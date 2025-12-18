@@ -1,0 +1,40 @@
+# ------------------
+# Environment / Secrets
+# ------------------
+.env
+.env.*
+secrets/
+
+# ------------------
+# Python
+# ------------------
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# Python build artifacts
+build/
+dist/
+*.egg-info/
+
+# ------------------
+# OS
+# ------------------
+.DS_Store
+
+# ------------------
+# Editor
+# ------------------
+.vscode/
+.idea/
+
+# ------------------
+# Deployment
+# ------------------
+.vercel/
