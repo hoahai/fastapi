@@ -4,6 +4,7 @@ from typing import List, Dict
 from google.ads.googleads.client import GoogleAdsClient
 from google.ads.googleads.errors import GoogleAdsException
 from functions.util import get_current_period, run_parallel_accounts
+from functions.constants import ADTYPES
 
 
 def get_client() -> GoogleAdsClient:
@@ -204,21 +205,44 @@ def get_ggad_campaign(customer_id: str) -> List[Dict]:
     return results
 def get_ggad_campaigns(accounts: List[Dict]) -> List[Dict]:
     """
-    Get campaigns for multiple Google Ads accounts (parallelized)
+    Get Google Ads campaigns for multiple accounts,
+    filtered by naming convention:
+    [zzz.][accountCode]_[adTypeCode]_[Name]
+
+    adTypeCode is dynamically derived from ADTYPES keys.
     """
 
     def per_account_func(account: Dict) -> List[Dict]:
         campaigns = get_ggad_campaign(account["id"])
+        account_code = account.get("accountCode")
 
-        return [
-            {
+        ad_type_pattern = "|".join(map(re.escape, ADTYPES.keys()))
+
+        pattern = re.compile(
+            rf"^(zzz\.)?{re.escape(account_code)}_({ad_type_pattern})_.+",
+            re.IGNORECASE,
+        )
+
+        filtered = []
+
+        for c in campaigns:
+            campaign_name = c.get("campaignName", "")
+            match = pattern.match(campaign_name)
+
+            if not match:
+                continue
+
+            ad_type_code = match.group(2).upper()
+
+            filtered.append({
                 "customerId": account["id"],
-                "accountCode": account.get("accountCode"),
+                "accountCode": account_code,
                 "accountName": account.get("accountName"),
+                "adTypeCode": ad_type_code,
                 **c,
-            }
-            for c in campaigns
-        ]
+            })
+
+        return filtered
 
     return run_parallel_accounts(
         accounts=accounts,

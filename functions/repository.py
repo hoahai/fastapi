@@ -31,7 +31,39 @@ def get_accounts(limit: int = 10) -> list[dict]:
     """
     return fetch_all(query, (limit,))
 
-def get_budgets_by_account(account_code: str) -> List[dict]:
+def get_master_budgets() -> List[dict]:
+    """
+    Get budgets for the current month/year filtered by service IDs
+    """
+    period = get_current_period()
+    month = period["month"]
+    year = period["year"]
+
+    # Build placeholders for IN clause safely
+    in_placeholders = ", ".join(["%s"] * len(SERVICE_BUDGETS))
+
+    query = (
+        "SELECT "
+        "b.accountCode, "
+        "b.serviceId, "
+        "s.name AS serviceName, "
+        "b.subService, b.month, b.year,"
+        "b.netAmount "
+        "FROM Budgets AS b "
+        "JOIN Services AS s ON s.id = b.serviceId "
+        "WHERE b.month = %s "
+        "AND b.year = %s "
+        f"AND b.serviceId IN ({in_placeholders})"
+    )
+
+    params = (
+        month,
+        year,
+        *SERVICE_BUDGETS
+    )
+
+    return fetch_all(query, params)
+def get_master_budgets_by_account(account_code: str) -> List[dict]:
     """
     Get budgets for an account for the current month/year
     """
