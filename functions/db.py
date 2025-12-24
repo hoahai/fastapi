@@ -4,7 +4,7 @@ import os
 from dotenv import load_dotenv
 
 # Load .env from project root
-load_dotenv()
+load_dotenv("secrets/.env")
 
 def get_connection():
     return mysql.connector.connect(

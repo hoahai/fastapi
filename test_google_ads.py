@@ -3,6 +3,7 @@ from functions.repository import *
 from functions.dataTransform import *
 import json
 from decimal import Decimal
+import pandas as pd
 
 def json_serializer(obj):
     if isinstance(obj, Decimal):
@@ -45,11 +46,19 @@ if __name__ == "__main__":
     print(f"\nFinal Result Rows: {len(results)}")
     # for r in results:
     #     print(r)
-    with open("results.json", "w", encoding="utf-8") as f:
-      json.dump(
-          results,
-          f,
-          indent=2,
-          default=json_serializer
-      )
+    # with open("results.json", "w", encoding="utf-8") as f:
+    #   json.dump(
+    #       results,
+    #       f,
+    #       indent=2,
+    #       default=json_serializer
+    #   )
+
+    df = pd.DataFrame(results)
+
+    df.to_excel(
+        "results.xlsx",
+        index=False,
+        engine="openpyxl"
+    )
 

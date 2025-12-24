@@ -1,6 +1,6 @@
 # main.py
 from dotenv import load_dotenv
-load_dotenv()
+load_dotenv("secrets/.env")
 from fastapi import FastAPI, HTTPException
 from functions import repository
 from functions.util import get_current_period

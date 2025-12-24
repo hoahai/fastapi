@@ -1,33 +1,60 @@
 # functions/dataTransform.py
 import pandas as pd
 from decimal import Decimal
+from collections import defaultdict
+from datetime import datetime, date
+import calendar
+import pytz
 
-from functions.constants import SERVICE_MAPPING, ADTYPES
+from functions.constants import SERVICE_MAPPING, ADTYPES, TIMEZONE
 
 def master_budget_ad_type_mapping(master_budgets: list[dict]) -> list[dict]:
     """
-    Add adTypeCode, serviceName, and queryAdType
-    to master budget rows using SERVICE_MAPPING and ADTYPES
+    Add adTypeCode and serviceName to master budget rows
+    using SERVICE_MAPPING, then pivot by (accountCode, adTypeCode).
+
+    Output:
+    - netAmount per (accountCode, adTypeCode)
+    - services array with {serviceId, serviceName, netAmount}
     """
-    mapped = []
+
+    grouped = defaultdict(lambda: {
+        "netAmount": Decimal("0"),
+        "services": [],
+    })
 
     for mb in master_budgets:
         service_id = mb.get("serviceId")
         service_mapping = SERVICE_MAPPING.get(service_id)
 
         if not service_mapping:
-            # Optional: log warning here
             continue
 
+        account_code = mb.get("accountCode")
         ad_type_code = service_mapping["adTypeCode"]
 
-        mapped.append({
-            **mb,
-            "adTypeCode": ad_type_code,
-            "serviceName": service_mapping["serviceName"]
+        net_amount = Decimal(str(mb.get("netAmount", 0)))
+
+        key = (account_code, ad_type_code)
+
+        grouped[key]["netAmount"] += net_amount
+        grouped[key]["services"].append({
+            "serviceId": service_id,
+            "serviceName": service_mapping["serviceName"],
+            "netAmount": net_amount,
         })
 
-    return mapped
+    result = []
+
+    for (account_code, ad_type_code), values in grouped.items():
+        result.append({
+            "accountCode": account_code,
+            "adTypeCode": ad_type_code,
+            "netAmount": values["netAmount"],
+            "services": values["services"],
+        })
+
+    return result
 
 def master_budget_campaigns_join(
     master_budget_data: list[dict],
@@ -55,6 +82,7 @@ def master_budget_campaigns_join(
         for campaign in matched_campaigns:
             joined.append({
                 **mb,
+                "customerId": campaign.get("customerId"),
                 "campaignId": campaign.get("campaignId"),
                 "campaignName": campaign.get("campaignName"),
                 "budgetId": campaign.get("budgetId"),
@@ -193,6 +221,64 @@ def master_budget_rollover_join(
 
     return joined
 
+def calculate_daily_budget(
+    data: list[dict],
+    today: date | None = None
+) -> list[dict]:
+    """
+    Calculate daily budget for each row.
+
+    Formula:
+    dailyBudget =
+    (
+        (totalNetAmount + rolloverAmount) * allocation
+        - totalCost
+    ) / daysLeftInMonth
+    """
+
+    # ---- 0. Determine "today" using configured TIMEZONE (string → pytz)
+    if not today:
+        tz = pytz.timezone(TIMEZONE)
+        today = datetime.now(tz).date()
+
+    # ---- 1. Days left in month (including today)
+    days_in_month = calendar.monthrange(today.year, today.month)[1]
+    days_left = Decimal(str(days_in_month - today.day + 1))
+
+    # ---- 2. Group total netAmount by accountCode + adTypeCode
+    total_net_by_group = defaultdict(Decimal)
+
+    for row in data:
+        key = (row["accountCode"], row["adTypeCode"])
+        total_net_by_group[key] += Decimal(str(row["netAmount"]))
+
+    # ---- 3. Calculate daily budget per row
+    result = []
+
+    for row in data:
+        key = (row["accountCode"], row["adTypeCode"])
+
+        total_net = total_net_by_group[key]
+        rollover = Decimal(str(row.get("rolloverAmount", 0)))
+        allocation_pct = Decimal(str(row.get("allocation", 0))) / Decimal("100")
+        cost = Decimal(str(row.get("totalCost", 0)))
+
+        remaining_budget = (total_net + rollover) * allocation_pct - cost
+
+        daily_budget = (
+            remaining_budget / days_left
+            if days_left > 0
+            else Decimal("0")
+        )
+
+        result.append({
+            **row,
+            "dailyBudget": daily_budget.quantize(Decimal("0.01")),
+        })
+
+    return result
+
+
 def transform_google_ads_budget_pipeline(
     master_budgets: list[dict],
     campaigns: list[dict],
@@ -206,24 +292,27 @@ def transform_google_ads_budget_pipeline(
     """
 
     # 1. Map master budget → adTypeCode + queryAdType
-    step_1 = master_budget_ad_type_mapping(master_budgets)
+    resuts = master_budget_ad_type_mapping(master_budgets)
 
     # 2. Join master budget → campaigns
-    step_2 = master_budget_campaigns_join(step_1, campaigns)
+    resuts = master_budget_campaigns_join(resuts, campaigns)
 
-    # 3. Join Google budgets
-    step_3 = master_budget_google_budgets_join(step_2, budgets)
+    # # 3. Join Google budgets
+    resuts = master_budget_google_budgets_join(resuts, budgets)
 
-    # 4. Attach summed costs (pandas)
-    step_4 = campaign_costs_cal(step_3, costs)
+    # # 4. Attach summed costs (pandas)
+    resuts = campaign_costs_cal(resuts, costs)
 
-    # 5. Attach summed costs (pandas)
-    step_5 = master_budget_allocation_join(step_4, allocations)
+    # # 5. Attach summed costs (pandas)
+    resuts = master_budget_allocation_join(resuts, allocations)
 
-    # 5. Attach summed costs (pandas)
-    final_result = master_budget_rollover_join(step_5, rollovers)
+    # # 6. Attach summed costs (pandas)
+    resuts = master_budget_rollover_join(resuts, rollovers)
 
-    return final_result
+    # # 7. Cal Daily Budget
+    resuts = calculate_daily_budget(resuts)
+
+    return resuts
 
 
 

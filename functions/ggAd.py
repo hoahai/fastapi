@@ -232,6 +232,10 @@ def get_ggad_campaigns(accounts: List[Dict]) -> List[Dict]:
             if not match:
                 continue
 
+            # Exclude zzz.* campaign explicitly (even if they match)
+            if campaign_name.lower().startswith("zzz."):
+                continue
+
             ad_type_code = match.group(2).upper()
 
             filtered.append({

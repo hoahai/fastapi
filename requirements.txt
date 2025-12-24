@@ -8,4 +8,4 @@ google-auth
 python-dotenv
 google-ads
 pandas
-json
+openpyxl
