@@ -38,3 +38,10 @@ dist/
 # Deployment
 # ------------------
 .vercel/
+
+# ------------------
+# Test Files
+# ------------------
+*.xlsx
+*.json
+*.csv
