@@ -1,11 +1,12 @@
 # functions/utils.py
+
 from datetime import datetime, date
 import calendar
 import pytz
 import time
 import random
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
-from typing import Callable, Dict, List
+from typing import Callable
 
 from functions.constants import (
     TIMEZONE,
@@ -18,7 +19,8 @@ from functions.constants import (
     GGAD_JITTER_MAX,
 )
 
-def get_current_period():
+
+def get_current_period() -> dict:
     tz = pytz.timezone(TIMEZONE)
     now = datetime.now(tz)
 
@@ -39,10 +41,11 @@ def get_current_period():
         "end_date": end_date.isoformat(),      # YYYY-MM-DD
     }
 
+
 def _run_with_retry(
-    func: Callable[[Dict], List[Dict]],
-    account: Dict
-) -> List[Dict]:
+    func: Callable[[dict], list[dict]],
+    account: dict
+) -> list[dict]:
     """
     Run a per-account function with retry + exponential backoff + jitter
     """
@@ -50,7 +53,6 @@ def _run_with_retry(
         try:
             # Jitter before execution
             time.sleep(random.uniform(GGAD_JITTER_MIN, GGAD_JITTER_MAX))
-
             return func(account)
 
         except Exception as e:
@@ -68,9 +70,9 @@ def _run_with_retry(
 
 
 def run_parallel_accounts(
-    accounts: List[Dict],
-    per_account_func: Callable[[Dict], List[Dict]],
-) -> List[Dict]:
+    accounts: list[dict],
+    per_account_func: Callable[[dict], list[dict]],
+) -> list[dict]:
     """
     Run a function in parallel across Google Ads accounts with:
     - limited concurrency
@@ -81,7 +83,7 @@ def run_parallel_accounts(
     if not accounts:
         return []
 
-    results: List[Dict] = []
+    results: list[dict] = []
 
     with ThreadPoolExecutor(max_workers=GGAD_MAX_WORKERS) as executor:
         future_map = {

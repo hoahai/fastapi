@@ -1,4 +1,5 @@
 # functions/dataTransform.py
+
 import pandas as pd
 from decimal import Decimal
 from collections import defaultdict
@@ -7,6 +8,7 @@ import calendar
 import pytz
 
 from functions.constants import SERVICE_MAPPING, ADTYPES, TIMEZONE
+
 
 def master_budget_ad_type_mapping(master_budgets: list[dict]) -> list[dict]:
     """
@@ -17,7 +19,6 @@ def master_budget_ad_type_mapping(master_budgets: list[dict]) -> list[dict]:
     - netAmount per (accountCode, adTypeCode)
     - services array with {serviceId, serviceName, netAmount}
     """
-
     grouped = defaultdict(lambda: {
         "netAmount": Decimal("0"),
         "services": [],
@@ -30,12 +31,12 @@ def master_budget_ad_type_mapping(master_budgets: list[dict]) -> list[dict]:
         if not service_mapping:
             continue
 
-        account_code = mb.get("accountCode")
-        ad_type_code = service_mapping["adTypeCode"]
+        key = (
+            mb.get("accountCode"),
+            service_mapping["adTypeCode"],
+        )
 
         net_amount = Decimal(str(mb.get("netAmount", 0)))
-
-        key = (account_code, ad_type_code)
 
         grouped[key]["netAmount"] += net_amount
         grouped[key]["services"].append({
@@ -44,17 +45,16 @@ def master_budget_ad_type_mapping(master_budgets: list[dict]) -> list[dict]:
             "netAmount": net_amount,
         })
 
-    result = []
-
-    for (account_code, ad_type_code), values in grouped.items():
-        result.append({
+    return [
+        {
             "accountCode": account_code,
             "adTypeCode": ad_type_code,
             "netAmount": values["netAmount"],
             "services": values["services"],
-        })
+        }
+        for (account_code, ad_type_code), values in grouped.items()
+    ]
 
-    return result
 
 def master_budget_campaigns_join(
     master_budget_data: list[dict],
@@ -62,24 +62,19 @@ def master_budget_campaigns_join(
 ) -> list[dict]:
     """
     Join master budget data with Google Ads campaigns
-    based on accountCode and queryAdType (channelType).
-
-    One master budget row can map to multiple campaigns.
+    based on (accountCode, adTypeCode).
     """
-    # Build lookup: (accountCode, channelType) -> list[campaign]
-    campaign_lookup = {}
+    campaign_lookup: dict[tuple, list[dict]] = {}
 
     for c in campaigns:
         key = (c.get("accountCode"), c.get("adTypeCode"))
         campaign_lookup.setdefault(key, []).append(c)
 
-    joined = []
+    joined: list[dict] = []
 
     for mb in master_budget_data:
         key = (mb.get("accountCode"), mb.get("adTypeCode"))
-        matched_campaigns = campaign_lookup.get(key, [])
-
-        for campaign in matched_campaigns:
+        for campaign in campaign_lookup.get(key, []):
             joined.append({
                 **mb,
                 "customerId": campaign.get("customerId"),
@@ -91,6 +86,7 @@ def master_budget_campaigns_join(
 
     return joined
 
+
 def master_budget_google_budgets_join(
     master_campaign_data: list[dict],
     budgets: list[dict]
@@ -99,25 +95,21 @@ def master_budget_google_budgets_join(
     Join Google Ads budget details to master-campaign data
     based on budgetId.
     """
-    # Build lookup: budgetId -> budget
     budget_lookup = {
         b.get("budgetId"): b
         for b in budgets
     }
 
-    joined = []
-
-    for row in master_campaign_data:
-        budget = budget_lookup.get(row.get("budgetId"))
-
-        joined.append({
+    return [
+        {
             **row,
-            "budgetName": budget.get("budgetName") if budget else None,
-            "budgetStatus": budget.get("status") if budget else None,
-            "budgetAmount": budget.get("amount") if budget else None,
-        })
+            "budgetName": budget_lookup.get(row.get("budgetId"), {}).get("budgetName"),
+            "budgetStatus": budget_lookup.get(row.get("budgetId"), {}).get("status"),
+            "budgetAmount": budget_lookup.get(row.get("budgetId"), {}).get("amount"),
+        }
+        for row in master_campaign_data
+    ]
 
-    return joined
 
 def campaign_costs_cal(
     master_campaign_data: list[dict],
@@ -129,7 +121,6 @@ def campaign_costs_cal(
     if not master_campaign_data:
         return []
 
-    # Convert to DataFrames
     df_master = pd.DataFrame(master_campaign_data)
     df_costs = pd.DataFrame(costs)
 
@@ -137,7 +128,6 @@ def campaign_costs_cal(
         df_master["totalCost"] = Decimal("0")
         return df_master.to_dict(orient="records")
 
-    # Aggregate costs by campaignId
     df_costs_agg = (
         df_costs
         .groupby("campaignId", as_index=False)["cost"]
@@ -145,14 +135,12 @@ def campaign_costs_cal(
         .rename(columns={"cost": "totalCost"})
     )
 
-    # Join back to master
     df_joined = df_master.merge(
         df_costs_agg,
         on="campaignId",
         how="left"
     )
 
-    # Handle NaN → Decimal(0)
     df_joined["totalCost"] = (
         df_joined["totalCost"]
         .fillna(0)
@@ -161,35 +149,31 @@ def campaign_costs_cal(
 
     return df_joined.to_dict(orient="records")
 
+
 def master_budget_allocation_join(
     master_gg_budget_data: list[dict],
     allocations: list[dict],
 ) -> list[dict]:
     """
     Join allocation data to master Google budget data
-    using (accountCode, budgetId ↔ ggBudgetId).
-
-    Adds `allocation` field to each master row.
+    using budgetId ↔ ggBudgetId.
     """
-
-    # Build lookup: (accountCode, ggBudgetId) -> allocation
     allocation_lookup = {
-        (a.get("ggBudgetId")): a.get("allocation")
+        a.get("ggBudgetId"): a.get("allocation")
         for a in allocations
     }
 
-    joined = []
-
-    for row in master_gg_budget_data:
-        key = (row.get("budgetId"))
-        allocation = allocation_lookup.get(key, Decimal("0"))
-
-        joined.append({
+    return [
+        {
             **row,
-            "allocation": allocation,
-        })
+            "allocation": allocation_lookup.get(
+                row.get("budgetId"),
+                Decimal("0"),
+            ),
+        }
+        for row in master_gg_budget_data
+    ]
 
-    return joined
 
 def master_budget_rollover_join(
     master_gg_budget_data: list[dict],
@@ -197,29 +181,24 @@ def master_budget_rollover_join(
 ) -> list[dict]:
     """
     Join rollover breakdown data to master Google budget data
-    using (accountCode, adTypeCode).
-
-    Adds `rolloverAmount` field to each master row.
+    using adTypeCode.
     """
-
-    # Build lookup: (accountCode, adTypeCode) -> rollover amount
     rollover_lookup = {
-        (r.get("adTypeCode")): r.get("amount")
+        r.get("adTypeCode"): r.get("amount")
         for r in rollover_breakdown
     }
 
-    joined = []
-
-    for row in master_gg_budget_data:
-        key = (row.get("adTypeCode"))
-        rollover_amount = rollover_lookup.get(key, Decimal("0"))
-
-        joined.append({
+    return [
+        {
             **row,
-            "rolloverAmount": rollover_amount,
-        })
+            "rolloverAmount": rollover_lookup.get(
+                row.get("adTypeCode"),
+                Decimal("0"),
+            ),
+        }
+        for row in master_gg_budget_data
+    ]
 
-    return joined
 
 def calculate_daily_budget(
     data: list[dict],
@@ -227,33 +206,21 @@ def calculate_daily_budget(
 ) -> list[dict]:
     """
     Calculate daily budget for each row.
-
-    Formula:
-    dailyBudget =
-    (
-        (totalNetAmount + rolloverAmount) * allocation
-        - totalCost
-    ) / daysLeftInMonth
     """
-
-    # ---- 0. Determine "today" using configured TIMEZONE (string → pytz)
     if not today:
         tz = pytz.timezone(TIMEZONE)
         today = datetime.now(tz).date()
 
-    # ---- 1. Days left in month (including today)
     days_in_month = calendar.monthrange(today.year, today.month)[1]
     days_left = Decimal(str(days_in_month - today.day + 1))
 
-    # ---- 2. Group total netAmount by accountCode + adTypeCode
     total_net_by_group = defaultdict(Decimal)
 
     for row in data:
         key = (row["accountCode"], row["adTypeCode"])
         total_net_by_group[key] += Decimal(str(row["netAmount"]))
 
-    # ---- 3. Calculate daily budget per row
-    result = []
+    result: list[dict] = []
 
     for row in data:
         key = (row["accountCode"], row["adTypeCode"])
@@ -290,30 +257,12 @@ def transform_google_ads_budget_pipeline(
     """
     Full Google Ads budget vs spend transformation pipeline.
     """
+    results = master_budget_ad_type_mapping(master_budgets)
+    results = master_budget_campaigns_join(results, campaigns)
+    results = master_budget_google_budgets_join(results, budgets)
+    results = campaign_costs_cal(results, costs)
+    results = master_budget_allocation_join(results, allocations)
+    results = master_budget_rollover_join(results, rollovers)
+    results = calculate_daily_budget(results)
 
-    # 1. Map master budget → adTypeCode + queryAdType
-    resuts = master_budget_ad_type_mapping(master_budgets)
-
-    # 2. Join master budget → campaigns
-    resuts = master_budget_campaigns_join(resuts, campaigns)
-
-    # # 3. Join Google budgets
-    resuts = master_budget_google_budgets_join(resuts, budgets)
-
-    # # 4. Attach summed costs (pandas)
-    resuts = campaign_costs_cal(resuts, costs)
-
-    # # 5. Attach summed costs (pandas)
-    resuts = master_budget_allocation_join(resuts, allocations)
-
-    # # 6. Attach summed costs (pandas)
-    resuts = master_budget_rollover_join(resuts, rollovers)
-
-    # # 7. Cal Daily Budget
-    resuts = calculate_daily_budget(resuts)
-
-    return resuts
-
-
-
-
+    return results

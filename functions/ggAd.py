@@ -1,8 +1,9 @@
 # functions/ggAd.py
+
 import re
-from typing import List, Dict
 from google.ads.googleads.client import GoogleAdsClient
 from google.ads.googleads.errors import GoogleAdsException
+
 from functions.utils import get_current_period, run_parallel_accounts
 from functions.constants import ADTYPES
 
@@ -14,7 +15,7 @@ def get_client() -> GoogleAdsClient:
     return GoogleAdsClient.load_from_storage("secrets/google-ads.yaml")
 
 
-def get_mcc_accounts() -> List[Dict]:
+def get_mcc_accounts() -> list[dict]:
     """
     Get all non-hidden, non-canceled Google Ads accounts under the MCC
     """
@@ -31,7 +32,7 @@ def get_mcc_accounts() -> List[Dict]:
           AND customer_client.status = 'ENABLED'
     """
 
-    results: List[Dict] = []
+    results: list[dict] = []
 
     try:
         mcc_id = client.login_customer_id
@@ -55,7 +56,8 @@ def get_mcc_accounts() -> List[Dict]:
 
     return results
 
-def get_ggad_accounts() -> List[Dict]:
+
+def get_ggad_accounts() -> list[dict]:
     """
     Return normalized Google Ads accounts that follow naming convention:
     [zzz.][AccountCode]_[Account Name]
@@ -65,36 +67,35 @@ def get_ggad_accounts() -> List[Dict]:
     if not raw_accounts:
         return []
 
-    results: List[Dict] = []
+    results: list[dict] = []
 
     ACCOUNT_NAME_PATTERN = re.compile(
         r"^(?:zzz\.)?(?P<code>[A-Za-z0-9]+)_(?P<name>.+)$"
     )
+
     for acc in raw_accounts:
         descriptive_name = acc.get("name", "").strip()
 
-        # 1️⃣ Must match naming convention
+        # Must match naming convention
         match = ACCOUNT_NAME_PATTERN.match(descriptive_name)
         if not match:
             continue
 
-        account_code = match.group("code").strip()
-        account_name = match.group("name").strip()
-
-        # 2️⃣ Exclude zzz.* accounts explicitly (even if they match)
+        # Exclude zzz.* accounts explicitly
         if descriptive_name.lower().startswith("zzz."):
             continue
 
         results.append({
             "id": acc.get("id"),
             "descriptiveName": descriptive_name,
-            "accountCode": account_code,
-            "accountName": account_name,
+            "accountCode": match.group("code").strip(),
+            "accountName": match.group("name").strip(),
         })
 
     return results
 
-def get_ggad_budget(customer_id: str) -> List[Dict]:
+
+def get_ggad_budget(customer_id: str) -> list[dict]:
     """
     Get all non-removed campaign budgets for a single Google Ads account
     """
@@ -112,7 +113,7 @@ def get_ggad_budget(customer_id: str) -> List[Dict]:
         WHERE campaign_budget.status != 'REMOVED'
     """
 
-    results: List[Dict] = []
+    results: list[dict] = []
 
     response = ga_service.search(
         customer_id=customer_id,
@@ -131,15 +132,14 @@ def get_ggad_budget(customer_id: str) -> List[Dict]:
         })
 
     return results
-def get_ggad_budgets(accounts: List[Dict]) -> List[Dict]:
+
+
+def get_ggad_budgets(accounts: list[dict]) -> list[dict]:
     """
     Get campaign budgets for multiple Google Ads accounts
     """
 
-    def per_account_func(account: Dict) -> List[Dict]:
-        """
-        Logic to fetch and normalize budgets for ONE account
-        """
+    def per_account_func(account: dict) -> list[dict]:
         budgets = get_ggad_budget(account["id"])
 
         return [
@@ -157,7 +157,8 @@ def get_ggad_budgets(accounts: List[Dict]) -> List[Dict]:
         per_account_func=per_account_func
     )
 
-def get_ggad_campaign(customer_id: str) -> List[Dict]:
+
+def get_ggad_campaign(customer_id: str) -> list[dict]:
     """
     Get campaigns for a single Google Ads account
     """
@@ -179,7 +180,7 @@ def get_ggad_campaign(customer_id: str) -> List[Dict]:
           campaign.name ASC
     """
 
-    results: List[Dict] = []
+    results: list[dict] = []
 
     try:
         response = ga_service.search(
@@ -188,61 +189,57 @@ def get_ggad_campaign(customer_id: str) -> List[Dict]:
         )
 
         for row in response:
-            campaign = row.campaign
-            budget = row.campaign_budget
-
             results.append({
-                "campaignId": str(campaign.id),
-                "campaignName": campaign.name,
-                "status": campaign.status.name,
-                "channelType": campaign.advertising_channel_type.name,
-                "budgetId": str(budget.id) if budget.id else None,
+                "campaignId": str(row.campaign.id),
+                "campaignName": row.campaign.name,
+                "status": row.campaign.status.name,
+                "channelType": row.campaign.advertising_channel_type.name,
+                "budgetId": str(row.campaign_budget.id)
+                if row.campaign_budget.id else None,
             })
 
     except GoogleAdsException as ex:
         raise RuntimeError(f"Google Ads API error: {ex.failure}")
 
     return results
-def get_ggad_campaigns(accounts: List[Dict]) -> List[Dict]:
+
+
+def get_ggad_campaigns(accounts: list[dict]) -> list[dict]:
     """
     Get Google Ads campaigns for multiple accounts,
     filtered by naming convention:
     [zzz.][accountCode]_[adTypeCode]_[Name]
-
-    adTypeCode is dynamically derived from ADTYPES keys.
     """
 
-    def per_account_func(account: Dict) -> List[Dict]:
+    ad_type_pattern = "|".join(map(re.escape, ADTYPES.keys()))
+
+    def per_account_func(account: dict) -> list[dict]:
         campaigns = get_ggad_campaign(account["id"])
         account_code = account.get("accountCode")
-
-        ad_type_pattern = "|".join(map(re.escape, ADTYPES.keys()))
 
         pattern = re.compile(
             rf"^(zzz\.)?{re.escape(account_code)}_({ad_type_pattern})_.+",
             re.IGNORECASE,
         )
 
-        filtered = []
+        filtered: list[dict] = []
 
         for c in campaigns:
-            campaign_name = c.get("campaignName", "")
-            match = pattern.match(campaign_name)
+            name = c.get("campaignName", "")
 
+            match = pattern.match(name)
             if not match:
                 continue
 
-            # Exclude zzz.* campaign explicitly (even if they match)
-            if campaign_name.lower().startswith("zzz."):
+            # Exclude zzz.* campaigns explicitly
+            if name.lower().startswith("zzz."):
                 continue
-
-            ad_type_code = match.group(2).upper()
 
             filtered.append({
                 "customerId": account["id"],
                 "accountCode": account_code,
                 "accountName": account.get("accountName"),
-                "adTypeCode": ad_type_code,
+                "adTypeCode": match.group(2).upper(),
                 **c,
             })
 
@@ -253,14 +250,13 @@ def get_ggad_campaigns(accounts: List[Dict]) -> List[Dict]:
         per_account_func=per_account_func
     )
 
-def get_ggad_spent(customer_id: str) -> List[Dict]:
+
+def get_ggad_spent(customer_id: str) -> list[dict]:
     """
     Get campaign spend for a single Google Ads account
     for the current period
     """
     period = get_current_period()
-    start_date = period["start_date"]
-    end_date = period["end_date"]
 
     client = get_client()
     ga_service = client.get_service("GoogleAdsService")
@@ -274,15 +270,15 @@ def get_ggad_spent(customer_id: str) -> List[Dict]:
           campaign_budget.id
         FROM campaign
         WHERE campaign.status != 'REMOVED'
-          AND segments.date >= '{start_date}'
-          AND segments.date <= '{end_date}'
+          AND segments.date >= '{period["start_date"]}'
+          AND segments.date <= '{period["end_date"]}'
         ORDER BY
           segments.year DESC,
           segments.month DESC,
           campaign.advertising_channel_type ASC
     """
 
-    results: List[Dict] = []
+    results: list[dict] = []
 
     try:
         response = ga_service.search(
@@ -295,21 +291,24 @@ def get_ggad_spent(customer_id: str) -> List[Dict]:
                 "year": row.segments.year,
                 "month": row.segments.month,
                 "campaignId": str(row.campaign.id),
-                "budgetId": str(row.campaign_budget.id) if row.campaign_budget.id else None,
-                "cost": row.metrics.cost_micros / 1_000_000
+                "budgetId": str(row.campaign_budget.id)
+                if row.campaign_budget.id else None,
+                "cost": row.metrics.cost_micros / 1_000_000,
             })
 
     except GoogleAdsException as ex:
         raise RuntimeError(f"Google Ads API error: {ex.failure}")
 
     return results
-def get_ggad_spents(accounts: List[Dict]) -> List[Dict]:
+
+
+def get_ggad_spents(accounts: list[dict]) -> list[dict]:
     """
     Get campaign spend for multiple Google Ads accounts
     for the current period (parallelized)
     """
 
-    def per_account_func(account: Dict) -> List[Dict]:
+    def per_account_func(account: dict) -> list[dict]:
         spents = get_ggad_spent(account["id"])
 
         return [

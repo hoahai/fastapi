@@ -1,5 +1,5 @@
 # functions/ggSheet.py
-from typing import List
+
 import os
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
@@ -11,10 +11,10 @@ SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
 def read_spreadsheet(
     spreadsheet_id: str,
     range_name: str
-) -> List[dict]:
+) -> list[dict]:
     """
-    Read data from Google Spreadsheet using service account
-    Returns rows as list of dicts
+    Read data from Google Spreadsheet using service account.
+    Returns rows as list of dicts.
     """
 
     credentials = service_account.Credentials.from_service_account_file(
