@@ -2,7 +2,7 @@
 from typing import Optional, Tuple, List
 from functions.db import get_connection
 from functions.constants import SERVICE_BUDGETS
-from functions.util import get_current_period
+from functions.utils import get_current_period
 from functions.ggSheet import read_spreadsheet
 
 def fetch_all(query: str, params: Optional[Tuple] = None) -> list[dict]:

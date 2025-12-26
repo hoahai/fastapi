@@ -3,7 +3,7 @@ import re
 from typing import List, Dict
 from google.ads.googleads.client import GoogleAdsClient
 from google.ads.googleads.errors import GoogleAdsException
-from functions.util import get_current_period, run_parallel_accounts
+from functions.utils import get_current_period, run_parallel_accounts
 from functions.constants import ADTYPES
 
 

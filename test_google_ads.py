@@ -1,5 +1,5 @@
 from functions.ggAd import *
-from functions.repository import *
+from functions.db_queries import *
 from functions.dataTransform import *
 import json
 from decimal import Decimal
