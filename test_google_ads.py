@@ -12,9 +12,9 @@ def json_serializer(obj):
 
 if __name__ == "__main__":
     # Fetch master budgets (MySQL)
-    master_budgets = get_master_budgets_by_account('TAC')
-    allocations = get_allocations_by_account('TAC')
-    rollovers = get_rollbreakdowns_by_account('TAC')
+    master_budgets = get_masterbudgets('TAC')
+    allocations = get_allocations('TAC')
+    rollovers = get_rollbreakdowns('TAC')
 
     # Get Google Ads accounts under MCC
     accounts = get_ggad_accounts()
