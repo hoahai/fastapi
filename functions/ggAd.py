@@ -4,20 +4,31 @@ import re
 from google.ads.googleads.client import GoogleAdsClient
 from google.ads.googleads.errors import GoogleAdsException
 
-from functions.utils import get_current_period, run_parallel_accounts
+from functions.utils import (
+    get_current_period,
+    run_parallel_flatten,
+)
 from functions.constants import ADTYPES
 
 
+# =====================
+# CLIENT
+# =====================
+
 def get_client() -> GoogleAdsClient:
     """
-    Create and return a Google Ads client using service account auth
+    Create and return a Google Ads client using local google-ads.yaml config.
     """
     return GoogleAdsClient.load_from_storage("secrets/google-ads.yaml")
 
 
+# =====================
+# ACCOUNTS
+# =====================
+
 def get_mcc_accounts() -> list[dict]:
     """
-    Get all non-hidden, non-canceled Google Ads accounts under the MCC
+    Get all non-hidden, ENABLED Google Ads accounts under the MCC.
     """
     client = get_client()
     ga_service = client.get_service("GoogleAdsService")
@@ -39,7 +50,7 @@ def get_mcc_accounts() -> list[dict]:
 
         response = ga_service.search(
             customer_id=mcc_id,
-            query=query
+            query=query,
         )
 
         for row in response:
@@ -50,9 +61,7 @@ def get_mcc_accounts() -> list[dict]:
             })
 
     except GoogleAdsException as ex:
-        raise RuntimeError(
-            f"Google Ads API error: {ex.failure}"
-        )
+        raise RuntimeError(f"Google Ads API error: {ex.failure}") from ex
 
     return results
 
@@ -63,21 +72,19 @@ def get_ggad_accounts() -> list[dict]:
     [zzz.][AccountCode]_[Account Name]
     """
     raw_accounts = get_mcc_accounts()
-
     if not raw_accounts:
         return []
 
     results: list[dict] = []
 
-    ACCOUNT_NAME_PATTERN = re.compile(
+    account_name_pattern = re.compile(
         r"^(?:zzz\.)?(?P<code>[A-Za-z0-9]+)_(?P<name>.+)$"
     )
 
     for acc in raw_accounts:
         descriptive_name = acc.get("name", "").strip()
 
-        # Must match naming convention
-        match = ACCOUNT_NAME_PATTERN.match(descriptive_name)
+        match = account_name_pattern.match(descriptive_name)
         if not match:
             continue
 
@@ -95,9 +102,13 @@ def get_ggad_accounts() -> list[dict]:
     return results
 
 
+# =====================
+# BUDGETS
+# =====================
+
 def get_ggad_budget(customer_id: str) -> list[dict]:
     """
-    Get all non-removed campaign budgets for a single Google Ads account
+    Get all non-removed campaign budgets for a single Google Ads account.
     """
     client = get_client()
     ga_service = client.get_service("GoogleAdsService")
@@ -115,33 +126,35 @@ def get_ggad_budget(customer_id: str) -> list[dict]:
 
     results: list[dict] = []
 
-    response = ga_service.search(
-        customer_id=customer_id,
-        query=query
-    )
+    try:
+        response = ga_service.search(
+            customer_id=customer_id,
+            query=query,
+        )
 
-    for row in response:
-        budget = row.campaign_budget
+        for row in response:
+            budget = row.campaign_budget
+            results.append({
+                "budgetId": str(budget.id),
+                "budgetName": budget.name,
+                "explicitlyShared": budget.explicitly_shared,
+                "status": budget.status.name,
+                "amount": budget.amount_micros / 1_000_000 if budget.amount_micros else 0,
+            })
 
-        results.append({
-            "budgetId": str(budget.id),
-            "budgetName": budget.name,
-            "explicitlyShared": budget.explicitly_shared,
-            "status": budget.status.name,
-            "amount": budget.amount_micros / 1_000_000 if budget.amount_micros else 0,
-        })
+    except GoogleAdsException as ex:
+        raise RuntimeError(f"Google Ads API error: {ex.failure}") from ex
 
     return results
 
 
 def get_ggad_budgets(accounts: list[dict]) -> list[dict]:
     """
-    Get campaign budgets for multiple Google Ads accounts
+    Get campaign budgets for multiple Google Ads accounts (parallelized).
     """
 
     def per_account_func(account: dict) -> list[dict]:
         budgets = get_ggad_budget(account["id"])
-
         return [
             {
                 "customerId": account["id"],
@@ -152,15 +165,21 @@ def get_ggad_budgets(accounts: list[dict]) -> list[dict]:
             for b in budgets
         ]
 
-    return run_parallel_accounts(
-        accounts=accounts,
-        per_account_func=per_account_func
+    tasks = [(per_account_func, (account,)) for account in accounts]
+
+    return run_parallel_flatten(
+        tasks=tasks,
+        api_name="google_ads",
     )
 
 
+# =====================
+# CAMPAIGNS
+# =====================
+
 def get_ggad_campaign(customer_id: str) -> list[dict]:
     """
-    Get campaigns for a single Google Ads account
+    Get campaigns for a single Google Ads account.
     """
     client = get_client()
     ga_service = client.get_service("GoogleAdsService")
@@ -185,7 +204,7 @@ def get_ggad_campaign(customer_id: str) -> list[dict]:
     try:
         response = ga_service.search(
             customer_id=customer_id,
-            query=query
+            query=query,
         )
 
         for row in response:
@@ -199,7 +218,7 @@ def get_ggad_campaign(customer_id: str) -> list[dict]:
             })
 
     except GoogleAdsException as ex:
-        raise RuntimeError(f"Google Ads API error: {ex.failure}")
+        raise RuntimeError(f"Google Ads API error: {ex.failure}") from ex
 
     return results
 
@@ -226,8 +245,8 @@ def get_ggad_campaigns(accounts: list[dict]) -> list[dict]:
 
         for c in campaigns:
             name = c.get("campaignName", "")
-
             match = pattern.match(name)
+
             if not match:
                 continue
 
@@ -245,19 +264,23 @@ def get_ggad_campaigns(accounts: list[dict]) -> list[dict]:
 
         return filtered
 
-    return run_parallel_accounts(
-        accounts=accounts,
-        per_account_func=per_account_func
+    tasks = [(per_account_func, (account,)) for account in accounts]
+
+    return run_parallel_flatten(
+        tasks=tasks,
+        api_name="google_ads",
     )
 
 
+# =====================
+# SPEND
+# =====================
+
 def get_ggad_spent(customer_id: str) -> list[dict]:
     """
-    Get campaign spend for a single Google Ads account
-    for the current period
+    Get campaign spend for a single Google Ads account for the current period.
     """
     period = get_current_period()
-
     client = get_client()
     ga_service = client.get_service("GoogleAdsService")
 
@@ -283,7 +306,7 @@ def get_ggad_spent(customer_id: str) -> list[dict]:
     try:
         response = ga_service.search(
             customer_id=customer_id,
-            query=query
+            query=query,
         )
 
         for row in response:
@@ -297,20 +320,18 @@ def get_ggad_spent(customer_id: str) -> list[dict]:
             })
 
     except GoogleAdsException as ex:
-        raise RuntimeError(f"Google Ads API error: {ex.failure}")
+        raise RuntimeError(f"Google Ads API error: {ex.failure}") from ex
 
     return results
 
 
 def get_ggad_spents(accounts: list[dict]) -> list[dict]:
     """
-    Get campaign spend for multiple Google Ads accounts
-    for the current period (parallelized)
+    Get campaign spend for multiple Google Ads accounts (parallelized).
     """
 
     def per_account_func(account: dict) -> list[dict]:
         spents = get_ggad_spent(account["id"])
-
         return [
             {
                 "customerId": account["id"],
@@ -321,7 +342,9 @@ def get_ggad_spents(accounts: list[dict]) -> list[dict]:
             for s in spents
         ]
 
-    return run_parallel_accounts(
-        accounts=accounts,
-        per_account_func=per_account_func
+    tasks = [(per_account_func, (account,)) for account in accounts]
+
+    return run_parallel_flatten(
+        tasks=tasks,
+        api_name="google_ads",
     )

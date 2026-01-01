@@ -1,10 +1,14 @@
 # functions/constants.py
 
-# ---- General Congifs ----
+# =========================
+# GENERAL CONFIGS
+# =========================
 TIMEZONE = "America/Chicago"
 
 
-# ---- MySQL Budgets ----
+# =========================
+# MYSQL BUDGETS
+# =========================
 SERVICE_BUDGETS = [
     "e39a81c6-6ff7-436e-9bce-5d4e25cef244",
     "42801189-8217-4ce1-9623-30c02d9d1518",
@@ -74,13 +78,29 @@ ADTYPES = {
 }
 
 
-# ---- Google Ads parallel execution config ----
-GGAD_MAX_WORKERS = 3
+# =========================
+# PARALLEL EXECUTION CONFIG
+# =========================
 
-GGAD_MAX_RETRIES = 3
-GGAD_INITIAL_BACKOFF = 1.0     # seconds
-GGAD_MAX_BACKOFF = 10.0        # seconds
+PARALLEL_MAX_WORKERS = 8
 
-GGAD_ACCOUNT_TIMEOUT = 30.0    # seconds
-GGAD_JITTER_MIN = 0.0
-GGAD_JITTER_MAX = 3.0
+PARALLEL_MAX_RETRIES = 3
+
+PARALLEL_INITIAL_BACKOFF = 1.0      # seconds
+PARALLEL_MAX_BACKOFF = 10.0         # seconds
+
+PARALLEL_TASK_TIMEOUT = 60          # seconds per task
+
+PARALLEL_JITTER_MIN = 0.1            # seconds
+PARALLEL_JITTER_MAX = 0.5 
+
+PARALLEL_RATE_LIMIT = 5        # requests
+PARALLEL_RATE_INTERVAL = 1.0   # per second
+
+
+# =====================
+# LOGGING CONFIG
+# =====================
+
+LOGGING_ENABLED = True        # Set False to completely disable logging
+LOG_LEVEL = "INFO"           # DEBUG | INFO | WARNING | ERROR | CRITICAL

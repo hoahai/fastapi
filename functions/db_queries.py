@@ -1,14 +1,15 @@
-# functions/repository.py
-
-from typing import Optional, Sequence
+# functions/db_queries.py
 
 from functions.db import get_connection
 from functions.constants import SERVICE_BUDGETS
 from functions.utils import get_current_period
-from functions.ggSheet import read_spreadsheet
 
 
-def fetch_all(query: str, params: Optional[tuple] = None) -> list[dict]:
+# =====================
+# GENERIC DB HELPERS
+# =====================
+
+def fetch_all(query: str, params: tuple | None = None) -> list[dict]:
     """
     Generic SELECT query executor
     """
@@ -23,9 +24,9 @@ def fetch_all(query: str, params: Optional[tuple] = None) -> list[dict]:
         conn.close()
 
 
-# -------------------------------
-# Domain-specific queries
-# -------------------------------
+# =====================
+# DOMAIN QUERIES
+# =====================
 
 def get_accounts(limit: int = 10) -> list[dict]:
     query = """
@@ -37,7 +38,7 @@ def get_accounts(limit: int = 10) -> list[dict]:
 
 
 def get_masterbudgets(
-    account_codes: Optional[Sequence[str]] = None
+    account_codes: list[str] | None = None,
 ) -> list[dict]:
     """
     Get master budgets for the current month/year.
@@ -45,7 +46,6 @@ def get_masterbudgets(
     - Filters by SERVICE_BUDGETS (always)
     - Optionally filters by one or more account codes
     """
-    # Normalize string input defensively
     if isinstance(account_codes, str):
         account_codes = [account_codes]
 
@@ -71,7 +71,7 @@ def get_masterbudgets(
         f"AND b.serviceId IN ({service_placeholders})"
     )
 
-    params = [month, year, *SERVICE_BUDGETS]
+    params: list = [month, year, *SERVICE_BUDGETS]
 
     if account_codes:
         placeholders = ", ".join(["%s"] * len(account_codes))
@@ -82,12 +82,10 @@ def get_masterbudgets(
 
 
 def get_allocations(
-    account_codes: Optional[Sequence[str]] = None
+    account_codes: list[str] | None = None,
 ) -> list[dict]:
     """
     Get SpendShare allocations for the current month/year.
-
-    - Optionally filtered by one or more account codes
     """
     if isinstance(account_codes, str):
         account_codes = [account_codes]
@@ -106,7 +104,7 @@ def get_allocations(
         "AND year = %s"
     )
 
-    params = [month, year]
+    params: list = [month, year]
 
     if account_codes:
         placeholders = ", ".join(["%s"] * len(account_codes))
@@ -117,7 +115,7 @@ def get_allocations(
 
 
 def get_rollbreakdowns(
-    account_codes: Optional[Sequence[str]] = None
+    account_codes: list[str] | None = None,
 ) -> list[dict]:
     """
     Get SpendShare roll breakdowns for one or more accounts
@@ -140,7 +138,7 @@ def get_rollbreakdowns(
         "AND year = %s"
     )
 
-    params = [month, year]
+    params: list = [month, year]
 
     if account_codes:
         placeholders = ", ".join(["%s"] * len(account_codes))
@@ -149,40 +147,3 @@ def get_rollbreakdowns(
 
     return fetch_all(query, tuple(params))
 
-
-def get_rollovers(
-    account_codes: Optional[Sequence[str]] = None
-) -> list[dict]:
-    SPREADSHEET_ID = "1wbKImoY7_fv_dcn_bA9pL7g9htrWMKXB0EqVu09-KEQ"
-    RANGE_NAME = "0.0 LowcoderRollover"
-
-    data = read_spreadsheet(
-        spreadsheet_id=SPREADSHEET_ID,
-        range_name=RANGE_NAME
-    )
-
-    if not data:
-        return []
-
-    if isinstance(account_codes, str):
-        account_codes = [account_codes]
-
-    period = get_current_period()
-    current_month = period["month"]
-    current_year = period["year"]
-
-    normalized_accounts = (
-        {code.strip().upper() for code in account_codes}
-        if account_codes
-        else None
-    )
-
-    return [
-        row for row in data
-        if int(row.get("month", 0)) == current_month
-        and int(row.get("year", 0)) == current_year
-        and (
-            normalized_accounts is None
-            or row.get("accountCode", "").strip().upper() in normalized_accounts
-        )
-    ]
