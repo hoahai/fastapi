@@ -112,6 +112,20 @@ if __name__ == "__main__":
         # 3. Google Ads — Parallel
         # =====================================================
         accounts = get_ggad_accounts()
+        logger.info(
+            "Get GG Accounts",
+            extra={
+                "extra_fields": {
+                    "event": "job_success",
+                    "job": "get_ggad_accounts",
+                    "account_codes": (
+                        sorted(accounts)
+                        if accounts
+                        else "ALL"
+                    ),
+                }
+            },
+        )
 
         if account_code_filter is not None:
             accounts = [
