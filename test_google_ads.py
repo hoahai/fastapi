@@ -1,10 +1,19 @@
 # test_mysql_with_rollovers.py
 
+from __future__ import annotations
+
+import os
+import pandas as pd
+from datetime import datetime
+import pytz
+
 from functions.db_queries import (
     get_masterbudgets,
     get_allocations,
     get_rollbreakdowns,
 )
+
+from functions.ggSheet import get_rollovers
 
 from functions.ggAd import (
     get_ggad_accounts,
@@ -12,6 +21,8 @@ from functions.ggAd import (
     get_ggad_budgets,
     get_ggad_spents,
 )
+
+from functions.dataTransform import transform_google_ads_budget_pipeline
 
 from functions.utils import run_parallel
 from functions.logger import (
@@ -24,7 +35,10 @@ from functions.logger import (
 # =========================================================
 # LOGGER
 # =========================================================
+# File-only logger (default)
+file_logger = get_logger("job")
 
+# Logger
 logger = get_logger(__name__)
 enable_console_logging(logger)
 
@@ -37,6 +51,8 @@ enable_console_logging(logger)
 # - "TAC"             → single account
 # - ["TAC", "TAAA"]   → multiple accounts
 ACCOUNT_CODE = ["TAC", "TAAA"]
+
+OUTPUT_DIR = "output"
 
 # =========================================================
 # HELPERS
@@ -76,7 +92,12 @@ if __name__ == "__main__":
         account_code_filter = normalize_account_codes(ACCOUNT_CODE)
 
         # =====================================================
-        # 1. MySQL — Parallel
+        # 1. Google Sheets (SYNC — NO THREADS)
+        # =====================================================
+        rollovers = get_rollovers(ACCOUNT_CODE)
+
+        # =====================================================
+        # 2. MySQL — Parallel
         # =====================================================
         master_budgets, allocations, rollbreakdowns = run_parallel(
             tasks=[
@@ -88,7 +109,7 @@ if __name__ == "__main__":
         )
 
         # =====================================================
-        # 2. Google Ads — Parallel
+        # 3. Google Ads — Parallel
         # =====================================================
         accounts = get_ggad_accounts()
 
@@ -106,6 +127,47 @@ if __name__ == "__main__":
                 (get_ggad_spents, (accounts,)),
             ],
             api_name="google_ads",
+        )
+
+        # =====================================================
+        # 4. Transform Data
+        # =====================================================
+        results = transform_google_ads_budget_pipeline(
+            master_budgets=master_budgets,
+            campaigns=campaigns,
+            budgets=budgets,
+            costs=costs,
+            allocations=allocations,
+            rollovers=rollovers,
+        )
+
+        # =====================================================
+        # 5. Export Results to Excel (overwrite)
+        # =====================================================
+        os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+        output_file = os.path.join(
+            OUTPUT_DIR,
+            "results.xlsx",   # fixed name → overwrite
+        )
+
+        df = pd.DataFrame(results)
+        df.to_excel(
+            output_file,
+            index=False,
+            engine="openpyxl",
+        )
+
+        file_logger.info(
+            "Results exported to Excel",
+            extra={
+                "extra_fields": {
+                    "event": "export_excel",
+                    "file_path": output_file,
+                    "rows": len(results),
+                }
+            },
+
         )
 
         # =====================================================

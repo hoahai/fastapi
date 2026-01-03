@@ -42,6 +42,7 @@ dist/
 # ------------------
 # Test Files
 # ------------------
+output/
 *.xlsx
 *.json
 *.csv
