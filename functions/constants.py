@@ -102,5 +102,19 @@ PARALLEL_RATE_INTERVAL = 1.0   # per second
 # LOGGING CONFIG
 # =====================
 
-LOGGING_ENABLED = True        # Set False to completely disable logging
-LOG_LEVEL = "INFO"           # DEBUG | INFO | WARNING | ERROR | CRITICAL
+# Global switch
+LOGGING_ENABLED = True
+
+# Logging level
+# DEBUG | INFO | WARNING | ERROR | CRITICAL
+LOG_LEVEL = "INFO"
+
+# Directory for all logs
+LOG_DIR = "logs"
+
+# Per-run file rotation (within a single run)
+LOG_MAX_BYTES = 1 * 1024 * 1024   # 10 MB per file
+LOG_BACKUP_COUNT = 5               # Rotated files per run
+
+# Retention policy
+LOG_RETENTION_DAYS = 1             # Delete logs older than N days
