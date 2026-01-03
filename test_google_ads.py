@@ -50,7 +50,7 @@ enable_console_logging(logger)
 # - None or ""        → all accounts
 # - "TAC"             → single account
 # - ["TAC", "TAAA"]   → multiple accounts
-ACCOUNT_CODE = ["TAC", "TAAA"]
+ACCOUNT_CODE = []
 
 OUTPUT_DIR = "output"
 
@@ -63,20 +63,25 @@ def normalize_account_codes(account_code):
     Normalize account_code into a set[str] (uppercase),
     or None meaning "all accounts".
     """
-    if not account_code:
+    if account_code is None:
         return None
 
+    # Empty string or whitespace → all accounts
     if isinstance(account_code, str):
-        return {account_code.strip().upper()}
+        code = account_code.strip()
+        return {code.upper()} if code else None
 
+    # Empty list → all accounts
     if isinstance(account_code, list):
-        return {
+        cleaned = {
             code.strip().upper()
             for code in account_code
             if isinstance(code, str) and code.strip()
         }
+        return cleaned if cleaned else None
 
     raise TypeError("ACCOUNT_CODE must be None, str, or list[str]")
+
 
 # =========================================================
 # MAIN
@@ -112,20 +117,7 @@ if __name__ == "__main__":
         # 3. Google Ads — Parallel
         # =====================================================
         accounts = get_ggad_accounts()
-        logger.info(
-            "Get GG Accounts",
-            extra={
-                "extra_fields": {
-                    "event": "job_success",
-                    "job": "get_ggad_accounts",
-                    "account_codes": (
-                        sorted(accounts)
-                        if accounts
-                        else "ALL"
-                    ),
-                }
-            },
-        )
+        account_code_filter = normalize_account_codes(ACCOUNT_CODE)
 
         if account_code_filter is not None:
             accounts = [
