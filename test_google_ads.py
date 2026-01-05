@@ -50,7 +50,7 @@ enable_console_logging(logger)
 # - None or ""        → all accounts
 # - "TAC"             → single account
 # - ["TAC", "TAAA"]   → multiple accounts
-ACCOUNT_CODE = ['AUC']
+ACCOUNT_CODE = []
 
 OUTPUT_DIR = "output"
 

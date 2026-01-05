@@ -158,14 +158,15 @@ def group_campaigns_by_budget(rows: list[dict]) -> list[dict]:
 
         if budget_id not in grouped:
             grouped[budget_id] = {
+                "ggAccountId": r.get("customerId"),
+                "accountCode": r.get("accountCode"),
+                "adTypeCode": r.get("adTypeCode"),
+                "services": r.get("services", []),
+                "netAmount": r.get("netAmount"),
                 "budgetId": budget_id,
                 "budgetName": r.get("budgetName"),
                 "budgetStatus": r.get("budgetStatus"),
                 "budgetAmount": r.get("budgetAmount", Decimal("0")),
-                "accountCode": r.get("accountCode"),
-                "adTypeCode": r.get("adTypeCode"),
-                "netAmount": r.get("netAmount"),
-                "services": r.get("services", []),
                 "campaigns": [],
                 "campaignNames": "",
                 "_campaign_names": [],   # internal helper
@@ -287,4 +288,17 @@ def transform_google_ads_budget_pipeline(
     budgets_grouped = budget_rollover_join(budgets_grouped, rollovers)
     budgets_grouped = calculate_daily_budget(budgets_grouped)
 
-    return budgets_grouped
+    # --------------------------------------------------
+    # SORT RESULT USING PANDAS
+    # --------------------------------------------------
+    df = pd.DataFrame(budgets_grouped)
+
+    df_sorted = df.sort_values(
+        by=["accountCode", "adTypeCode"],
+        ascending=[True, False],
+        na_position="last"
+    )
+
+    result = df_sorted.to_dict(orient="records")
+
+    return result
