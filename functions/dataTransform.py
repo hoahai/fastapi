@@ -287,7 +287,7 @@ def calculate_daily_budget(
 # ============================================================
 
 
-def update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
+def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
     budget_updates: dict[str, list[dict]] = {}
     campaign_updates: dict[str, list[dict]] = {}
 
@@ -352,6 +352,17 @@ def update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
         for cid, updates in campaign_updates.items()
     ]
 
+    logger.info(
+        "Payload Data",
+        extra={
+            "extra_fields": {
+                "operation": "generate_update_payloads",
+                "budget_payloads": budget_payloads,
+                "campaign_payloads": campaign_payloads,
+            }
+        },
+    )
+
     return budget_payloads, campaign_payloads
 
 
@@ -381,21 +392,6 @@ def transform_google_ads_data(
     step6 = budget_allocation_join(step5, allocations)
     step7 = budget_rollover_join(step6, rollovers)
     step8 = calculate_daily_budget(step7)
-
-    budget_payloads, campaign_payloads = update_payloads(step8)
-    budget_payloads = list(budget_payloads)
-    campaign_payloads = list(campaign_payloads)
-
-    logger.info(
-        "Data",
-        extra={
-            "extra_fields": {
-                "operation": "transform_google_ads_budget_pipeline",
-                "budget_payloads": budget_payloads,
-                "campaign_payloads": campaign_payloads,
-            }
-        },
-    )
 
     # --------------------------------------------------
     # SORT RESULT USING PANDAS

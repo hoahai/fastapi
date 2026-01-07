@@ -9,6 +9,7 @@ from functions.utils import get_current_period
 # GENERIC DB HELPERS
 # =====================
 
+
 def fetch_all(query: str, params: tuple | None = None) -> list[dict]:
     """
     Generic SELECT query executor
@@ -28,13 +29,51 @@ def fetch_all(query: str, params: tuple | None = None) -> list[dict]:
 # DOMAIN QUERIES
 # =====================
 
-def get_accounts(limit: int = 10) -> list[dict]:
-    query = """
-        SELECT code, name
-        FROM Accounts
-        LIMIT %s
+
+def get_accounts(account_codes: str | list[str] | None = None) -> list[dict]:
     """
-    return fetch_all(query, (limit,))
+    Fetch accounts from DB.
+
+    - account_codes is None or empty → return ALL accounts
+    - account_codes is str → return that account if exists
+    - account_codes is list[str] → return matching accounts
+    """
+
+    # -----------------------------------------
+    # Normalize input
+    # -----------------------------------------
+    if account_codes is None:
+        codes = None
+    elif isinstance(account_codes, str):
+        code = account_codes.strip()
+        codes = [code.upper()] if code else None
+    elif isinstance(account_codes, list):
+        codes = [
+            c.strip().upper() for c in account_codes if isinstance(c, str) and c.strip()
+        ]
+        codes = codes or None
+    else:
+        raise TypeError("account_codes must be None, str, or list[str]")
+
+    # -----------------------------------------
+    # Build query
+    # -----------------------------------------
+    if not codes:
+        query = """
+            SELECT code, name
+            FROM Accounts
+        """
+        params = ()
+    else:
+        placeholders = ",".join(["%s"] * len(codes))
+        query = f"""
+            SELECT code, name
+            FROM Accounts
+            WHERE UPPER(code) IN ({placeholders})
+        """
+        params = tuple(codes)
+
+    return fetch_all(query, params)
 
 
 def get_masterbudgets(
@@ -146,4 +185,3 @@ def get_rollbreakdowns(
         params.extend(account_codes)
 
     return fetch_all(query, tuple(params))
-

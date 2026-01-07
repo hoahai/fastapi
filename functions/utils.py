@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, date
+from zoneinfo import ZoneInfo
 import calendar
 import pytz
 import time
@@ -41,6 +42,7 @@ logger = get_logger("parallel")
 # DATE HELPERS
 # ======================================================
 
+
 def get_current_period() -> dict:
     tz = pytz.timezone(TIMEZONE)
     now = datetime.now(tz)
@@ -59,9 +61,11 @@ def get_current_period() -> dict:
         "end_date": end_date.isoformat(),
     }
 
+
 # ======================================================
 # RATE LIMIT
 # ======================================================
+
 
 class RateLimitBucket:
     def __init__(self, rate: int, per: float) -> None:
@@ -99,6 +103,7 @@ GLOBAL_RATE_BUCKET: Optional[RateLimitBucket] = (
 # VALIDATION
 # ======================================================
 
+
 def _validate_task(task: ParallelTask) -> None:
     if not isinstance(task, tuple) or len(task) != 2:
         raise TypeError("Task must be (callable, args_tuple)")
@@ -114,9 +119,11 @@ def _validate_task(task: ParallelTask) -> None:
     if not isinstance(args, tuple):
         raise TypeError("Args must be tuple")
 
+
 # ======================================================
 # SAFE PARAM LOGGING
 # ======================================================
+
 
 def _safe_serialize_args(args: tuple[Any, ...]) -> list[Any]:
     out: list[Any] = []
@@ -131,9 +138,11 @@ def _safe_serialize_args(args: tuple[Any, ...]) -> list[Any]:
             out.append({"type": type(a).__name__})
     return out
 
+
 # ======================================================
 # TASK EXECUTION
 # ======================================================
+
 
 def _run_with_retry(
     func: Callable[..., R],
@@ -151,10 +160,12 @@ def _run_with_retry(
                 GLOBAL_RATE_BUCKET.acquire()
 
             if PARALLEL_JITTER_MAX > 0:
-                time.sleep(random.uniform(
-                    PARALLEL_JITTER_MIN,
-                    PARALLEL_JITTER_MAX,
-                ))
+                time.sleep(
+                    random.uniform(
+                        PARALLEL_JITTER_MIN,
+                        PARALLEL_JITTER_MAX,
+                    )
+                )
 
             result = func(*args)
             duration = time.monotonic() - start
@@ -201,9 +212,11 @@ def _run_with_retry(
             )
             time.sleep(backoff)
 
+
 # ======================================================
 # PARALLEL EXECUTION
 # ======================================================
+
 
 def run_parallel(
     *,
@@ -249,9 +262,11 @@ def run_parallel(
 
     return results
 
+
 # ======================================================
 # FLATTEN
 # ======================================================
+
 
 def run_parallel_flatten(
     *,
@@ -274,3 +289,29 @@ def run_parallel_flatten(
             flattened.append(r)
 
     return flattened
+
+
+# ======================================================
+# ROUTE META
+# ======================================================
+
+
+def format_hms(seconds: float) -> str:
+    total_ms = int(seconds * 1000)
+    s, ms = divmod(total_ms, 1000)
+    m, s = divmod(s, 60)
+    h, m = divmod(m, 60)
+    return f"{h:02}:{m:02}:{s:02}.{ms:03}"
+
+
+def with_meta(*, data: dict | list, start_time: float) -> dict:
+    duration = time.perf_counter() - start_time
+
+    return {
+        "meta": {
+            "timestamp": datetime.now(ZoneInfo(TIMEZONE)).isoformat(),
+            "duration_ms": int(duration * 1000),
+            "duration_hms": format_hms(duration),
+        },
+        "data": data,
+    }

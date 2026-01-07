@@ -17,7 +17,7 @@ from functions.ggAd import (
     update_campaign_statuses,
 )
 
-from functions.dataTransform import transform_google_ads_data
+from functions.dataTransform import transform_google_ads_data, generate_update_payloads
 
 from functions.utils import run_parallel
 from functions.logger import get_logger
@@ -138,32 +138,9 @@ def run_google_ads_budget_pipeline(
     )
 
     # =====================================================
-    # 4. Build mutation payloads per customer
+    # 4. Generate mutation payloads
     # =====================================================
-    budget_payloads = defaultdict(list)
-    campaign_payloads = defaultdict(list)
-
-    for r in results:
-        customer_id = r.get("customerId")
-        if not customer_id:
-            continue
-
-        if r.get("budgetId") and r.get("newAmount") is not None:
-            budget_payloads[customer_id].append(
-                {
-                    "budgetId": r["budgetId"],
-                    "currentAmount": r.get("currentAmount"),
-                    "newAmount": r["newAmount"],
-                }
-            )
-
-        if r.get("campaignId") and r.get("newStatus"):
-            campaign_payloads[customer_id].append(
-                {
-                    "campaignId": r["campaignId"],
-                    "status": r["newStatus"],
-                }
-            )
+    budget_payloads, campaign_payloads = generate_update_payloads(results)
 
     # =====================================================
     # 5. Execute Google Ads mutations (parallel)
@@ -173,10 +150,28 @@ def run_google_ads_budget_pipeline(
     if not dry_run:
         tasks = []
 
-        for customer_id, updates in budget_payloads.items():
+        # -------------------------
+        # Budget updates
+        # -------------------------
+        for payload in budget_payloads:
+            customer_id = payload["customer_id"]
+            updates = payload["updates"]
+
+            if not updates:
+                continue
+
             tasks.append((_run_budget_update, (customer_id, updates)))
 
-        for customer_id, updates in campaign_payloads.items():
+        # -------------------------
+        # Campaign updates
+        # -------------------------
+        for payload in campaign_payloads:
+            customer_id = payload["customer_id"]
+            updates = payload["updates"]
+
+            if not updates:
+                continue
+
             tasks.append((_run_campaign_update, (customer_id, updates)))
 
         mutation_results = run_parallel(
@@ -207,12 +202,12 @@ def run_google_ads_budget_pipeline(
     # =====================================================
     # 7. Email FULL report
     # =====================================================
-    email_body = build_google_ads_result_email(full_report=pipeline_result)
+    # email_body = build_google_ads_result_email(full_report=pipeline_result)
 
-    send_google_ads_result_email(
-        subject="Spendsphere – Google Ads update report",
-        body=email_body,
-    )
+    # send_google_ads_result_email(
+    #     subject="Spendsphere – Google Ads update report",
+    #     body=email_body,
+    # )
 
     logger.info(
         "Google Ads pipeline completed",
