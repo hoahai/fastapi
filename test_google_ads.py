@@ -4,8 +4,6 @@ from __future__ import annotations
 
 import os
 import pandas as pd
-from datetime import datetime
-import pytz
 
 from functions.db_queries import (
     get_masterbudgets,
@@ -20,9 +18,11 @@ from functions.ggAd import (
     get_ggad_campaigns,
     get_ggad_budgets,
     get_ggad_spents,
+    update_budgets,
+    update_campaign_statuses,
 )
 
-from functions.dataTransform import transform_google_ads_budget_pipeline
+from functions.dataTransform import transform_google_ads_data
 
 from functions.utils import run_parallel
 from functions.logger import (
@@ -50,13 +50,14 @@ enable_console_logging(logger)
 # - None or ""        → all accounts
 # - "TAC"             → single account
 # - ["TAC", "TAAA"]   → multiple accounts
-ACCOUNT_CODE = []
+ACCOUNT_CODE = ["TAAA", "DRMK"]
 
 OUTPUT_DIR = "output"
 
 # =========================================================
 # HELPERS
 # =========================================================
+
 
 def normalize_account_codes(account_code):
     """
@@ -81,6 +82,26 @@ def normalize_account_codes(account_code):
         return cleaned if cleaned else None
 
     raise TypeError("ACCOUNT_CODE must be None, str, or list[str]")
+
+
+def run_budget_update(customer_id: str, updates: list[dict]) -> dict:
+    """
+    Wrapper for parallel execution (args-only).
+    """
+    return update_budgets(
+        customer_id=customer_id,
+        updates=updates,
+    )
+
+
+def run_campaign_update(customer_id: str, updates: list[dict]) -> dict:
+    """
+    Wrapper for parallel execution (args-only).
+    """
+    return update_campaign_statuses(
+        customer_id=customer_id,
+        updates=updates,
+    )
 
 
 # =========================================================
@@ -138,7 +159,7 @@ if __name__ == "__main__":
         # =====================================================
         # 4. Transform Data
         # =====================================================
-        results = transform_google_ads_budget_pipeline(
+        results = transform_google_ads_data(
             master_budgets=master_budgets,
             campaigns=campaigns,
             budgets=budgets,
@@ -154,7 +175,7 @@ if __name__ == "__main__":
 
         output_file = os.path.join(
             OUTPUT_DIR,
-            "results.xlsx",   # fixed name → overwrite
+            "results.xlsx",  # fixed name → overwrite
         )
 
         df = pd.DataFrame(results)
@@ -173,7 +194,6 @@ if __name__ == "__main__":
                     "rows": len(results),
                 }
             },
-
         )
 
         # =====================================================
@@ -186,9 +206,7 @@ if __name__ == "__main__":
                     "event": "job_success",
                     "job": "test_mysql_with_rollovers",
                     "account_codes": (
-                        sorted(account_code_filter)
-                        if account_code_filter
-                        else "ALL"
+                        sorted(account_code_filter) if account_code_filter else "ALL"
                     ),
                 }
             },

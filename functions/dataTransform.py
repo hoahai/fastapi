@@ -8,20 +8,25 @@ import pytz
 import pandas as pd
 
 from functions.constants import SERVICE_MAPPING, TIMEZONE
+from functions.logger import get_logger
 
+logger = get_logger("mySQL")
 
 # ============================================================
 # 1. MASTER BUDGET → AD TYPE MAPPING
 # ============================================================
 
+
 def master_budget_ad_type_mapping(master_budgets: list[dict]) -> list[dict]:
     """
     Aggregate master budgets by (accountCode, adTypeCode).
     """
-    grouped = defaultdict(lambda: {
-        "netAmount": Decimal("0"),
-        "services": [],
-    })
+    grouped = defaultdict(
+        lambda: {
+            "netAmount": Decimal("0"),
+            "services": [],
+        }
+    )
 
     for mb in master_budgets:
         service_id = mb.get("serviceId")
@@ -33,11 +38,13 @@ def master_budget_ad_type_mapping(master_budgets: list[dict]) -> list[dict]:
         net_amount = Decimal(str(mb.get("netAmount", 0)))
 
         grouped[key]["netAmount"] += net_amount
-        grouped[key]["services"].append({
-            "serviceId": service_id,
-            "serviceName": service_mapping["serviceName"],
-            "netAmount": net_amount,
-        })
+        grouped[key]["services"].append(
+            {
+                "serviceId": service_id,
+                "serviceName": service_mapping["serviceName"],
+                "netAmount": net_amount,
+            }
+        )
 
     return [
         {
@@ -53,6 +60,7 @@ def master_budget_ad_type_mapping(master_budgets: list[dict]) -> list[dict]:
 # ============================================================
 # 2. JOIN CAMPAIGNS (FLAT)
 # ============================================================
+
 
 def master_budget_campaigns_join(
     master_budget_data: list[dict],
@@ -72,14 +80,16 @@ def master_budget_campaigns_join(
     for mb in master_budget_data:
         key = (mb.get("accountCode"), mb.get("adTypeCode"))
         for c in lookup.get(key, []):
-            rows.append({
-                **mb,
-                "customerId": c.get("customerId"),
-                "campaignId": c.get("campaignId"),
-                "campaignName": c.get("campaignName"),
-                "budgetId": c.get("budgetId"),
-                "campaignStatus": c.get("status"),
-            })
+            rows.append(
+                {
+                    **mb,
+                    "customerId": c.get("customerId"),
+                    "campaignId": c.get("campaignId"),
+                    "campaignName": c.get("campaignName"),
+                    "budgetId": c.get("budgetId"),
+                    "campaignStatus": c.get("status"),
+                }
+            )
 
     return rows
 
@@ -87,6 +97,7 @@ def master_budget_campaigns_join(
 # ============================================================
 # 3. JOIN GOOGLE BUDGETS (FLAT)
 # ============================================================
+
 
 def master_budget_google_budgets_join(
     rows: list[dict],
@@ -102,9 +113,9 @@ def master_budget_google_budgets_join(
             **r,
             "budgetName": lookup.get(r.get("budgetId"), {}).get("budgetName"),
             "budgetStatus": lookup.get(r.get("budgetId"), {}).get("status"),
-            "budgetAmount": Decimal(str(
-                lookup.get(r.get("budgetId"), {}).get("amount", 0)
-            )),
+            "budgetAmount": Decimal(
+                str(lookup.get(r.get("budgetId"), {}).get("amount", 0))
+            ),
         }
         for r in rows
     ]
@@ -113,6 +124,7 @@ def master_budget_google_budgets_join(
 # ============================================================
 # 4. JOIN COSTS (CAMPAIGN LEVEL)
 # ============================================================
+
 
 def campaign_costs_join(
     rows: list[dict],
@@ -132,8 +144,7 @@ def campaign_costs_join(
         return df_rows.to_dict(orient="records")
 
     df_costs = (
-        df_costs
-        .groupby("campaignId", as_index=False)["cost"]
+        df_costs.groupby("campaignId", as_index=False)["cost"]
         .sum()
         .rename(columns={"cost": "cost"})
     )
@@ -147,6 +158,7 @@ def campaign_costs_join(
 # ============================================================
 # 5. GROUP BY BUDGET (CORE CHANGE)
 # ============================================================
+
 
 def group_campaigns_by_budget(rows: list[dict]) -> list[dict]:
     grouped: dict[str, dict] = {}
@@ -169,17 +181,19 @@ def group_campaigns_by_budget(rows: list[dict]) -> list[dict]:
                 "budgetAmount": r.get("budgetAmount", Decimal("0")),
                 "campaigns": [],
                 "campaignNames": "",
-                "_campaign_names": [],   # internal helper
+                "_campaign_names": [],  # internal helper
             }
 
         campaign_name = r.get("campaignName")
 
-        grouped[budget_id]["campaigns"].append({
-            "campaignId": r.get("campaignId"),
-            "campaignName": campaign_name,
-            "status": r.get("campaignStatus"),
-            "cost": r.get("cost", Decimal("0")),
-        })
+        grouped[budget_id]["campaigns"].append(
+            {
+                "campaignId": r.get("campaignId"),
+                "campaignName": campaign_name,
+                "status": r.get("campaignStatus"),
+                "cost": r.get("cost", Decimal("0")),
+            }
+        )
 
         if campaign_name:
             grouped[budget_id]["_campaign_names"].append(campaign_name)
@@ -192,22 +206,21 @@ def group_campaigns_by_budget(rows: list[dict]) -> list[dict]:
     return list(grouped.values())
 
 
-
 # ============================================================
 # 6. JOIN ALLOCATIONS & ROLLOVERS (BUDGET LEVEL)
 # ============================================================
+
 
 def budget_allocation_join(
     budgets: list[dict],
     allocations: list[dict],
 ) -> list[dict]:
     lookup = {
-        a.get("ggBudgetId"): Decimal(str(a.get("allocation", 0)))
-        for a in allocations
+        a.get("ggBudgetId"): Decimal(str(a.get("allocation", 0))) for a in allocations
     }
 
     for b in budgets:
-        b["allocation"] = lookup.get(b["budgetId"], Decimal("100"))
+        b["allocation"] = lookup.get(b["budgetId"], None)
 
     return budgets
 
@@ -216,10 +229,7 @@ def budget_rollover_join(
     budgets: list[dict],
     rollovers: list[dict],
 ) -> list[dict]:
-    lookup = {
-        r.get("adTypeCode"): Decimal(str(r.get("amount", 0)))
-        for r in rollovers
-    }
+    lookup = {r.get("adTypeCode"): Decimal(str(r.get("amount", 0))) for r in rollovers}
 
     for b in budgets:
         b["rolloverAmount"] = lookup.get(b["adTypeCode"], Decimal("0"))
@@ -230,6 +240,7 @@ def budget_rollover_join(
 # ============================================================
 # 7. CALCULATE DAILY BUDGET (BUDGET LEVEL)
 # ============================================================
+
 
 def calculate_daily_budget(
     budgets: list[dict],
@@ -250,12 +261,21 @@ def calculate_daily_budget(
         total_cost = sum(c["cost"] for c in b["campaigns"])
         net = Decimal(str(b.get("netAmount", 0)))
         rollover = Decimal(str(b.get("rolloverAmount", 0)))
-        allocation_pct = Decimal(str(b.get("allocation", 100))) / Decimal("100")
+        allocation = b.get("allocation")
+
+        b["totalCost"] = Decimal(str(total_cost)).quantize(Decimal("0.01"))
+
+        # 🔹 Handle missing allocation
+        if allocation is None:
+            b["remainingBudget"] = None
+            b["dailyBudget"] = None
+            continue
+
+        allocation_pct = Decimal(str(allocation)) / Decimal("100")
 
         remaining = (net + rollover) * allocation_pct - total_cost
         daily = remaining / days_left if days_left > 0 else Decimal("0")
 
-        b["totalCost"] = total_cost.quantize(Decimal("0.01"))
         b["remainingBudget"] = remaining.quantize(Decimal("0.01"))
         b["dailyBudget"] = daily.quantize(Decimal("0.01"))
 
@@ -263,10 +283,84 @@ def calculate_daily_budget(
 
 
 # ============================================================
+# 8. UPDATE PAYLOADS
+# ============================================================
+
+
+def update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
+    budget_updates: dict[str, list[dict]] = {}
+    campaign_updates: dict[str, list[dict]] = {}
+
+    for row in data:
+        customer_id = row["ggAccountId"]
+
+        daily_budget_raw = row.get("dailyBudget")
+        budget_amount_raw = row.get("budgetAmount")
+
+        # dailyBudget is required for BOTH
+        if daily_budget_raw is None:
+            continue
+
+        daily_budget = Decimal(daily_budget_raw)
+
+        # Inline expected status logic
+        expected_status = "ENABLED" if daily_budget >= Decimal("0.01") else "PAUSED"
+
+        campaigns = row.get("campaigns", [])
+
+        # -------------------------
+        # Campaign status updates (independent)
+        # -------------------------
+        for campaign in campaigns:
+            if campaign["status"] != expected_status:
+                campaign_updates.setdefault(customer_id, []).append(
+                    {"campaignId": campaign["campaignId"], "status": expected_status}
+                )
+
+        # -------------------------
+        # Budget updates (stricter rules)
+        # -------------------------
+        if budget_amount_raw is None:
+            continue
+
+        budget_amount = Decimal(budget_amount_raw)
+
+        # Only update when values differ
+        if daily_budget == budget_amount:
+            continue
+
+        # Enforce Google Ads minimum
+        amount_to_set = (
+            Decimal("0.01") if daily_budget <= Decimal("0") else daily_budget
+        )
+
+        budget_updates.setdefault(customer_id, []).append(
+            {
+                "budgetId": row["budgetId"],
+                "currentAmount": float(budget_amount),
+                "newAmount": float(amount_to_set),
+            }
+        )
+
+    budget_payloads = [
+        {"customer_id": cid, "updates": updates}
+        for cid, updates in budget_updates.items()
+    ]
+
+    campaign_payloads = [
+        {"customer_id": cid, "updates": updates}
+        for cid, updates in campaign_updates.items()
+    ]
+
+    return budget_payloads, campaign_payloads
+
+
+# ============================================================
 # 8. PIPELINE ORCHESTRATOR
 # ============================================================
 
-def transform_google_ads_budget_pipeline(
+
+def transform_google_ads_data(
     master_budgets: list[dict],
     campaigns: list[dict],
     budgets: list[dict],
@@ -278,25 +372,38 @@ def transform_google_ads_budget_pipeline(
     Full Google Ads budget pipeline (BUDGET-CENTRIC).
     """
 
-    rows = master_budget_ad_type_mapping(master_budgets)
-    rows = master_budget_campaigns_join(rows, campaigns)
-    rows = master_budget_google_budgets_join(rows, budgets)
-    rows = campaign_costs_join(rows, costs)
+    step1 = master_budget_ad_type_mapping(master_budgets)
+    step2 = master_budget_campaigns_join(step1, campaigns)
+    step3 = master_budget_google_budgets_join(step2, budgets)
+    step4 = campaign_costs_join(step3, costs)
 
-    budgets_grouped = group_campaigns_by_budget(rows)
-    budgets_grouped = budget_allocation_join(budgets_grouped, allocations)
-    budgets_grouped = budget_rollover_join(budgets_grouped, rollovers)
-    budgets_grouped = calculate_daily_budget(budgets_grouped)
+    step5 = group_campaigns_by_budget(step4)
+    step6 = budget_allocation_join(step5, allocations)
+    step7 = budget_rollover_join(step6, rollovers)
+    step8 = calculate_daily_budget(step7)
+
+    budget_payloads, campaign_payloads = update_payloads(step8)
+    budget_payloads = list(budget_payloads)
+    campaign_payloads = list(campaign_payloads)
+
+    logger.info(
+        "Data",
+        extra={
+            "extra_fields": {
+                "operation": "transform_google_ads_budget_pipeline",
+                "budget_payloads": budget_payloads,
+                "campaign_payloads": campaign_payloads,
+            }
+        },
+    )
 
     # --------------------------------------------------
     # SORT RESULT USING PANDAS
     # --------------------------------------------------
-    df = pd.DataFrame(budgets_grouped)
+    df = pd.DataFrame(step8)
 
     df_sorted = df.sort_values(
-        by=["accountCode", "adTypeCode"],
-        ascending=[True, False],
-        na_position="last"
+        by=["accountCode", "adTypeCode"], ascending=[True, False], na_position="last"
     )
 
     result = df_sorted.to_dict(orient="records")

@@ -2,13 +2,23 @@
 
 import re
 from google.ads.googleads.client import GoogleAdsClient
+from google.protobuf.field_mask_pb2 import FieldMask
+from google.protobuf.any_pb2 import Any
 from google.ads.googleads.errors import GoogleAdsException
 
 from functions.utils import (
     get_current_period,
     run_parallel_flatten,
 )
-from functions.constants import ADTYPES
+from functions.constants import (
+    ADTYPES,
+    GGADS_MAX_PAUSED_CAMPAIGNS,
+    GGADS_MIN_BUDGET,
+    GGADS_MAX_BUDGET_MULTIPLIER,
+    GGADS_ALLOWED_CAMPAIGN_STATUSES,
+)
+from functions.logger import get_logger
+logger = get_logger("google_ads")
 
 
 # =====================
@@ -46,10 +56,8 @@ def get_mcc_accounts() -> list[dict]:
     results: list[dict] = []
 
     try:
-        mcc_id = client.login_customer_id
-
         response = ga_service.search(
-            customer_id=mcc_id,
+            customer_id=client.login_customer_id,
             query=query,
         )
 
@@ -61,6 +69,10 @@ def get_mcc_accounts() -> list[dict]:
             })
 
     except GoogleAdsException as ex:
+        logger.error(
+            "Failed to fetch MCC accounts",
+            extra={"extra_fields": {"error": str(ex)}},
+        )
         raise RuntimeError(f"Google Ads API error: {ex.failure}") from ex
 
     return results
@@ -88,7 +100,6 @@ def get_ggad_accounts() -> list[dict]:
         if not match:
             continue
 
-        # Exclude zzz.* accounts explicitly
         if descriptive_name.lower().startswith("zzz."):
             continue
 
@@ -103,7 +114,7 @@ def get_ggad_accounts() -> list[dict]:
 
 
 # =====================
-# BUDGETS
+# BUDGETS (READ)
 # =====================
 
 def get_ggad_budget(customer_id: str) -> list[dict]:
@@ -127,19 +138,16 @@ def get_ggad_budget(customer_id: str) -> list[dict]:
     results: list[dict] = []
 
     try:
-        response = ga_service.search(
-            customer_id=customer_id,
-            query=query,
-        )
+        response = ga_service.search(customer_id=customer_id, query=query)
 
         for row in response:
-            budget = row.campaign_budget
+            b = row.campaign_budget
             results.append({
-                "budgetId": str(budget.id),
-                "budgetName": budget.name,
-                "explicitlyShared": budget.explicitly_shared,
-                "status": budget.status.name,
-                "amount": budget.amount_micros / 1_000_000 if budget.amount_micros else 0,
+                "budgetId": str(b.id),
+                "budgetName": b.name,
+                "explicitlyShared": b.explicitly_shared,
+                "status": b.status.name,
+                "amount": b.amount_micros / 1_000_000 if b.amount_micros else 0,
             })
 
     except GoogleAdsException as ex:
@@ -167,14 +175,11 @@ def get_ggad_budgets(accounts: list[dict]) -> list[dict]:
 
     tasks = [(per_account_func, (account,)) for account in accounts]
 
-    return run_parallel_flatten(
-        tasks=tasks,
-        api_name="google_ads",
-    )
+    return run_parallel_flatten(tasks=tasks, api_name="google_ads")
 
 
 # =====================
-# CAMPAIGNS
+# CAMPAIGNS (READ)
 # =====================
 
 def get_ggad_campaign(customer_id: str) -> list[dict]:
@@ -202,10 +207,7 @@ def get_ggad_campaign(customer_id: str) -> list[dict]:
     results: list[dict] = []
 
     try:
-        response = ga_service.search(
-            customer_id=customer_id,
-            query=query,
-        )
+        response = ga_service.search(customer_id=customer_id, query=query)
 
         for row in response:
             results.append({
@@ -229,8 +231,8 @@ def get_ggad_campaigns(accounts: list[dict]) -> list[dict]:
     filtered by naming convention:
     [zzz.][accountCode]_[adTypeCode]_[Name]
     """
-
     ad_type_pattern = "|".join(map(re.escape, ADTYPES.keys()))
+
 
     def per_account_func(account: dict) -> list[dict]:
         campaigns = get_ggad_campaign(account["id"])
@@ -250,7 +252,6 @@ def get_ggad_campaigns(accounts: list[dict]) -> list[dict]:
             if not match:
                 continue
 
-            # Exclude zzz.* campaigns explicitly
             if name.lower().startswith("zzz."):
                 continue
 
@@ -264,12 +265,9 @@ def get_ggad_campaigns(accounts: list[dict]) -> list[dict]:
 
         return filtered
 
-    tasks = [(per_account_func, (account,)) for account in accounts]
 
-    return run_parallel_flatten(
-        tasks=tasks,
-        api_name="google_ads",
-    )
+    tasks = [(per_account_func, (account,)) for account in accounts]
+    return run_parallel_flatten(tasks=tasks, api_name="google_ads")
 
 
 # =====================
@@ -304,10 +302,7 @@ def get_ggad_spent(customer_id: str) -> list[dict]:
     results: list[dict] = []
 
     try:
-        response = ga_service.search(
-            customer_id=customer_id,
-            query=query,
-        )
+        response = ga_service.search(customer_id=customer_id, query=query)
 
         for row in response:
             results.append({
@@ -344,7 +339,317 @@ def get_ggad_spents(accounts: list[dict]) -> list[dict]:
 
     tasks = [(per_account_func, (account,)) for account in accounts]
 
-    return run_parallel_flatten(
-        tasks=tasks,
-        api_name="google_ads",
+    return run_parallel_flatten(tasks=tasks, api_name="google_ads")
+
+
+# =====================
+# VALIDATION
+# =====================
+
+def validate_updates(
+    *,
+    customer_id: str,
+    updates: list[dict],
+    mode: str,  # "campaign_status" | "budget"
+) -> tuple[list[dict], list[dict]]:
+    """
+    Row-level validation and filtering.
+
+    Returns:
+        valid_updates, invalid_updates
+    """
+    if not updates:
+        raise ValueError("No updates provided")
+
+    valid: list[dict] = []
+    invalid: list[dict] = []
+
+    # =====================
+    # CAMPAIGN STATUS
+    # =====================
+    if mode == "campaign_status":
+        seen_ids = set()
+        paused_count = 0
+
+        for r in updates:
+            try:
+                if not {"campaignId", "status"}.issubset(r):
+                    raise ValueError("Missing campaignId or status")
+
+                campaign_id = r["campaignId"]
+                status = r["status"].upper()
+
+                if campaign_id in seen_ids:
+                    raise ValueError("Duplicate campaignId")
+
+                if status not in GGADS_ALLOWED_CAMPAIGN_STATUSES:
+                    raise ValueError(f"Invalid status: {status}")
+
+                if status == "PAUSED":
+                    paused_count += 1
+                    if paused_count > GGADS_MAX_PAUSED_CAMPAIGNS:
+                        raise ValueError("Pause-all protection triggered")
+
+                seen_ids.add(campaign_id)
+                valid.append(r)
+
+            except Exception as e:
+                invalid.append({**r, "error": str(e)})
+                logger.error(
+                    "Campaign row excluded by validation",
+                    extra={"extra_fields": {
+                        "operation": "validate_campaign_status",
+                        "customerId": customer_id,
+                        "reason": str(e),
+                        "row": r,
+                    }},
+                )
+
+    # =====================
+    # BUDGET
+    # =====================
+    elif mode == "budget":
+        seen_ids = set()
+
+        for r in updates:
+            try:
+                if not {"budgetId", "newAmount", "currentAmount"}.issubset(r):
+                    raise ValueError("Missing budgetId, currentAmount, or newAmount")
+
+                budget_id = r["budgetId"]
+                new_amount = r["newAmount"]
+                current_amount = r["currentAmount"]
+
+                if budget_id in seen_ids:
+                    raise ValueError("Duplicate budgetId")
+
+                # ✅ BLOCK UPWARD spikes ONLY
+                if new_amount > current_amount * GGADS_MAX_BUDGET_MULTIPLIER:
+                    raise ValueError("Budget spike exceeds allowed multiplier")
+
+                seen_ids.add(budget_id)
+                valid.append(r)
+
+            except Exception as e:
+                invalid.append({**r, "error": str(e)})
+                logger.error(
+                    "Budget row excluded by validation",
+                    extra={"extra_fields": {
+                        "operation": "validate_budget",
+                        "customerId": customer_id,
+                        "reason": str(e),
+                        "row": r,
+                    }},
+                )
+
+    else:
+        raise ValueError(f"Unknown validation mode: {mode}")
+
+    return valid, invalid
+
+
+# =====================
+# UPDATE BUDGETS
+# =====================
+
+def update_budgets(
+    *,
+    customer_id: str,
+    updates: list[dict],
+) -> dict:
+    """
+    Params:
+        customer_id: str
+        updates: [
+            { budgetId, currentAmount, newAmount }
+        ]
+    """
+    valid, invalid = validate_updates(
+        customer_id=customer_id,
+        updates=updates,
+        mode="budget",
     )
+
+    if not valid:
+        return {
+            "customerId": customer_id,
+            "operation": "update_budgets",
+            "summary": {
+                "total": len(updates),
+                "succeeded": 0,
+                "failed": len(invalid),
+            },
+            "successes": [],
+            "failures": invalid,
+        }
+
+    client = get_client()
+    service = client.get_service("CampaignBudgetService")
+
+    operations = []
+
+    for r in valid:
+        new_amount = r["newAmount"]
+        if new_amount <= 0:
+            new_amount = GGADS_MIN_BUDGET
+
+        op = client.get_type("CampaignBudgetOperation")
+        budget = op.update
+
+        budget.resource_name = service.campaign_budget_path(
+            customer_id,
+            r["budgetId"],
+        )
+        budget.amount_micros = int(new_amount * 1_000_000)
+
+        op.update_mask.CopyFrom(
+            FieldMask(paths=["amount_micros"])
+        )
+
+        operations.append(op)
+
+    # -------- v22 request object --------
+    request = client.get_type("MutateCampaignBudgetsRequest")
+    request.customer_id = customer_id
+    request.operations.extend(operations)
+    request.partial_failure = True
+
+    response = service.mutate_campaign_budgets(request=request)
+
+    successes = []
+    failures = invalid.copy()
+    successful_indices = set(range(len(valid)))
+
+    # -------- parse partial failure (v22-safe) --------
+    if response.partial_failure_error:
+        failure = client.get_type("GoogleAdsFailure")
+
+        for detail in response.partial_failure_error.details:
+            if detail.Is(failure.DESCRIPTOR):
+                detail.Unpack(failure)
+
+        for err in failure.errors:
+            idx = err.location.field_path_elements[0].index
+            successful_indices.discard(idx)
+            failures.append({
+                "budgetId": valid[idx]["budgetId"],
+                "error": err.message,
+            })
+
+    for i in successful_indices:
+        successes.append({
+            "budgetId": valid[i]["budgetId"],
+            "newAmount": max(valid[i]["newAmount"], GGADS_MIN_BUDGET),
+        })
+
+    return {
+        "customerId": customer_id,
+        "operation": "update_budgets",
+        "summary": {
+            "total": len(updates),
+            "succeeded": len(successes),
+            "failed": len(failures),
+        },
+        "successes": successes,
+        "failures": failures,
+    }
+
+
+# =====================
+# UPDATE CAMPAIGN STATUSES
+# =====================
+
+def update_campaign_statuses(
+    *,
+    customer_id: str,
+    updates: list[dict],
+) -> dict:
+    """
+    Params:
+        customer_id: str
+        updates: [
+            { campaignId, status }
+        ]
+    """
+    valid, invalid = validate_updates(
+        customer_id=customer_id,
+        updates=updates,
+        mode="campaign_status",
+    )
+
+    if not valid:
+        return {
+            "customerId": customer_id,
+            "operation": "update_campaign_statuses",
+            "summary": {
+                "total": len(updates),
+                "succeeded": 0,
+                "failed": len(invalid),
+            },
+            "successes": [],
+            "failures": invalid,
+        }
+
+    client = get_client()
+    service = client.get_service("CampaignService")
+
+    operations = []
+
+    for r in valid:
+        op = client.get_type("CampaignOperation")
+        campaign = op.update
+
+        campaign.resource_name = service.campaign_path(
+            customer_id,
+            r["campaignId"],
+        )
+        campaign.status = (
+            client.enums.CampaignStatusEnum.ENABLED
+            if r["status"].upper() == "ENABLED"
+            else client.enums.CampaignStatusEnum.PAUSED
+        )
+
+        op.update_mask.CopyFrom(
+            FieldMask(paths=["status"])
+        )
+
+        operations.append(op)
+
+    # -------- campaigns are atomic --------
+    request = client.get_type("MutateCampaignsRequest")
+    request.customer_id = customer_id
+    request.operations.extend(operations)
+
+    try:
+        service.mutate_campaigns(request=request)
+
+        successes = [
+            {
+                "campaignId": r["campaignId"],
+                "newStatus": r["status"],
+            }
+            for r in valid
+        ]
+        failures = invalid.copy()
+
+    except GoogleAdsException as ex:
+        successes = []
+        failures = invalid + [
+            {
+                "campaignId": r["campaignId"],
+                "error": str(ex),
+            }
+            for r in valid
+        ]
+
+    return {
+        "customerId": customer_id,
+        "operation": "update_campaign_statuses",
+        "summary": {
+            "total": len(updates),
+            "succeeded": len(successes),
+            "failed": len(failures),
+        },
+        "successes": successes,
+        "failures": failures,
+    }
