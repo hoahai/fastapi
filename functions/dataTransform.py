@@ -10,7 +10,7 @@ import pandas as pd
 from functions.constants import SERVICE_MAPPING, TIMEZONE
 from functions.logger import get_logger
 
-logger = get_logger("mySQL")
+logger = get_logger("Data Transform")
 
 # ============================================================
 # 1. MASTER BUDGET → AD TYPE MAPPING
@@ -352,7 +352,7 @@ def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
         for cid, updates in campaign_updates.items()
     ]
 
-    logger.info(
+    logger.debug(
         "Payload Data",
         extra={
             "extra_fields": {

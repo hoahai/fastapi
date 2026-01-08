@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from datetime import datetime, date
+from contextvars import copy_context
 from zoneinfo import ZoneInfo
 import calendar
 import pytz
@@ -36,7 +37,7 @@ R = TypeVar("R")
 
 ParallelTask = tuple[Callable[..., R], tuple[Any, ...]]
 
-logger = get_logger("parallel")
+logger = get_logger("Utils")
 
 # ======================================================
 # DATE HELPERS
@@ -139,6 +140,18 @@ def _safe_serialize_args(args: tuple[Any, ...]) -> list[Any]:
     return out
 
 
+def _safe_serialize_result(result: Any, *, max_str: int = 2000) -> Any:
+    if isinstance(result, (str, int, float, bool)) or result is None:
+        if isinstance(result, str) and len(result) > max_str:
+            return result[:max_str] + "...(truncated)"
+        return result
+    if isinstance(result, list):
+        return {"type": "list", "length": len(result), "sample": result[:3]}
+    if isinstance(result, dict):
+        return {"type": "dict", "keys": list(result.keys())[:20]}
+    return {"type": type(result).__name__}
+
+
 # ======================================================
 # TASK EXECUTION
 # ======================================================
@@ -170,13 +183,14 @@ def _run_with_retry(
             result = func(*args)
             duration = time.monotonic() - start
 
-            logger.info(
+            logger.debug(
                 "Task summary",
                 extra={
                     "extra_fields": {
                         "api": api_name,
                         "function": func.__name__,
                         "params": _safe_serialize_args(args),
+                        "result": _safe_serialize_result(result),
                         "status": "success",
                         "attempts": attempts,
                         "duration_ms": int(duration * 1000),
@@ -245,6 +259,7 @@ def run_parallel(
         with ThreadPoolExecutor(max_workers=max_workers) as executor:
             future_map = {
                 executor.submit(
+                    copy_context().run,
                     _run_with_retry,
                     func,
                     args,

@@ -18,12 +18,14 @@ from functions.constants import (
     GGADS_ALLOWED_CAMPAIGN_STATUSES,
 )
 from functions.logger import get_logger
-logger = get_logger("google_ads")
+
+logger = get_logger("Google Ads")
 
 
 # =====================
 # CLIENT
 # =====================
+
 
 def get_client() -> GoogleAdsClient:
     """
@@ -35,6 +37,7 @@ def get_client() -> GoogleAdsClient:
 # =====================
 # ACCOUNTS
 # =====================
+
 
 def get_mcc_accounts() -> list[dict]:
     """
@@ -62,11 +65,13 @@ def get_mcc_accounts() -> list[dict]:
         )
 
         for row in response:
-            results.append({
-                "id": str(row.customer_client.id),
-                "name": row.customer_client.descriptive_name,
-                "status": row.customer_client.status.name,
-            })
+            results.append(
+                {
+                    "id": str(row.customer_client.id),
+                    "name": row.customer_client.descriptive_name,
+                    "status": row.customer_client.status.name,
+                }
+            )
 
     except GoogleAdsException as ex:
         logger.error(
@@ -103,12 +108,14 @@ def get_ggad_accounts() -> list[dict]:
         if descriptive_name.lower().startswith("zzz."):
             continue
 
-        results.append({
-            "id": acc.get("id"),
-            "descriptiveName": descriptive_name,
-            "accountCode": match.group("code").strip(),
-            "accountName": match.group("name").strip(),
-        })
+        results.append(
+            {
+                "id": acc.get("id"),
+                "descriptiveName": descriptive_name,
+                "accountCode": match.group("code").strip(),
+                "accountName": match.group("name").strip(),
+            }
+        )
 
     return results
 
@@ -116,6 +123,7 @@ def get_ggad_accounts() -> list[dict]:
 # =====================
 # BUDGETS (READ)
 # =====================
+
 
 def get_ggad_budget(customer_id: str) -> list[dict]:
     """
@@ -142,13 +150,15 @@ def get_ggad_budget(customer_id: str) -> list[dict]:
 
         for row in response:
             b = row.campaign_budget
-            results.append({
-                "budgetId": str(b.id),
-                "budgetName": b.name,
-                "explicitlyShared": b.explicitly_shared,
-                "status": b.status.name,
-                "amount": b.amount_micros / 1_000_000 if b.amount_micros else 0,
-            })
+            results.append(
+                {
+                    "budgetId": str(b.id),
+                    "budgetName": b.name,
+                    "explicitlyShared": b.explicitly_shared,
+                    "status": b.status.name,
+                    "amount": b.amount_micros / 1_000_000 if b.amount_micros else 0,
+                }
+            )
 
     except GoogleAdsException as ex:
         raise RuntimeError(f"Google Ads API error: {ex.failure}") from ex
@@ -182,6 +192,7 @@ def get_ggad_budgets(accounts: list[dict]) -> list[dict]:
 # CAMPAIGNS (READ)
 # =====================
 
+
 def get_ggad_campaign(customer_id: str) -> list[dict]:
     """
     Get campaigns for a single Google Ads account.
@@ -210,14 +221,17 @@ def get_ggad_campaign(customer_id: str) -> list[dict]:
         response = ga_service.search(customer_id=customer_id, query=query)
 
         for row in response:
-            results.append({
-                "campaignId": str(row.campaign.id),
-                "campaignName": row.campaign.name,
-                "status": row.campaign.status.name,
-                "channelType": row.campaign.advertising_channel_type.name,
-                "budgetId": str(row.campaign_budget.id)
-                if row.campaign_budget.id else None,
-            })
+            results.append(
+                {
+                    "campaignId": str(row.campaign.id),
+                    "campaignName": row.campaign.name,
+                    "status": row.campaign.status.name,
+                    "channelType": row.campaign.advertising_channel_type.name,
+                    "budgetId": (
+                        str(row.campaign_budget.id) if row.campaign_budget.id else None
+                    ),
+                }
+            )
 
     except GoogleAdsException as ex:
         raise RuntimeError(f"Google Ads API error: {ex.failure}") from ex
@@ -232,7 +246,6 @@ def get_ggad_campaigns(accounts: list[dict]) -> list[dict]:
     [zzz.][accountCode]_[adTypeCode]_[Name]
     """
     ad_type_pattern = "|".join(map(re.escape, ADTYPES.keys()))
-
 
     def per_account_func(account: dict) -> list[dict]:
         campaigns = get_ggad_campaign(account["id"])
@@ -255,16 +268,17 @@ def get_ggad_campaigns(accounts: list[dict]) -> list[dict]:
             if name.lower().startswith("zzz."):
                 continue
 
-            filtered.append({
-                "customerId": account["id"],
-                "accountCode": account_code,
-                "accountName": account.get("accountName"),
-                "adTypeCode": match.group(2).upper(),
-                **c,
-            })
+            filtered.append(
+                {
+                    "customerId": account["id"],
+                    "accountCode": account_code,
+                    "accountName": account.get("accountName"),
+                    "adTypeCode": match.group(2).upper(),
+                    **c,
+                }
+            )
 
         return filtered
-
 
     tasks = [(per_account_func, (account,)) for account in accounts]
     return run_parallel_flatten(tasks=tasks, api_name="google_ads")
@@ -273,6 +287,7 @@ def get_ggad_campaigns(accounts: list[dict]) -> list[dict]:
 # =====================
 # SPEND
 # =====================
+
 
 def get_ggad_spent(customer_id: str) -> list[dict]:
     """
@@ -305,14 +320,17 @@ def get_ggad_spent(customer_id: str) -> list[dict]:
         response = ga_service.search(customer_id=customer_id, query=query)
 
         for row in response:
-            results.append({
-                "year": row.segments.year,
-                "month": row.segments.month,
-                "campaignId": str(row.campaign.id),
-                "budgetId": str(row.campaign_budget.id)
-                if row.campaign_budget.id else None,
-                "cost": row.metrics.cost_micros / 1_000_000,
-            })
+            results.append(
+                {
+                    "year": row.segments.year,
+                    "month": row.segments.month,
+                    "campaignId": str(row.campaign.id),
+                    "budgetId": (
+                        str(row.campaign_budget.id) if row.campaign_budget.id else None
+                    ),
+                    "cost": row.metrics.cost_micros / 1_000_000,
+                }
+            )
 
     except GoogleAdsException as ex:
         raise RuntimeError(f"Google Ads API error: {ex.failure}") from ex
@@ -345,6 +363,7 @@ def get_ggad_spents(accounts: list[dict]) -> list[dict]:
 # =====================
 # VALIDATION
 # =====================
+
 
 def validate_updates(
     *,
@@ -397,12 +416,14 @@ def validate_updates(
                 invalid.append({**r, "error": str(e)})
                 logger.error(
                     "Campaign row excluded by validation",
-                    extra={"extra_fields": {
-                        "operation": "validate_campaign_status",
-                        "customerId": customer_id,
-                        "reason": str(e),
-                        "row": r,
-                    }},
+                    extra={
+                        "extra_fields": {
+                            "operation": "validate_campaign_status",
+                            "customerId": customer_id,
+                            "reason": str(e),
+                            "row": r,
+                        }
+                    },
                 )
 
     # =====================
@@ -434,12 +455,14 @@ def validate_updates(
                 invalid.append({**r, "error": str(e)})
                 logger.error(
                     "Budget row excluded by validation",
-                    extra={"extra_fields": {
-                        "operation": "validate_budget",
-                        "customerId": customer_id,
-                        "reason": str(e),
-                        "row": r,
-                    }},
+                    extra={
+                        "extra_fields": {
+                            "operation": "validate_budget",
+                            "customerId": customer_id,
+                            "reason": str(e),
+                            "row": r,
+                        }
+                    },
                 )
 
     else:
@@ -451,6 +474,7 @@ def validate_updates(
 # =====================
 # UPDATE BUDGETS
 # =====================
+
 
 def update_budgets(
     *,
@@ -502,9 +526,7 @@ def update_budgets(
         )
         budget.amount_micros = int(new_amount * 1_000_000)
 
-        op.update_mask.CopyFrom(
-            FieldMask(paths=["amount_micros"])
-        )
+        op.update_mask.CopyFrom(FieldMask(paths=["amount_micros"]))
 
         operations.append(op)
 
@@ -531,16 +553,20 @@ def update_budgets(
         for err in failure.errors:
             idx = err.location.field_path_elements[0].index
             successful_indices.discard(idx)
-            failures.append({
-                "budgetId": valid[idx]["budgetId"],
-                "error": err.message,
-            })
+            failures.append(
+                {
+                    "budgetId": valid[idx]["budgetId"],
+                    "error": err.message,
+                }
+            )
 
     for i in successful_indices:
-        successes.append({
-            "budgetId": valid[i]["budgetId"],
-            "newAmount": max(valid[i]["newAmount"], GGADS_MIN_BUDGET),
-        })
+        successes.append(
+            {
+                "budgetId": valid[i]["budgetId"],
+                "newAmount": max(valid[i]["newAmount"], GGADS_MIN_BUDGET),
+            }
+        )
 
     return {
         "customerId": customer_id,
@@ -558,6 +584,7 @@ def update_budgets(
 # =====================
 # UPDATE CAMPAIGN STATUSES
 # =====================
+
 
 def update_campaign_statuses(
     *,
@@ -609,9 +636,7 @@ def update_campaign_statuses(
             else client.enums.CampaignStatusEnum.PAUSED
         )
 
-        op.update_mask.CopyFrom(
-            FieldMask(paths=["status"])
-        )
+        op.update_mask.CopyFrom(FieldMask(paths=["status"]))
 
         operations.append(op)
 

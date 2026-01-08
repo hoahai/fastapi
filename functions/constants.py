@@ -1,4 +1,5 @@
 # functions/constants.py
+from pathlib import Path
 
 # =========================
 # GENERAL CONFIGS
@@ -127,8 +128,8 @@ LOGGING_ENABLED = True
 # DEBUG | INFO | WARNING | ERROR | CRITICAL
 LOG_LEVEL = "INFO"
 
-# Directory for all logs
-LOG_DIR = "logs"
+# Directory for all logs (anchored to repo/fastapi)
+LOG_DIR = str(Path(__file__).resolve().parents[1] / "logs")
 
 # Per-run file rotation (within a single run)
 LOG_MAX_BYTES = 1 * 1024 * 1024  # 10 MB per file

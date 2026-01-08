@@ -31,7 +31,7 @@ from functions.email import (
 # LOGGER
 # =========================================================
 
-logger = get_logger("spendsphere")
+logger = get_logger("SpendSphere")
 
 # =========================================================
 # HELPERS
@@ -209,7 +209,7 @@ def run_google_ads_budget_pipeline(
     #     body=email_body,
     # )
 
-    logger.info(
+    logger.debug(
         "Google Ads pipeline completed",
         extra={"extra_fields": pipeline_result},
     )

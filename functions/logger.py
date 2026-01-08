@@ -8,6 +8,7 @@ import sys
 import os
 import uuid
 import time
+from contextvars import ContextVar
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 
@@ -35,8 +36,38 @@ CHICAGO_TZ = pytz.timezone("America/Chicago")
 RUN_ID = uuid.uuid4().hex
 _RUN_START_TIME = time.monotonic()
 
-RUN_TIMESTAMP = datetime.now(CHICAGO_TZ).strftime("%y%m%d_%H%M%S")
-RUN_LOG_FILE = f"run_{RUN_TIMESTAMP}_{RUN_ID[:8]}.log"
+RUN_LOG_FILE = "api.log"
+
+# ======================================================
+# REQUEST CONTEXT
+# ======================================================
+
+_REQUEST_ID: ContextVar[str | None] = ContextVar("request_id", default=None)
+
+
+def set_request_id(request_id: str) -> ContextVar.Token:
+    return _REQUEST_ID.set(request_id)
+
+
+def reset_request_id(token: ContextVar.Token) -> None:
+    _REQUEST_ID.reset(token)
+
+
+def get_request_id() -> str | None:
+    return _REQUEST_ID.get()
+
+
+class RequestIdFilter(logging.Filter):
+    def __init__(self, request_id: str) -> None:
+        super().__init__()
+        self.request_id = request_id
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        return get_request_id() == self.request_id
+
+
+_LOGGER_REGISTRY: set[logging.Logger] = set()
+_ACTIVE_DEBUG_HANDLERS: list[logging.Handler] = []
 
 # ======================================================
 # DURATION FORMATTER
@@ -73,6 +104,10 @@ class JsonFormatter(logging.Formatter):
             "run_id": RUN_ID,
         }
 
+        request_id = get_request_id()
+        if request_id:
+            log["request_id"] = request_id
+
         extra_fields = getattr(record, "extra_fields", None)
         if isinstance(extra_fields, dict):
             log.update(extra_fields)
@@ -86,6 +121,7 @@ class JsonFormatter(logging.Formatter):
 def _create_file_handler() -> logging.Handler:
     os.makedirs(LOG_DIR, exist_ok=True)
 
+    handler_level = logging.INFO if LOG_LEVEL == "DEBUG" else LOG_LEVEL
     handler = RotatingFileHandler(
         filename=os.path.join(LOG_DIR, RUN_LOG_FILE),
         maxBytes=LOG_MAX_BYTES,
@@ -93,9 +129,26 @@ def _create_file_handler() -> logging.Handler:
         encoding="utf-8",
     )
     handler.setFormatter(JsonFormatter())
-    handler.setLevel(LOG_LEVEL)
+    handler.setLevel(handler_level)
     handler.name = "file"
     return handler
+
+
+def create_request_debug_handler(request_id: str) -> logging.Handler:
+    os.makedirs(LOG_DIR, exist_ok=True)
+    timestamp = datetime.now(CHICAGO_TZ).strftime("%y%m%d_%H%M%S")
+    filename = f"run_debug_{timestamp}_{request_id}.log"
+
+    handler = logging.FileHandler(
+        filename=os.path.join(LOG_DIR, filename),
+        encoding="utf-8",
+    )
+    handler.setFormatter(JsonFormatter())
+    handler.setLevel(logging.DEBUG)
+    handler.name = f"debug-{request_id}"
+    handler.addFilter(RequestIdFilter(request_id))
+    return handler
+
 
 
 def _create_console_handler() -> logging.Handler:
@@ -126,8 +179,33 @@ def get_logger(name: str = "app") -> logging.Logger:
     if not any(getattr(h, "name", None) == "file" for h in logger.handlers):
         logger.addHandler(_create_file_handler())
 
+    for handler in _ACTIVE_DEBUG_HANDLERS:
+        if handler not in logger.handlers:
+            logger.addHandler(handler)
+
     logger.propagate = False
+    _LOGGER_REGISTRY.add(logger)
     return logger
+
+
+def add_debug_handler(handler: logging.Handler) -> None:
+    if handler in _ACTIVE_DEBUG_HANDLERS:
+        return
+
+    _ACTIVE_DEBUG_HANDLERS.append(handler)
+    for logger in _LOGGER_REGISTRY:
+        if handler not in logger.handlers:
+            logger.addHandler(handler)
+
+
+def remove_debug_handler(handler: logging.Handler) -> None:
+    if handler in _ACTIVE_DEBUG_HANDLERS:
+        _ACTIVE_DEBUG_HANDLERS.remove(handler)
+
+    for logger in _LOGGER_REGISTRY:
+        if handler in logger.handlers:
+            logger.removeHandler(handler)
+    handler.close()
 
 # ======================================================
 # CONSOLE TOGGLE
