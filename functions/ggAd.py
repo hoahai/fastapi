@@ -9,6 +9,7 @@ from google.ads.googleads.errors import GoogleAdsException
 from functions.utils import (
     get_current_period,
     run_parallel_flatten,
+    resolve_secret_path,
 )
 from functions.constants import (
     ADTYPES,
@@ -31,7 +32,8 @@ def get_client() -> GoogleAdsClient:
     """
     Create and return a Google Ads client using local google-ads.yaml config.
     """
-    return GoogleAdsClient.load_from_storage("secrets/google-ads.yaml")
+    config_path = resolve_secret_path("GOOGLE_ADS_CONFIG_PATH", "google-ads.yaml")
+    return GoogleAdsClient.load_from_storage(config_path)
 
 
 # =====================

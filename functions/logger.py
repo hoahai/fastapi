@@ -83,9 +83,6 @@ def _log_file_enabled() -> bool:
     )
 
 
-def _vercel_env_enabled() -> bool:
-    return bool(os.getenv("VERCEL") == "1" or os.getenv("VERCEL_ENV"))
-
 
 def _get_axiom_config() -> tuple[bool, str, str, str, int, float]:
     token = os.getenv("AXIOM_API_TOKEN", "")
@@ -235,7 +232,7 @@ class AxiomHandler(logging.Handler):
 # ======================================================
 
 def _create_file_handler() -> logging.Handler:
-    if not _log_file_enabled() or _vercel_env_enabled():
+    if not _log_file_enabled():
         handler = logging.NullHandler()
         handler.name = "file-null"
         return handler
@@ -256,7 +253,7 @@ def _create_file_handler() -> logging.Handler:
 
 
 def create_request_debug_handler(request_id: str) -> logging.Handler:
-    if not _log_file_enabled() or _vercel_env_enabled():
+    if not _log_file_enabled():
         handler = logging.NullHandler()
         handler.name = f"debug-null-{request_id}"
         return handler

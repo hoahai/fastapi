@@ -1,11 +1,10 @@
 # functions/ggSheet.py
 
-import os
 from typing import Callable
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
-from functions.utils import get_current_period
+from functions.utils import get_current_period, resolve_secret_path
 
 # =====================================================
 # CONFIG
@@ -35,11 +34,10 @@ def _get_sheets_service():
     IMPORTANT:
     - Must be called in a process that does NOT create threads
     """
-    cred_path = os.environ.get("GOOGLE_APPLICATION_CREDENTIALS")
-    if not cred_path:
-        raise RuntimeError(
-            "GOOGLE_APPLICATION_CREDENTIALS environment variable is not set"
-        )
+    cred_path = resolve_secret_path(
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "service-account.json",
+    )
 
     credentials = service_account.Credentials.from_service_account_file(
         cred_path,

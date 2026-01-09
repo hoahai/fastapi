@@ -1,7 +1,16 @@
 # main.py
+from pathlib import Path
 from dotenv import load_dotenv
 
-load_dotenv("secrets/.env")
+
+def _load_env() -> None:
+    for path in (Path("/etc/secrets/.env"), Path("secrets/.env")):
+        if path.is_file():
+            load_dotenv(path)
+            return
+
+
+_load_env()
 
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel

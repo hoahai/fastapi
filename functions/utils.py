@@ -10,6 +10,8 @@ import pytz
 import time
 import random
 import threading
+import os
+from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 from typing import Callable, Iterable, TypeVar, Optional, Any
 
@@ -330,3 +332,27 @@ def with_meta(*, data: dict | list, start_time: float) -> dict:
         },
         "data": data,
     }
+
+
+# ======================================================
+# SECRET FILE RESOLUTION
+# ======================================================
+
+
+def resolve_secret_path(env_var: str, filename: str) -> str:
+    env_value = os.getenv(env_var)
+    if env_value and Path(env_value).is_file():
+        return env_value
+
+    for base in ("/etc/secrets", "secrets"):
+        candidate = Path(base) / filename
+        if candidate.is_file():
+            return str(candidate)
+
+    if env_value:
+        return env_value
+
+    raise RuntimeError(
+        f"Secret file not found for {env_var}. "
+        f"Tried {filename} in /etc/secrets and secrets/."
+    )
