@@ -11,6 +11,8 @@ from api.middleware import (
     api_key_auth_middleware,
     request_response_logger_middleware,
 )
+from contextlib import asynccontextmanager
+
 from functions.utils import with_meta, get_current_period
 from functions.logger import log_run_start
 
@@ -24,15 +26,16 @@ from functions.db_queries import (
 from functions.ggSheet import get_rollovers
 from functions.spendsphere import run_google_ads_budget_pipeline
 
-app = FastAPI()
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    log_run_start()
+    yield
+
+
+app = FastAPI(lifespan=lifespan)
 app.middleware("http")(timing_middleware)
 app.middleware("http")(api_key_auth_middleware)
 app.middleware("http")(request_response_logger_middleware)
-
-
-@app.on_event("startup")
-def _on_startup() -> None:
-    log_run_start()
 
 # =========================================================
 # HELPERS

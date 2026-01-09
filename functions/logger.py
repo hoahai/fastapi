@@ -8,6 +8,9 @@ import sys
 import os
 import uuid
 import time
+import threading
+import queue
+import urllib.request
 from contextvars import ContextVar
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -17,6 +20,7 @@ import pytz
 from functions.constants import (
     LOGGING_ENABLED,
     LOG_LEVEL,
+    AXIOM_LOG_LEVEL,
     LOG_DIR,
     LOG_MAX_BYTES,
     LOG_BACKUP_COUNT,
@@ -69,6 +73,35 @@ class RequestIdFilter(logging.Filter):
 _LOGGER_REGISTRY: set[logging.Logger] = set()
 _ACTIVE_DEBUG_HANDLERS: list[logging.Handler] = []
 
+
+def _log_file_enabled() -> bool:
+    return os.getenv("LOG_FILE_ENABLED", "true").lower() in (
+        "1",
+        "true",
+        "yes",
+        "on",
+    )
+
+
+def _vercel_env_enabled() -> bool:
+    return bool(os.getenv("VERCEL") == "1" or os.getenv("VERCEL_ENV"))
+
+
+def _get_axiom_config() -> tuple[bool, str, str, str, int, float]:
+    token = os.getenv("AXIOM_API_TOKEN", "")
+    dataset = os.getenv("AXIOM_DATASET", "")
+    api_url = os.getenv("AXIOM_API_URL", "https://api.axiom.co").rstrip("/")
+    batch_size = int(os.getenv("AXIOM_BATCH_SIZE", "25"))
+    flush_seconds = float(os.getenv("AXIOM_FLUSH_SECONDS", "2.0"))
+    enabled = bool(token and dataset)
+    return enabled, token, dataset, api_url, batch_size, flush_seconds
+
+
+def _get_axiom_level() -> int:
+    level_name = AXIOM_LOG_LEVEL.upper()
+    level = logging.getLevelName(level_name)
+    return level if isinstance(level, int) else logging.INFO
+
 # ======================================================
 # DURATION FORMATTER
 # ======================================================
@@ -114,11 +147,99 @@ class JsonFormatter(logging.Formatter):
 
         return json.dumps(log, default=str)
 
+
+class AxiomHandler(logging.Handler):
+    def __init__(
+        self,
+        token: str,
+        dataset: str,
+        api_url: str,
+        batch_size: int,
+        flush_seconds: float,
+    ) -> None:
+        super().__init__()
+        self._token = token
+        self._dataset = dataset
+        self._api_url = api_url
+        self._batch_size = max(1, batch_size)
+        self._flush_seconds = max(0.5, flush_seconds)
+        self._queue: queue.SimpleQueue[dict] = queue.SimpleQueue()
+        self._worker = threading.Thread(
+            target=self._run,
+            name="axiom-log-worker",
+            daemon=True,
+        )
+        self._worker.start()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        try:
+            payload = self.format(record)
+            if isinstance(payload, str):
+                item = json.loads(payload)
+            elif isinstance(payload, dict):
+                item = payload
+            else:
+                item = {"message": str(payload)}
+            self._queue.put(item)
+        except Exception:
+            # Never crash app because of logging
+            pass
+
+    def _run(self) -> None:
+        batch: list[dict] = []
+        last_flush = time.monotonic()
+
+        while True:
+            try:
+                item = self._queue.get(timeout=self._flush_seconds)
+                batch.append(item)
+            except queue.Empty:
+                pass
+
+            now = time.monotonic()
+            should_flush = (
+                batch
+                and (
+                    len(batch) >= self._batch_size
+                    or (now - last_flush) >= self._flush_seconds
+                )
+            )
+            if should_flush:
+                self._send(batch)
+                batch = []
+                last_flush = now
+
+    def _send(self, items: list[dict]) -> None:
+        url = f"{self._api_url}/v1/datasets/{self._dataset}/ingest"
+        data = json.dumps(items).encode("utf-8")
+        req = urllib.request.Request(
+            url,
+            data=data,
+            headers={
+                "Authorization": f"Bearer {self._token}",
+                "Content-Type": "application/json",
+                "User-Agent": "fastapi-logger",
+            },
+            method="POST",
+        )
+
+        try:
+            with urllib.request.urlopen(req, timeout=5) as response:
+                response.read()
+        except Exception:
+            # Never crash app because of logging
+            pass
+
 # ======================================================
 # HANDLERS
 # ======================================================
 
 def _create_file_handler() -> logging.Handler:
+    if not _log_file_enabled() or _vercel_env_enabled():
+        handler = logging.NullHandler()
+        handler.name = "file-null"
+        return handler
+
     os.makedirs(LOG_DIR, exist_ok=True)
 
     handler_level = logging.INFO if LOG_LEVEL == "DEBUG" else LOG_LEVEL
@@ -135,6 +256,11 @@ def _create_file_handler() -> logging.Handler:
 
 
 def create_request_debug_handler(request_id: str) -> logging.Handler:
+    if not _log_file_enabled() or _vercel_env_enabled():
+        handler = logging.NullHandler()
+        handler.name = f"debug-null-{request_id}"
+        return handler
+
     os.makedirs(LOG_DIR, exist_ok=True)
     timestamp = datetime.now(CHICAGO_TZ).strftime("%y%m%d_%H%M%S")
     filename = f"run_debug_{timestamp}_{request_id}.log"
@@ -149,6 +275,25 @@ def create_request_debug_handler(request_id: str) -> logging.Handler:
     handler.addFilter(RequestIdFilter(request_id))
     return handler
 
+
+def _create_axiom_handler() -> logging.Handler:
+    enabled, token, dataset, api_url, batch_size, flush_seconds = _get_axiom_config()
+    if not enabled:
+        handler = logging.NullHandler()
+        handler.name = "axiom-null"
+        return handler
+
+    handler = AxiomHandler(
+        token=token,
+        dataset=dataset,
+        api_url=api_url,
+        batch_size=batch_size,
+        flush_seconds=flush_seconds,
+    )
+    handler.setFormatter(JsonFormatter())
+    handler.setLevel(_get_axiom_level())
+    handler.name = "axiom"
+    return handler
 
 
 def _create_console_handler() -> logging.Handler:
@@ -177,7 +322,14 @@ def get_logger(name: str = "app") -> logging.Logger:
         return logger
 
     if not any(getattr(h, "name", None) == "file" for h in logger.handlers):
-        logger.addHandler(_create_file_handler())
+        handler = _create_file_handler()
+        if not isinstance(handler, logging.NullHandler):
+            logger.addHandler(handler)
+
+    if not any(getattr(h, "name", None) == "axiom" for h in logger.handlers):
+        handler = _create_axiom_handler()
+        if not isinstance(handler, logging.NullHandler):
+            logger.addHandler(handler)
 
     for handler in _ACTIVE_DEBUG_HANDLERS:
         if handler not in logger.handlers:

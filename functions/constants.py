@@ -128,6 +128,9 @@ LOGGING_ENABLED = True
 # DEBUG | INFO | WARNING | ERROR | CRITICAL
 LOG_LEVEL = "INFO"
 
+# Axiom logging level
+AXIOM_LOG_LEVEL = "INFO"
+
 # Directory for all logs (anchored to repo/fastapi)
 LOG_DIR = str(Path(__file__).resolve().parents[1] / "logs")
 
