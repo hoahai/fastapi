@@ -1,10 +1,11 @@
 # functions/ggAd.py
 
 import re
+from decimal import Decimal, ROUND_HALF_UP
 from google.ads.googleads.client import GoogleAdsClient
 from google.protobuf.field_mask_pb2 import FieldMask
-from google.protobuf.any_pb2 import Any
 from google.ads.googleads.errors import GoogleAdsException
+from google.ads.googleads.v22.errors.types.errors import GoogleAdsFailure
 
 from functions.utils import (
     get_current_period,
@@ -526,7 +527,15 @@ def update_budgets(
             customer_id,
             r["budgetId"],
         )
-        budget.amount_micros = int(new_amount * 1_000_000)
+        # Quantize to cents to match Google Ads minimum money unit and avoid float drift.
+        quantized_amount = Decimal(str(new_amount)).quantize(
+            Decimal("0.01"), rounding=ROUND_HALF_UP
+        )
+        budget.amount_micros = int(
+            (quantized_amount * Decimal("1000000")).to_integral_value(
+                rounding=ROUND_HALF_UP
+            )
+        )
 
         op.update_mask.CopyFrom(FieldMask(paths=["amount_micros"]))
 
@@ -546,13 +555,14 @@ def update_budgets(
 
     # -------- parse partial failure (v22-safe) --------
     if response.partial_failure_error:
-        failure = client.get_type("GoogleAdsFailure")
+        failure_pb_cls = GoogleAdsFailure.pb()
+        failure_pb = failure_pb_cls()
 
         for detail in response.partial_failure_error.details:
-            if detail.Is(failure.DESCRIPTOR):
-                detail.Unpack(failure)
+            if detail.Is(failure_pb_cls.DESCRIPTOR):
+                detail.Unpack(failure_pb)
 
-        for err in failure.errors:
+        for err in failure_pb.errors:
             idx = err.location.field_path_elements[0].index
             successful_indices.discard(idx)
             failures.append(
