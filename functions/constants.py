@@ -92,6 +92,7 @@ GGADS_MAX_PAUSED_CAMPAIGNS = 50
 # Budget safety rules
 GGADS_MIN_BUDGET = 0.01  # must be > 0
 GGADS_MAX_BUDGET_MULTIPLIER = 10  # prevent 10× / 100× spikes
+GGADS_MIN_BUDGET_DELTA = 0.50  # skip small changes unless forcing 0.00/0.01
 
 # Allowed campaign statuses
 GGADS_ALLOWED_CAMPAIGN_STATUSES = {"ENABLED", "PAUSED"}

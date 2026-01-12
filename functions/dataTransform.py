@@ -7,7 +7,7 @@ import calendar
 import pytz
 import pandas as pd
 
-from functions.constants import SERVICE_MAPPING, TIMEZONE
+from functions.constants import SERVICE_MAPPING, TIMEZONE, GGADS_MIN_BUDGET_DELTA
 from functions.logger import get_logger
 
 logger = get_logger("Data Transform")
@@ -335,8 +335,8 @@ def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
                 campaign_updates.setdefault(customer_id, []).append(
                     {
                         "campaignId": campaign["campaignId"],
-                        "currentStatus": campaign["status"],
-                        "status": expected_status,
+                        "oldStatus": campaign["status"],
+                        "newStatus": expected_status,
                         "accountCode": row.get("accountCode"),
                     }
                 )
@@ -353,6 +353,13 @@ def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
         amount_to_set = (
             Decimal("0.01") if daily_budget <= Decimal("0") else daily_budget
         )
+
+        # Skip small changes unless targeting 0.00/0.01
+        if amount_to_set not in (Decimal("0"), Decimal("0.01")):
+            if abs(amount_to_set - budget_amount) <= Decimal(
+                str(GGADS_MIN_BUDGET_DELTA)
+            ):
+                continue
 
         # Only update when values differ (after min floor)
         if amount_to_set == budget_amount:

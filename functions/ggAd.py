@@ -395,11 +395,15 @@ def validate_updates(
 
         for r in updates:
             try:
-                if not {"campaignId", "status"}.issubset(r):
-                    raise ValueError("Missing campaignId or status")
+                if "campaignId" not in r:
+                    raise ValueError("Missing campaignId")
+
+                status_value = r.get("newStatus", r.get("status"))
+                if not status_value:
+                    raise ValueError("Missing newStatus or status")
 
                 campaign_id = r["campaignId"]
-                status = r["status"].upper()
+                status = str(status_value).upper()
 
                 if campaign_id in seen_ids:
                     raise ValueError("Duplicate campaignId")
@@ -573,8 +577,8 @@ def update_budgets(
             failures.append(
                 {
                     "budgetId": valid[idx]["budgetId"],
-                    "currentAmount": valid[idx].get("currentAmount"),
-                    "intendedAmount": valid[idx].get("newAmount"),
+                    "oldAmount": valid[idx].get("currentAmount"),
+                    "newAmount": valid[idx].get("newAmount"),
                     "error": err.message,
                 }
             )
@@ -584,7 +588,7 @@ def update_budgets(
             {
                 "budgetId": valid[i]["budgetId"],
                 "campaignNames": valid[i].get("campaignNames", []),
-                "currentAmount": valid[i].get("currentAmount"),
+                "oldAmount": valid[i].get("currentAmount"),
                 "newAmount": max(valid[i]["newAmount"], GGADS_MIN_BUDGET),
             }
         )
@@ -656,9 +660,10 @@ def update_campaign_statuses(
             customer_id,
             r["campaignId"],
         )
+        new_status_value = r.get("newStatus", r.get("status"))
         campaign.status = (
             client.enums.CampaignStatusEnum.ENABLED
-            if r["status"].upper() == "ENABLED"
+            if str(new_status_value).upper() == "ENABLED"
             else client.enums.CampaignStatusEnum.PAUSED
         )
 
@@ -677,8 +682,8 @@ def update_campaign_statuses(
         successes = [
             {
                 "campaignId": r["campaignId"],
-                "currentStatus": r.get("currentStatus"),
-                "newStatus": r["status"],
+                "oldStatus": r.get("oldStatus"),
+                "newStatus": r.get("newStatus", r.get("status")),
             }
             for r in valid
         ]
@@ -689,9 +694,9 @@ def update_campaign_statuses(
         failures = invalid + [
             {
                 "campaignId": r["campaignId"],
+                "oldStatus": r.get("oldStatus"),
+                "newStatus": r.get("newStatus", r.get("status")),
                 "error": str(ex),
-                "currentStatus": r.get("currentStatus"),
-                "newStatus": r.get("status"),
             }
             for r in valid
         ]
