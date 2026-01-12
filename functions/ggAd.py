@@ -464,6 +464,7 @@ def validate_updates(
                             "customerId": customer_id,
                             "reason": str(e),
                             "row": r,
+                            "intendedAmount": r.get("newAmount"),
                         }
                     },
                 )
@@ -496,10 +497,14 @@ def update_budgets(
         updates=updates,
         mode="budget",
     )
+    account_code = next(
+        (r.get("accountCode") for r in updates if r.get("accountCode")), None
+    )
 
     if not valid:
         return {
             "customerId": customer_id,
+            "accountCode": account_code,
             "operation": "update_budgets",
             "summary": {
                 "total": len(updates),
@@ -568,6 +573,8 @@ def update_budgets(
             failures.append(
                 {
                     "budgetId": valid[idx]["budgetId"],
+                    "currentAmount": valid[idx].get("currentAmount"),
+                    "intendedAmount": valid[idx].get("newAmount"),
                     "error": err.message,
                 }
             )
@@ -576,12 +583,15 @@ def update_budgets(
         successes.append(
             {
                 "budgetId": valid[i]["budgetId"],
+                "campaignNames": valid[i].get("campaignNames", []),
+                "currentAmount": valid[i].get("currentAmount"),
                 "newAmount": max(valid[i]["newAmount"], GGADS_MIN_BUDGET),
             }
         )
 
     return {
         "customerId": customer_id,
+        "accountCode": account_code,
         "operation": "update_budgets",
         "summary": {
             "total": len(updates),
@@ -615,10 +625,14 @@ def update_campaign_statuses(
         updates=updates,
         mode="campaign_status",
     )
+    account_code = next(
+        (r.get("accountCode") for r in updates if r.get("accountCode")), None
+    )
 
     if not valid:
         return {
             "customerId": customer_id,
+            "accountCode": account_code,
             "operation": "update_campaign_statuses",
             "summary": {
                 "total": len(updates),
@@ -663,6 +677,7 @@ def update_campaign_statuses(
         successes = [
             {
                 "campaignId": r["campaignId"],
+                "currentStatus": r.get("currentStatus"),
                 "newStatus": r["status"],
             }
             for r in valid
@@ -675,12 +690,15 @@ def update_campaign_statuses(
             {
                 "campaignId": r["campaignId"],
                 "error": str(ex),
+                "currentStatus": r.get("currentStatus"),
+                "newStatus": r.get("status"),
             }
             for r in valid
         ]
 
     return {
         "customerId": customer_id,
+        "accountCode": account_code,
         "operation": "update_campaign_statuses",
         "summary": {
             "total": len(updates),

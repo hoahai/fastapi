@@ -84,6 +84,7 @@ def master_budget_campaigns_join(
                 {
                     **mb,
                     "customerId": c.get("customerId"),
+                    "accountName": c.get("accountCode"),
                     "campaignId": c.get("campaignId"),
                     "campaignName": c.get("campaignName"),
                     "budgetId": c.get("budgetId"),
@@ -144,12 +145,12 @@ def campaign_costs_join(
         return df_rows.to_dict(orient="records")
 
     df_costs = (
-        df_costs.groupby("campaignId", as_index=False)["cost"]
+        df_costs.groupby(["customerId", "campaignId"], as_index=False)["cost"]
         .sum()
         .rename(columns={"cost": "cost"})
     )
 
-    df = df_rows.merge(df_costs, on="campaignId", how="left")
+    df = df_rows.merge(df_costs, on=["customerId", "campaignId"], how="left")
     df["cost"] = df["cost"].fillna(0).apply(lambda x: Decimal(str(x)))
 
     return df.to_dict(orient="records")
@@ -161,16 +162,19 @@ def campaign_costs_join(
 
 
 def group_campaigns_by_budget(rows: list[dict]) -> list[dict]:
-    grouped: dict[str, dict] = {}
+    grouped: dict[tuple[str, str], dict] = {}
 
     for r in rows:
+        customer_id = r.get("customerId")
         budget_id = r.get("budgetId")
         if not budget_id:
             continue
 
-        if budget_id not in grouped:
-            grouped[budget_id] = {
-                "ggAccountId": r.get("customerId"),
+        group_key = (customer_id, budget_id)
+
+        if group_key not in grouped:
+            grouped[group_key] = {
+                "ggAccountId": customer_id,
                 "accountCode": r.get("accountCode"),
                 "adTypeCode": r.get("adTypeCode"),
                 "services": r.get("services", []),
@@ -186,7 +190,7 @@ def group_campaigns_by_budget(rows: list[dict]) -> list[dict]:
 
         campaign_name = r.get("campaignName")
 
-        grouped[budget_id]["campaigns"].append(
+        grouped[group_key]["campaigns"].append(
             {
                 "campaignId": r.get("campaignId"),
                 "campaignName": campaign_name,
@@ -196,7 +200,7 @@ def group_campaigns_by_budget(rows: list[dict]) -> list[dict]:
         )
 
         if campaign_name:
-            grouped[budget_id]["_campaign_names"].append(campaign_name)
+            grouped[group_key]["_campaign_names"].append(campaign_name)
 
     # finalize campaignNames
     for b in grouped.values():
@@ -216,11 +220,14 @@ def budget_allocation_join(
     allocations: list[dict],
 ) -> list[dict]:
     lookup = {
-        a.get("ggBudgetId"): Decimal(str(a.get("allocation", 0))) for a in allocations
+        (a.get("accountCode"), a.get("ggBudgetId")): Decimal(
+            str(a.get("allocation", 0))
+        )
+        for a in allocations
     }
 
     for b in budgets:
-        b["allocation"] = lookup.get(b["budgetId"], None)
+        b["allocation"] = lookup.get((b.get("accountCode"), b["budgetId"]), None)
 
     return budgets
 
@@ -229,10 +236,17 @@ def budget_rollover_join(
     budgets: list[dict],
     rollovers: list[dict],
 ) -> list[dict]:
-    lookup = {r.get("adTypeCode"): Decimal(str(r.get("amount", 0))) for r in rollovers}
+    lookup = {
+        (r.get("accountCode"), r.get("adTypeCode")): Decimal(
+            str(r.get("amount", 0))
+        )
+        for r in rollovers
+    }
 
     for b in budgets:
-        b["rolloverAmount"] = lookup.get(b["adTypeCode"], Decimal("0"))
+        b["rolloverAmount"] = lookup.get(
+            (b.get("accountCode"), b.get("adTypeCode")), Decimal("0")
+        )
 
     return budgets
 
@@ -307,6 +321,11 @@ def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
         expected_status = "ENABLED" if daily_budget >= Decimal("0.01") else "PAUSED"
 
         campaigns = row.get("campaigns", [])
+        campaign_names = [
+            c.get("campaignName")
+            for c in campaigns
+            if c.get("campaignName")
+        ]
 
         # -------------------------
         # Campaign status updates (independent)
@@ -314,7 +333,12 @@ def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
         for campaign in campaigns:
             if campaign["status"] != expected_status:
                 campaign_updates.setdefault(customer_id, []).append(
-                    {"campaignId": campaign["campaignId"], "status": expected_status}
+                    {
+                        "campaignId": campaign["campaignId"],
+                        "currentStatus": campaign["status"],
+                        "status": expected_status,
+                        "accountCode": row.get("accountCode"),
+                    }
                 )
 
         # -------------------------
@@ -325,18 +349,21 @@ def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
 
         budget_amount = Decimal(budget_amount_raw)
 
-        # Only update when values differ
-        if daily_budget == budget_amount:
-            continue
-
         # Enforce Google Ads minimum
         amount_to_set = (
             Decimal("0.01") if daily_budget <= Decimal("0") else daily_budget
         )
 
+        # Only update when values differ (after min floor)
+        if amount_to_set == budget_amount:
+            continue
+
         budget_updates.setdefault(customer_id, []).append(
             {
                 "budgetId": row["budgetId"],
+                "accountCode": row.get("accountCode"),
+                "customerName": row.get("accountName"),
+                "campaignNames": campaign_names,
                 "currentAmount": float(budget_amount),
                 "newAmount": float(amount_to_set),
             }

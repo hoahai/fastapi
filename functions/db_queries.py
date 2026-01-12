@@ -136,6 +136,7 @@ def get_allocations(
     query = (
         "SELECT "
         "id, "
+        "accountCode, "
         "ggBudgetId, "
         "allocation "
         "FROM SpendShere_Allocations "
@@ -170,6 +171,7 @@ def get_rollbreakdowns(
     query = (
         "SELECT "
         "id, "
+        "accountCode, "
         "adTypeCode, "
         "amount "
         "FROM SpendShere_RollBreakdowns "
