@@ -321,7 +321,7 @@ def format_hms(seconds: float) -> str:
     return f"{h:02}:{m:02}:{s:02}.{ms:03}"
 
 
-def with_meta(*, data: dict | list, start_time: float) -> dict:
+def with_meta(*, data: dict | list, start_time: float, client_id: str) -> dict:
     duration = time.perf_counter() - start_time
 
     return {
@@ -329,6 +329,7 @@ def with_meta(*, data: dict | list, start_time: float) -> dict:
             "timestamp": datetime.now(ZoneInfo(TIMEZONE)).isoformat(),
             "duration_ms": int(duration * 1000),
             "duration_hms": format_hms(duration),
+            "client_id": client_id,
         },
         "data": data,
     }

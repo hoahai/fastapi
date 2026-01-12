@@ -95,6 +95,8 @@ def _log_api_request(
     status_code: int,
     duration_ms: int,
     client_id: str | None,
+    request_host: str | None,
+    request_scheme: str | None,
     error: str | None = None,
 ) -> None:
     payload: dict[str, object] = {
@@ -104,6 +106,8 @@ def _log_api_request(
         "status_code": status_code,
         "duration_ms": duration_ms,
         "client_id": client_id,
+        "request_host": request_host,
+        "request_scheme": request_scheme,
         "timestamp": datetime.now(ZoneInfo(TIMEZONE)).isoformat(),
     }
 
@@ -194,6 +198,11 @@ async def request_response_logger_middleware(request: Request, call_next):
         else:
             response_body_out = None
 
+        request_host = request.headers.get("x-forwarded-host") or request.headers.get(
+            "host"
+        )
+        request_scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
+
         _API_LOGGER.info(
             "HTTP request/response",
             extra={
@@ -205,6 +214,8 @@ async def request_response_logger_middleware(request: Request, call_next):
                     "status_code": response.status_code,
                     "duration_ms": duration_ms,
                     "client_id": getattr(request.state, "client_id", None),
+                    "request_host": request_host,
+                    "request_scheme": request_scheme,
                     "request_body": request_body,
                     "response_body": response_body_out,
                 }
@@ -220,43 +231,53 @@ async def request_response_logger_middleware(request: Request, call_next):
 
 async def api_key_auth_middleware(request: Request, call_next):
     path = request.url.path or ""
-    if not (path == "/api" or path.startswith("/api/")):
-        return await call_next(request)
+    is_api_route = path == "/api" or path.startswith("/api/")
 
     if request.method == "OPTIONS":
         return await call_next(request)
 
-    start_time = time.perf_counter()
-
     try:
         registry = _get_api_key_registry()
     except ValueError:
-        return JSONResponse(
-            status_code=500,
-            content={"detail": "API key registry is misconfigured"},
-        )
+        if is_api_route:
+            return JSONResponse(
+                status_code=500,
+                content={"detail": "API key registry is misconfigured"},
+            )
+        registry = {}
 
-    if not registry:
+    if not registry and is_api_route:
         return JSONResponse(
             status_code=500,
             content={"detail": "API key registry is not configured"},
         )
 
     api_key = _extract_api_key(request)
-    if not api_key:
-        return JSONResponse(
-            status_code=401,
-            content={"detail": "Missing API key"},
-        )
+    client_id = _match_api_key(api_key, registry) if api_key and registry else None
 
-    client_id = _match_api_key(api_key, registry)
-    if not client_id:
-        return JSONResponse(
-            status_code=401,
-            content={"detail": "Invalid API key"},
-        )
+    if is_api_route:
+        if not api_key:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Missing API key"},
+            )
+        if not client_id:
+            return JSONResponse(
+                status_code=401,
+                content={"detail": "Invalid API key"},
+            )
 
-    request.state.client_id = client_id
+        request.state.client_id = client_id
+        response = await call_next(request)
+        response.headers["X-API-Client"] = client_id
+        return response
+
+    if api_key:
+        client_label = client_id or "Not Found"
+    else:
+        client_label = "Unauthenticated"
+
+    request.state.client_id = client_label
     response = await call_next(request)
-    response.headers["X-API-Client"] = client_id
+    response.headers["X-API-Client"] = client_label
     return response

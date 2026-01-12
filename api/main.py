@@ -12,6 +12,9 @@ def _load_env() -> None:
 
 _load_env()
 
+from datetime import datetime
+from zoneinfo import ZoneInfo
+
 from fastapi import FastAPI, HTTPException, Request
 from pydantic import BaseModel
 
@@ -24,6 +27,7 @@ from contextlib import asynccontextmanager
 
 from functions.utils import with_meta, get_current_period
 from functions.logger import log_run_start
+from functions.constants import TIMEZONE
 
 from functions.db_queries import (
     get_accounts,
@@ -101,6 +105,41 @@ def root(request: Request):
     return with_meta(
         data={"status": "Hello World!"},
         start_time=request.state.start_time,
+        client_id=getattr(request.state, "client_id", "Not Found"),
+    )
+
+
+# =========================================================
+# WAKE-UP
+# =========================================================
+
+
+@app.get("/wake-up")
+def wake_up(request: Request):
+    client_id = getattr(request.state, "client_id", "Not Found")
+    request_id = getattr(request.state, "request_id", "Not Found")
+    forwarded_for = request.headers.get("x-forwarded-for")
+    caller_ip = (
+        forwarded_for.split(",")[0].strip()
+        if forwarded_for
+        else request.headers.get("x-real-ip")
+        or (request.client.host if request.client else "Unknown")
+    )
+
+    data = {
+        "message": "I'm awake. Let's do this.",
+        "called_at": datetime.now(ZoneInfo(TIMEZONE)).isoformat(),
+        "request_id": request_id,
+        "caller_ip": caller_ip,
+        "method": request.method,
+        "path": request.url.path,
+        "user_agent": request.headers.get("user-agent", "Unknown"),
+    }
+
+    return with_meta(
+        data=data,
+        start_time=request.state.start_time,
+        client_id=client_id,
     )
 
 
@@ -114,6 +153,7 @@ def getCurrentPeriod(request: Request):
     return with_meta(
         data=get_current_period(),
         start_time=request.state.start_time,
+        client_id=getattr(request.state, "client_id", "Not Found"),
     )
 
 
@@ -136,6 +176,7 @@ def getBudgets(account_code: str, request: Request):
     return with_meta(
         data=data,
         start_time=request.state.start_time,
+        client_id=getattr(request.state, "client_id", "Not Found"),
     )
 
 
@@ -158,6 +199,7 @@ def getAllocations(account_code: str, request: Request):
     return with_meta(
         data=data,
         start_time=request.state.start_time,
+        client_id=getattr(request.state, "client_id", "Not Found"),
     )
 
 
@@ -180,6 +222,7 @@ def getRollovers(account_code: str, request: Request):
     return with_meta(
         data=data,
         start_time=request.state.start_time,
+        client_id=getattr(request.state, "client_id", "Not Found"),
     )
 
 
@@ -197,6 +240,7 @@ def getRolloversBreakDown(account_code: str, request: Request):
     return with_meta(
         data=data,
         start_time=request.state.start_time,
+        client_id=getattr(request.state, "client_id", "Not Found"),
     )
 
 
@@ -228,6 +272,7 @@ def update_google_ads(payload: GoogleAdsUpdateRequest, request: Request):
     return with_meta(
         data=result,
         start_time=request.state.start_time,
+        client_id=getattr(request.state, "client_id", "Not Found"),
     )
 
 

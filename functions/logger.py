@@ -11,6 +11,7 @@ import time
 import threading
 import queue
 import urllib.request
+import socket
 from contextvars import ContextVar
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
@@ -83,6 +84,30 @@ def _log_file_enabled() -> bool:
     )
 
 
+_HOST_CONTEXT: dict[str, str] | None = None
+
+
+def _get_host_context() -> dict[str, str]:
+    global _HOST_CONTEXT
+    if _HOST_CONTEXT is not None:
+        return _HOST_CONTEXT
+
+    hostname = os.getenv("HOSTNAME") or socket.gethostname()
+    app_env = os.getenv("APP_ENV", "").strip()
+    service = os.getenv("SERVICE_NAME") or os.getenv("RENDER_SERVICE_NAME", "")
+    deployment_id = os.getenv("DEPLOYMENT_ID") or os.getenv("RENDER_INSTANCE_ID", "")
+    region = os.getenv("REGION") or os.getenv("RENDER_REGION", "")
+
+    context = {
+        "host": hostname,
+        "app_env": app_env,
+        "service": service.strip(),
+        "deployment_id": deployment_id.strip(),
+        "region": region.strip(),
+    }
+    _HOST_CONTEXT = {key: value for key, value in context.items() if value}
+    return _HOST_CONTEXT
+
 
 def _get_axiom_config() -> tuple[bool, str, str, str, int, float]:
     token = os.getenv("AXIOM_API_TOKEN", "")
@@ -133,6 +158,8 @@ class JsonFormatter(logging.Formatter):
             "message": record.getMessage(),
             "run_id": RUN_ID,
         }
+
+        log.update(_get_host_context())
 
         request_id = get_request_id()
         if request_id:
