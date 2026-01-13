@@ -1,5 +1,7 @@
 # main.py
 from pathlib import Path
+import os
+import traceback
 from dotenv import load_dotenv
 
 
@@ -16,6 +18,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from fastapi import FastAPI, HTTPException, Request
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
 from api.middleware import (
@@ -26,7 +29,7 @@ from api.middleware import (
 from contextlib import asynccontextmanager
 
 from functions.utils import with_meta, get_current_period
-from functions.logger import log_run_start
+from functions.logger import log_run_start, get_logger
 from functions.constants import TIMEZONE
 
 from functions.db_queries import (
@@ -49,6 +52,40 @@ app = FastAPI(lifespan=lifespan)
 app.middleware("http")(timing_middleware)
 app.middleware("http")(api_key_auth_middleware)
 app.middleware("http")(request_response_logger_middleware)
+
+logger = get_logger("API")
+
+
+@app.exception_handler(Exception)
+async def unhandled_exception_handler(request: Request, exc: Exception):
+    logger.error(
+        "Unhandled exception",
+        extra={
+            "extra_fields": {
+                "path": str(request.url.path),
+                "method": request.method,
+                "error": str(exc),
+            }
+        },
+    )
+
+    response_content = {
+        "error": "Internal Server Error",
+        "message": "Something went wrong. Please try again later.",
+        "detail": str(exc),
+        "error_type": exc.__class__.__name__,
+        "path": str(request.url.path),
+        "method": request.method,
+        "request_id": getattr(request.state, "request_id", None),
+    }
+
+    if os.getenv("APP_ENV", "").lower() in {"local", "dev", "development"}:
+        response_content["traceback"] = traceback.format_exc()
+
+    return JSONResponse(
+        status_code=500,
+        content=response_content,
+    )
 
 # =========================================================
 # HELPERS

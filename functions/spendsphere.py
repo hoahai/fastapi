@@ -26,6 +26,7 @@ from functions.email import (
     build_google_ads_result_email,
     send_google_ads_result_email,
 )
+from functions.ggSheet import get_active_period
 
 # =========================================================
 # LOGGER
@@ -84,7 +85,7 @@ def _run_campaign_update(customer_id: str, updates: list[dict]) -> dict:
 def run_google_ads_budget_pipeline(
     *,
     account_codes: list[str] | str | None = None,
-    dry_run: bool = False,
+    dry_run: bool = False
 ) -> dict:
     """
     Full Google Ads budget + campaign update pipeline.
@@ -128,6 +129,9 @@ def run_google_ads_budget_pipeline(
     # =====================================================
     # 3. Transform
     # =====================================================
+    active_period = get_active_period(account_codes)
+    print(active_period)
+
     results = transform_google_ads_data(
         master_budgets=master_budgets,
         campaigns=campaigns,
@@ -135,6 +139,7 @@ def run_google_ads_budget_pipeline(
         costs=costs,
         allocations=allocations,
         rollovers=rollbreakdowns,
+        activePeriod=active_period,
     )
 
     # =====================================================
@@ -147,7 +152,72 @@ def run_google_ads_budget_pipeline(
     # =====================================================
     mutation_results = []
 
-    if not dry_run:
+    if dry_run:
+        for payload in budget_payloads:
+            updates = payload.get("updates", [])
+            if not updates:
+                continue
+
+            account_code = next(
+                (u.get("accountCode") for u in updates if u.get("accountCode")),
+                None,
+            )
+
+            mutation_results.append(
+                {
+                    "customerId": payload["customer_id"],
+                    "accountCode": account_code,
+                    "operation": "update_budgets",
+                    "summary": {
+                        "total": len(updates),
+                        "succeeded": len(updates),
+                        "failed": 0,
+                    },
+                    "successes": [
+                        {
+                            "budgetId": u.get("budgetId"),
+                            "campaignNames": u.get("campaignNames", []),
+                            "oldAmount": u.get("currentAmount"),
+                            "newAmount": u.get("newAmount"),
+                        }
+                        for u in updates
+                    ],
+                    "failures": [],
+                }
+            )
+
+        for payload in campaign_payloads:
+            updates = payload.get("updates", [])
+            if not updates:
+                continue
+
+            account_code = next(
+                (u.get("accountCode") for u in updates if u.get("accountCode")),
+                None,
+            )
+
+            mutation_results.append(
+                {
+                    "customerId": payload["customer_id"],
+                    "accountCode": account_code,
+                    "operation": "update_campaign_statuses",
+                    "summary": {
+                        "total": len(updates),
+                        "succeeded": len(updates),
+                        "failed": 0,
+                    },
+                    "successes": [
+                        {
+                            "campaignId": u.get("campaignId"),
+                            "oldStatus": u.get("oldStatus"),
+                            "newStatus": u.get("newStatus"),
+                        }
+                        for u in updates
+                    ],
+                    "failures": [],
+                }
+            )
+    else:
         tasks = []
 
         # -------------------------

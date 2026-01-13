@@ -2,7 +2,7 @@
 
 from decimal import Decimal
 from collections import defaultdict
-from datetime import datetime, date
+from datetime import datetime, date, time
 import calendar
 import pytz
 import pandas as pd
@@ -84,7 +84,7 @@ def master_budget_campaigns_join(
                 {
                     **mb,
                     "customerId": c.get("customerId"),
-                    "accountName": c.get("accountCode"),
+                    "accountName": c.get("accountName"),
                     "campaignId": c.get("campaignId"),
                     "campaignName": c.get("campaignName"),
                     "budgetId": c.get("budgetId"),
@@ -252,7 +252,81 @@ def budget_rollover_join(
 
 
 # ============================================================
-# 7. CALCULATE DAILY BUDGET (BUDGET LEVEL)
+# 7. JOIN ACTIVE PERIOD
+# ============================================================
+
+
+def _coerce_date(value) -> date | None:
+    if isinstance(value, date):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, str) and value.strip():
+        for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y"):
+            try:
+                return datetime.strptime(value.strip(), fmt).date()
+            except ValueError:
+                continue
+        try:
+            return datetime.fromisoformat(value.strip()).date()
+        except ValueError:
+            return None
+    return None
+
+
+def budget_activePeriod_join(
+    budgets: list[dict],
+    activePeriod: list[dict] | None,
+    today: date | None = None,
+) -> list[dict]:
+    tz = pytz.timezone(TIMEZONE)
+    now = datetime.now(tz)
+    if not today:
+        today = now.date()
+
+    lookup: dict[str, dict] = {}
+
+    for ap in activePeriod or []:
+        account_code = ap.get("accountCode")
+        if not account_code:
+            continue
+        lookup[str(account_code).upper()] = ap
+
+    for b in budgets:
+        account_code = str(b.get("accountCode", "")).upper()
+        ap = lookup.get(account_code, {})
+
+        start_date_raw = ap.get("startDate")
+        end_date_raw = ap.get("endDate")
+        start_date = _coerce_date(start_date_raw)
+        end_date = _coerce_date(end_date_raw)
+
+        if "isActive" in ap:
+            is_active = bool(ap.get("isActive"))
+        else:
+            if start_date is None:
+                start_ok = True
+            else:
+                start_dt = tz.localize(datetime.combine(start_date, time.min))
+                start_ok = now >= start_dt
+
+            if end_date is None:
+                end_ok = True
+            else:
+                end_dt = tz.localize(datetime.combine(end_date, time.max))
+                end_ok = now <= end_dt
+
+            is_active = start_ok and end_ok
+
+        b["startDate"] = start_date_raw
+        b["endDate"] = end_date_raw
+        b["isActive"] = is_active
+
+    return budgets
+
+
+# ============================================================
+# 8. CALCULATE DAILY BUDGET (BUDGET LEVEL)
 # ============================================================
 
 
@@ -291,34 +365,51 @@ def calculate_daily_budget(
         daily = remaining / days_left if days_left > 0 else Decimal("0")
 
         b["remainingBudget"] = remaining.quantize(Decimal("0.01"))
-        b["dailyBudget"] = daily.quantize(Decimal("0.01"))
+
+        if b.get("isActive") is False:
+            b["dailyBudget"] = Decimal("0.00")
+        else:
+            b["dailyBudget"] = daily.quantize(Decimal("0.01"))
 
     return budgets
 
 
 # ============================================================
-# 8. UPDATE PAYLOADS
+# 9. UPDATE PAYLOADS
 # ============================================================
 
 
 def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
     budget_updates: dict[str, list[dict]] = {}
-    campaign_updates: dict[str, list[dict]] = {}
+    campaign_updates: dict[str, dict[str, dict]] = {}
 
     for row in data:
         customer_id = row["ggAccountId"]
-
+        allocation = row.get("allocation")
         daily_budget_raw = row.get("dailyBudget")
         budget_amount_raw = row.get("budgetAmount")
 
-        # dailyBudget is required for BOTH
-        if daily_budget_raw is None:
+        is_inactive = row.get("isActive") is False
+
+        if allocation is None and not is_inactive:
             continue
 
-        daily_budget = Decimal(daily_budget_raw)
+        if allocation is None and is_inactive:
+            expected_status = "PAUSED"
+            daily_budget = None
+        else:
+            if daily_budget_raw is None:
+                continue
 
-        # Inline expected status logic
-        expected_status = "ENABLED" if daily_budget >= Decimal("0.01") else "PAUSED"
+            daily_budget = Decimal(daily_budget_raw)
+
+            # Inline expected status logic
+            if is_inactive:
+                expected_status = "PAUSED"
+            else:
+                expected_status = (
+                    "ENABLED" if daily_budget >= Decimal("0.01") else "PAUSED"
+                )
 
         campaigns = row.get("campaigns", [])
         campaign_names = [
@@ -332,18 +423,19 @@ def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
         # -------------------------
         for campaign in campaigns:
             if campaign["status"] != expected_status:
-                campaign_updates.setdefault(customer_id, []).append(
-                    {
-                        "campaignId": campaign["campaignId"],
-                        "oldStatus": campaign["status"],
-                        "newStatus": expected_status,
-                        "accountCode": row.get("accountCode"),
-                    }
-                )
+                customer_updates = campaign_updates.setdefault(customer_id, {})
+                customer_updates[str(campaign["campaignId"])] = {
+                    "campaignId": campaign["campaignId"],
+                    "oldStatus": campaign["status"],
+                    "newStatus": expected_status,
+                    "accountCode": row.get("accountCode"),
+                }
 
         # -------------------------
         # Budget updates (stricter rules)
         # -------------------------
+        if daily_budget is None:
+            continue
         if budget_amount_raw is None:
             continue
 
@@ -382,7 +474,7 @@ def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
     ]
 
     campaign_payloads = [
-        {"customer_id": cid, "updates": updates}
+        {"customer_id": cid, "updates": list(updates.values())}
         for cid, updates in campaign_updates.items()
     ]
 
@@ -401,7 +493,7 @@ def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
 
 
 # ============================================================
-# 8. PIPELINE ORCHESTRATOR
+# 10. PIPELINE ORCHESTRATOR
 # ============================================================
 
 
@@ -412,6 +504,7 @@ def transform_google_ads_data(
     costs: list[dict],
     allocations: list[dict],
     rollovers: list[dict],
+    activePeriod: list[dict] | None = None,
 ) -> list[dict]:
     """
     Full Google Ads budget pipeline (BUDGET-CENTRIC).
@@ -425,12 +518,13 @@ def transform_google_ads_data(
     step5 = group_campaigns_by_budget(step4)
     step6 = budget_allocation_join(step5, allocations)
     step7 = budget_rollover_join(step6, rollovers)
-    step8 = calculate_daily_budget(step7)
+    step8 = budget_activePeriod_join(step7, activePeriod)
+    step9 = calculate_daily_budget(step8)
 
     # --------------------------------------------------
     # SORT RESULT USING PANDAS
     # --------------------------------------------------
-    df = pd.DataFrame(step8)
+    df = pd.DataFrame(step9)
 
     df_sorted = df.sort_values(
         by=["accountCode", "adTypeCode"], ascending=[True, False], na_position="last"

@@ -141,3 +141,10 @@ LOG_BACKUP_COUNT = 5  # Rotated files per run
 
 # Retention policy
 LOG_RETENTION_DAYS = 1  # Delete logs older than N days
+
+# =====================
+# SPENDSPHERE SHEETS
+# =====================
+
+SPENDSPHERE_ACTIVEPERIOD_SPREADSHEET_ID = "1wbKImoY7_fv_dcn_bA9pL7g9htrWMKXB0EqVu09-KEQ"
+SPENDSPHERE_ACTIVEPERIOD_SHEET_NAME = "0.0 SpendSphere ActivePeriod"

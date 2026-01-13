@@ -5,6 +5,10 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 
 from functions.utils import get_current_period, resolve_secret_path
+from functions.constants import (
+    SPENDSPHERE_ACTIVEPERIOD_SPREADSHEET_ID,
+    SPENDSPHERE_ACTIVEPERIOD_SHEET_NAME,
+)
 
 # =====================================================
 # CONFIG
@@ -17,6 +21,10 @@ SHEETS: dict[str, dict[str, str]] = {
     "rollovers": {
         "spreadsheet_id": "1wbKImoY7_fv_dcn_bA9pL7g9htrWMKXB0EqVu09-KEQ",
         "range_name": "0.0 LowcoderRollover",
+    },
+    "active_period": {
+        "spreadsheet_id": SPENDSPHERE_ACTIVEPERIOD_SPREADSHEET_ID,
+        "range_name": SPENDSPHERE_ACTIVEPERIOD_SHEET_NAME,
     },
     # Future sheets go here
     # "allocations": {...},
@@ -144,3 +152,41 @@ def get_sheet_raw(name: str) -> list[dict]:
         spreadsheet_id=sheet["spreadsheet_id"],
         range_name=sheet["range_name"],
     )
+
+
+def get_active_period(
+    account_codes: list[str] | None = None,
+) -> list[dict]:
+    """
+    Get active period data.
+
+    NOTE:
+    - Must NOT be called in a process that uses threads
+    """
+    sheet = SHEETS["active_period"]
+
+    data = _read_sheet_raw(
+        spreadsheet_id=sheet["spreadsheet_id"],
+        range_name=sheet["range_name"],
+    )
+
+    if not data:
+        return []
+
+    if isinstance(account_codes, str):
+        account_codes = [account_codes]
+
+    normalized_accounts = (
+        {c.strip().upper() for c in account_codes}
+        if account_codes
+        else None
+    )
+
+    if normalized_accounts is None:
+        return data
+
+    return [
+        row
+        for row in data
+        if row.get("accountCode", "").strip().upper() in normalized_accounts
+    ]
