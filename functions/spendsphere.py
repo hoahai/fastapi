@@ -83,9 +83,7 @@ def _run_campaign_update(customer_id: str, updates: list[dict]) -> dict:
 
 
 def run_google_ads_budget_pipeline(
-    *,
-    account_codes: list[str] | str | None = None,
-    dry_run: bool = False
+    *, account_codes: list[str] | str | None = None, dry_run: bool = False
 ) -> dict:
     """
     Full Google Ads budget + campaign update pipeline.
@@ -130,7 +128,6 @@ def run_google_ads_budget_pipeline(
     # 3. Transform
     # =====================================================
     active_period = get_active_period(account_codes)
-    print(active_period)
 
     results = transform_google_ads_data(
         master_budgets=master_budgets,

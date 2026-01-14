@@ -182,11 +182,19 @@ def get_active_period(
         else None
     )
 
-    if normalized_accounts is None:
-        return data
+    last_rows: dict[str, dict] = {}
+    last_index: dict[str, int] = {}
+
+    for idx, row in enumerate(data):
+        account_code = row.get("accountCode", "").strip().upper()
+        if not account_code:
+            continue
+        if normalized_accounts is not None and account_code not in normalized_accounts:
+            continue
+        last_rows[account_code] = row
+        last_index[account_code] = idx
 
     return [
-        row
-        for row in data
-        if row.get("accountCode", "").strip().upper() in normalized_accounts
+        last_rows[code]
+        for code in sorted(last_index, key=last_index.get)
     ]
