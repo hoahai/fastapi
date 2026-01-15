@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 from collections import defaultdict
+from datetime import datetime
+from zoneinfo import ZoneInfo
+import json
 
 from functions.db_queries import (
     get_masterbudgets,
@@ -22,10 +25,7 @@ from functions.dataTransform import transform_google_ads_data, generate_update_p
 from functions.utils import run_parallel
 from functions.logger import get_logger
 
-from functions.email import (
-    build_google_ads_result_email,
-    send_google_ads_result_email,
-)
+from functions.email import send_google_ads_result_email
 from functions.ggSheet import get_active_period
 
 # =========================================================
@@ -267,14 +267,20 @@ def run_google_ads_budget_pipeline(
     }
 
     # =====================================================
-    # 7. Email FULL report
+    # 7. Email FULL report on failures
     # =====================================================
-    # email_body = build_google_ads_result_email(full_report=pipeline_result)
-
-    # send_google_ads_result_email(
-    #     subject="Spendsphere – Google Ads update report",
-    #     body=email_body,
-    # )
+    if overall_summary.get("failed", 0) > 0:
+        chicago_time = datetime.now(ZoneInfo("America/Chicago")).strftime(
+            "%d/%m/%Y %H:%M:%S"
+        )
+        email_body = json.dumps(pipeline_result, indent=2, default=str)
+        send_google_ads_result_email(
+            subject=(
+                "Spendsphere – Google Ads update report "
+                f"(failures detected) {chicago_time}"
+            ),
+            body=email_body,
+        )
 
     logger.debug(
         "Google Ads pipeline completed",

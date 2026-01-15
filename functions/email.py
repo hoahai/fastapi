@@ -142,7 +142,7 @@ def send_google_ads_result_email(subject: str, body: str):
         raise RuntimeError("SMTP environment variables are not fully configured")
 
     msg = EmailMessage()
-    msg["From"] = email_from
+    msg["From"] = f"SpendSphere <{email_from}>"
     msg["To"] = email_to
     msg["Subject"] = subject
     msg.set_content(body)

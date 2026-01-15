@@ -80,7 +80,7 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     }
 
     if os.getenv("APP_ENV", "").lower() in {"local", "dev", "development"}:
-        response_content["traceback"] = traceback.format_exc()
+        response_content["traceback"] = traceback.format_exc().splitlines()
 
     return JSONResponse(
         status_code=500,
