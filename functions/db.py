@@ -1,18 +1,18 @@
 # functions/db.py
 
 import mysql.connector
-import os
-from dotenv import load_dotenv
 
-# Load .env from project root
-load_dotenv("secrets/.env")
+from functions.utils import load_env
+from functions.tenant import get_env
+
+load_env()
 
 def get_connection():
     return mysql.connector.connect(
-        host=os.getenv("DB_HOST"),
-        port=int(os.getenv("DB_PORT", 3306)),
-        user=os.getenv("DB_USER"),
-        password=os.getenv("DB_PASSWORD"),
-        database=os.getenv("DB_NAME"),
+        host=get_env("DB_HOST"),
+        port=int(get_env("DB_PORT", "3306")),
+        user=get_env("DB_USER"),
+        password=get_env("DB_PASSWORD"),
+        database=get_env("DB_NAME"),
         ssl_disabled=False
     )

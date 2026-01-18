@@ -1,21 +1,15 @@
 # main.py
-from pathlib import Path
 import os
 import traceback
-from dotenv import load_dotenv
-
-
-def _load_env() -> None:
-    for path in (Path("/etc/secrets/.env"), Path("secrets/.env")):
-        if path.is_file():
-            load_dotenv(path)
-            return
-
-
-_load_env()
 
 from datetime import datetime
 from zoneinfo import ZoneInfo
+from contextlib import asynccontextmanager
+
+from functions.utils import with_meta, get_current_period, load_env
+from functions.tenant import TenantConfigError
+
+load_env()
 
 from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import JSONResponse
@@ -25,10 +19,9 @@ from api.middleware import (
     timing_middleware,
     api_key_auth_middleware,
     request_response_logger_middleware,
+    tenant_context_middleware,
 )
-from contextlib import asynccontextmanager
 
-from functions.utils import with_meta, get_current_period
 from functions.logger import log_run_start, get_logger
 from functions.constants import TIMEZONE
 
@@ -52,8 +45,17 @@ app = FastAPI(lifespan=lifespan)
 app.middleware("http")(timing_middleware)
 app.middleware("http")(api_key_auth_middleware)
 app.middleware("http")(request_response_logger_middleware)
+app.middleware("http")(tenant_context_middleware)
 
 logger = get_logger("API")
+
+
+@app.exception_handler(TenantConfigError)
+async def tenant_config_exception_handler(request: Request, exc: TenantConfigError):
+    return JSONResponse(
+        status_code=400,
+        content={"detail": str(exc)},
+    )
 
 
 @app.exception_handler(Exception)
@@ -185,7 +187,7 @@ def wake_up(request: Request):
 # =========================================================
 
 
-@app.get("/api/utils/current-period")
+@app.get("/api/spendsphere/current-period")
 def getCurrentPeriod(request: Request):
     return with_meta(
         data=get_current_period(),
@@ -199,7 +201,7 @@ def getCurrentPeriod(request: Request):
 # =========================================================
 
 
-@app.get("/api/budgets/{account_code}")
+@app.get("/api/spendsphere/budgets/{account_code}")
 def getBudgets(account_code: str, request: Request):
     account_code = require_account_code(account_code)
 
@@ -222,7 +224,7 @@ def getBudgets(account_code: str, request: Request):
 # =========================================================
 
 
-@app.get("/api/allocations/{account_code}")
+@app.get("/api/spendsphere/allocations/{account_code}")
 def getAllocations(account_code: str, request: Request):
     account_code = require_account_code(account_code)
 
@@ -245,7 +247,7 @@ def getAllocations(account_code: str, request: Request):
 # =========================================================
 
 
-@app.get("/api/rollovers/{account_code}")
+@app.get("/api/spendsphere/rollovers/{account_code}")
 def getRollovers(account_code: str, request: Request):
     account_code = require_account_code(account_code)
 
@@ -263,7 +265,7 @@ def getRollovers(account_code: str, request: Request):
     )
 
 
-@app.get("/api/rollovers/breakdown/{account_code}")
+@app.get("/api/spendsphere/rollovers/breakdown/{account_code}")
 def getRolloversBreakDown(account_code: str, request: Request):
     account_code = require_account_code(account_code)
 
@@ -291,7 +293,7 @@ class GoogleAdsUpdateRequest(BaseModel):
     dryRun: bool = False
 
 
-@app.post("/api/update/")
+@app.post("/api/spendsphere/update/")
 def update_google_ads(payload: GoogleAdsUpdateRequest, request: Request):
     # -----------------------------------------
     # Validate accountCodes (REUSABLE)

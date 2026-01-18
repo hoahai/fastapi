@@ -27,6 +27,7 @@ from functions.constants import (
     LOG_BACKUP_COUNT,
     LOG_RETENTION_DAYS,
 )
+from functions.tenant import get_env, get_tenant_id
 
 # ======================================================
 # TIMEZONE
@@ -110,11 +111,11 @@ def _get_host_context() -> dict[str, str]:
 
 
 def _get_axiom_config() -> tuple[bool, str, str, str, int, float]:
-    token = os.getenv("AXIOM_API_TOKEN", "")
-    dataset = os.getenv("AXIOM_DATASET", "")
-    api_url = os.getenv("AXIOM_API_URL", "https://api.axiom.co").rstrip("/")
-    batch_size = int(os.getenv("AXIOM_BATCH_SIZE", "25"))
-    flush_seconds = float(os.getenv("AXIOM_FLUSH_SECONDS", "2.0"))
+    token = get_env("AXIOM_API_TOKEN", "")
+    dataset = get_env("AXIOM_DATASET", "")
+    api_url = get_env("AXIOM_API_URL", "https://api.axiom.co").rstrip("/")
+    batch_size = int(get_env("AXIOM_BATCH_SIZE", "25"))
+    flush_seconds = float(get_env("AXIOM_FLUSH_SECONDS", "2.0"))
     enabled = bool(token and dataset)
     return enabled, token, dataset, api_url, batch_size, flush_seconds
 
@@ -160,6 +161,10 @@ class JsonFormatter(logging.Formatter):
         }
 
         log.update(_get_host_context())
+
+        tenant_id = get_tenant_id()
+        if tenant_id:
+            log["tenant_id"] = tenant_id
 
         request_id = get_request_id()
         if request_id:
@@ -254,6 +259,38 @@ class AxiomHandler(logging.Handler):
             # Never crash app because of logging
             pass
 
+
+class AxiomRouterHandler(logging.Handler):
+    def __init__(self) -> None:
+        super().__init__()
+        self._handlers: dict[str, AxiomHandler] = {}
+        self._lock = threading.Lock()
+
+    def emit(self, record: logging.LogRecord) -> None:
+        enabled, token, dataset, api_url, batch_size, flush_seconds = _get_axiom_config()
+        if not enabled:
+            return
+
+        key = f"{token}:{dataset}:{api_url}:{batch_size}:{flush_seconds}"
+        handler = self._handlers.get(key)
+        if handler is None:
+            with self._lock:
+                handler = self._handlers.get(key)
+                if handler is None:
+                    handler = AxiomHandler(
+                        token=token,
+                        dataset=dataset,
+                        api_url=api_url,
+                        batch_size=batch_size,
+                        flush_seconds=flush_seconds,
+                    )
+                    handler.setFormatter(self.formatter or JsonFormatter())
+                    handler.setLevel(_get_axiom_level())
+                    handler.name = f"axiom-{len(self._handlers) + 1}"
+                    self._handlers[key] = handler
+
+        handler.emit(record)
+
 # ======================================================
 # HANDLERS
 # ======================================================
@@ -301,19 +338,7 @@ def create_request_debug_handler(request_id: str) -> logging.Handler:
 
 
 def _create_axiom_handler() -> logging.Handler:
-    enabled, token, dataset, api_url, batch_size, flush_seconds = _get_axiom_config()
-    if not enabled:
-        handler = logging.NullHandler()
-        handler.name = "axiom-null"
-        return handler
-
-    handler = AxiomHandler(
-        token=token,
-        dataset=dataset,
-        api_url=api_url,
-        batch_size=batch_size,
-        flush_seconds=flush_seconds,
-    )
+    handler = AxiomRouterHandler()
     handler.setFormatter(JsonFormatter())
     handler.setLevel(_get_axiom_level())
     handler.name = "axiom"

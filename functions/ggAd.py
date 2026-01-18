@@ -10,8 +10,9 @@ from google.ads.googleads.v22.errors.types.errors import GoogleAdsFailure
 from functions.utils import (
     get_current_period,
     run_parallel_flatten,
-    resolve_secret_path,
 )
+from functions.tenant import get_env, TenantConfigError
+from pathlib import Path
 from functions.constants import (
     ADTYPES,
     GGADS_MAX_PAUSED_CAMPAIGNS,
@@ -31,10 +32,41 @@ logger = get_logger("Google Ads")
 
 def get_client() -> GoogleAdsClient:
     """
-    Create and return a Google Ads client using local google-ads.yaml config.
+    Create and return a Google Ads client using tenant config.
     """
-    config_path = resolve_secret_path("GOOGLE_ADS_CONFIG_PATH", "google-ads.yaml")
-    return GoogleAdsClient.load_from_storage(config_path)
+    developer_token = get_env("developer_token")
+    login_customer_id = get_env("login_customer_id")
+    json_key_file_path = get_env("json_key_file_path")
+    use_proto_plus = get_env("use_proto_plus", "true")
+
+    missing = [
+        key
+        for key, value in (
+            ("developer_token", developer_token),
+            ("login_customer_id", login_customer_id),
+            ("json_key_file_path", json_key_file_path),
+        )
+        if not value
+    ]
+    if missing:
+        raise TenantConfigError(
+            "Missing Google Ads tenant config keys: " + ", ".join(missing)
+        )
+
+    key_path = Path(str(json_key_file_path))
+    if not key_path.is_file():
+        raise TenantConfigError(
+            f"Google Ads json_key_file_path not found: {key_path}"
+        )
+
+    config = {
+        "developer_token": developer_token,
+        "login_customer_id": login_customer_id,
+        "json_key_file_path": str(key_path),
+        "use_proto_plus": str(use_proto_plus).lower()
+        in {"1", "true", "yes", "on"},
+    }
+    return GoogleAdsClient.load_from_dict(config)
 
 
 # =====================

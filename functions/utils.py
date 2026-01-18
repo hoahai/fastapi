@@ -15,6 +15,8 @@ from pathlib import Path
 from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
 from typing import Callable, Iterable, TypeVar, Optional, Any
 
+from dotenv import load_dotenv
+
 from functions.constants import (
     TIMEZONE,
     PARALLEL_MAX_WORKERS,
@@ -33,13 +35,25 @@ from functions.logger import (
     enable_console_logging,
     disable_console_logging,
 )
+from functions.tenant import get_env
 
 T = TypeVar("T")
 R = TypeVar("R")
 
 ParallelTask = tuple[Callable[..., R], tuple[Any, ...]]
 
-logger = get_logger("Utils")
+_utils_logger = None
+
+
+def _get_logger():
+    global _utils_logger
+    if _utils_logger is None:
+        _utils_logger = get_logger("Utils")
+    return _utils_logger
+
+
+LOCAL_ETC_DIR = Path(__file__).resolve().parents[1] / "etc"
+LOCAL_SECRETS_DIR = LOCAL_ETC_DIR / "secrets"
 
 # ======================================================
 # DATE HELPERS
@@ -185,7 +199,7 @@ def _run_with_retry(
             result = func(*args)
             duration = time.monotonic() - start
 
-            logger.debug(
+            _get_logger().debug(
                 "Task summary",
                 extra={
                     "extra_fields": {
@@ -206,7 +220,7 @@ def _run_with_retry(
             if attempts >= PARALLEL_MAX_RETRIES:
                 duration = time.monotonic() - start
 
-                logger.error(
+                _get_logger().error(
                     "Task summary",
                     extra={
                         "extra_fields": {
@@ -251,9 +265,9 @@ def run_parallel(
         _validate_task(t)
 
     if log_to_console:
-        enable_console_logging(logger)
+        enable_console_logging(_get_logger())
     else:
-        disable_console_logging(logger)
+        disable_console_logging(_get_logger())
 
     results: list[R] = [None] * len(task_list)
 
@@ -275,7 +289,7 @@ def run_parallel(
                 results[idx] = future.result(timeout=timeout)
 
     finally:
-        disable_console_logging(logger)
+        disable_console_logging(_get_logger())
 
     return results
 
@@ -340,13 +354,20 @@ def with_meta(*, data: dict | list, start_time: float, client_id: str) -> dict:
 # ======================================================
 
 
+def load_env() -> None:
+    for path in (Path("/etc/.env"), LOCAL_ETC_DIR / ".env"):
+        if path.is_file():
+            load_dotenv(path)
+            return
+
+
 def resolve_secret_path(env_var: str, filename: str) -> str:
-    env_value = os.getenv(env_var)
+    env_value = get_env(env_var)
     if env_value and Path(env_value).is_file():
         return env_value
 
-    for base in ("/etc/secrets", "secrets"):
-        candidate = Path(base) / filename
+    for base in (Path("/etc/secrets"), LOCAL_SECRETS_DIR):
+        candidate = base / filename
         if candidate.is_file():
             return str(candidate)
 
@@ -355,5 +376,5 @@ def resolve_secret_path(env_var: str, filename: str) -> str:
 
     raise RuntimeError(
         f"Secret file not found for {env_var}. "
-        f"Tried {filename} in /etc/secrets and secrets/."
+        f"Tried {filename} in /etc/secrets and etc/secrets."
     )

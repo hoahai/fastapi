@@ -20,6 +20,12 @@ from functions.logger import (
     remove_debug_handler,
     create_request_debug_handler,
 )
+from functions.tenant import (
+    TenantConfigError,
+    set_tenant_context,
+    reset_tenant_context,
+    get_tenant_id,
+)
 
 _API_KEY_REGISTRY: dict[str, str] | None = None
 _API_LOGGER = get_logger("api")
@@ -32,6 +38,37 @@ async def timing_middleware(request: Request, call_next):
     response = await call_next(request)
 
     return response
+
+
+async def tenant_context_middleware(request: Request, call_next):
+    path = request.url.path or ""
+    requires_tenant = path.startswith("/api")
+    tenant_header = request.headers.get("x-tenant-id")
+    token = None
+    if not requires_tenant and not tenant_header:
+        request.state.tenant_id = None
+        return await call_next(request)
+
+    if not tenant_header:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": "Missing X-Tenant-Id header"},
+        )
+
+    try:
+        token = set_tenant_context(tenant_header)
+        request.state.tenant_id = get_tenant_id()
+    except TenantConfigError as exc:
+        return JSONResponse(
+            status_code=400,
+            content={"detail": str(exc)},
+        )
+
+    try:
+        return await call_next(request)
+    finally:
+        if token:
+            reset_tenant_context(token)
 
 
 def _parse_api_key_registry(raw: str) -> dict[str, str]:
@@ -95,6 +132,7 @@ def _log_api_request(
     status_code: int,
     duration_ms: int,
     client_id: str | None,
+    tenant_id: str | None,
     request_host: str | None,
     request_scheme: str | None,
     error: str | None = None,
@@ -106,6 +144,7 @@ def _log_api_request(
         "status_code": status_code,
         "duration_ms": duration_ms,
         "client_id": client_id,
+        "tenant_id": tenant_id,
         "request_host": request_host,
         "request_scheme": request_scheme,
         "timestamp": datetime.now(ZoneInfo(TIMEZONE)).isoformat(),
@@ -214,6 +253,7 @@ async def request_response_logger_middleware(request: Request, call_next):
                     "status_code": response.status_code,
                     "duration_ms": duration_ms,
                     "client_id": getattr(request.state, "client_id", None),
+                    "tenant_id": getattr(request.state, "tenant_id", None),
                     "request_host": request_host,
                     "request_scheme": request_scheme,
                     "request_body": request_body,

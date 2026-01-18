@@ -1,16 +1,17 @@
 from __future__ import annotations
 
-from dotenv import load_dotenv
 from datetime import datetime
-import os
 import smtplib
 from email.message import EmailMessage
+
+from functions.utils import load_env
+from functions.tenant import get_env
 
 # =========================================================
 # ENV
 # =========================================================
 
-load_dotenv("secrets/.env")
+load_env()
 
 
 # =========================================================
@@ -124,16 +125,16 @@ def send_google_ads_result_email(subject: str, body: str):
     Send Google Ads mutation result email using environment variables.
     """
 
-    smtp_host = os.getenv("SMTP_HOST")
-    smtp_port = int(os.getenv("SMTP_PORT", "587"))
-    smtp_username = os.getenv("SMTP_USERNAME")
-    smtp_password = os.getenv("SMTP_PASSWORD")
+    smtp_host = get_env("SMTP_HOST")
+    smtp_port = int(get_env("SMTP_PORT", "587"))
+    smtp_username = get_env("SMTP_USERNAME")
+    smtp_password = get_env("SMTP_PASSWORD")
 
-    email_from = os.getenv(
+    email_from = get_env(
         "EMAIL_FROM",
         "noreply@theautoadagency.com",
     )
-    email_to = os.getenv(
+    email_to = get_env(
         "EMAIL_TO_GOOGLE_ADS_ALERT",
         "hai@theautoadagency.com",
     )
