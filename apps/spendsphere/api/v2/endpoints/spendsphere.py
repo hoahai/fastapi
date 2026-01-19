@@ -17,15 +17,6 @@ from shared.utils import with_meta, get_current_period
 router = APIRouter()
 
 
-@router.get("/current-period")
-def getCurrentPeriod(request: Request):
-    return with_meta(
-        data=get_current_period(),
-        start_time=request.state.start_time,
-        client_id=getattr(request.state, "client_id", "Not Found"),
-    )
-
-
 @router.get("/budgets/{account_code}")
 def getBudgets(account_code: str, request: Request):
     account_code = require_account_code(account_code)
