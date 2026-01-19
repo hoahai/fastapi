@@ -21,6 +21,7 @@ from api.middleware import (
     tenant_context_middleware,
 )
 from api.v1.router import router as v1_router
+from api.v2.router import router as v2_router
 
 from services.logger import log_run_start, get_logger
 
@@ -36,6 +37,7 @@ app.middleware("http")(api_key_auth_middleware)
 app.middleware("http")(request_response_logger_middleware)
 app.middleware("http")(tenant_context_middleware)
 app.include_router(v1_router)
+app.include_router(v2_router)
 
 logger = get_logger("API")
 

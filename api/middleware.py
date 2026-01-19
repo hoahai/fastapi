@@ -60,7 +60,7 @@ async def tenant_context_middleware(request: Request, call_next):
     try:
         token = set_tenant_context(tenant_header)
         request.state.tenant_id = get_tenant_id()
-        if path.startswith("/api/v1"):
+        if path.startswith("/api"):
             validate_tenant_config()
     except TenantConfigError as exc:
         return JSONResponse(
