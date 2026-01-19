@@ -42,7 +42,7 @@ async def timing_middleware(request: Request, call_next):
 
 async def tenant_context_middleware(request: Request, call_next):
     path = request.url.path or ""
-    requires_tenant = path.startswith("/api")
+    requires_tenant = path.startswith("/api") or path.startswith("/spendsphere/api")
     tenant_header = request.headers.get("x-tenant-id")
     token = None
     if not requires_tenant and not tenant_header:
@@ -275,7 +275,11 @@ async def request_response_logger_middleware(request: Request, call_next):
 
 async def api_key_auth_middleware(request: Request, call_next):
     path = request.url.path or ""
-    is_api_route = path == "/api" or path.startswith("/api/")
+    is_api_route = (
+        path == "/api"
+        or path.startswith("/api/")
+        or path.startswith("/spendsphere/api")
+    )
 
     if request.method == "OPTIONS":
         return await call_next(request)

@@ -1,13 +1,10 @@
 # main.py
 import os
 import traceback
-
-from datetime import datetime
-from zoneinfo import ZoneInfo
 from contextlib import asynccontextmanager
 
 from shared.utils import with_meta, load_env
-from shared.tenant import TenantConfigError, get_timezone
+from shared.tenant import TenantConfigError
 
 load_env()
 
@@ -94,40 +91,6 @@ def root(request: Request):
         data={"status": "Hello World!"},
         start_time=request.state.start_time,
         client_id=getattr(request.state, "client_id", "Not Found"),
-    )
-
-
-# =========================================================
-# WAKE-UP
-# =========================================================
-
-
-@app.get("/wake-up")
-def wake_up(request: Request):
-    client_id = getattr(request.state, "client_id", "Not Found")
-    request_id = getattr(request.state, "request_id", "Not Found")
-    forwarded_for = request.headers.get("x-forwarded-for")
-    caller_ip = (
-        forwarded_for.split(",")[0].strip()
-        if forwarded_for
-        else request.headers.get("x-real-ip")
-        or (request.client.host if request.client else "Unknown")
-    )
-
-    data = {
-        "message": "I'm awake. Let's do this.",
-        "called_at": datetime.now(ZoneInfo(get_timezone())).isoformat(),
-        "request_id": request_id,
-        "caller_ip": caller_ip,
-        "method": request.method,
-        "path": request.url.path,
-        "user_agent": request.headers.get("user-agent", "Unknown"),
-    }
-
-    return with_meta(
-        data=data,
-        start_time=request.state.start_time,
-        client_id=client_id,
     )
 
 

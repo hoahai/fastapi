@@ -10,6 +10,7 @@ from google.ads.googleads.v22.errors.types.errors import GoogleAdsFailure
 from shared.utils import (
     get_current_period,
     run_parallel_flatten,
+    LOCAL_SECRETS_DIR,
 )
 from shared.tenant import get_env, TenantConfigError
 from pathlib import Path
@@ -37,26 +38,52 @@ def get_client() -> GoogleAdsClient:
     developer_token = get_env("developer_token")
     login_customer_id = get_env("login_customer_id")
     json_key_file_path = get_env("json_key_file_path")
+    google_app_creds = get_env("GOOGLE_APPLICATION_CREDENTIALS")
     use_proto_plus = get_env("use_proto_plus", "true")
 
-    missing = [
-        key
-        for key, value in (
-            ("developer_token", developer_token),
-            ("login_customer_id", login_customer_id),
-            ("json_key_file_path", json_key_file_path),
-        )
-        if not value
-    ]
+    missing: list[str] = []
+    if not developer_token:
+        missing.append("developer_token")
+    if not login_customer_id:
+        missing.append("login_customer_id")
+    if not json_key_file_path and not google_app_creds:
+        missing.append("json_key_file_path or GOOGLE_APPLICATION_CREDENTIALS")
     if missing:
         raise TenantConfigError(
             "Missing Google Ads tenant config keys: " + ", ".join(missing)
         )
 
-    key_path = Path(str(json_key_file_path))
-    if not key_path.is_file():
+    def _resolve_key_path(raw_path: str) -> Path | None:
+        candidate = Path(raw_path)
+        if candidate.is_file():
+            return candidate
+        if not candidate.is_absolute():
+            candidate_str = str(candidate)
+            if candidate_str.startswith("etc/secrets/"):
+                abs_candidate = Path("/") / candidate
+                if abs_candidate.is_file():
+                    return abs_candidate
+            for base in (Path("/etc/secrets"), LOCAL_SECRETS_DIR):
+                alt = base / candidate_str
+                if alt.is_file():
+                    return alt
+        return None
+
+    key_path = None
+    tried: list[str] = []
+    for raw_path in (json_key_file_path, google_app_creds):
+        if not raw_path:
+            continue
+        tried.append(str(raw_path))
+        resolved = _resolve_key_path(str(raw_path))
+        if resolved is not None:
+            key_path = resolved
+            break
+
+    if key_path is None:
+        tried_display = ", ".join(tried) if tried else "(none)"
         raise TenantConfigError(
-            f"Google Ads json_key_file_path not found: {key_path}"
+            "Google Ads json_key_file_path not found. Tried: " + tried_display
         )
 
     config = {

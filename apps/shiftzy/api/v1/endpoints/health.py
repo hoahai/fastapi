@@ -2,7 +2,7 @@ from fastapi import APIRouter, Request
 
 from shared.utils import with_meta
 
-router = APIRouter(prefix="/shiftzy")
+router = APIRouter()
 
 
 @router.get("/ping")
