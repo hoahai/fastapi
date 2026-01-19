@@ -1,4 +1,4 @@
-# functions/ggAd.py
+# api/v1/helpers/ggAd.py
 
 import re
 from decimal import Decimal, ROUND_HALF_UP
@@ -7,20 +7,20 @@ from google.protobuf.field_mask_pb2 import FieldMask
 from google.ads.googleads.errors import GoogleAdsException
 from google.ads.googleads.v22.errors.types.errors import GoogleAdsFailure
 
-from functions.utils import (
+from services.utils import (
     get_current_period,
     run_parallel_flatten,
 )
-from functions.tenant import get_env, TenantConfigError
+from services.tenant import get_env, TenantConfigError
 from pathlib import Path
-from functions.constants import (
-    ADTYPES,
+from services.constants import (
     GGADS_MAX_PAUSED_CAMPAIGNS,
     GGADS_MIN_BUDGET,
     GGADS_MAX_BUDGET_MULTIPLIER,
     GGADS_ALLOWED_CAMPAIGN_STATUSES,
 )
-from functions.logger import get_logger
+from services.logger import get_logger
+from api.v1.helpers.config import get_adtypes
 
 logger = get_logger("Google Ads")
 
@@ -280,7 +280,8 @@ def get_ggad_campaigns(accounts: list[dict]) -> list[dict]:
     filtered by naming convention:
     [zzz.][accountCode]_[adTypeCode]_[Name]
     """
-    ad_type_pattern = "|".join(map(re.escape, ADTYPES.keys()))
+    adtypes = get_adtypes()
+    ad_type_pattern = "|".join(map(re.escape, adtypes.keys()))
 
     def per_account_func(account: dict) -> list[dict]:
         campaigns = get_ggad_campaign(account["id"])

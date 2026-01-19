@@ -11,8 +11,8 @@ from zoneinfo import ZoneInfo
 from fastapi import Request
 from starlette.responses import JSONResponse, Response
 
-from functions.constants import TIMEZONE, LOG_LEVEL
-from functions.logger import (
+from services.constants import LOG_LEVEL
+from services.logger import (
     get_logger,
     set_request_id,
     reset_request_id,
@@ -20,12 +20,14 @@ from functions.logger import (
     remove_debug_handler,
     create_request_debug_handler,
 )
-from functions.tenant import (
+from services.tenant import (
     TenantConfigError,
     set_tenant_context,
     reset_tenant_context,
     get_tenant_id,
+    get_timezone,
 )
+from api.v1.helpers.config import validate_tenant_config
 
 _API_KEY_REGISTRY: dict[str, str] | None = None
 _API_LOGGER = get_logger("api")
@@ -58,6 +60,8 @@ async def tenant_context_middleware(request: Request, call_next):
     try:
         token = set_tenant_context(tenant_header)
         request.state.tenant_id = get_tenant_id()
+        if path.startswith("/api/v1"):
+            validate_tenant_config()
     except TenantConfigError as exc:
         return JSONResponse(
             status_code=400,
@@ -147,7 +151,7 @@ def _log_api_request(
         "tenant_id": tenant_id,
         "request_host": request_host,
         "request_scheme": request_scheme,
-        "timestamp": datetime.now(ZoneInfo(TIMEZONE)).isoformat(),
+        "timestamp": datetime.now(ZoneInfo(get_timezone())).isoformat(),
     }
 
     if error:
@@ -247,7 +251,7 @@ async def request_response_logger_middleware(request: Request, call_next):
             extra={
                 "extra_fields": {
                     "event": "http_request_response",
-                    "timestamp": datetime.now(ZoneInfo(TIMEZONE)).isoformat(),
+                    "timestamp": datetime.now(ZoneInfo(get_timezone())).isoformat(),
                     "method": request.method,
                     "path": request.url.path,
                     "status_code": response.status_code,

@@ -1,18 +1,18 @@
 from __future__ import annotations
 
-from functions.ggAd import (
+from api.v1.helpers.ggAd import (
     update_budgets,
     update_campaign_statuses,
 )
-from functions.utils import run_parallel
-from functions.logger import (
+from services.utils import run_parallel
+from services.logger import (
     get_logger,
     enable_console_logging,
     log_run_start,
     log_run_end,
 )
 
-from functions.email import (
+from services.email import (
     build_google_ads_result_email,
     send_google_ads_result_email,
 )

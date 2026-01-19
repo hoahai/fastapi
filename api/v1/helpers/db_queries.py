@@ -1,32 +1,10 @@
-# functions/db_queries.py
-
-from functions.db import get_connection
-from functions.constants import SERVICE_BUDGETS
-from functions.utils import get_current_period
+from services.db import fetch_all
+from services.utils import get_current_period
+from api.v1.helpers.config import get_service_budgets
 
 
 # =====================
-# GENERIC DB HELPERS
-# =====================
-
-
-def fetch_all(query: str, params: tuple | None = None) -> list[dict]:
-    """
-    Generic SELECT query executor
-    """
-    conn = get_connection()
-    cursor = conn.cursor(dictionary=True)
-
-    try:
-        cursor.execute(query, params)
-        return cursor.fetchall()
-    finally:
-        cursor.close()
-        conn.close()
-
-
-# =====================
-# DOMAIN QUERIES
+# DOMAIN QUERIES (V1)
 # =====================
 
 
@@ -34,9 +12,9 @@ def get_accounts(account_codes: str | list[str] | None = None) -> list[dict]:
     """
     Fetch accounts from DB.
 
-    - account_codes is None or empty → return ALL accounts
-    - account_codes is str → return that account if exists
-    - account_codes is list[str] → return matching accounts
+    - account_codes is None or empty -> return ALL accounts
+    - account_codes is str -> return that account if exists
+    - account_codes is list[str] -> return matching accounts
     """
 
     # -----------------------------------------
@@ -82,7 +60,7 @@ def get_masterbudgets(
     """
     Get master budgets for the current month/year.
 
-    - Filters by SERVICE_BUDGETS (always)
+    - Filters by configured service budgets (always)
     - Optionally filters by one or more account codes
     """
     if isinstance(account_codes, str):
@@ -92,7 +70,11 @@ def get_masterbudgets(
     month = period["month"]
     year = period["year"]
 
-    service_placeholders = ", ".join(["%s"] * len(SERVICE_BUDGETS))
+    service_budgets = get_service_budgets()
+    if not service_budgets:
+        return []
+
+    service_placeholders = ", ".join(["%s"] * len(service_budgets))
 
     query = (
         "SELECT "
@@ -110,7 +92,7 @@ def get_masterbudgets(
         f"AND b.serviceId IN ({service_placeholders})"
     )
 
-    params: list = [month, year, *SERVICE_BUDGETS]
+    params: list = [month, year, *service_budgets]
 
     if account_codes:
         placeholders = ", ".join(["%s"] * len(account_codes))

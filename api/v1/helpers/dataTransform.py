@@ -1,4 +1,4 @@
-# functions/dataTransform.py
+# api/v1/helpers/dataTransform.py
 
 from decimal import Decimal
 from collections import defaultdict
@@ -7,8 +7,10 @@ import calendar
 import pytz
 import pandas as pd
 
-from functions.constants import SERVICE_MAPPING, TIMEZONE, GGADS_MIN_BUDGET_DELTA
-from functions.logger import get_logger
+from services.constants import GGADS_MIN_BUDGET_DELTA
+from services.logger import get_logger
+from api.v1.helpers.config import get_service_mapping
+from services.tenant import get_timezone
 
 logger = get_logger("Data Transform")
 
@@ -28,20 +30,22 @@ def master_budget_ad_type_mapping(master_budgets: list[dict]) -> list[dict]:
         }
     )
 
+    service_mapping = get_service_mapping()
+
     for mb in master_budgets:
         service_id = mb.get("serviceId")
-        service_mapping = SERVICE_MAPPING.get(service_id)
-        if not service_mapping:
+        mapping = service_mapping.get(service_id)
+        if not mapping:
             continue
 
-        key = (mb.get("accountCode"), service_mapping["adTypeCode"])
+        key = (mb.get("accountCode"), mapping["adTypeCode"])
         net_amount = Decimal(str(mb.get("netAmount", 0)))
 
         grouped[key]["netAmount"] += net_amount
         grouped[key]["services"].append(
             {
                 "serviceId": service_id,
-                "serviceName": service_mapping["serviceName"],
+                "serviceName": mapping["serviceName"],
                 "netAmount": net_amount,
             }
         )
@@ -279,7 +283,7 @@ def budget_activePeriod_join(
     activePeriod: list[dict] | None,
     today: date | None = None,
 ) -> list[dict]:
-    tz = pytz.timezone(TIMEZONE)
+    tz = pytz.timezone(get_timezone())
     now = datetime.now(tz)
     if not today:
         today = now.date()
@@ -339,7 +343,7 @@ def calculate_daily_budget(
     """
 
     if not today:
-        tz = pytz.timezone(TIMEZONE)
+        tz = pytz.timezone(get_timezone())
         today = datetime.now(tz).date()
 
     days_in_month = calendar.monthrange(today.year, today.month)[1]

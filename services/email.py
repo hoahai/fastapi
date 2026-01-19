@@ -4,8 +4,8 @@ from datetime import datetime
 import smtplib
 from email.message import EmailMessage
 
-from functions.utils import load_env
-from functions.tenant import get_env
+from services.utils import load_env
+from services.tenant import get_env
 
 # =========================================================
 # ENV

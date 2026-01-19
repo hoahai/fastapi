@@ -8,6 +8,8 @@ import re
 import threading
 from typing import Any
 
+from services.constants import TIMEZONE as DEFAULT_TIMEZONE
+
 try:
     import yaml
 except ImportError:
@@ -218,3 +220,10 @@ def get_env(key: str, default: str | None = None) -> str | None:
     if ctx and key in ctx.env:
         return ctx.env[key]
     return os.getenv(key, default)
+
+
+def get_timezone(default: str | None = None) -> str:
+    value = get_env("TIMEZONE", default or DEFAULT_TIMEZONE)
+    if value is None or str(value).strip() == "":
+        return default or DEFAULT_TIMEZONE
+    return str(value).strip()

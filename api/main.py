@@ -6,14 +6,13 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 from contextlib import asynccontextmanager
 
-from functions.utils import with_meta, get_current_period, load_env
-from functions.tenant import TenantConfigError
+from services.utils import with_meta, load_env
+from services.tenant import TenantConfigError, get_timezone
 
 load_env()
 
-from fastapi import FastAPI, HTTPException, Request
+from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
 
 from api.middleware import (
     timing_middleware,
@@ -21,19 +20,9 @@ from api.middleware import (
     request_response_logger_middleware,
     tenant_context_middleware,
 )
+from api.v1.router import router as v1_router
 
-from functions.logger import log_run_start, get_logger
-from functions.constants import TIMEZONE
-
-from functions.db_queries import (
-    get_accounts,
-    get_masterbudgets,
-    get_allocations,
-    get_rollbreakdowns,
-)
-
-from functions.ggSheet import get_rollovers
-from functions.spendsphere import run_google_ads_budget_pipeline
+from services.logger import log_run_start, get_logger
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -46,6 +35,7 @@ app.middleware("http")(timing_middleware)
 app.middleware("http")(api_key_auth_middleware)
 app.middleware("http")(request_response_logger_middleware)
 app.middleware("http")(tenant_context_middleware)
+app.include_router(v1_router)
 
 logger = get_logger("API")
 
@@ -90,51 +80,6 @@ async def unhandled_exception_handler(request: Request, exc: Exception):
     )
 
 # =========================================================
-# HELPERS
-# =========================================================
-
-
-def validate_account_codes(account_codes: str | list[str] | None) -> list[dict]:
-    """
-    Validate accountCodes against DB.
-
-    Rules:
-    - None / ""     → all accounts
-    - "TAAA"        → single account
-    - ["TAAA","X"]  → multiple accounts
-    """
-
-    accounts = get_accounts(account_codes)
-    all_codes = {a["code"].upper() for a in accounts}
-
-    if not account_codes:
-        return accounts
-
-    requested = [account_codes] if isinstance(account_codes, str) else account_codes
-
-    requested_set = {c.strip().upper() for c in requested if c.strip()}
-    missing = sorted(requested_set - all_codes)
-
-    if missing:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "Invalid accountCodes",
-                "invalid_codes": missing,
-                "valid_codes": sorted(all_codes),
-            },
-        )
-
-    return accounts
-
-
-def require_account_code(account_code: str) -> str:
-    if not account_code or not account_code.strip():
-        raise HTTPException(status_code=400, detail="account_code is required")
-    return account_code.strip().upper()
-
-
-# =========================================================
 # ROOT
 # =========================================================
 
@@ -167,7 +112,7 @@ def wake_up(request: Request):
 
     data = {
         "message": "I'm awake. Let's do this.",
-        "called_at": datetime.now(ZoneInfo(TIMEZONE)).isoformat(),
+        "called_at": datetime.now(ZoneInfo(get_timezone())).isoformat(),
         "request_id": request_id,
         "caller_ip": caller_ip,
         "method": request.method,
@@ -179,139 +124,6 @@ def wake_up(request: Request):
         data=data,
         start_time=request.state.start_time,
         client_id=client_id,
-    )
-
-
-# =========================================================
-# UTILS
-# =========================================================
-
-
-@app.get("/api/spendsphere/current-period")
-def getCurrentPeriod(request: Request):
-    return with_meta(
-        data=get_current_period(),
-        start_time=request.state.start_time,
-        client_id=getattr(request.state, "client_id", "Not Found"),
-    )
-
-
-# =========================================================
-# BUDGETS
-# =========================================================
-
-
-@app.get("/api/spendsphere/budgets/{account_code}")
-def getBudgets(account_code: str, request: Request):
-    account_code = require_account_code(account_code)
-
-    data = get_masterbudgets(account_code)
-    if not data:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No budgets found for account_code '{account_code}'",
-        )
-
-    return with_meta(
-        data=data,
-        start_time=request.state.start_time,
-        client_id=getattr(request.state, "client_id", "Not Found"),
-    )
-
-
-# =========================================================
-# ALLOCATIONS
-# =========================================================
-
-
-@app.get("/api/spendsphere/allocations/{account_code}")
-def getAllocations(account_code: str, request: Request):
-    account_code = require_account_code(account_code)
-
-    data = get_allocations(account_code)
-    if not data:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No allocations found for account_code '{account_code}'",
-        )
-
-    return with_meta(
-        data=data,
-        start_time=request.state.start_time,
-        client_id=getattr(request.state, "client_id", "Not Found"),
-    )
-
-
-# =========================================================
-# ROLLOVERS
-# =========================================================
-
-
-@app.get("/api/spendsphere/rollovers/{account_code}")
-def getRollovers(account_code: str, request: Request):
-    account_code = require_account_code(account_code)
-
-    data = get_rollovers(account_code)
-    if not data:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No rollovers found for account_code '{account_code}'",
-        )
-
-    return with_meta(
-        data=data,
-        start_time=request.state.start_time,
-        client_id=getattr(request.state, "client_id", "Not Found"),
-    )
-
-
-@app.get("/api/spendsphere/rollovers/breakdown/{account_code}")
-def getRolloversBreakDown(account_code: str, request: Request):
-    account_code = require_account_code(account_code)
-
-    data = get_rollbreakdowns(account_code)
-    if not data:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No rollovers breakdown found for account_code '{account_code}'",
-        )
-
-    return with_meta(
-        data=data,
-        start_time=request.state.start_time,
-        client_id=getattr(request.state, "client_id", "Not Found"),
-    )
-
-
-# =========================================================
-# SPENDSPHERE UPDATE
-# =========================================================
-
-
-class GoogleAdsUpdateRequest(BaseModel):
-    accountCodes: str | list[str] | None = None
-    dryRun: bool = False
-
-
-@app.post("/api/spendsphere/update/")
-def update_google_ads(payload: GoogleAdsUpdateRequest, request: Request):
-    # -----------------------------------------
-    # Validate accountCodes (REUSABLE)
-    # -----------------------------------------
-    validate_account_codes(payload.accountCodes)
-
-    # -----------------------------------------
-    # Run pipeline
-    # -----------------------------------------
-    result = run_google_ads_budget_pipeline(
-        account_codes=payload.accountCodes,
-        dry_run=payload.dryRun,
-    )
-
-    return with_meta(
-        data=result,
-        start_time=request.state.start_time,
-        client_id=getattr(request.state, "client_id", "Not Found"),
     )
 
 

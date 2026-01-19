@@ -1,4 +1,4 @@
-# functions/metrics.py
+# services/metrics.py
 
 import threading
 from collections import defaultdict

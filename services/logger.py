@@ -1,4 +1,4 @@
-# functions/logger.py
+# services/logger.py
 
 from __future__ import annotations
 
@@ -18,7 +18,7 @@ from logging.handlers import RotatingFileHandler
 
 import pytz
 
-from functions.constants import (
+from services.constants import (
     LOGGING_ENABLED,
     LOG_LEVEL,
     AXIOM_LOG_LEVEL,
@@ -27,7 +27,7 @@ from functions.constants import (
     LOG_BACKUP_COUNT,
     LOG_RETENTION_DAYS,
 )
-from functions.tenant import get_env, get_tenant_id
+from services.tenant import get_env, get_tenant_id
 
 # ======================================================
 # TIMEZONE

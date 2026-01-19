@@ -1,4 +1,4 @@
-# functions/utils.py
+# services/utils.py
 
 from __future__ import annotations
 
@@ -17,8 +17,7 @@ from typing import Callable, Iterable, TypeVar, Optional, Any
 
 from dotenv import load_dotenv
 
-from functions.constants import (
-    TIMEZONE,
+from services.constants import (
     PARALLEL_MAX_WORKERS,
     PARALLEL_MAX_RETRIES,
     PARALLEL_INITIAL_BACKOFF,
@@ -30,12 +29,12 @@ from functions.constants import (
     PARALLEL_RATE_INTERVAL,
 )
 
-from functions.logger import (
+from services.logger import (
     get_logger,
     enable_console_logging,
     disable_console_logging,
 )
-from functions.tenant import get_env
+from services.tenant import get_env, get_timezone
 
 T = TypeVar("T")
 R = TypeVar("R")
@@ -61,7 +60,7 @@ LOCAL_SECRETS_DIR = LOCAL_ETC_DIR / "secrets"
 
 
 def get_current_period() -> dict:
-    tz = pytz.timezone(TIMEZONE)
+    tz = pytz.timezone(get_timezone())
     now = datetime.now(tz)
 
     year = now.year
@@ -337,10 +336,11 @@ def format_hms(seconds: float) -> str:
 
 def with_meta(*, data: dict | list, start_time: float, client_id: str) -> dict:
     duration = time.perf_counter() - start_time
+    tz = ZoneInfo(get_timezone())
 
     return {
         "meta": {
-            "timestamp": datetime.now(ZoneInfo(TIMEZONE)).isoformat(),
+            "timestamp": datetime.now(tz).isoformat(),
             "duration_ms": int(duration * 1000),
             "duration_hms": format_hms(duration),
             "client_id": client_id,
