@@ -5,6 +5,7 @@ import json
 import os
 import time
 import uuid
+import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -31,6 +32,16 @@ _API_KEY_REGISTRY: dict[str, str] | None = None
 _API_LOGGER = get_logger("api")
 
 
+def _is_docs_path(path: str) -> bool:
+    normalized = (path or "").rstrip("/")
+    return (
+        normalized.endswith("/docs")
+        or normalized.endswith("/docs/oauth2-redirect")
+        or normalized.endswith("/redoc")
+        or normalized.endswith("/openapi.json")
+    )
+
+
 async def timing_middleware(request: Request, call_next):
     # Set start time BEFORE route executes
     request.state.start_time = time.perf_counter()
@@ -42,6 +53,9 @@ async def timing_middleware(request: Request, call_next):
 
 async def tenant_context_middleware(request: Request, call_next):
     path = request.url.path or ""
+    if _is_docs_path(path):
+        request.state.tenant_id = None
+        return await call_next(request)
     requires_tenant = path.startswith("/api") or path.startswith("/spendsphere/api")
     tenant_header = request.headers.get("x-tenant-id")
     token = None
@@ -63,10 +77,17 @@ async def tenant_context_middleware(request: Request, call_next):
             if callable(validator):
                 validator()
     except TenantConfigError as exc:
-        return JSONResponse(
-            status_code=400,
-            content={"detail": str(exc)},
-        )
+        error_text = str(exc)
+        if "Tenant config not found for" in error_text:
+            match = re.search(r"Tenant config not found for '([^']+)'", error_text)
+            tenant_id = match.group(1) if match else None
+            detail = (
+                f"Tenant ({tenant_id}) not found!"
+                if tenant_id
+                else "Tenant not found!"
+            )
+            return JSONResponse(status_code=400, content={"detail": detail})
+        return JSONResponse(status_code=400, content={"detail": error_text})
 
     try:
         return await call_next(request)
@@ -275,6 +296,8 @@ async def request_response_logger_middleware(request: Request, call_next):
 
 async def api_key_auth_middleware(request: Request, call_next):
     path = request.url.path or ""
+    if _is_docs_path(path):
+        return await call_next(request)
     is_api_route = (
         path == "/api"
         or path.startswith("/api/")
