@@ -134,17 +134,18 @@ def send_google_ads_result_email(subject: str, body: str):
         "EMAIL_FROM",
         "noreply@theautoadagency.com",
     )
-    email_to = get_env(
-        "EMAIL_TO_GOOGLE_ADS_ALERT",
+    email_to_raw = get_env(
+        "EMAIL_TO",
         "hai@theautoadagency.com",
     )
+    email_to = [e.strip() for e in str(email_to_raw).split(",") if e.strip()]
 
     if not all([smtp_host, smtp_username, smtp_password]):
         raise RuntimeError("SMTP environment variables are not fully configured")
 
     msg = EmailMessage()
     msg["From"] = f"SpendSphere <{email_from}>"
-    msg["To"] = email_to
+    msg["To"] = ", ".join(email_to)
     msg["Subject"] = subject
     msg.set_content(body)
 
