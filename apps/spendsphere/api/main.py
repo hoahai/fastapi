@@ -29,7 +29,7 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(lifespan=lifespan)
+app = FastAPI(lifespan=lifespan, redirect_slashes=False)
 app.state.tenant_validator = validate_tenant_config
 app.middleware("http")(timing_middleware)
 app.middleware("http")(api_key_auth_middleware)

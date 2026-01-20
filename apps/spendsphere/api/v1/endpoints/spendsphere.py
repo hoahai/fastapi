@@ -103,7 +103,7 @@ class GoogleAdsUpdateRequest(BaseModel):
     dryRun: bool = False
 
 
-@router.post("/update-budget")
+@router.post("/updateBudget")
 def update_google_ads(payload: GoogleAdsUpdateRequest, request: Request):
     validate_account_codes(payload.accountCodes)
 
