@@ -13,6 +13,10 @@ from shared.tenant import (
 APP_NAME = "Shiftzy"
 
 
+# ============================================================
+# HELPERS
+# ============================================================
+
 def _require_env_value(key: str) -> str:
     raw = get_env(key)
     if raw is None or str(raw).strip() == "":
@@ -52,6 +56,10 @@ def _get_today_date() -> date:
     tz = ZoneInfo(get_timezone())
     return datetime.now(tz).date()
 
+
+# ============================================================
+# PUBLIC API
+# ============================================================
 
 def get_default_week_window() -> tuple[int, int]:
     before = _parse_int("WEEK_BEFORE")

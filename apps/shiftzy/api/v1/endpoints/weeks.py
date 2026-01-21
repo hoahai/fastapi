@@ -12,6 +12,10 @@ from shared.utils import with_meta
 router = APIRouter()
 
 
+# ============================================================
+# WEEKS
+# ============================================================
+
 @router.get("/weeks")
 def get_weeks(
     request: Request,

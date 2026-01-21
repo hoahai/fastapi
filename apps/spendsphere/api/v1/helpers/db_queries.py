@@ -3,9 +3,9 @@ from shared.utils import get_current_period
 from apps.spendsphere.api.v1.helpers.config import get_service_budgets
 
 
-# =====================
-# DOMAIN QUERIES (V1)
-# =====================
+# ============================================================
+# ACCOUNTS
+# ============================================================
 
 
 def get_accounts(account_codes: str | list[str] | None = None) -> list[dict]:
@@ -53,6 +53,10 @@ def get_accounts(account_codes: str | list[str] | None = None) -> list[dict]:
 
     return fetch_all(query, params)
 
+
+# ============================================================
+# BUDGETS
+# ============================================================
 
 def get_masterbudgets(
     account_codes: list[str] | None = None,
@@ -102,6 +106,10 @@ def get_masterbudgets(
     return fetch_all(query, tuple(params))
 
 
+# ============================================================
+# ALLOCATIONS
+# ============================================================
+
 def get_allocations(
     account_codes: list[str] | None = None,
 ) -> list[dict]:
@@ -135,6 +143,10 @@ def get_allocations(
 
     return fetch_all(query, tuple(params))
 
+
+# ============================================================
+# ROLLBREAKDOWNS
+# ============================================================
 
 def get_rollbreakdowns(
     account_codes: list[str] | None = None,
