@@ -42,6 +42,23 @@ def _is_docs_path(path: str) -> bool:
     )
 
 
+def _normalize_path(path: str | None) -> str:
+    if not path or path == "/":
+        return "/"
+    return path.rstrip("/")
+
+
+def _is_public_path(path: str) -> bool:
+    normalized = _normalize_path(path)
+    return normalized in {"/", "/ping"}
+
+
+def _should_validate_tenant(path: str, prefixes: tuple[str, ...] | None) -> bool:
+    if not prefixes:
+        return True
+    return any(path.startswith(prefix) for prefix in prefixes)
+
+
 async def timing_middleware(request: Request, call_next):
     # Set start time BEFORE route executes
     request.state.start_time = time.perf_counter()
@@ -53,7 +70,7 @@ async def timing_middleware(request: Request, call_next):
 
 async def tenant_context_middleware(request: Request, call_next):
     path = request.url.path or ""
-    if _is_docs_path(path):
+    if _is_docs_path(path) or _is_public_path(path):
         request.state.tenant_id = None
         return await call_next(request)
     requires_tenant = path.startswith("/api") or path.startswith("/spendsphere/api")
@@ -72,10 +89,12 @@ async def tenant_context_middleware(request: Request, call_next):
     try:
         token = set_tenant_context(tenant_header)
         request.state.tenant_id = get_tenant_id()
-        if path.startswith("/api"):
-            validator = getattr(request.app.state, "tenant_validator", None)
-            if callable(validator):
-                validator()
+        validator = getattr(request.app.state, "tenant_validator", None)
+        validator_prefixes = getattr(
+            request.app.state, "tenant_validator_prefixes", None
+        )
+        if callable(validator) and _should_validate_tenant(path, validator_prefixes):
+            validator()
     except TenantConfigError as exc:
         error_text = str(exc)
         if "Tenant config not found for" in error_text:
@@ -296,7 +315,7 @@ async def request_response_logger_middleware(request: Request, call_next):
 
 async def api_key_auth_middleware(request: Request, call_next):
     path = request.url.path or ""
-    if _is_docs_path(path):
+    if _is_docs_path(path) or _is_public_path(path):
         return await call_next(request)
     is_api_route = (
         path == "/api"
