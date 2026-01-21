@@ -23,6 +23,8 @@ from shared.logger import (
 )
 from shared.tenant import (
     TenantConfigError,
+    TenantConfigValidationError,
+    build_tenant_config_payload,
     set_tenant_context,
     reset_tenant_context,
     get_tenant_id,
@@ -83,6 +85,37 @@ def _should_validate_tenant(path: str, prefixes: tuple[str, ...] | None) -> bool
     return any(path.startswith(prefix) for prefix in prefixes)
 
 
+def _resolve_tenant_validator(path: str, registry: object) -> tuple[str | None, object]:
+    if not registry:
+        return None, None
+
+    best_validator = None
+    best_app_name = None
+    best_prefix_len = -1
+
+    for entry in registry:
+        try:
+            if len(entry) == 3:
+                prefixes, app_name, validator = entry
+            else:
+                prefixes, validator = entry
+                app_name = None
+        except (TypeError, ValueError):
+            continue
+        if not callable(validator):
+            continue
+        if isinstance(prefixes, str):
+            prefixes = (prefixes,)
+        if _should_validate_tenant(path, prefixes):
+            prefix_len = max((len(p) for p in prefixes), default=0) if prefixes else 0
+            if prefix_len > best_prefix_len:
+                best_prefix_len = prefix_len
+                best_app_name = app_name
+                best_validator = validator
+
+    return best_app_name, best_validator
+
+
 async def timing_middleware(request: Request, call_next):
     # Set start time BEFORE route executes
     request.state.start_time = time.perf_counter()
@@ -114,13 +147,28 @@ async def tenant_context_middleware(request: Request, call_next):
     try:
         token = set_tenant_context(tenant_header)
         request.state.tenant_id = get_tenant_id()
-        validator = getattr(request.app.state, "tenant_validator", None)
-        validator_prefixes = getattr(
-            request.app.state, "tenant_validator_prefixes", None
-        )
-        if callable(validator) and _should_validate_tenant(path, validator_prefixes):
+        registry = getattr(request.app.state, "tenant_validator_registry", None)
+        app_name, validator = _resolve_tenant_validator(path, registry)
+        if app_name:
+            request.state.tenant_app = app_name
+        if validator is None:
+            validator = getattr(request.app.state, "tenant_validator", None)
+            validator_prefixes = getattr(
+                request.app.state, "tenant_validator_prefixes", None
+            )
+            if callable(validator) and _should_validate_tenant(path, validator_prefixes):
+                validator()
+        elif callable(validator):
             validator()
     except TenantConfigError as exc:
+        if isinstance(exc, TenantConfigValidationError):
+            app_name = exc.app_name or getattr(request.state, "tenant_app", None)
+            payload = build_tenant_config_payload(
+                app_name,
+                missing=exc.missing,
+                invalid=exc.invalid,
+            )
+            return JSONResponse(status_code=400, content=payload)
         error_text = str(exc)
         if "Tenant config not found for" in error_text:
             match = re.search(r"Tenant config not found for '([^']+)'", error_text)
@@ -192,42 +240,6 @@ def _match_api_key(api_key: str, registry: dict[str, str]) -> str | None:
         if hmac.compare_digest(api_key, expected):
             return client_id
     return None
-
-
-def _log_api_request(
-    *,
-    method: str,
-    path: str,
-    status_code: int,
-    duration_ms: int,
-    client_id: str | None,
-    tenant_id: str | None,
-    request_host: str | None,
-    request_scheme: str | None,
-    error: str | None = None,
-) -> None:
-    payload: dict[str, object] = {
-        "event": "api_request",
-        "method": method,
-        "path": path,
-        "status_code": status_code,
-        "duration_ms": duration_ms,
-        "client_id": client_id,
-        "tenant_id": tenant_id,
-        "request_host": request_host,
-        "request_scheme": request_scheme,
-        "timestamp": datetime.now(ZoneInfo(get_timezone())).isoformat(),
-    }
-
-    if error:
-        payload["error"] = error
-
-    _API_LOGGER.info(
-        "API request",
-        extra={
-            "extra_fields": payload,
-        },
-    )
 
 
 def _safe_parse_json(payload: bytes | str) -> object | None:

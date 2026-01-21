@@ -1,24 +1,23 @@
 from __future__ import annotations
 
-from collections import defaultdict
+import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
-import json
 
+from apps.spendsphere.api.v1.helpers.dataTransform import (
+    generate_update_payloads,
+    transform_google_ads_data,
+)
 from apps.spendsphere.api.v2.helpers.db_queries import (
-    get_masterbudgets,
     get_allocations,
+    get_masterbudgets,
     get_rollbreakdowns,
 )
-
-from apps.spendsphere.api.v1.helpers.dataTransform import transform_google_ads_data, generate_update_payloads
-
-from shared.utils import run_parallel
+from apps.spendsphere.api.v1.helpers.ggSheet import get_active_period
+from shared.email import send_google_ads_result_email
 from shared.logger import get_logger
 from shared.tenant import get_timezone
-
-from shared.email import send_google_ads_result_email
-from apps.spendsphere.api.v1.helpers.ggSheet import get_active_period
+from shared.utils import run_parallel
 
 # =========================================================
 # LOGGER

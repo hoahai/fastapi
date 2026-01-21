@@ -6,7 +6,7 @@ from pathlib import Path
 import os
 import re
 import threading
-from typing import Any
+from typing import Any, Iterable
 
 from shared.constants import TIMEZONE as DEFAULT_TIMEZONE
 
@@ -18,6 +18,66 @@ except ImportError:
 
 class TenantConfigError(RuntimeError):
     pass
+
+
+def format_tenant_config_detail(
+    app_name: str | None,
+    *,
+    missing: Iterable[str] | None = None,
+    invalid: Iterable[str] | None = None,
+) -> str:
+    name = app_name or "Tenant"
+    missing_list = [str(item) for item in (missing or [])]
+    invalid_list = [str(item) for item in (invalid or [])]
+
+    parts: list[str] = []
+    if missing_list:
+        parts.append(f"missing: {', '.join(missing_list)}")
+    if invalid_list:
+        parts.append(f"invalid: {', '.join(invalid_list)}")
+    if not parts:
+        parts.append("missing required values")
+
+    return f"{name} tenant config " + "; ".join(parts)
+
+
+def build_tenant_config_payload(
+    app_name: str | None,
+    *,
+    missing: Iterable[str] | None = None,
+    invalid: Iterable[str] | None = None,
+) -> dict[str, object]:
+    missing_list = [str(item) for item in (missing or [])]
+    invalid_list = [str(item) for item in (invalid or [])]
+    return {
+        "app": app_name,
+        "detail": format_tenant_config_detail(
+            app_name,
+            missing=missing_list,
+            invalid=invalid_list,
+        ),
+        "missing": missing_list,
+        "invalid": invalid_list,
+    }
+
+
+class TenantConfigValidationError(TenantConfigError):
+    def __init__(
+        self,
+        *,
+        app_name: str | None = None,
+        missing: Iterable[str] | None = None,
+        invalid: Iterable[str] | None = None,
+    ) -> None:
+        self.app_name = app_name
+        self.missing = [str(item) for item in (missing or [])]
+        self.invalid = [str(item) for item in (invalid or [])]
+        message = format_tenant_config_detail(
+            app_name,
+            missing=self.missing,
+            invalid=self.invalid,
+        )
+        super().__init__(message)
 
 
 @dataclass(frozen=True)
@@ -208,11 +268,6 @@ def reset_tenant_context(token: ContextVar.Token) -> None:
 def get_tenant_id() -> str | None:
     ctx = _TENANT_CONTEXT.get()
     return ctx.tenant_id if ctx else None
-
-
-def get_tenant_env() -> dict[str, str] | None:
-    ctx = _TENANT_CONTEXT.get()
-    return ctx.env if ctx else None
 
 
 def get_env(key: str, default: str | None = None) -> str | None:

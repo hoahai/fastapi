@@ -10,9 +10,8 @@ import pytz
 import time
 import random
 import threading
-import os
 from pathlib import Path
-from concurrent.futures import ThreadPoolExecutor, as_completed, TimeoutError
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Iterable, TypeVar, Optional, Any
 
 from dotenv import load_dotenv

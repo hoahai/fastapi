@@ -7,7 +7,11 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from shared.logger import get_logger
-from shared.tenant import TenantConfigError
+from shared.tenant import (
+    TenantConfigError,
+    TenantConfigValidationError,
+    build_tenant_config_payload,
+)
 
 
 def register_exception_handlers(app: FastAPI, *, logger_name: str) -> None:
@@ -18,6 +22,17 @@ def register_exception_handlers(app: FastAPI, *, logger_name: str) -> None:
         request: Request,
         exc: TenantConfigError,
     ) -> JSONResponse:
+        if isinstance(exc, TenantConfigValidationError):
+            app_name = exc.app_name or getattr(request.state, "tenant_app", None)
+            payload = build_tenant_config_payload(
+                app_name,
+                missing=exc.missing,
+                invalid=exc.invalid,
+            )
+            return JSONResponse(
+                status_code=400,
+                content=payload,
+            )
         return JSONResponse(
             status_code=400,
             content={"detail": str(exc)},

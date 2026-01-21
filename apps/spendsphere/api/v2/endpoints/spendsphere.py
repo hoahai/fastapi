@@ -12,7 +12,7 @@ from apps.spendsphere.api.v2.helpers.db_queries import (
 )
 from apps.spendsphere.api.v1.helpers.ggSheet import get_rollovers
 from apps.spendsphere.api.v2.helpers.pipeline import run_google_ads_budget_pipeline
-from shared.utils import with_meta, get_current_period
+from shared.utils import with_meta
 
 router = APIRouter()
 

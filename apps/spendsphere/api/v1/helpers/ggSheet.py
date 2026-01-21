@@ -10,14 +10,6 @@ def _get_sheet(name: str) -> dict[str, str]:
     return sheets[name]
 
 
-def get_sheet_raw(name: str) -> list[dict]:
-    sheet = _get_sheet(name)
-    return _read_sheet_raw(
-        spreadsheet_id=sheet["spreadsheet_id"],
-        range_name=sheet["range_name"],
-    )
-
-
 def get_rollovers(
     account_codes: list[str] | None = None,
 ) -> list[dict]:
