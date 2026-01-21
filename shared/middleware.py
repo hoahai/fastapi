@@ -48,9 +48,33 @@ def _normalize_path(path: str | None) -> str:
     return path.rstrip("/")
 
 
-def _is_public_path(path: str) -> bool:
+def _normalize_public_paths(paths: object) -> set[str]:
+    if isinstance(paths, str):
+        values = [paths]
+    else:
+        try:
+            values = list(paths)
+        except TypeError:
+            return {"/", "/ping"}
+
+    normalized: set[str] = set()
+    for value in values:
+        if value is None:
+            continue
+        normalized.add(_normalize_path(str(value)))
+    return normalized or {"/", "/ping"}
+
+
+def _get_public_paths(request: Request) -> set[str]:
+    paths = getattr(request.app.state, "public_paths", None)
+    if paths is None:
+        return {"/", "/ping"}
+    return _normalize_public_paths(paths)
+
+
+def _is_public_path(path: str, public_paths: set[str]) -> bool:
     normalized = _normalize_path(path)
-    return normalized in {"/", "/ping"}
+    return normalized in public_paths
 
 
 def _should_validate_tenant(path: str, prefixes: tuple[str, ...] | None) -> bool:
@@ -70,7 +94,8 @@ async def timing_middleware(request: Request, call_next):
 
 async def tenant_context_middleware(request: Request, call_next):
     path = request.url.path or ""
-    if _is_docs_path(path) or _is_public_path(path):
+    public_paths = _get_public_paths(request)
+    if _is_docs_path(path) or _is_public_path(path, public_paths):
         request.state.tenant_id = None
         return await call_next(request)
     requires_tenant = path.startswith("/api") or path.startswith("/spendsphere/api")
@@ -315,7 +340,8 @@ async def request_response_logger_middleware(request: Request, call_next):
 
 async def api_key_auth_middleware(request: Request, call_next):
     path = request.url.path or ""
-    if _is_docs_path(path) or _is_public_path(path):
+    public_paths = _get_public_paths(request)
+    if _is_docs_path(path) or _is_public_path(path, public_paths):
         return await call_next(request)
     is_api_route = (
         path == "/api"

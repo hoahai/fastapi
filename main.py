@@ -16,6 +16,7 @@ from shared.middleware import (
 
 
 app = FastAPI()
+app.state.public_paths = {"/", "/ping"}
 app.state.tenant_validator = validate_tenant_config
 app.state.tenant_validator_prefixes = ("/api/spendsphere", "/spendsphere/api")
 app.middleware("http")(timing_middleware)
