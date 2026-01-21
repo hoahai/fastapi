@@ -5,13 +5,14 @@ from shared.utils import with_meta, load_env
 
 load_env()
 
-from fastapi import FastAPI, Request
+from fastapi import Depends, FastAPI, Request
 
 from apps.spendsphere.api.v1.router import router as v1_router
 from apps.spendsphere.api.v2.router import router as v2_router
 
 from shared.exception_handlers import register_exception_handlers
 from shared.logger import log_run_start
+from shared.request_validation import validate_query_params
 
 
 @asynccontextmanager
@@ -20,7 +21,11 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(lifespan=lifespan, redirect_slashes=False)
+app = FastAPI(
+    lifespan=lifespan,
+    redirect_slashes=False,
+    dependencies=[Depends(validate_query_params)],
+)
 app.include_router(v1_router)
 app.include_router(v2_router)
 

@@ -266,15 +266,18 @@ def get_schedules(
         "s.id, "
         "s.employee_id, "
         "s.position_code, "
+        "s.shift_id, "
         "s.date, "
         "s.start_time, "
         "s.end_time, "
         "s.note, "
         "e.name AS employee_name, "
-        "p.name AS position_name "
+        "p.name AS position_name, "
+        "sh.name AS shift_name "
         "FROM schedules AS s "
         "LEFT JOIN employees AS e ON e.id = s.employee_id "
         "LEFT JOIN positions AS p ON p.code = s.position_code "
+        "LEFT JOIN shifts AS sh ON sh.id = s.shift_id "
     )
 
     if where_clauses:
@@ -292,6 +295,7 @@ def insert_schedules(schedules: list[dict] | dict) -> int:
         schedule_id = (item.get("id") or "").strip() or str(uuid4())
         employee_id = (item.get("employee_id") or "").strip()
         position_code = (item.get("position_code") or "").strip()
+        shift_id = item.get("shift_id")
         date_value = item.get("date")
         start_time = item.get("start_time")
         end_time = item.get("end_time")
@@ -311,6 +315,7 @@ def insert_schedules(schedules: list[dict] | dict) -> int:
                 schedule_id,
                 employee_id,
                 position_code,
+                shift_id,
                 _parse_date(date_value),
                 start_time,
                 end_time,
@@ -320,7 +325,7 @@ def insert_schedules(schedules: list[dict] | dict) -> int:
 
     query = (
         "INSERT INTO schedules "
-        "(id, employee_id, position_code, date, start_time, end_time, note) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s)"
+        "(id, employee_id, position_code, shift_id, date, start_time, end_time, note) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
     )
     return _execute_many(query, values)
