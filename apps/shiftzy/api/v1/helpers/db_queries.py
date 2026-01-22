@@ -77,6 +77,16 @@ def _format_duration(seconds: int) -> str:
     return f"{hours:02}:{minutes:02}:{secs:02}"
 
 
+def _format_time_value(value: object) -> str | None:
+    if value is None:
+        return None
+    try:
+        parsed = _parse_time(value)
+    except (TypeError, ValueError):
+        return str(value)
+    return parsed.strftime("%H:%M")
+
+
 def _compute_duration(start_time: object, end_time: object) -> str | None:
     if start_time is None or end_time is None:
         return None
@@ -186,10 +196,11 @@ def get_shifts(shift_id: int | str | None = None) -> list[dict]:
         rows = fetch_all(query, ())
 
     for row in rows:
-        row["duration"] = _compute_duration(
-            row.get("start_time"),
-            row.get("end_time"),
-        )
+        start_time = row.get("start_time")
+        end_time = row.get("end_time")
+        row["duration"] = _compute_duration(start_time, end_time)
+        row["start_time"] = _format_time_value(start_time)
+        row["end_time"] = _format_time_value(end_time)
     return rows
 
 
@@ -293,7 +304,11 @@ def get_schedules(
 
     query += "ORDER BY s.date, s.start_time"
 
-    return fetch_all(query, tuple(params))
+    rows = fetch_all(query, tuple(params))
+    for row in rows:
+        row["start_time"] = _format_time_value(row.get("start_time"))
+        row["end_time"] = _format_time_value(row.get("end_time"))
+    return rows
 
 
 def insert_schedules(schedules: list[dict] | dict) -> int:
