@@ -49,11 +49,19 @@ def _parse_date(value: date | datetime | str) -> date:
     raise TypeError("date must be date, datetime, or ISO string")
 
 
-def _parse_time(value: time_type | datetime | str) -> time_type:
+def _parse_time(value: time_type | datetime | timedelta | str) -> time_type:
     if isinstance(value, time_type) and not isinstance(value, datetime):
         return value
     if isinstance(value, datetime):
         return value.time()
+    if isinstance(value, timedelta):
+        total_seconds = int(value.total_seconds())
+        if total_seconds < 0:
+            raise ValueError("time must be non-negative")
+        seconds = total_seconds % 86400
+        hours, remainder = divmod(seconds, 3600)
+        minutes, secs = divmod(remainder, 60)
+        return time_type(hour=hours, minute=minutes, second=secs)
     if isinstance(value, str):
         text = value.strip()
         try:

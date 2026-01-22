@@ -1,0 +1,57 @@
+from __future__ import annotations
+
+from fastapi import APIRouter, HTTPException, Query, Request
+
+from apps.shiftzy.api.v1.helpers.db_queries import (
+    get_employees,
+    get_positions,
+    get_shifts,
+)
+from apps.shiftzy.api.v1.helpers.weeks import list_weeks
+from shared.utils import run_parallel, with_meta
+
+router = APIRouter()
+
+_TABLE_LOADERS = {
+    "shifts": get_shifts,
+    "employees": get_employees,
+    "weeks": list_weeks,
+    "positions": get_positions,
+}
+
+
+def _normalize_tables(tables: list[str] | None) -> list[str]:
+    if not tables:
+        return []
+    normalized: list[str] = []
+    for item in tables:
+        for part in item.split(","):
+            name = part.strip().lower()
+            if name and name not in normalized:
+                normalized.append(name)
+    return normalized
+
+
+@router.get("/bootstrap")
+def get_bootstrap(
+    request: Request,
+    tables: list[str] | None = Query(None),
+):
+    selected = _normalize_tables(tables)
+    if not selected:
+        selected = list(_TABLE_LOADERS.keys())
+
+    unknown = [name for name in selected if name not in _TABLE_LOADERS]
+    if unknown:
+        unknown_list = ", ".join(sorted(unknown))
+        raise HTTPException(status_code=400, detail=f"Unknown tables: {unknown_list}")
+
+    tasks = [( _TABLE_LOADERS[name], ()) for name in selected]
+    results = run_parallel(tasks=tasks, api_name="shiftzy.bootstrap")
+    data = {name: result for name, result in zip(selected, results)}
+
+    return with_meta(
+        data=data,
+        start_time=request.state.start_time,
+        client_id=getattr(request.state, "client_id", "Not Found"),
+    )

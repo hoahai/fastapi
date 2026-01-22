@@ -130,6 +130,8 @@ def list_weeks(
 
     start_week = current_week_no - week_before
     end_week = current_week_no + week_after
+    if start_week < start_week_no:
+        start_week = start_week_no
 
     return [
         build_week_info(
