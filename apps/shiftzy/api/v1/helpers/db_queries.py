@@ -277,6 +277,7 @@ def get_schedules(
         "s.end_time, "
         "s.note, "
         "e.name AS employee_name, "
+        "e.schedule_section AS schedule_section, "
         "p.name AS position_name, "
         "sh.name AS shift_name "
         "FROM schedules AS s "

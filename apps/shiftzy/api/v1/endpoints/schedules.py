@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date as DateType, time as TimeType
 
-from fastapi import APIRouter, Body, HTTPException, Query, Request
+from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
 from pydantic import BaseModel
 
 from apps.shiftzy.api.v1.helpers.db_queries import (
@@ -12,6 +12,8 @@ from apps.shiftzy.api.v1.helpers.db_queries import (
     insert_schedules,
     update_schedules as update_schedules_db,
 )
+from apps.shiftzy.api.v1.helpers.schedule_pdf import build_schedule_pdf
+from apps.shiftzy.api.v1.helpers.weeks import build_week_info
 from shared.utils import with_meta
 
 router = APIRouter()
@@ -114,6 +116,30 @@ def list_schedules(
         data=data,
         start_time=request.state.start_time,
         client_id=getattr(request.state, "client_id", "Not Found"),
+    )
+
+
+@router.get("/schedules/pdf")
+def download_schedule_pdf(
+    week_no: int = Query(...),
+    orientation: str = Query("landscape"),
+):
+    try:
+        week_info = build_week_info(week_no)
+        schedules = get_schedules(week_no=week_no)
+        pdf_bytes = build_schedule_pdf(
+            schedules=schedules,
+            week_info=week_info,
+            orientation=orientation,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    filename = f"schedule-week-{week_no}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
     )
 
 
