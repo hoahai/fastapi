@@ -1,8 +1,11 @@
 # shared/db.py
 
 from typing import Callable, TypeVar
+import hashlib
+import threading
 
 import mysql.connector
+from mysql.connector import pooling
 
 from shared.utils import load_env
 from shared.tenant import get_env
@@ -11,16 +14,69 @@ load_env()
 
 T = TypeVar("T")
 
+_POOL_LOCK = threading.Lock()
+_POOLS: dict[str, pooling.MySQLConnectionPool] = {}
+
 
 def get_connection():
-    return mysql.connector.connect(
-        host=get_env("DB_HOST"),
-        port=int(get_env("DB_PORT", "3306")),
-        user=get_env("DB_USER"),
-        password=get_env("DB_PASSWORD"),
-        database=get_env("DB_NAME"),
-        ssl_disabled=False
+    if not _pooling_enabled():
+        return mysql.connector.connect(**_build_connection_kwargs())
+    return _get_pool().get_connection()
+
+
+def _pooling_enabled() -> bool:
+    value = get_env("DB_POOL_ENABLED", "true")
+    return str(value).strip().lower() not in {"0", "false", "no", "off"}
+
+
+def _pool_size() -> int:
+    raw = get_env("DB_POOL_SIZE", "5")
+    try:
+        size = int(str(raw).strip())
+    except (TypeError, ValueError):
+        size = 5
+    return max(size, 1)
+
+
+def _pool_reset_session() -> bool:
+    value = get_env("DB_POOL_RESET_SESSION", "true")
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _build_connection_kwargs() -> dict:
+    return {
+        "host": get_env("DB_HOST"),
+        "port": int(get_env("DB_PORT", "3306")),
+        "user": get_env("DB_USER"),
+        "password": get_env("DB_PASSWORD"),
+        "database": get_env("DB_NAME"),
+        "ssl_disabled": False,
+    }
+
+
+def _pool_key() -> str:
+    params = _build_connection_kwargs()
+    signature = (
+        f"{params.get('host')}|{params.get('port')}|{params.get('user')}|"
+        f"{params.get('password')}|{params.get('database')}|{params.get('ssl_disabled')}"
     )
+    digest = hashlib.md5(signature.encode("utf-8")).hexdigest()[:12]
+    return f"db_{digest}"
+
+
+def _get_pool() -> pooling.MySQLConnectionPool:
+    key = _pool_key()
+    with _POOL_LOCK:
+        pool = _POOLS.get(key)
+        if pool is None:
+            pool = pooling.MySQLConnectionPool(
+                pool_name=key,
+                pool_size=_pool_size(),
+                pool_reset_session=_pool_reset_session(),
+                **_build_connection_kwargs(),
+            )
+            _POOLS[key] = pool
+        return pool
 
 
 def fetch_all(query: str, params: tuple | None = None) -> list[dict]:
