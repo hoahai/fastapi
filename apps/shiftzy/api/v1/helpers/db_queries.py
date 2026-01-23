@@ -8,7 +8,7 @@ from apps.shiftzy.api.v1.helpers.config import (
     get_schedule_sections,
 )
 from apps.shiftzy.api.v1.helpers.weeks import build_week_info
-from shared.db import fetch_all, get_connection
+from shared.db import execute_many, fetch_all, run_transaction
 
 
 # ============================================================
@@ -100,20 +100,6 @@ def _compute_duration(start_time: object, end_time: object) -> str | None:
     return _format_duration(seconds)
 
 
-def _execute_many(query: str, rows: list[tuple]) -> int:
-    if not rows:
-        return 0
-    conn = get_connection()
-    cursor = conn.cursor()
-    try:
-        cursor.executemany(query, rows)
-        conn.commit()
-        return cursor.rowcount
-    finally:
-        cursor.close()
-        conn.close()
-
-
 # ============================================================
 # POSITIONS
 # ============================================================
@@ -142,7 +128,7 @@ def insert_positions(positions: list[dict] | dict) -> int:
         values.append((code, name, area, active))
 
     query = "INSERT INTO positions (code, name, area, active) VALUES (%s, %s, %s, %s)"
-    return _execute_many(query, values)
+    return execute_many(query, values)
 
 
 # ============================================================
@@ -180,7 +166,7 @@ def insert_employees(employees: list[dict] | dict) -> int:
         "INSERT INTO employees (id, name, schedule_section, note, active) "
         "VALUES (%s, %s, %s, %s, %s)"
     )
-    return _execute_many(query, values)
+    return execute_many(query, values)
 
 
 # ============================================================
@@ -216,7 +202,7 @@ def insert_shifts(shifts: list[dict] | dict) -> int:
         values.append((name, start_time, end_time))
 
     query = "INSERT INTO shifts (name, start_time, end_time) VALUES (%s, %s, %s)"
-    return _execute_many(query, values)
+    return execute_many(query, values)
 
 
 # ============================================================
@@ -313,8 +299,134 @@ def get_schedules(
 
 def insert_schedules(schedules: list[dict] | dict) -> int:
     rows = _ensure_list(schedules, name="schedules")
+    values = _build_schedule_insert_values(rows)
+    return execute_many(_schedule_insert_query(), values)
+
+
+def update_schedules(schedules: list[dict] | dict) -> int:
+    rows = _ensure_list(schedules, name="schedules")
+    if not rows:
+        return 0
+    statements = _build_schedule_update_statements(rows)
+    return run_transaction(
+        lambda cursor: _execute_schedule_updates(cursor, statements)
+    )
+
+
+def delete_schedules(schedules: list[dict] | dict) -> int:
+    rows = _ensure_list(schedules, name="schedules")
+    if not rows:
+        return 0
+    delete_payload = _build_schedule_delete_payload(rows)
+    if delete_payload is None:
+        return 0
+    return run_transaction(lambda cursor: _execute_schedule_delete(cursor, delete_payload))
+
+
+def apply_schedule_changes(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise TypeError("payload must be a dict")
+
+    create_rows = _coerce_optional_list(payload.get("toCreate"), name="toCreate")
+    update_rows = _coerce_optional_list(payload.get("toUpdate"), name="toUpdate")
+    delete_rows = _coerce_optional_list(payload.get("toDelete"), name="toDelete")
+
+    if not (create_rows or update_rows or delete_rows):
+        raise ValueError(
+            "At least one of toCreate, toUpdate, or toDelete must be provided "
+            "and have length > 0"
+        )
+
+    _validate_schedule_change_conflicts(
+        create_rows=create_rows,
+        update_rows=update_rows,
+        delete_rows=delete_rows,
+    )
+
+    create_values = _build_schedule_insert_values(create_rows)
+    update_statements = _build_schedule_update_statements(update_rows)
+    delete_payload = _build_schedule_delete_payload(delete_rows)
+
+    def _work(cursor) -> dict:
+        deleted = _execute_schedule_delete(cursor, delete_payload)
+        updated = _execute_schedule_updates(cursor, update_statements)
+        inserted = _execute_schedule_inserts(cursor, create_values)
+        return {"inserted": inserted, "updated": updated, "deleted": deleted}
+
+    return run_transaction(_work)
+
+
+def _schedule_insert_query() -> str:
+    return (
+        "INSERT INTO schedules "
+        "(id, employee_id, position_code, shift_id, date, start_time, end_time, note) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
+    )
+
+
+def _coerce_optional_list(value: object, *, name: str) -> list:
+    if value is None:
+        return []
+    return _ensure_list(value, name=name)
+
+
+def _extract_schedule_id(value: object) -> str:
+    if isinstance(value, dict):
+        raw = value.get("id") or value.get("schedule_id") or ""
+    else:
+        raw = value
+    if raw is None:
+        return ""
+    return str(raw).strip()
+
+
+def _validate_schedule_change_conflicts(
+    *,
+    create_rows: list[dict],
+    update_rows: list[dict],
+    delete_rows: list,
+) -> None:
+    create_ids = [_extract_schedule_id(item) for item in create_rows]
+    update_ids = [_extract_schedule_id(item) for item in update_rows]
+    delete_ids = [_extract_schedule_id(item) for item in delete_rows]
+
+    create_set = {value for value in create_ids if value}
+    update_set = {value for value in update_ids if value}
+    delete_set = {value for value in delete_ids if value}
+
+    if create_ids and len(create_set) != len([v for v in create_ids if v]):
+        raise ValueError("Duplicate ids found in toCreate")
+    if update_ids and len(update_set) != len([v for v in update_ids if v]):
+        raise ValueError("Duplicate ids found in toUpdate")
+    if delete_ids and len(delete_set) != len([v for v in delete_ids if v]):
+        raise ValueError("Duplicate ids found in toDelete")
+
+    overlap_create_update = create_set & update_set
+    overlap_create_delete = create_set & delete_set
+    overlap_update_delete = update_set & delete_set
+
+    if overlap_create_update:
+        raise ValueError(
+            "Schedule ids cannot appear in both toCreate and toUpdate: "
+            + ", ".join(sorted(overlap_create_update))
+        )
+    if overlap_create_delete:
+        raise ValueError(
+            "Schedule ids cannot appear in both toCreate and toDelete: "
+            + ", ".join(sorted(overlap_create_delete))
+        )
+    if overlap_update_delete:
+        raise ValueError(
+            "Schedule ids cannot appear in both toUpdate and toDelete: "
+            + ", ".join(sorted(overlap_update_delete))
+        )
+
+
+def _build_schedule_insert_values(rows: list[dict]) -> list[tuple]:
     values: list[tuple] = []
     for item in rows:
+        if not isinstance(item, dict):
+            raise TypeError("schedules must be a dict or list[dict]")
         schedule_id = (item.get("id") or "").strip() or str(uuid4())
         employee_id = (item.get("employee_id") or "").strip()
         position_code = (item.get("position_code") or "").strip()
@@ -345,10 +457,112 @@ def insert_schedules(schedules: list[dict] | dict) -> int:
                 note,
             )
         )
+    return values
 
-    query = (
-        "INSERT INTO schedules "
-        "(id, employee_id, position_code, shift_id, date, start_time, end_time, note) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
-    )
-    return _execute_many(query, values)
+
+def _execute_schedule_inserts(cursor, values: list[tuple]) -> int:
+    if not values:
+        return 0
+    cursor.executemany(_schedule_insert_query(), values)
+    return cursor.rowcount
+
+
+def _build_schedule_update_statements(rows: list[dict]) -> list[tuple[str, tuple]]:
+    statements: list[tuple[str, tuple]] = []
+    for item in rows:
+        if not isinstance(item, dict):
+            raise TypeError("schedules must be a dict or list[dict]")
+        schedule_id = _extract_schedule_id(item)
+        if not schedule_id:
+            raise ValueError("id is required for schedules update")
+
+        fields: list[str] = []
+        params: list[object] = []
+
+        if "employee_id" in item:
+            employee_id = (item.get("employee_id") or "").strip()
+            if not employee_id:
+                raise ValueError("employee_id cannot be empty")
+            fields.append("employee_id = %s")
+            params.append(employee_id)
+
+        if "position_code" in item:
+            position_code = (item.get("position_code") or "").strip()
+            if not position_code:
+                raise ValueError("position_code cannot be empty")
+            fields.append("position_code = %s")
+            params.append(position_code)
+
+        if "shift_id" in item:
+            shift_id = item.get("shift_id")
+            if isinstance(shift_id, str) and not shift_id.strip():
+                shift_id = None
+            fields.append("shift_id = %s")
+            params.append(shift_id)
+
+        if "date" in item:
+            date_value = item.get("date")
+            if date_value is None:
+                raise ValueError("date cannot be null")
+            fields.append("date = %s")
+            params.append(_parse_date(date_value))
+
+        if "start_time" in item:
+            start_time = item.get("start_time")
+            if start_time is None:
+                raise ValueError("start_time cannot be null")
+            fields.append("start_time = %s")
+            params.append(_parse_time(start_time))
+
+        if "end_time" in item:
+            end_time = item.get("end_time")
+            if end_time is None:
+                raise ValueError("end_time cannot be null")
+            fields.append("end_time = %s")
+            params.append(_parse_time(end_time))
+
+        if "note" in item:
+            fields.append("note = %s")
+            params.append(item.get("note"))
+
+        if not fields:
+            raise ValueError(
+                f"No updatable fields provided for schedule id {schedule_id}"
+            )
+
+        params.append(schedule_id)
+        query = "UPDATE schedules SET " + ", ".join(fields) + " WHERE id = %s"
+        statements.append((query, tuple(params)))
+
+    return statements
+
+
+def _execute_schedule_updates(cursor, statements: list[tuple[str, tuple]]) -> int:
+    updated = 0
+    for query, params in statements:
+        cursor.execute(query, params)
+        updated += cursor.rowcount
+    return updated
+
+
+def _build_schedule_delete_payload(rows: list) -> tuple[str, tuple] | None:
+    if not rows:
+        return None
+    schedule_ids: list[str] = []
+    for item in rows:
+        schedule_id = _extract_schedule_id(item)
+        if not schedule_id:
+            raise ValueError("id is required for schedules delete")
+        schedule_ids.append(schedule_id)
+
+    placeholders = ", ".join(["%s"] * len(schedule_ids))
+    query = f"DELETE FROM schedules WHERE id IN ({placeholders})"
+    return query, tuple(schedule_ids)
+
+
+def _execute_schedule_delete(cursor, payload: tuple[str, tuple] | None) -> int:
+    if payload is None:
+        return 0
+    query, params = payload
+    cursor.execute(query, params)
+    return cursor.rowcount

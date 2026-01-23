@@ -3,8 +3,15 @@ from __future__ import annotations
 from datetime import date as DateType, time as TimeType
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
+from pydantic import BaseModel
 
-from apps.shiftzy.api.v1.helpers.db_queries import get_schedules, insert_schedules
+from apps.shiftzy.api.v1.helpers.db_queries import (
+    apply_schedule_changes,
+    delete_schedules as delete_schedules_db,
+    get_schedules,
+    insert_schedules,
+    update_schedules as update_schedules_db,
+)
 from shared.utils import with_meta
 
 router = APIRouter()
@@ -13,6 +20,69 @@ router = APIRouter()
 # ============================================================
 # SCHEDULES
 # ============================================================
+
+try:
+    from pydantic import ConfigDict
+
+    class _ShiftzyModel(BaseModel):
+        model_config = ConfigDict(extra="ignore")
+
+except ImportError:
+
+    class _ShiftzyModel(BaseModel):
+        class Config:
+            extra = "ignore"
+
+
+class ScheduleCreate(_ShiftzyModel):
+    id: str | None = None
+    employee_id: str
+    position_code: str
+    shift_id: str | None = None
+    date: DateType
+    start_time: TimeType
+    end_time: TimeType
+    note: str | None = None
+
+
+class ScheduleUpdate(_ShiftzyModel):
+    id: str
+    employee_id: str | None = None
+    position_code: str | None = None
+    shift_id: str | None = None
+    date: DateType | None = None
+    start_time: TimeType | None = None
+    end_time: TimeType | None = None
+    note: str | None = None
+
+
+class ScheduleDeleteItem(_ShiftzyModel):
+    id: str
+
+
+class ScheduleBatchRequest(_ShiftzyModel):
+    toCreate: list[ScheduleCreate] | ScheduleCreate | None = None
+    toUpdate: list[ScheduleUpdate] | ScheduleUpdate | None = None
+    toDelete: list[ScheduleDeleteItem | str] | ScheduleDeleteItem | None = None
+
+
+def _dump_model(item: BaseModel) -> dict:
+    if hasattr(item, "model_dump"):
+        return item.model_dump(exclude_unset=True)
+    return item.dict(exclude_unset=True)
+
+
+def _normalize_payload(payload):
+    if isinstance(payload, list):
+        normalized = []
+        for item in payload:
+            normalized.append(
+                _dump_model(item) if isinstance(item, BaseModel) else item
+            )
+        return normalized
+    if isinstance(payload, BaseModel):
+        return _dump_model(payload)
+    return payload
 
 
 @router.get("/schedules")
@@ -50,14 +120,111 @@ def list_schedules(
 @router.post("/schedules")
 def create_schedules(
     request: Request,
-    payload: list[dict] | dict = Body(...),
+    payload: list[ScheduleCreate] | ScheduleCreate = Body(...),
 ):
+    """
+    Example request:
+    [
+      {
+        "employee_id": "948f09c9-f6b9-11f0-b7f6-5a4783e25118",
+        "position_code": "FR-CASH",
+        "shift_id": "9941aa49-f6b9-11f0-b7f6-5a4783e25118",
+        "date": "2026-01-20",
+        "start_time": "10:00",
+        "end_time": "14:00",
+        "note": null
+      }
+    ]
+
+    Example response:
+    {
+      "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 3},
+      "data": {"inserted": 1}
+    }
+    """
+    normalized = _normalize_payload(payload)
     try:
-        inserted = insert_schedules(payload)
+        inserted = insert_schedules(normalized)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return with_meta(
         data={"inserted": inserted},
+        start_time=request.state.start_time,
+        client_id=getattr(request.state, "client_id", "Not Found"),
+    )
+
+
+@router.put("/schedules")
+def update_schedules(
+    request: Request,
+    payload: list[ScheduleUpdate] | ScheduleUpdate = Body(...),
+):
+    normalized = _normalize_payload(payload)
+    try:
+        updated = update_schedules_db(normalized)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return with_meta(
+        data={"updated": updated},
+        start_time=request.state.start_time,
+        client_id=getattr(request.state, "client_id", "Not Found"),
+    )
+
+
+@router.delete("/schedules")
+def delete_schedules(
+    request: Request,
+    payload: list[ScheduleDeleteItem | str] | ScheduleDeleteItem = Body(...),
+):
+    normalized = _normalize_payload(payload)
+    try:
+        deleted = delete_schedules_db(normalized)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return with_meta(
+        data={"deleted": deleted},
+        start_time=request.state.start_time,
+        client_id=getattr(request.state, "client_id", "Not Found"),
+    )
+
+
+@router.post("/schedules/batchUpdates")
+def batch_schedules(
+    request: Request,
+    payload: ScheduleBatchRequest = Body(...),
+):
+    """
+    Example request:
+    {
+      "toCreate": [],
+      "toUpdate": [
+        {
+          "id": "66495150-aada-4a11-bffa-e90e84d90662",
+          "employee_id": "948f09c9-f6b9-11f0-b7f6-5a4783e25118",
+          "position_code": "FR-CASH",
+          "shift_id": "9941aa49-f6b9-11f0-b7f6-5a4783e25118",
+          "date": "2026-01-20",
+          "start_time": "10:00",
+          "end_time": "14:00",
+          "note": null
+        }
+      ],
+      "toDelete": ["50e20973-9584-4d2c-a4a7-0977e8e4d80a"]
+    }
+
+    Example response:
+    {
+      "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 5},
+      "data": {"inserted": 0, "updated": 1, "deleted": 1}
+    }
+    """
+    normalized = _normalize_payload(payload)
+    try:
+        results = apply_schedule_changes(normalized)
+    except (TypeError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return with_meta(
+        data=results,
         start_time=request.state.start_time,
         client_id=getattr(request.state, "client_id", "Not Found"),
     )
