@@ -151,22 +151,26 @@ def _load_pdf_config() -> dict[str, object]:
 
 
 def _resolve_base_path(value: str | None) -> Path | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    path = Path(text)
-    if path.is_absolute():
-        return path
-    repo_root = _find_repo_root(Path(__file__).resolve())
-    candidates = [Path.cwd() / path]
-    if repo_root is not None:
-        candidates.append(repo_root / path)
+    candidates: list[Path] = []
+    if value is not None:
+        text = str(value).strip()
+        if text:
+            path = Path(text)
+            if path.is_absolute():
+                candidates.append(path)
+            else:
+                repo_root = _find_repo_root(Path(__file__).resolve())
+                candidates.append(Path.cwd() / path)
+                if repo_root is not None:
+                    candidates.append(repo_root / path)
+
+    default_assets = Path(__file__).resolve().parents[2] / "assets"
+    candidates.append(default_assets)
+
     for candidate in candidates:
         if candidate.is_dir():
             return candidate
-    return candidates[0]
+    return candidates[0] if candidates else None
 
 
 def _find_repo_root(start: Path) -> Path | None:
@@ -250,7 +254,8 @@ def resolve_position_icon(code: str | None) -> str | None:
 
 def resolve_position_icon_debug(code: str | None) -> dict[str, object]:
     config = _load_pdf_config()
-    icon_base_path = _resolve_base_path(config.get("position_icon_base_path"))
+    config_base = config.get("position_icon_base_path")
+    icon_base_path = _resolve_base_path(config_base)
     icon_map = config.get("position_icon_map", {})
     text = "" if code is None else str(code).strip()
     variants = _expand_icon_keys(text) if text else []
@@ -269,6 +274,7 @@ def resolve_position_icon_debug(code: str | None) -> dict[str, object]:
 
     return {
         "code": text,
+        "config_base_path": str(config_base) if config_base else None,
         "icon_base_path": str(icon_base_path) if icon_base_path else None,
         "icon_base_exists": icon_base_path.is_dir() if icon_base_path else False,
         "variants": variants,
