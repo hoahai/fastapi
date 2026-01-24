@@ -3,6 +3,7 @@ from __future__ import annotations
 from datetime import date as DateType, time as TimeType
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from apps.shiftzy.api.v1.helpers.db_queries import (
@@ -13,7 +14,10 @@ from apps.shiftzy.api.v1.helpers.db_queries import (
     insert_schedules,
     update_schedules as update_schedules_db,
 )
-from apps.shiftzy.api.v1.helpers.schedule_pdf import build_schedule_pdf
+from apps.shiftzy.api.v1.helpers.schedule_pdf import (
+    build_schedule_pdf,
+    resolve_position_icon,
+)
 from apps.shiftzy.api.v1.helpers.weeks import build_week_info
 from shared.utils import with_meta
 
@@ -118,6 +122,16 @@ def list_schedules(
         start_time=request.state.start_time,
         client_id=getattr(request.state, "client_id", "Not Found"),
     )
+
+
+@router.get("/schedules/icon")
+def get_schedule_icon(
+    code: str = Query(...),
+):
+    path = resolve_position_icon(code)
+    if not path:
+        raise HTTPException(status_code=404, detail="Icon not found")
+    return FileResponse(path)
 
 
 @router.get("/schedules/pdf")

@@ -232,6 +232,22 @@ def _expand_icon_keys(key: str) -> list[str]:
     return ordered
 
 
+def resolve_position_icon(code: str | None) -> str | None:
+    if not code:
+        return None
+    text = str(code)
+    if ".." in text or "/" in text or "\\" in text:
+        return None
+    config = _load_pdf_config()
+    icon_base_path = _resolve_base_path(config.get("position_icon_base_path"))
+    icon_map = config.get("position_icon_map", {})
+    return _resolve_icon_path(
+        text,
+        icon_map=icon_map if isinstance(icon_map, dict) else {},
+        icon_base_path=icon_base_path,
+    )
+
+
 def _build_cell_lines(
     rows: list[dict],
     *,
