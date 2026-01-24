@@ -189,23 +189,47 @@ def _resolve_icon_path(
     if not key:
         return None
 
-    if key in icon_map:
-        raw = icon_map.get(key)
-        if raw is None:
-            return None
-        path = Path(str(raw))
-        if not path.is_absolute():
-            base = icon_base_path or Path.cwd()
-            path = base / path
-        return str(path) if path.is_file() else None
+    for variant in _expand_icon_keys(key):
+        if variant in icon_map:
+            raw = icon_map.get(variant)
+            if raw is None:
+                continue
+            path = Path(str(raw))
+            if not path.is_absolute():
+                base = icon_base_path or Path.cwd()
+                path = base / path
+            if path.is_file():
+                return str(path)
 
     if icon_base_path:
-        for ext in _ICON_EXTS:
-            candidate = icon_base_path / f"{key}{ext}"
-            if candidate.is_file():
-                return str(candidate)
+        for variant in _expand_icon_keys(key):
+            for ext in _ICON_EXTS:
+                candidate = icon_base_path / f"{variant}{ext}"
+                if candidate.is_file():
+                    return str(candidate)
 
     return None
+
+
+def _expand_icon_keys(key: str) -> list[str]:
+    variants = [
+        key,
+        key.replace("_", "-"),
+        key.replace("-", "_"),
+        key.upper(),
+        key.upper().replace("_", "-"),
+        key.upper().replace("-", "_"),
+        key.lower(),
+        key.lower().replace("_", "-"),
+        key.lower().replace("-", "_"),
+    ]
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for variant in variants:
+        if variant and variant not in seen:
+            ordered.append(variant)
+            seen.add(variant)
+    return ordered
 
 
 def _build_cell_lines(
