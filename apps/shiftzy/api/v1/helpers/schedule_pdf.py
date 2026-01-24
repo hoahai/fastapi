@@ -236,51 +236,6 @@ def _expand_icon_keys(key: str) -> list[str]:
     return ordered
 
 
-def resolve_position_icon(code: str | None) -> str | None:
-    if not code:
-        return None
-    text = str(code)
-    if ".." in text or "/" in text or "\\" in text:
-        return None
-    config = _load_pdf_config()
-    icon_base_path = _resolve_base_path(config.get("position_icon_base_path"))
-    icon_map = config.get("position_icon_map", {})
-    return _resolve_icon_path(
-        text,
-        icon_map=icon_map if isinstance(icon_map, dict) else {},
-        icon_base_path=icon_base_path,
-    )
-
-
-def resolve_position_icon_debug(code: str | None) -> dict[str, object]:
-    config = _load_pdf_config()
-    config_base = config.get("position_icon_base_path")
-    icon_base_path = _resolve_base_path(config_base)
-    icon_map = config.get("position_icon_map", {})
-    text = "" if code is None else str(code).strip()
-    variants = _expand_icon_keys(text) if text else []
-    candidates: list[str] = []
-
-    if icon_base_path:
-        for variant in variants:
-            for ext in _ICON_EXTS:
-                candidates.append(str(icon_base_path / f"{variant}{ext}"))
-
-    resolved = _resolve_icon_path(
-        text,
-        icon_map=icon_map if isinstance(icon_map, dict) else {},
-        icon_base_path=icon_base_path,
-    )
-
-    return {
-        "code": text,
-        "config_base_path": str(config_base) if config_base else None,
-        "icon_base_path": str(icon_base_path) if icon_base_path else None,
-        "icon_base_exists": icon_base_path.is_dir() if icon_base_path else False,
-        "variants": variants,
-        "candidates": candidates[:15],
-        "resolved_path": resolved,
-    }
 
 
 def _build_cell_lines(
