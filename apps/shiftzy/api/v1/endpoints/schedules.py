@@ -17,6 +17,7 @@ from apps.shiftzy.api.v1.helpers.db_queries import (
 from apps.shiftzy.api.v1.helpers.schedule_pdf import (
     build_schedule_pdf,
     resolve_position_icon,
+    resolve_position_icon_debug,
 )
 from apps.shiftzy.api.v1.helpers.weeks import build_week_info
 from shared.utils import with_meta
@@ -127,7 +128,10 @@ def list_schedules(
 @router.get("/schedules/icon")
 def get_schedule_icon(
     code: str = Query(...),
+    debug: bool = Query(False),
 ):
+    if debug:
+        return resolve_position_icon_debug(code)
     path = resolve_position_icon(code)
     if not path:
         raise HTTPException(status_code=404, detail="Icon not found")
