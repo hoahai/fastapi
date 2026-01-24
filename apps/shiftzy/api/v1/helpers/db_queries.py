@@ -298,6 +298,40 @@ def get_schedules(
     return rows
 
 
+def duplicate_week_schedules(
+    *,
+    source_start: date,
+    source_end: date,
+    target_start: date,
+    target_end: date,
+    delta_days: int,
+    overwrite: bool,
+) -> int:
+    def _work(cursor) -> int:
+        if overwrite:
+            cursor.execute(
+                "DELETE FROM schedules WHERE date >= %s AND date <= %s",
+                (target_start, target_end),
+            )
+            insert_prefix = "INSERT INTO schedules "
+        else:
+            insert_prefix = "INSERT IGNORE INTO schedules "
+
+        cursor.execute(
+            insert_prefix
+            + "(id, employee_id, position_code, shift_id, date, start_time, end_time, note) "
+            "SELECT "
+            "UUID(), s.employee_id, s.position_code, s.shift_id, "
+            "DATE_ADD(s.date, INTERVAL %s DAY), s.start_time, s.end_time, s.note "
+            "FROM schedules AS s "
+            "WHERE s.date >= %s AND s.date <= %s",
+            (delta_days, source_start, source_end),
+        )
+        return cursor.rowcount
+
+    return run_transaction(_work)
+
+
 def insert_schedules(schedules: list[dict] | dict) -> int:
     rows = _ensure_list(schedules, name="schedules")
     values = _build_schedule_insert_values(rows)

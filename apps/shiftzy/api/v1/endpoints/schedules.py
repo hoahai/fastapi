@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from apps.shiftzy.api.v1.helpers.db_queries import (
     apply_schedule_changes,
     delete_schedules as delete_schedules_db,
+    duplicate_week_schedules as duplicate_week_schedules_db,
     get_schedules,
     insert_schedules,
     update_schedules as update_schedules_db,
@@ -251,6 +252,54 @@ def batch_schedules(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return with_meta(
         data=results,
+        start_time=request.state.start_time,
+        client_id=getattr(request.state, "client_id", "Not Found"),
+    )
+
+
+@router.post("/schedules/duplicate")
+def duplicate_week_schedules(
+    request: Request,
+    week_start: int = Query(...),
+    week_end: int = Query(...),
+    overwrite: bool = Query(False),
+    return_schedules: bool = Query(False),
+):
+    try:
+        if week_start == week_end:
+            raise ValueError("week_start and week_end must be different")
+
+        source_week = build_week_info(week_start)
+        target_week = build_week_info(week_end)
+        source_start = DateType.fromisoformat(source_week["start_date"])
+        source_end = DateType.fromisoformat(source_week["end_date"])
+        target_start = DateType.fromisoformat(target_week["start_date"])
+        target_end = DateType.fromisoformat(target_week["end_date"])
+        delta_days = (target_start - source_start).days
+
+        inserted = duplicate_week_schedules_db(
+            source_start=source_start,
+            source_end=source_end,
+            target_start=target_start,
+            target_end=target_end,
+            delta_days=delta_days,
+            overwrite=overwrite,
+        )
+        schedules = get_schedules(week_no=week_end) if return_schedules else None
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    data = {
+        "inserted": inserted,
+        "source_week": week_start,
+        "target_week": week_end,
+        "overwrite": overwrite,
+    }
+    if return_schedules:
+        data["schedules"] = schedules
+
+    return with_meta(
+        data=data,
         start_time=request.state.start_time,
         client_id=getattr(request.state, "client_id", "Not Found"),
     )
