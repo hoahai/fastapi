@@ -1,6 +1,6 @@
-from fastapi import APIRouter, Request
+from fastapi import APIRouter
 
-from shared.utils import get_current_period, with_meta
+from shared.utils import get_current_period
 
 router = APIRouter()
 
@@ -11,9 +11,5 @@ router = APIRouter()
 
 
 @router.get("/current-period")
-def get_current_period_route(request: Request):
-    return with_meta(
-        data=get_current_period(),
-        start_time=request.state.start_time,
-        client_id=getattr(request.state, "client_id", "Not Found"),
-    )
+def get_current_period_route():
+    return get_current_period()

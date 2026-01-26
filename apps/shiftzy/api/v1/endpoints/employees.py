@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, HTTPException, Query, Request
+from fastapi import APIRouter, Body, HTTPException, Query
 
 from apps.shiftzy.api.v1.helpers.db_queries import (
     delete_employees,
@@ -8,7 +8,6 @@ from apps.shiftzy.api.v1.helpers.db_queries import (
     insert_employees,
     update_employees,
 )
-from shared.utils import with_meta
 
 router = APIRouter()
 
@@ -20,37 +19,26 @@ router = APIRouter()
 
 @router.get("/employees")
 def list_employees(
-    request: Request,
     employee_id: str | None = Query(None, alias="id"),
     include_all: bool = Query(False, alias="all"),
 ):
     data = get_employees(employee_id, include_all=include_all)
-    return with_meta(
-        data=data,
-        start_time=request.state.start_time,
-        client_id=getattr(request.state, "client_id", "Not Found"),
-    )
+    return data
 
 
 @router.post("/employees")
 def create_employees(
-    request: Request,
     payload: list[dict] | dict = Body(...),
 ):
     try:
         inserted = insert_employees(payload)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return with_meta(
-        data={"inserted": inserted},
-        start_time=request.state.start_time,
-        client_id=getattr(request.state, "client_id", "Not Found"),
-    )
+    return {"inserted": inserted}
 
 
 @router.put("/employees")
 def update_employees_route(
-    request: Request,
     payload: list[dict] | dict = Body(...),
 ):
     """
@@ -76,16 +64,11 @@ def update_employees_route(
         updated = update_employees(payload)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return with_meta(
-        data={"updated": updated},
-        start_time=request.state.start_time,
-        client_id=getattr(request.state, "client_id", "Not Found"),
-    )
+    return {"updated": updated}
 
 
 @router.delete("/employees")
 def delete_employees_route(
-    request: Request,
     payload: list[dict] | dict = Body(...),
 ):
     """
@@ -102,8 +85,4 @@ def delete_employees_route(
         deleted = delete_employees(payload)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return with_meta(
-        data={"deleted": deleted},
-        start_time=request.state.start_time,
-        client_id=getattr(request.state, "client_id", "Not Found"),
-    )
+    return {"deleted": deleted}

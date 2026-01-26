@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query
 
 from apps.shiftzy.api.v1.helpers.db_queries import (
     get_employees,
@@ -8,7 +8,7 @@ from apps.shiftzy.api.v1.helpers.db_queries import (
     get_shifts,
 )
 from apps.shiftzy.api.v1.helpers.weeks import list_weeks
-from shared.utils import run_parallel, with_meta
+from shared.utils import run_parallel
 
 router = APIRouter()
 
@@ -34,7 +34,6 @@ def _normalize_tables(tables: list[str] | None) -> list[str]:
 
 @router.get("/bootstrap")
 def get_bootstrap(
-    request: Request,
     tables: list[str] | None = Query(None),
     include_all: bool = Query(False, alias="all"),
 ):
@@ -56,8 +55,4 @@ def get_bootstrap(
     results = run_parallel(tasks=tasks, api_name="shiftzy.bootstrap")
     data = {name: result for name, result in zip(selected, results)}
 
-    return with_meta(
-        data=data,
-        start_time=request.state.start_time,
-        client_id=getattr(request.state, "client_id", "Not Found"),
-    )
+    return data

@@ -4,7 +4,6 @@ import hmac
 import json
 import os
 import time
-import uuid
 import re
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -29,6 +28,11 @@ from shared.tenant import (
     reset_tenant_context,
     get_tenant_id,
     get_timezone,
+)
+from shared.response import (
+    ensure_request_id,
+    wrap_error,
+    wrap_success,
 )
 _API_KEY_REGISTRY: dict[str, str] | None = None
 _API_LOGGER = get_logger("api")
@@ -79,6 +83,117 @@ def _is_public_path(path: str, public_paths: set[str]) -> bool:
     return normalized in public_paths
 
 
+def _should_wrap_response(
+    request: Request,
+    response: Response,
+    content_type: str,
+) -> bool:
+    if _is_docs_path(request.url.path or ""):
+        return False
+    if response.status_code in {204, 304}:
+        return False
+    return "application/json" in (content_type or "").lower()
+
+
+def _duration_since(request: Request, fallback_start: float) -> float:
+    start_time = getattr(request.state, "start_time", None)
+    if isinstance(start_time, (int, float)):
+        return time.perf_counter() - start_time
+    return time.perf_counter() - fallback_start
+
+
+def _extract_payload(
+    response_json: object | None,
+    response_body: bytes,
+) -> object | None:
+    if response_json is not None:
+        return response_json
+    if response_body:
+        return _safe_decode_text(response_body)
+    return None
+
+
+def _unwrap_success_payload(payload: object | None) -> object | None:
+    if isinstance(payload, dict) and "meta" in payload and "data" in payload:
+        return payload.get("data")
+    return payload
+
+
+def _unwrap_error_payload(payload: object | None) -> object | None:
+    if isinstance(payload, dict) and "meta" in payload and "error" in payload:
+        return payload.get("error")
+    return payload
+
+
+def _wrap_response_payload(
+    request: Request,
+    response: Response,
+    response_body: bytes,
+    *,
+    duration_s: float,
+) -> tuple[Response, object | None]:
+    response_headers = dict(response.headers)
+    response_headers.pop("content-length", None)
+
+    content_type = response.headers.get("content-type", "")
+    response_json = None
+    if response_body and "application/json" in (content_type or "").lower():
+        response_json = _safe_parse_json(response_body)
+
+    if _should_wrap_response(request, response, content_type):
+        raw_payload = _extract_payload(response_json, response_body)
+        if response.status_code < 400:
+            payload = wrap_success(
+                _unwrap_success_payload(raw_payload),
+                request,
+                duration_s=duration_s,
+            )
+        else:
+            payload = wrap_error(
+                _unwrap_error_payload(raw_payload),
+                request,
+                duration_s=duration_s,
+            )
+
+        response_headers.pop("content-type", None)
+        response = JSONResponse(
+            content=payload,
+            status_code=response.status_code,
+            headers=response_headers,
+            background=response.background,
+        )
+        return response, payload
+
+    response = Response(
+        content=response_body,
+        status_code=response.status_code,
+        headers=response_headers,
+        media_type=response.media_type,
+        background=response.background,
+    )
+
+    if response_body:
+        if response_json is not None:
+            response_body_out = response_json
+        else:
+            response_body_out = _safe_decode_text(response_body)
+    else:
+        response_body_out = None
+
+    return response, response_body_out
+
+
+def _error_response(
+    request: Request,
+    *,
+    status_code: int,
+    detail: object | None,
+    duration_s: float,
+) -> JSONResponse:
+    payload = wrap_error(detail, request, duration_s=duration_s)
+    return JSONResponse(status_code=status_code, content=payload)
+
+
 def _should_validate_tenant(path: str, prefixes: tuple[str, ...] | None) -> bool:
     if not prefixes:
         return True
@@ -118,7 +233,8 @@ def _resolve_tenant_validator(path: str, registry: object) -> tuple[str | None, 
 
 async def timing_middleware(request: Request, call_next):
     # Set start time BEFORE route executes
-    request.state.start_time = time.perf_counter()
+    if getattr(request.state, "start_time", None) is None:
+        request.state.start_time = time.perf_counter()
 
     response = await call_next(request)
 
@@ -126,6 +242,7 @@ async def timing_middleware(request: Request, call_next):
 
 
 async def tenant_context_middleware(request: Request, call_next):
+    start_time = time.perf_counter()
     path = request.url.path or ""
     public_paths = _get_public_paths(request)
     if _is_docs_path(path) or _is_public_path(path, public_paths):
@@ -139,9 +256,11 @@ async def tenant_context_middleware(request: Request, call_next):
         return await call_next(request)
 
     if not tenant_header:
-        return JSONResponse(
+        return _error_response(
+            request,
             status_code=400,
-            content={"detail": "Missing X-Tenant-Id header"},
+            detail="Missing X-Tenant-Id header",
+            duration_s=_duration_since(request, start_time),
         )
 
     try:
@@ -168,7 +287,12 @@ async def tenant_context_middleware(request: Request, call_next):
                 missing=exc.missing,
                 invalid=exc.invalid,
             )
-            return JSONResponse(status_code=400, content=payload)
+            return _error_response(
+                request,
+                status_code=400,
+                detail=payload,
+                duration_s=_duration_since(request, start_time),
+            )
         error_text = str(exc)
         if "Tenant config not found for" in error_text:
             match = re.search(r"Tenant config not found for '([^']+)'", error_text)
@@ -178,8 +302,18 @@ async def tenant_context_middleware(request: Request, call_next):
                 if tenant_id
                 else "Tenant not found!"
             )
-            return JSONResponse(status_code=400, content={"detail": detail})
-        return JSONResponse(status_code=400, content={"detail": error_text})
+            return _error_response(
+                request,
+                status_code=400,
+                detail={"detail": detail},
+                duration_s=_duration_since(request, start_time),
+            )
+        return _error_response(
+            request,
+            status_code=400,
+            detail={"detail": error_text},
+            duration_s=_duration_since(request, start_time),
+        )
 
     try:
         return await call_next(request)
@@ -255,10 +389,32 @@ def _safe_decode_text(payload: bytes) -> str:
     return payload.decode("utf-8", errors="replace")
 
 
+def _normalize_query_params(params: object) -> dict[str, object] | None:
+    if not params:
+        return None
+    result: dict[str, object] = {}
+    try:
+        items = params.multi_items()
+    except AttributeError:
+        try:
+            items = dict(params).items()
+        except Exception:
+            return None
+    for key, value in items:
+        if key in result:
+            existing = result[key]
+            if isinstance(existing, list):
+                existing.append(value)
+            else:
+                result[key] = [existing, value]
+        else:
+            result[key] = value
+    return result
+
+
 async def request_response_logger_middleware(request: Request, call_next):
     start_time = time.perf_counter()
-    request_id = uuid.uuid4().hex[:8]
-    request.state.request_id = request_id
+    request_id = ensure_request_id(request)
     token = set_request_id(request_id)
     debug_handler = None
 
@@ -280,19 +436,8 @@ async def request_response_logger_middleware(request: Request, call_next):
         async for chunk in response.body_iterator:
             response_body += chunk
 
-        response_headers = dict(response.headers)
-        response_headers.pop("content-length", None)
-
-        response = Response(
-            content=response_body,
-            status_code=response.status_code,
-            headers=response_headers,
-            media_type=response.media_type,
-            background=response.background,
-        )
-
-        duration_ms = int((time.perf_counter() - start_time) * 1000)
-        content_type = response.headers.get("content-type", "")
+        duration_s = _duration_since(request, start_time)
+        duration_ms = int(duration_s * 1000)
 
         if body_bytes:
             request_json = _safe_parse_json(body_bytes)
@@ -303,20 +448,14 @@ async def request_response_logger_middleware(request: Request, call_next):
             )
         else:
             request_body = None
+        request_params = _normalize_query_params(request.query_params)
 
-        if response_body:
-            response_json = (
-                _safe_parse_json(response_body)
-                if "application/json" in content_type
-                else None
-            )
-            response_body_out = (
-                response_json
-                if response_json is not None
-                else _safe_decode_text(response_body)
-            )
-        else:
-            response_body_out = None
+        response, response_body_out = _wrap_response_payload(
+            request,
+            response,
+            response_body,
+            duration_s=duration_s,
+        )
 
         request_host = request.headers.get("x-forwarded-host") or request.headers.get(
             "host"
@@ -338,6 +477,7 @@ async def request_response_logger_middleware(request: Request, call_next):
                     "request_host": request_host,
                     "request_scheme": request_scheme,
                     "request_body": request_body,
+                    "request_params": request_params,
                     "response_body": response_body_out,
                 }
             },
@@ -350,7 +490,26 @@ async def request_response_logger_middleware(request: Request, call_next):
         reset_request_id(token)
 
 
+async def response_envelope_middleware(request: Request, call_next):
+    start_time = time.perf_counter()
+    response = await call_next(request)
+
+    response_body = b""
+    async for chunk in response.body_iterator:
+        response_body += chunk
+
+    duration_s = _duration_since(request, start_time)
+    response, _ = _wrap_response_payload(
+        request,
+        response,
+        response_body,
+        duration_s=duration_s,
+    )
+    return response
+
+
 async def api_key_auth_middleware(request: Request, call_next):
+    start_time = time.perf_counter()
     path = request.url.path or ""
     public_paths = _get_public_paths(request)
     if _is_docs_path(path) or _is_public_path(path, public_paths):
@@ -368,16 +527,20 @@ async def api_key_auth_middleware(request: Request, call_next):
         registry = _get_api_key_registry()
     except ValueError:
         if is_api_route:
-            return JSONResponse(
+            return _error_response(
+                request,
                 status_code=500,
-                content={"detail": "API key registry is misconfigured"},
+                detail="API key registry is misconfigured",
+                duration_s=_duration_since(request, start_time),
             )
         registry = {}
 
     if not registry and is_api_route:
-        return JSONResponse(
+        return _error_response(
+            request,
             status_code=500,
-            content={"detail": "API key registry is not configured"},
+            detail="API key registry is not configured",
+            duration_s=_duration_since(request, start_time),
         )
 
     api_key = _extract_api_key(request)
@@ -385,14 +548,20 @@ async def api_key_auth_middleware(request: Request, call_next):
 
     if is_api_route:
         if not api_key:
-            return JSONResponse(
+            request.state.client_id = "Unauthenticated"
+            return _error_response(
+                request,
                 status_code=401,
-                content={"detail": "Missing API key"},
+                detail="Missing API key",
+                duration_s=_duration_since(request, start_time),
             )
         if not client_id:
-            return JSONResponse(
+            request.state.client_id = "Not Found"
+            return _error_response(
+                request,
                 status_code=401,
-                content={"detail": "Invalid API key"},
+                detail="Invalid API key",
+                duration_s=_duration_since(request, start_time),
             )
 
         request.state.client_id = client_id

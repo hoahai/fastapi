@@ -1,17 +1,18 @@
 # main.py
 from contextlib import asynccontextmanager
 
-from shared.utils import with_meta, load_env
+from shared.utils import load_env
 
 load_env()
 
-from fastapi import Depends, FastAPI, Request
+from fastapi import Depends, FastAPI
 
 from apps.spendsphere.api.v1.router import router as v1_router
 from apps.spendsphere.api.v2.router import router as v2_router
 
 from shared.exception_handlers import register_exception_handlers
 from shared.logger import log_run_start
+from shared.middleware import response_envelope_middleware, timing_middleware
 from shared.request_validation import validate_query_params
 
 
@@ -26,6 +27,8 @@ app = FastAPI(
     redirect_slashes=False,
     dependencies=[Depends(validate_query_params)],
 )
+app.middleware("http")(timing_middleware)
+app.middleware("http")(response_envelope_middleware)
 app.include_router(v1_router)
 app.include_router(v2_router)
 
@@ -37,12 +40,8 @@ register_exception_handlers(app, logger_name="SpendSphere API")
 
 
 @app.get("/")
-def root(request: Request):
-    return with_meta(
-        data={"status": "Hello World!"},
-        start_time=request.state.start_time,
-        client_id=getattr(request.state, "client_id", "Not Found"),
-    )
+def root():
+    return {"status": "Hello World!"}
 
 
 # =========================================================

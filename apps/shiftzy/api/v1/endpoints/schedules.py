@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date as DateType, time as TimeType
 
-from fastapi import APIRouter, Body, HTTPException, Query, Request, Response
+from fastapi import APIRouter, Body, HTTPException, Query, Response
 from pydantic import BaseModel
 
 from apps.shiftzy.api.v1.helpers.db_queries import (
@@ -16,7 +16,6 @@ from apps.shiftzy.api.v1.helpers.db_queries import (
 )
 from apps.shiftzy.api.v1.helpers.schedule_pdf import build_schedule_pdf
 from apps.shiftzy.api.v1.helpers.weeks import build_week_info
-from shared.utils import with_meta
 
 router = APIRouter()
 
@@ -91,7 +90,6 @@ def _normalize_payload(payload):
 
 @router.get("/schedules")
 def list_schedules(
-    request: Request,
     schedule_id: str | None = Query(None, alias="id"),
     employee_id: str | None = Query(None),
     date_value: DateType | None = Query(None, alias="date"),
@@ -115,11 +113,7 @@ def list_schedules(
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return with_meta(
-        data=data,
-        start_time=request.state.start_time,
-        client_id=getattr(request.state, "client_id", "Not Found"),
-    )
+    return data
 
 
 @router.get("/schedules/pdf")
@@ -149,7 +143,6 @@ def download_schedule_pdf(
 
 @router.post("/schedules")
 def create_schedules(
-    request: Request,
     payload: list[ScheduleCreate] | ScheduleCreate = Body(...),
 ):
     """
@@ -177,16 +170,11 @@ def create_schedules(
         inserted = insert_schedules(normalized)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return with_meta(
-        data={"inserted": inserted},
-        start_time=request.state.start_time,
-        client_id=getattr(request.state, "client_id", "Not Found"),
-    )
+    return {"inserted": inserted}
 
 
 @router.put("/schedules")
 def update_schedules(
-    request: Request,
     payload: list[ScheduleUpdate] | ScheduleUpdate = Body(...),
 ):
     """
@@ -211,16 +199,11 @@ def update_schedules(
         updated = update_schedules_db(normalized)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return with_meta(
-        data={"updated": updated},
-        start_time=request.state.start_time,
-        client_id=getattr(request.state, "client_id", "Not Found"),
-    )
+    return {"updated": updated}
 
 
 @router.delete("/schedules")
 def delete_schedules(
-    request: Request,
     payload: list[ScheduleDeleteItem | str] | ScheduleDeleteItem = Body(...),
 ):
     """
@@ -238,16 +221,11 @@ def delete_schedules(
         deleted = delete_schedules_db(normalized)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return with_meta(
-        data={"deleted": deleted},
-        start_time=request.state.start_time,
-        client_id=getattr(request.state, "client_id", "Not Found"),
-    )
+    return {"deleted": deleted}
 
 
 @router.delete("/schedules/week")
 def delete_schedules_by_week(
-    request: Request,
     week_no: int = Query(...),
     include_all: bool = Query(False, alias="all"),
 ):
@@ -265,16 +243,11 @@ def delete_schedules_by_week(
         deleted = delete_schedules_by_week_db(week_no)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return with_meta(
-        data={"deleted": deleted, "week_no": week_no},
-        start_time=request.state.start_time,
-        client_id=getattr(request.state, "client_id", "Not Found"),
-    )
+    return {"deleted": deleted, "week_no": week_no}
 
 
 @router.post("/schedules/batchUpdates")
 def batch_schedules(
-    request: Request,
     payload: ScheduleBatchRequest = Body(...),
 ):
     """
@@ -307,16 +280,11 @@ def batch_schedules(
         results = apply_schedule_changes(normalized)
     except (TypeError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return with_meta(
-        data=results,
-        start_time=request.state.start_time,
-        client_id=getattr(request.state, "client_id", "Not Found"),
-    )
+    return results
 
 
 @router.post("/schedules/duplicate")
 def duplicate_week_schedules(
-    request: Request,
     week_start: int = Query(...),
     week_end: int = Query(...),
     overwrite: bool = Query(False),
@@ -355,8 +323,4 @@ def duplicate_week_schedules(
     if return_schedules:
         data["schedules"] = schedules
 
-    return with_meta(
-        data=data,
-        start_time=request.state.start_time,
-        client_id=getattr(request.state, "client_id", "Not Found"),
-    )
+    return data

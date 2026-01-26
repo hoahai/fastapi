@@ -1,13 +1,12 @@
 from datetime import date as DateType
 
-from fastapi import APIRouter, HTTPException, Query, Request
+from fastapi import APIRouter, HTTPException, Query
 
 from apps.shiftzy.api.v1.helpers.weeks import (
     build_week_info,
     get_week_no_for_date,
     list_weeks,
 )
-from shared.utils import with_meta
 
 router = APIRouter()
 
@@ -19,7 +18,6 @@ router = APIRouter()
 
 @router.get("/weeks")
 def get_weeks(
-    request: Request,
     week_before: int | None = Query(None, ge=0),
     week_after: int | None = Query(None, ge=0),
     date_value: DateType | None = Query(None, alias="date"),
@@ -42,8 +40,4 @@ def get_weeks(
         data = build_week_info(week_no)
     else:
         data = list_weeks(week_before=week_before, week_after=week_after)
-    return with_meta(
-        data=data,
-        start_time=request.state.start_time,
-        client_id=getattr(request.state, "client_id", "Not Found"),
-    )
+    return data

@@ -7,6 +7,7 @@ from fastapi import FastAPI, Request
 from fastapi.responses import JSONResponse
 
 from shared.logger import get_logger
+from shared.response import wrap_error
 from shared.tenant import (
     TenantConfigError,
     TenantConfigValidationError,
@@ -31,11 +32,11 @@ def register_exception_handlers(app: FastAPI, *, logger_name: str) -> None:
             )
             return JSONResponse(
                 status_code=400,
-                content=payload,
+                content=wrap_error(payload, request),
             )
         return JSONResponse(
             status_code=400,
-            content={"detail": str(exc)},
+            content=wrap_error(str(exc), request),
         )
 
     @app.exception_handler(Exception)
@@ -69,5 +70,5 @@ def register_exception_handlers(app: FastAPI, *, logger_name: str) -> None:
 
         return JSONResponse(
             status_code=500,
-            content=response_content,
+            content=wrap_error(response_content, request),
         )
