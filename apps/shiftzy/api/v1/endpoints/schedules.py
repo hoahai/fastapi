@@ -8,6 +8,7 @@ from pydantic import BaseModel
 from apps.shiftzy.api.v1.helpers.db_queries import (
     apply_schedule_changes,
     delete_schedules as delete_schedules_db,
+    delete_schedules_by_week as delete_schedules_by_week_db,
     duplicate_week_schedules as duplicate_week_schedules_db,
     get_schedules,
     insert_schedules,
@@ -99,6 +100,7 @@ def list_schedules(
     start_time: TimeType | None = Query(None),
     end_time: TimeType | None = Query(None),
     week_no: int | None = Query(None),
+    include_all: bool = Query(False, alias="all"),
 ):
     try:
         data = get_schedules(
@@ -124,6 +126,7 @@ def list_schedules(
 def download_schedule_pdf(
     week_no: int = Query(...),
     orientation: str = Query("landscape"),
+    include_all: bool = Query(False, alias="all"),
 ):
     try:
         week_info = build_week_info(week_no)
@@ -186,6 +189,23 @@ def update_schedules(
     request: Request,
     payload: list[ScheduleUpdate] | ScheduleUpdate = Body(...),
 ):
+    """
+    Example request:
+    [
+      {
+        "id": "66495150-aada-4a11-bffa-e90e84d90662",
+        "start_time": "09:00",
+        "end_time": "13:30",
+        "note": "Cover shift"
+      }
+    ]
+
+    Example response:
+    {
+      "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 3},
+      "data": {"updated": 1}
+    }
+    """
     normalized = _normalize_payload(payload)
     try:
         updated = update_schedules_db(normalized)
@@ -203,6 +223,16 @@ def delete_schedules(
     request: Request,
     payload: list[ScheduleDeleteItem | str] | ScheduleDeleteItem = Body(...),
 ):
+    """
+    Example request:
+    ["50e20973-9584-4d2c-a4a7-0977e8e4d80a"]
+
+    Example response:
+    {
+      "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
+      "data": {"deleted": 1}
+    }
+    """
     normalized = _normalize_payload(payload)
     try:
         deleted = delete_schedules_db(normalized)
@@ -210,6 +240,33 @@ def delete_schedules(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     return with_meta(
         data={"deleted": deleted},
+        start_time=request.state.start_time,
+        client_id=getattr(request.state, "client_id", "Not Found"),
+    )
+
+
+@router.delete("/schedules/week")
+def delete_schedules_by_week(
+    request: Request,
+    week_no: int = Query(...),
+    include_all: bool = Query(False, alias="all"),
+):
+    """
+    Example request:
+    DELETE /schedules/week?week_no=12
+
+    Example response:
+    {
+      "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 4},
+      "data": {"deleted": 7, "week_no": 12}
+    }
+    """
+    try:
+        deleted = delete_schedules_by_week_db(week_no)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return with_meta(
+        data={"deleted": deleted, "week_no": week_no},
         start_time=request.state.start_time,
         client_id=getattr(request.state, "client_id", "Not Found"),
     )

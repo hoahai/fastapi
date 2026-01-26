@@ -3,10 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, time as time_type, timedelta
 from uuid import uuid4
 
-from apps.shiftzy.api.v1.helpers.config import (
-    get_position_areas,
-    get_schedule_sections,
-)
+from apps.shiftzy.api.v1.helpers.config import get_schedule_sections
 from apps.shiftzy.api.v1.helpers.weeks import build_week_info
 from shared.db import execute_many, fetch_all, run_transaction
 
@@ -104,46 +101,149 @@ def _compute_duration(start_time: object, end_time: object) -> str | None:
 # POSITIONS
 # ============================================================
 
-def get_positions(code: str | None = None) -> list[dict]:
+def get_positions(code: str | None = None, include_all: bool = False) -> list[dict]:
+    where_clauses: list[str] = []
+    params: list[object] = []
+
     if code:
-        query = "SELECT code, name, area, active FROM positions WHERE code = %s"
-        return fetch_all(query, (code,))
-    query = "SELECT code, name, area, active FROM positions"
-    return fetch_all(query, ())
+        where_clauses.append("code = %s")
+        params.append(code)
+
+    if not include_all:
+        where_clauses.append("active = 1")
+
+    query = "SELECT code, name, icon, active FROM positions"
+    if where_clauses:
+        query += " WHERE " + " AND ".join(where_clauses)
+    return fetch_all(query, tuple(params))
 
 
 def insert_positions(positions: list[dict] | dict) -> int:
     rows = _ensure_list(positions, name="positions")
-    allowed_areas = {v.strip() for v in get_position_areas()}
     values: list[tuple] = []
     for item in rows:
         code = (item.get("code") or "").strip()
         name = (item.get("name") or "").strip()
-        area = (item.get("area") or "").strip()
-        if not code or not name or not area:
-            raise ValueError("code, name, and area are required for positions")
-        if area not in allowed_areas:
-            raise ValueError(f"Invalid area: {area}")
+        icon = item.get("icon")
+        if isinstance(icon, str):
+            icon = icon.strip() or None
+        if not code or not name:
+            raise ValueError("code and name are required for positions")
         active = _normalize_bool(item.get("active"), default=True)
-        values.append((code, name, area, active))
+        values.append((code, name, icon, active))
 
-    query = "INSERT INTO positions (code, name, area, active) VALUES (%s, %s, %s, %s)"
+    query = (
+        "INSERT INTO positions (code, name, icon, active) "
+        "VALUES (%s, %s, %s, %s)"
+    )
     return execute_many(query, values)
+
+
+def update_positions(positions: list[dict] | dict) -> int:
+    rows = _ensure_list(positions, name="positions")
+    if not rows:
+        return 0
+    statements: list[tuple[str, tuple]] = []
+    for item in rows:
+        if not isinstance(item, dict):
+            raise TypeError("positions must be a dict or list[dict]")
+        code = (item.get("code") or "").strip()
+        if not code:
+            raise ValueError("code is required for positions update")
+
+        fields: list[str] = []
+        params: list[object] = []
+
+        if "name" in item:
+            name = (item.get("name") or "").strip()
+            if not name:
+                raise ValueError("name cannot be empty")
+            fields.append("name = %s")
+            params.append(name)
+
+        if "icon" in item:
+            icon = item.get("icon")
+            if isinstance(icon, str):
+                icon = icon.strip() or None
+            fields.append("icon = %s")
+            params.append(icon)
+
+        if "active" in item:
+            active_value = item.get("active")
+            if active_value is None:
+                raise ValueError("active cannot be null")
+            active = _normalize_bool(active_value, default=True)
+            fields.append("active = %s")
+            params.append(active)
+
+        if not fields:
+            raise ValueError(f"No updatable fields provided for position code {code}")
+
+        params.append(code)
+        query = "UPDATE positions SET " + ", ".join(fields) + " WHERE code = %s"
+        statements.append((query, tuple(params)))
+
+    def _work(cursor) -> int:
+        updated = 0
+        for query, params in statements:
+            cursor.execute(query, params)
+            updated += cursor.rowcount
+        return updated
+
+    return run_transaction(_work)
+
+
+def delete_positions(positions: list[dict] | dict) -> int:
+    rows = _ensure_list(positions, name="positions")
+    if not rows:
+        return 0
+    codes: list[str] = []
+    for item in rows:
+        if isinstance(item, dict):
+            raw = item.get("code") or item.get("position_code") or item.get("id")
+        else:
+            raw = item
+        if raw is None:
+            raise ValueError("code is required for positions delete")
+        code = str(raw).strip()
+        if not code:
+            raise ValueError("code is required for positions delete")
+        codes.append(code)
+
+    placeholders = ", ".join(["%s"] * len(codes))
+    query = f"UPDATE positions SET active = 0 WHERE code IN ({placeholders})"
+
+    def _work(cursor) -> int:
+        cursor.execute(query, tuple(codes))
+        return cursor.rowcount
+
+    return run_transaction(_work)
 
 
 # ============================================================
 # EMPLOYEES
 # ============================================================
 
-def get_employees(employee_id: str | None = None) -> list[dict]:
+def get_employees(
+    employee_id: str | None = None, include_all: bool = False
+) -> list[dict]:
+    where_clauses: list[str] = []
+    params: list[object] = []
+
     if employee_id:
-        query = (
-            "SELECT id, name, schedule_section, note, active "
-            "FROM employees WHERE id = %s"
-        )
-        return fetch_all(query, (employee_id,))
-    query = "SELECT id, name, schedule_section, note, active FROM employees"
-    return fetch_all(query, ())
+        where_clauses.append("id = %s")
+        params.append(employee_id)
+
+    if not include_all:
+        where_clauses.append("active = 1")
+
+    query = (
+        "SELECT id, name, schedule_section, note, ref_positionCode, active "
+        "FROM employees"
+    )
+    if where_clauses:
+        query += " WHERE " + " AND ".join(where_clauses)
+    return fetch_all(query, tuple(params))
 
 
 def insert_employees(employees: list[dict] | dict) -> int:
@@ -155,31 +255,144 @@ def insert_employees(employees: list[dict] | dict) -> int:
         name = (item.get("name") or "").strip()
         section = (item.get("schedule_section") or "").strip()
         note = item.get("note")
+        ref_position_code = item.get("ref_positionCode")
+        if isinstance(ref_position_code, str):
+            ref_position_code = ref_position_code.strip() or None
         if not name or not section:
             raise ValueError("name and schedule_section are required for employees")
         if section not in allowed_sections:
             raise ValueError(f"Invalid schedule_section: {section}")
         active = _normalize_bool(item.get("active"), default=True)
-        values.append((employee_id, name, section, note, active))
+        values.append(
+            (employee_id, name, section, note, ref_position_code, active)
+        )
 
     query = (
-        "INSERT INTO employees (id, name, schedule_section, note, active) "
-        "VALUES (%s, %s, %s, %s, %s)"
+        "INSERT INTO employees "
+        "(id, name, schedule_section, note, ref_positionCode, active) "
+        "VALUES (%s, %s, %s, %s, %s, %s)"
     )
     return execute_many(query, values)
+
+
+def update_employees(employees: list[dict] | dict) -> int:
+    rows = _ensure_list(employees, name="employees")
+    if not rows:
+        return 0
+    allowed_sections = {v.strip() for v in get_schedule_sections()}
+    statements: list[tuple[str, tuple]] = []
+    for item in rows:
+        if not isinstance(item, dict):
+            raise TypeError("employees must be a dict or list[dict]")
+        employee_id = (item.get("id") or "").strip()
+        if not employee_id:
+            raise ValueError("id is required for employees update")
+
+        fields: list[str] = []
+        params: list[object] = []
+
+        if "name" in item:
+            name = (item.get("name") or "").strip()
+            if not name:
+                raise ValueError("name cannot be empty")
+            fields.append("name = %s")
+            params.append(name)
+
+        if "schedule_section" in item:
+            section = (item.get("schedule_section") or "").strip()
+            if not section:
+                raise ValueError("schedule_section cannot be empty")
+            if section not in allowed_sections:
+                raise ValueError(f"Invalid schedule_section: {section}")
+            fields.append("schedule_section = %s")
+            params.append(section)
+
+        if "note" in item:
+            fields.append("note = %s")
+            params.append(item.get("note"))
+
+        if "ref_positionCode" in item:
+            ref_position_code = item.get("ref_positionCode")
+            if isinstance(ref_position_code, str):
+                ref_position_code = ref_position_code.strip() or None
+            fields.append("ref_positionCode = %s")
+            params.append(ref_position_code)
+
+        if "active" in item:
+            active_value = item.get("active")
+            if active_value is None:
+                raise ValueError("active cannot be null")
+            active = _normalize_bool(active_value, default=True)
+            fields.append("active = %s")
+            params.append(active)
+
+        if not fields:
+            raise ValueError(
+                f"No updatable fields provided for employee id {employee_id}"
+            )
+
+        params.append(employee_id)
+        query = "UPDATE employees SET " + ", ".join(fields) + " WHERE id = %s"
+        statements.append((query, tuple(params)))
+
+    def _work(cursor) -> int:
+        updated = 0
+        for query, params in statements:
+            cursor.execute(query, params)
+            updated += cursor.rowcount
+        return updated
+
+    return run_transaction(_work)
+
+
+def delete_employees(employees: list[dict] | dict) -> int:
+    rows = _ensure_list(employees, name="employees")
+    if not rows:
+        return 0
+    employee_ids: list[str] = []
+    for item in rows:
+        if isinstance(item, dict):
+            raw = item.get("id")
+        else:
+            raw = item
+        if raw is None:
+            raise ValueError("id is required for employees delete")
+        employee_id = str(raw).strip()
+        if not employee_id:
+            raise ValueError("id is required for employees delete")
+        employee_ids.append(employee_id)
+
+    placeholders = ", ".join(["%s"] * len(employee_ids))
+    query = f"UPDATE employees SET active = 0 WHERE id IN ({placeholders})"
+
+    def _work(cursor) -> int:
+        cursor.execute(query, tuple(employee_ids))
+        return cursor.rowcount
+
+    return run_transaction(_work)
 
 
 # ============================================================
 # SHIFTS
 # ============================================================
 
-def get_shifts(shift_id: int | str | None = None) -> list[dict]:
+def get_shifts(
+    shift_id: int | str | None = None, include_all: bool = False
+) -> list[dict]:
+    where_clauses: list[str] = []
+    params: list[object] = []
+
     if shift_id is not None:
-        query = "SELECT id, name, start_time, end_time FROM shifts WHERE id = %s"
-        rows = fetch_all(query, (shift_id,))
-    else:
-        query = "SELECT id, name, start_time, end_time FROM shifts"
-        rows = fetch_all(query, ())
+        where_clauses.append("id = %s")
+        params.append(shift_id)
+
+    if not include_all:
+        where_clauses.append("active = 1")
+
+    query = "SELECT id, name, start_time, end_time, active FROM shifts"
+    if where_clauses:
+        query += " WHERE " + " AND ".join(where_clauses)
+    rows = fetch_all(query, tuple(params))
 
     for row in rows:
         start_time = row.get("start_time")
@@ -199,10 +412,103 @@ def insert_shifts(shifts: list[dict] | dict) -> int:
         end_time = item.get("end_time")
         if not name or start_time is None or end_time is None:
             raise ValueError("name, start_time, and end_time are required for shifts")
-        values.append((name, start_time, end_time))
+        active = _normalize_bool(item.get("active"), default=True)
+        values.append((name, start_time, end_time, active))
 
-    query = "INSERT INTO shifts (name, start_time, end_time) VALUES (%s, %s, %s)"
+    query = (
+        "INSERT INTO shifts (name, start_time, end_time, active) "
+        "VALUES (%s, %s, %s, %s)"
+    )
     return execute_many(query, values)
+
+
+def update_shifts(shifts: list[dict] | dict) -> int:
+    rows = _ensure_list(shifts, name="shifts")
+    if not rows:
+        return 0
+    statements: list[tuple[str, tuple]] = []
+    for item in rows:
+        if not isinstance(item, dict):
+            raise TypeError("shifts must be a dict or list[dict]")
+        shift_id = item.get("id")
+        if shift_id is None or (isinstance(shift_id, str) and not shift_id.strip()):
+            raise ValueError("id is required for shifts update")
+
+        fields: list[str] = []
+        params: list[object] = []
+
+        if "name" in item:
+            name = (item.get("name") or "").strip()
+            if not name:
+                raise ValueError("name cannot be empty")
+            fields.append("name = %s")
+            params.append(name)
+
+        if "start_time" in item:
+            start_time = item.get("start_time")
+            if start_time is None:
+                raise ValueError("start_time cannot be null")
+            fields.append("start_time = %s")
+            params.append(_parse_time(start_time))
+
+        if "end_time" in item:
+            end_time = item.get("end_time")
+            if end_time is None:
+                raise ValueError("end_time cannot be null")
+            fields.append("end_time = %s")
+            params.append(_parse_time(end_time))
+
+        if "active" in item:
+            active_value = item.get("active")
+            if active_value is None:
+                raise ValueError("active cannot be null")
+            active = _normalize_bool(active_value, default=True)
+            fields.append("active = %s")
+            params.append(active)
+
+        if not fields:
+            raise ValueError(f"No updatable fields provided for shift id {shift_id}")
+
+        params.append(shift_id)
+        query = "UPDATE shifts SET " + ", ".join(fields) + " WHERE id = %s"
+        statements.append((query, tuple(params)))
+
+    def _work(cursor) -> int:
+        updated = 0
+        for query, params in statements:
+            cursor.execute(query, params)
+            updated += cursor.rowcount
+        return updated
+
+    return run_transaction(_work)
+
+
+def delete_shifts(shifts: list[dict] | dict) -> int:
+    rows = _ensure_list(shifts, name="shifts")
+    if not rows:
+        return 0
+    shift_ids: list[object] = []
+    for item in rows:
+        if isinstance(item, dict):
+            raw = item.get("id")
+        else:
+            raw = item
+        if raw is None:
+            raise ValueError("id is required for shifts delete")
+        if isinstance(raw, str):
+            raw = raw.strip()
+        if raw == "":
+            raise ValueError("id is required for shifts delete")
+        shift_ids.append(raw)
+
+    placeholders = ", ".join(["%s"] * len(shift_ids))
+    query = f"UPDATE shifts SET active = 0 WHERE id IN ({placeholders})"
+
+    def _work(cursor) -> int:
+        cursor.execute(query, tuple(shift_ids))
+        return cursor.rowcount
+
+    return run_transaction(_work)
 
 
 # ============================================================
@@ -356,6 +662,21 @@ def delete_schedules(schedules: list[dict] | dict) -> int:
     if delete_payload is None:
         return 0
     return run_transaction(lambda cursor: _execute_schedule_delete(cursor, delete_payload))
+
+
+def delete_schedules_by_week(week_no: int) -> int:
+    week_info = build_week_info(week_no)
+    start_date = _parse_date(week_info["start_date"])
+    end_date = _parse_date(week_info["end_date"])
+
+    def _work(cursor) -> int:
+        cursor.execute(
+            "DELETE FROM schedules WHERE date >= %s AND date <= %s",
+            (start_date, end_date),
+        )
+        return cursor.rowcount
+
+    return run_transaction(_work)
 
 
 def apply_schedule_changes(payload: dict) -> dict:

@@ -36,6 +36,7 @@ def _normalize_tables(tables: list[str] | None) -> list[str]:
 def get_bootstrap(
     request: Request,
     tables: list[str] | None = Query(None),
+    include_all: bool = Query(False, alias="all"),
 ):
     selected = _normalize_tables(tables)
     if not selected:
@@ -46,7 +47,12 @@ def get_bootstrap(
         unknown_list = ", ".join(sorted(unknown))
         raise HTTPException(status_code=400, detail=f"Unknown tables: {unknown_list}")
 
-    tasks = [( _TABLE_LOADERS[name], ()) for name in selected]
+    tasks = []
+    for name in selected:
+        if name == "weeks":
+            tasks.append((_TABLE_LOADERS[name], ()))
+        else:
+            tasks.append((_TABLE_LOADERS[name], (None, include_all)))
     results = run_parallel(tasks=tasks, api_name="shiftzy.bootstrap")
     data = {name: result for name, result in zip(selected, results)}
 
