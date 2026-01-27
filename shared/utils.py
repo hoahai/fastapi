@@ -15,6 +15,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from typing import Callable, Iterable, TypeVar, Optional, Any
 
 from dotenv import load_dotenv
+from pydantic import BaseModel
 
 from shared.constants import (
     PARALLEL_MAX_WORKERS,
@@ -346,6 +347,70 @@ def with_meta(*, data: dict | list, start_time: float, client_id: str) -> dict:
         },
         "data": data,
     }
+
+
+# ======================================================
+# PAYLOAD HELPERS
+# ======================================================
+
+
+def dump_model(item: BaseModel) -> dict:
+    if hasattr(item, "model_dump"):
+        return item.model_dump(exclude_unset=True)
+    return item.dict(exclude_unset=True)
+
+
+def normalize_payload(
+    payload,
+    *,
+    require_any: Iterable[str] | None = None,
+    name: str = "payload",
+):
+    if isinstance(payload, list):
+        normalized = []
+        for item in payload:
+            normalized.append(dump_model(item) if isinstance(item, BaseModel) else item)
+    elif isinstance(payload, BaseModel):
+        normalized = dump_model(payload)
+    else:
+        normalized = payload
+
+    if require_any:
+        if not isinstance(normalized, dict):
+            raise ValueError(f"{name} must be an object")
+
+        def _has_items(value: object) -> bool:
+            if value is None:
+                return False
+            if isinstance(value, list):
+                return len(value) > 0
+            return True
+
+        if not any(_has_items(normalized.get(key)) for key in require_any):
+            keys = ", ".join(require_any)
+            raise ValueError(
+                f"At least one of {keys} must be provided and have length > 0"
+            )
+
+    return normalized
+
+
+def normalize_payload_list(
+    payload,
+    *,
+    allow_empty: bool = False,
+    name: str = "payload",
+) -> list:
+    normalized = normalize_payload(payload)
+    if normalized is None:
+        if allow_empty:
+            return []
+        raise ValueError(f"{name} must be a non-empty array")
+    if isinstance(normalized, list):
+        if normalized or allow_empty:
+            return normalized
+        raise ValueError(f"{name} must be a non-empty array")
+    return [normalized]
 
 
 # ======================================================

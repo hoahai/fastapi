@@ -41,3 +41,34 @@ def require_account_code(account_code: str) -> str:
     if not account_code or not account_code.strip():
         raise HTTPException(status_code=400, detail="account_code is required")
     return account_code.strip().upper()
+
+
+def should_validate_account_codes(account_codes: str | list[str] | None) -> bool:
+    if account_codes is None:
+        return False
+    if isinstance(account_codes, str) and not account_codes.strip():
+        return False
+    return not (isinstance(account_codes, list) and len(account_codes) == 0)
+
+
+def normalize_query_params(params: object) -> dict[str, object] | None:
+    if not params:
+        return None
+    result: dict[str, object] = {}
+    try:
+        items = params.multi_items()
+    except AttributeError:
+        try:
+            items = dict(params).items()
+        except Exception:
+            return None
+    for key, value in items:
+        if key in result:
+            existing = result[key]
+            if isinstance(existing, list):
+                existing.append(value)
+            else:
+                result[key] = [existing, value]
+        else:
+            result[key] = value
+    return result

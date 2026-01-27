@@ -687,12 +687,6 @@ def apply_schedule_changes(payload: dict) -> dict:
     update_rows = _coerce_optional_list(payload.get("toUpdate"), name="toUpdate")
     delete_rows = _coerce_optional_list(payload.get("toDelete"), name="toDelete")
 
-    if not (create_rows or update_rows or delete_rows):
-        raise ValueError(
-            "At least one of toCreate, toUpdate, or toDelete must be provided "
-            "and have length > 0"
-        )
-
     _validate_schedule_change_conflicts(
         create_rows=create_rows,
         update_rows=update_rows,

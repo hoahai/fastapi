@@ -412,6 +412,24 @@ def _normalize_query_params(params: object) -> dict[str, object] | None:
     return result
 
 
+def _is_update_budget_async_accept_response(
+    request: Request,
+    response: Response,
+    response_body: object | None,
+) -> bool:
+    if request.method != "POST":
+        return False
+    path = _normalize_path(request.url.path or "")
+    if not (path.endswith("/updateBudgetAsync") or path.endswith("/update/async")):
+        return False
+    if response.status_code >= 400:
+        return False
+    if not isinstance(response_body, dict):
+        return False
+    payload = response_body.get("data") if "data" in response_body else response_body
+    return isinstance(payload, dict) and payload.get("status") == "accepted"
+
+
 async def request_response_logger_middleware(request: Request, call_next):
     start_time = time.perf_counter()
     request_id = ensure_request_id(request)
@@ -462,26 +480,31 @@ async def request_response_logger_middleware(request: Request, call_next):
         )
         request_scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
 
-        _API_LOGGER.info(
-            "HTTP request/response",
-            extra={
-                "extra_fields": {
-                    "event": "http_request_response",
-                    "timestamp": datetime.now(ZoneInfo(get_timezone())).isoformat(),
-                    "method": request.method,
-                    "path": request.url.path,
-                    "status_code": response.status_code,
-                    "duration_ms": duration_ms,
-                    "client_id": getattr(request.state, "client_id", None),
-                    "tenant_id": getattr(request.state, "tenant_id", None),
-                    "request_host": request_host,
-                    "request_scheme": request_scheme,
-                    "request_body": request_body,
-                    "request_params": request_params,
-                    "response_body": response_body_out,
-                }
-            },
-        )
+        if not _is_update_budget_async_accept_response(
+            request,
+            response,
+            response_body_out,
+        ):
+            _API_LOGGER.info(
+                "HTTP request/response",
+                extra={
+                    "extra_fields": {
+                        "event": "http_request_response",
+                        "timestamp": datetime.now(ZoneInfo(get_timezone())).isoformat(),
+                        "method": request.method,
+                        "path": request.url.path,
+                        "status_code": response.status_code,
+                        "duration_ms": duration_ms,
+                        "client_id": getattr(request.state, "client_id", None),
+                        "tenant_id": getattr(request.state, "tenant_id", None),
+                        "request_host": request_host,
+                        "request_scheme": request_scheme,
+                        "request_body": request_body,
+                        "request_params": request_params,
+                        "response_body": response_body_out,
+                    }
+                },
+            )
 
         return response
     finally:

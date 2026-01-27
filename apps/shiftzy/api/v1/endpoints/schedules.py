@@ -14,6 +14,7 @@ from apps.shiftzy.api.v1.helpers.db_queries import (
     insert_schedules,
     update_schedules as update_schedules_db,
 )
+from shared.utils import normalize_payload, normalize_payload_list
 from apps.shiftzy.api.v1.helpers.schedule_pdf import build_schedule_pdf
 from apps.shiftzy.api.v1.helpers.weeks import build_week_info
 
@@ -67,25 +68,6 @@ class ScheduleBatchRequest(_ShiftzyModel):
     toCreate: list[ScheduleCreate] | ScheduleCreate | None = None
     toUpdate: list[ScheduleUpdate] | ScheduleUpdate | None = None
     toDelete: list[ScheduleDeleteItem | str] | ScheduleDeleteItem | None = None
-
-
-def _dump_model(item: BaseModel) -> dict:
-    if hasattr(item, "model_dump"):
-        return item.model_dump(exclude_unset=True)
-    return item.dict(exclude_unset=True)
-
-
-def _normalize_payload(payload):
-    if isinstance(payload, list):
-        normalized = []
-        for item in payload:
-            normalized.append(
-                _dump_model(item) if isinstance(item, BaseModel) else item
-            )
-        return normalized
-    if isinstance(payload, BaseModel):
-        return _dump_model(payload)
-    return payload
 
 
 @router.get("/schedules")
@@ -165,7 +147,7 @@ def create_schedules(
       "data": {"inserted": 1}
     }
     """
-    normalized = _normalize_payload(payload)
+    normalized = normalize_payload_list(payload, name="schedules")
     try:
         inserted = insert_schedules(normalized)
     except (TypeError, ValueError) as exc:
@@ -194,7 +176,7 @@ def update_schedules(
       "data": {"updated": 1}
     }
     """
-    normalized = _normalize_payload(payload)
+    normalized = normalize_payload_list(payload, name="schedules")
     try:
         updated = update_schedules_db(normalized)
     except (TypeError, ValueError) as exc:
@@ -216,7 +198,7 @@ def delete_schedules(
       "data": {"deleted": 1}
     }
     """
-    normalized = _normalize_payload(payload)
+    normalized = normalize_payload_list(payload, name="schedules")
     try:
         deleted = delete_schedules_db(normalized)
     except (TypeError, ValueError) as exc:
@@ -275,7 +257,11 @@ def batch_schedules(
       "data": {"inserted": 0, "updated": 1, "deleted": 1}
     }
     """
-    normalized = _normalize_payload(payload)
+    normalized = normalize_payload(
+        payload,
+        require_any=("toCreate", "toUpdate", "toDelete"),
+        name="payload",
+    )
     try:
         results = apply_schedule_changes(normalized)
     except (TypeError, ValueError) as exc:
