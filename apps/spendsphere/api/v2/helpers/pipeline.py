@@ -5,8 +5,7 @@ from datetime import datetime
 from zoneinfo import ZoneInfo
 
 from apps.spendsphere.api.v1.helpers.dataTransform import (
-    generate_update_payloads,
-    transform_google_ads_data,
+    build_update_payloads_from_inputs,
 )
 from apps.spendsphere.api.v2.helpers.db_queries import (
     get_allocations,
@@ -78,7 +77,10 @@ def _run_campaign_update(customer_id: str, updates: list[dict]) -> dict:
 
 
 def run_google_ads_budget_pipeline(
-    *, account_codes: list[str] | str | None = None, dry_run: bool = False
+    *,
+    account_codes: list[str] | str | None = None,
+    dry_run: bool = False,
+    include_transform_results: bool = False,
 ) -> dict:
     """
     Full Google Ads budget + campaign update pipeline.
@@ -126,11 +128,15 @@ def run_google_ads_budget_pipeline(
     )
 
     # =====================================================
-    # 3. Transform
+    # 3. Transform + Generate mutation payloads
     # =====================================================
     active_period = get_active_period(account_codes)
 
-    results = transform_google_ads_data(
+    (
+        budget_payloads,
+        campaign_payloads,
+        results,
+    ) = build_update_payloads_from_inputs(
         master_budgets=master_budgets,
         campaigns=campaigns,
         budgets=budgets,
@@ -138,15 +144,11 @@ def run_google_ads_budget_pipeline(
         allocations=allocations,
         rollovers=rollbreakdowns,
         activePeriod=active_period,
+        include_transform_results=include_transform_results,
     )
 
     # =====================================================
-    # 4. Generate mutation payloads
-    # =====================================================
-    budget_payloads, campaign_payloads = generate_update_payloads(results)
-
-    # =====================================================
-    # 5. Execute Google Ads mutations (parallel)
+    # 4. Execute Google Ads mutations (parallel)
     # =====================================================
     mutation_results = []
 
@@ -248,7 +250,7 @@ def run_google_ads_budget_pipeline(
         )
 
     # =====================================================
-    # 6. Aggregate results
+    # 5. Aggregate results
     # =====================================================
     overall_summary = {"total": 0, "succeeded": 0, "failed": 0}
 
@@ -264,11 +266,12 @@ def run_google_ads_budget_pipeline(
         ),
         "overall_summary": overall_summary,
         "mutation_results": mutation_results,
-        "transform_results": results,
     }
+    if include_transform_results:
+        pipeline_result["transform_results"] = results
 
     # =====================================================
-    # 7. Email FULL report on failures
+    # 6. Email FULL report on failures
     # =====================================================
     if overall_summary.get("failed", 0) > 0:
         local_time = datetime.now(ZoneInfo(get_timezone())).strftime(

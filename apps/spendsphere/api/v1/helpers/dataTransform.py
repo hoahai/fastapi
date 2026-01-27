@@ -135,6 +135,8 @@ def group_campaigns_by_budget(
     campaigns: list[dict],
     budgets: list[dict],
     costs: list[dict],
+    *,
+    include_transform_results: bool,
 ) -> list[dict]:
     cost_lookup: dict[tuple[str | None, str | None], Decimal] = defaultdict(
         lambda: Decimal("0")
@@ -167,11 +169,10 @@ def group_campaigns_by_budget(
 
         if group_key not in grouped:
             budget_meta = budget_lookup.get(budget_id, {})
-            grouped[group_key] = {
+            group = {
                 "ggAccountId": customer_id,
                 "accountCode": master.get("accountCode"),
                 "adTypeCode": master.get("adTypeCode"),
-                "services": master.get("services", []),
                 "netAmount": master.get("netAmount"),
                 "budgetId": budget_id,
                 "budgetName": budget_meta.get("budgetName"),
@@ -180,9 +181,13 @@ def group_campaigns_by_budget(
                     str(budget_meta.get("amount", 0))
                 ),
                 "campaigns": [],
-                "campaignNames": "",
-                "_campaign_names": [],  # internal helper
+                "totalCost": Decimal("0"),
             }
+            if include_transform_results:
+                group["services"] = master.get("services", [])
+                group["campaignNames"] = ""
+                group["_campaign_names"] = []  # internal helper
+            grouped[group_key] = group
 
         campaign_id = c.get("campaignId")
         campaign_name = c.get("campaignName")
@@ -192,19 +197,29 @@ def group_campaigns_by_budget(
                 "campaignId": campaign_id,
                 "campaignName": campaign_name,
                 "status": c.get("status"),
-                "cost": cost_lookup.get(
-                    (customer_id, campaign_id), Decimal("0")
+                **(
+                    {
+                        "cost": cost_lookup.get(
+                            (customer_id, campaign_id), Decimal("0")
+                        )
+                    }
+                    if include_transform_results
+                    else {}
                 ),
             }
         )
 
-        if campaign_name:
+        cost_value = cost_lookup.get((customer_id, campaign_id), Decimal("0"))
+        grouped[group_key]["totalCost"] += cost_value
+
+        if include_transform_results and campaign_name:
             grouped[group_key]["_campaign_names"].append(campaign_name)
 
     # finalize campaignNames
-    for b in grouped.values():
-        names = b.pop("_campaign_names", [])
-        b["campaignNames"] = "\n".join(sorted(set(names)))
+    if include_transform_results:
+        for b in grouped.values():
+            names = b.pop("_campaign_names", [])
+            b["campaignNames"] = "\n".join(sorted(set(names)))
 
     return list(grouped.values())
 
@@ -345,7 +360,9 @@ def calculate_daily_budget(
     days_left = Decimal(str(days_in_month - today.day + 1))
 
     for b in budgets:
-        total_cost = sum(c["cost"] for c in b["campaigns"])
+        total_cost = b.get("totalCost")
+        if total_cost is None:
+            total_cost = sum(c.get("cost", 0) for c in b.get("campaigns", []))
         net = Decimal(str(b.get("netAmount", 0)))
         rollover = Decimal(str(b.get("rolloverAmount", 0)))
         allocation = b.get("allocation")
@@ -496,7 +513,7 @@ def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
 # ============================================================
 
 
-def transform_google_ads_data(
+def _build_budget_rows(
     master_budgets: list[dict],
     campaigns: list[dict],
     budgets: list[dict],
@@ -504,6 +521,8 @@ def transform_google_ads_data(
     allocations: list[dict],
     rollovers: list[dict],
     activePeriod: list[dict] | None = None,
+    *,
+    include_transform_results: bool = True,
 ) -> list[dict]:
     """
     Full Google Ads budget pipeline (BUDGET-CENTRIC).
@@ -515,11 +534,15 @@ def transform_google_ads_data(
         campaigns,
         budgets,
         costs,
+        include_transform_results=include_transform_results,
     )
     step3 = budget_allocation_join(step2, allocations)
     step4 = budget_rollover_join(step3, rollovers)
     step5 = budget_activePeriod_join(step4, activePeriod)
     step6 = calculate_daily_budget(step5)
+
+    if not include_transform_results:
+        return list(step6)
 
     # --------------------------------------------------
     # SORT RESULTS (accountCode ASC, adTypeCode DESC)
@@ -531,3 +554,60 @@ def transform_google_ads_data(
     )
 
     return result
+
+
+def transform_google_ads_data(
+    master_budgets: list[dict],
+    campaigns: list[dict],
+    budgets: list[dict],
+    costs: list[dict],
+    allocations: list[dict],
+    rollovers: list[dict],
+    activePeriod: list[dict] | None = None,
+    *,
+    include_transform_results: bool = True,
+) -> list[dict]:
+    """
+    Full Google Ads budget pipeline (BUDGET-CENTRIC).
+    """
+    return _build_budget_rows(
+        master_budgets,
+        campaigns,
+        budgets,
+        costs,
+        allocations,
+        rollovers,
+        activePeriod=activePeriod,
+        include_transform_results=include_transform_results,
+    )
+
+
+def build_update_payloads_from_inputs(
+    master_budgets: list[dict],
+    campaigns: list[dict],
+    budgets: list[dict],
+    costs: list[dict],
+    allocations: list[dict],
+    rollovers: list[dict],
+    activePeriod: list[dict] | None = None,
+    *,
+    include_transform_results: bool = False,
+) -> tuple[list[dict], list[dict], list[dict] | None]:
+    """
+    Build update payloads directly from raw inputs, optionally returning
+    the transformed rows for debugging/inspection.
+    """
+    rows = _build_budget_rows(
+        master_budgets,
+        campaigns,
+        budgets,
+        costs,
+        allocations,
+        rollovers,
+        activePeriod=activePeriod,
+        include_transform_results=include_transform_results,
+    )
+    budget_payloads, campaign_payloads = generate_update_payloads(rows)
+    if include_transform_results:
+        return budget_payloads, campaign_payloads, rows
+    return budget_payloads, campaign_payloads, None
