@@ -15,6 +15,7 @@ from shared.utils import (
 from shared.tenant import get_env, TenantConfigError
 from pathlib import Path
 from shared.constants import (
+    GGADS_MAX_UPDATES_PER_REQUEST,
     GGADS_MAX_PAUSED_CAMPAIGNS,
     GGADS_MIN_BUDGET,
     GGADS_MAX_BUDGET_MULTIPLIER,
@@ -24,6 +25,14 @@ from shared.logger import get_logger
 from apps.spendsphere.api.v1.helpers.config import get_adtypes
 
 logger = get_logger("Google Ads")
+
+
+def _chunked(items: list[dict], size: int):
+    if size <= 0:
+        yield items
+        return
+    for i in range(0, len(items), size):
+        yield items[i : i + size]
 
 
 # =====================
@@ -582,76 +591,78 @@ def update_budgets(
     client = get_client()
     service = client.get_service("CampaignBudgetService")
 
-    operations = []
-
-    for r in valid:
-        new_amount = r["newAmount"]
-        if new_amount <= 0:
-            new_amount = GGADS_MIN_BUDGET
-
-        op = client.get_type("CampaignBudgetOperation")
-        budget = op.update
-
-        budget.resource_name = service.campaign_budget_path(
-            customer_id,
-            r["budgetId"],
-        )
-        # Quantize to cents to match Google Ads minimum money unit and avoid float drift.
-        quantized_amount = Decimal(str(new_amount)).quantize(
-            Decimal("0.01"), rounding=ROUND_HALF_UP
-        )
-        budget.amount_micros = int(
-            (quantized_amount * Decimal("1000000")).to_integral_value(
-                rounding=ROUND_HALF_UP
-            )
-        )
-
-        op.update_mask.CopyFrom(FieldMask(paths=["amount_micros"]))
-
-        operations.append(op)
-
-    # -------- v22 request object --------
-    request = client.get_type("MutateCampaignBudgetsRequest")
-    request.customer_id = customer_id
-    request.operations.extend(operations)
-    request.partial_failure = True
-
-    response = service.mutate_campaign_budgets(request=request)
-
-    successes = []
+    successes: list[dict] = []
     failures = invalid.copy()
-    successful_indices = set(range(len(valid)))
 
-    # -------- parse partial failure (v22-safe) --------
-    if response.partial_failure_error:
-        failure_pb_cls = GoogleAdsFailure.pb()
-        failure_pb = failure_pb_cls()
+    for chunk in _chunked(valid, GGADS_MAX_UPDATES_PER_REQUEST):
+        operations = []
 
-        for detail in response.partial_failure_error.details:
-            if detail.Is(failure_pb_cls.DESCRIPTOR):
-                detail.Unpack(failure_pb)
+        for r in chunk:
+            new_amount = r["newAmount"]
+            if new_amount <= 0:
+                new_amount = GGADS_MIN_BUDGET
 
-        for err in failure_pb.errors:
-            idx = err.location.field_path_elements[0].index
-            successful_indices.discard(idx)
-            failures.append(
+            op = client.get_type("CampaignBudgetOperation")
+            budget = op.update
+
+            budget.resource_name = service.campaign_budget_path(
+                customer_id,
+                r["budgetId"],
+            )
+            # Quantize to cents to match Google Ads minimum money unit and avoid float drift.
+            quantized_amount = Decimal(str(new_amount)).quantize(
+                Decimal("0.01"), rounding=ROUND_HALF_UP
+            )
+            budget.amount_micros = int(
+                (quantized_amount * Decimal("1000000")).to_integral_value(
+                    rounding=ROUND_HALF_UP
+                )
+            )
+
+            op.update_mask.CopyFrom(FieldMask(paths=["amount_micros"]))
+
+            operations.append(op)
+
+        # -------- v22 request object --------
+        request = client.get_type("MutateCampaignBudgetsRequest")
+        request.customer_id = customer_id
+        request.operations.extend(operations)
+        request.partial_failure = True
+
+        response = service.mutate_campaign_budgets(request=request)
+
+        successful_indices = set(range(len(chunk)))
+
+        # -------- parse partial failure (v22-safe) --------
+        if response.partial_failure_error:
+            failure_pb_cls = GoogleAdsFailure.pb()
+            failure_pb = failure_pb_cls()
+
+            for detail in response.partial_failure_error.details:
+                if detail.Is(failure_pb_cls.DESCRIPTOR):
+                    detail.Unpack(failure_pb)
+
+            for err in failure_pb.errors:
+                idx = err.location.field_path_elements[0].index
+                successful_indices.discard(idx)
+                failures.append(
+                    {
+                        "budgetId": chunk[idx]["budgetId"],
+                        "oldAmount": chunk[idx].get("currentAmount"),
+                        "newAmount": chunk[idx].get("newAmount"),
+                        "error": err.message,
+                    }
+                )
+
+        for i in successful_indices:
+            successes.append(
                 {
-                    "budgetId": valid[idx]["budgetId"],
-                    "oldAmount": valid[idx].get("currentAmount"),
-                    "newAmount": valid[idx].get("newAmount"),
-                    "error": err.message,
+                    "budgetId": chunk[i]["budgetId"],
+                    "campaignNames": chunk[i].get("campaignNames", []),
+                    "oldAmount": chunk[i].get("currentAmount"),
+                    "newAmount": max(chunk[i]["newAmount"], GGADS_MIN_BUDGET),
                 }
             )
-
-    for i in successful_indices:
-        successes.append(
-            {
-                "budgetId": valid[i]["budgetId"],
-                "campaignNames": valid[i].get("campaignNames", []),
-                "oldAmount": valid[i].get("currentAmount"),
-                "newAmount": max(valid[i]["newAmount"], GGADS_MIN_BUDGET),
-            }
-        )
 
     return {
         "customerId": customer_id,
@@ -710,56 +721,58 @@ def update_campaign_statuses(
     client = get_client()
     service = client.get_service("CampaignService")
 
-    operations = []
+    successes: list[dict] = []
+    failures = invalid.copy()
 
-    for r in valid:
-        op = client.get_type("CampaignOperation")
-        campaign = op.update
+    for chunk in _chunked(valid, GGADS_MAX_UPDATES_PER_REQUEST):
+        operations = []
 
-        campaign.resource_name = service.campaign_path(
-            customer_id,
-            r["campaignId"],
-        )
-        new_status_value = r.get("newStatus", r.get("status"))
-        campaign.status = (
-            client.enums.CampaignStatusEnum.ENABLED
-            if str(new_status_value).upper() == "ENABLED"
-            else client.enums.CampaignStatusEnum.PAUSED
-        )
+        for r in chunk:
+            op = client.get_type("CampaignOperation")
+            campaign = op.update
 
-        op.update_mask.CopyFrom(FieldMask(paths=["status"]))
+            campaign.resource_name = service.campaign_path(
+                customer_id,
+                r["campaignId"],
+            )
+            new_status_value = r.get("newStatus", r.get("status"))
+            campaign.status = (
+                client.enums.CampaignStatusEnum.ENABLED
+                if str(new_status_value).upper() == "ENABLED"
+                else client.enums.CampaignStatusEnum.PAUSED
+            )
 
-        operations.append(op)
+            op.update_mask.CopyFrom(FieldMask(paths=["status"]))
 
-    # -------- campaigns are atomic --------
-    request = client.get_type("MutateCampaignsRequest")
-    request.customer_id = customer_id
-    request.operations.extend(operations)
+            operations.append(op)
 
-    try:
-        service.mutate_campaigns(request=request)
+        # -------- campaigns are atomic --------
+        request = client.get_type("MutateCampaignsRequest")
+        request.customer_id = customer_id
+        request.operations.extend(operations)
 
-        successes = [
-            {
-                "campaignId": r["campaignId"],
-                "oldStatus": r.get("oldStatus"),
-                "newStatus": r.get("newStatus", r.get("status")),
-            }
-            for r in valid
-        ]
-        failures = invalid.copy()
+        try:
+            service.mutate_campaigns(request=request)
 
-    except GoogleAdsException as ex:
-        successes = []
-        failures = invalid + [
-            {
-                "campaignId": r["campaignId"],
-                "oldStatus": r.get("oldStatus"),
-                "newStatus": r.get("newStatus", r.get("status")),
-                "error": str(ex),
-            }
-            for r in valid
-        ]
+            successes.extend(
+                {
+                    "campaignId": r["campaignId"],
+                    "oldStatus": r.get("oldStatus"),
+                    "newStatus": r.get("newStatus", r.get("status")),
+                }
+                for r in chunk
+            )
+
+        except GoogleAdsException as ex:
+            failures.extend(
+                {
+                    "campaignId": r["campaignId"],
+                    "oldStatus": r.get("oldStatus"),
+                    "newStatus": r.get("newStatus", r.get("status")),
+                    "error": str(ex),
+                }
+                for r in chunk
+            )
 
     return {
         "customerId": customer_id,

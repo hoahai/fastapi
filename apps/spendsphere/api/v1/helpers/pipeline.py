@@ -1,6 +1,5 @@
 from __future__ import annotations
 
-import json
 from datetime import datetime
 from zoneinfo import ZoneInfo
 
@@ -14,7 +13,7 @@ from apps.spendsphere.api.v1.helpers.db_queries import (
     get_rollbreakdowns,
 )
 from apps.spendsphere.api.v1.helpers.ggSheet import get_active_period
-from shared.email import send_google_ads_result_email
+from shared.email import build_google_ads_result_email, send_google_ads_result_email
 from shared.logger import get_logger
 from shared.tenant import get_timezone
 from shared.utils import run_parallel
@@ -78,7 +77,10 @@ def _run_campaign_update(customer_id: str, updates: list[dict]) -> dict:
 
 
 def run_google_ads_budget_pipeline(
-    *, account_codes: list[str] | str | None = None, dry_run: bool = False
+    *,
+    account_codes: list[str] | str | None = None,
+    dry_run: bool = False,
+    include_transform_results: bool = False,
 ) -> dict:
     """
     Full Google Ads budget + campaign update pipeline.
@@ -144,6 +146,8 @@ def run_google_ads_budget_pipeline(
     # 4. Generate mutation payloads
     # =====================================================
     budget_payloads, campaign_payloads = generate_update_payloads(results)
+    if not include_transform_results:
+        results = None
 
     # =====================================================
     # 5. Execute Google Ads mutations (parallel)
@@ -264,8 +268,9 @@ def run_google_ads_budget_pipeline(
         ),
         "overall_summary": overall_summary,
         "mutation_results": mutation_results,
-        "transform_results": results,
     }
+    if include_transform_results:
+        pipeline_result["transform_results"] = results
 
     # =====================================================
     # 7. Email FULL report on failures
@@ -274,7 +279,7 @@ def run_google_ads_budget_pipeline(
         local_time = datetime.now(ZoneInfo(get_timezone())).strftime(
             "%d/%m/%Y %H:%M:%S"
         )
-        email_body = json.dumps(pipeline_result, indent=2, default=str)
+        email_body = build_google_ads_result_email(full_report=pipeline_result)
         send_google_ads_result_email(
             subject=(
                 "Spendsphere – Google Ads update report "
@@ -285,7 +290,16 @@ def run_google_ads_budget_pipeline(
 
     logger.debug(
         "Google Ads pipeline completed",
-        extra={"extra_fields": pipeline_result},
+        extra={
+            "extra_fields": {
+                "dry_run": dry_run,
+                "account_codes": (
+                    sorted(account_code_filter) if account_code_filter else "ALL"
+                ),
+                "overall_summary": overall_summary,
+                "mutation_results_count": len(mutation_results),
+            }
+        },
     )
 
     return pipeline_result

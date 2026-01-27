@@ -5,7 +5,6 @@ from collections import defaultdict
 from datetime import datetime, date, time
 import calendar
 import pytz
-import pandas as pd
 
 from shared.constants import GGADS_MIN_BUDGET_DELTA
 from shared.logger import get_logger
@@ -127,79 +126,75 @@ def master_budget_google_budgets_join(
 
 
 # ============================================================
-# 4. JOIN COSTS (CAMPAIGN LEVEL)
+# 4. GROUP BY BUDGET (CORE CHANGE)
 # ============================================================
 
 
-def campaign_costs_join(
-    rows: list[dict],
+def group_campaigns_by_budget(
+    master_budget_data: list[dict],
+    campaigns: list[dict],
+    budgets: list[dict],
     costs: list[dict],
 ) -> list[dict]:
-    """
-    Sum costs per campaignId and join to rows.
-    """
-    if not rows:
-        return []
-
-    df_rows = pd.DataFrame(rows)
-    df_costs = pd.DataFrame(costs)
-
-    if df_costs.empty:
-        df_rows["cost"] = Decimal("0")
-        return df_rows.to_dict(orient="records")
-
-    df_costs = (
-        df_costs.groupby(["customerId", "campaignId"], as_index=False)["cost"]
-        .sum()
-        .rename(columns={"cost": "cost"})
+    cost_lookup: dict[tuple[str | None, str | None], Decimal] = defaultdict(
+        lambda: Decimal("0")
     )
+    for c in costs:
+        key = (c.get("customerId"), c.get("campaignId"))
+        cost_lookup[key] += Decimal(str(c.get("cost", 0)))
 
-    df = df_rows.merge(df_costs, on=["customerId", "campaignId"], how="left")
-    df["cost"] = df["cost"].fillna(0).apply(lambda x: Decimal(str(x)))
+    budget_lookup = {b.get("budgetId"): b for b in budgets}
+    master_lookup = {
+        (mb.get("accountCode"), mb.get("adTypeCode")): mb
+        for mb in master_budget_data
+    }
 
-    return df.to_dict(orient="records")
-
-
-# ============================================================
-# 5. GROUP BY BUDGET (CORE CHANGE)
-# ============================================================
-
-
-def group_campaigns_by_budget(rows: list[dict]) -> list[dict]:
     grouped: dict[tuple[str, str], dict] = {}
 
-    for r in rows:
-        customer_id = r.get("customerId")
-        budget_id = r.get("budgetId")
+    for c in campaigns:
+        account_code = c.get("accountCode")
+        ad_type = c.get("adTypeCode")
+        master = master_lookup.get((account_code, ad_type))
+        if not master:
+            continue
+
+        customer_id = c.get("customerId")
+        budget_id = c.get("budgetId")
         if not budget_id:
             continue
 
         group_key = (customer_id, budget_id)
 
         if group_key not in grouped:
+            budget_meta = budget_lookup.get(budget_id, {})
             grouped[group_key] = {
                 "ggAccountId": customer_id,
-                "accountCode": r.get("accountCode"),
-                "adTypeCode": r.get("adTypeCode"),
-                "services": r.get("services", []),
-                "netAmount": r.get("netAmount"),
+                "accountCode": master.get("accountCode"),
+                "adTypeCode": master.get("adTypeCode"),
+                "services": master.get("services", []),
+                "netAmount": master.get("netAmount"),
                 "budgetId": budget_id,
-                "budgetName": r.get("budgetName"),
-                "budgetStatus": r.get("budgetStatus"),
-                "budgetAmount": r.get("budgetAmount", Decimal("0")),
+                "budgetName": budget_meta.get("budgetName"),
+                "budgetStatus": budget_meta.get("status"),
+                "budgetAmount": Decimal(
+                    str(budget_meta.get("amount", 0))
+                ),
                 "campaigns": [],
                 "campaignNames": "",
                 "_campaign_names": [],  # internal helper
             }
 
-        campaign_name = r.get("campaignName")
+        campaign_id = c.get("campaignId")
+        campaign_name = c.get("campaignName")
 
         grouped[group_key]["campaigns"].append(
             {
-                "campaignId": r.get("campaignId"),
+                "campaignId": campaign_id,
                 "campaignName": campaign_name,
-                "status": r.get("campaignStatus"),
-                "cost": r.get("cost", Decimal("0")),
+                "status": c.get("status"),
+                "cost": cost_lookup.get(
+                    (customer_id, campaign_id), Decimal("0")
+                ),
             }
         )
 
@@ -515,25 +510,24 @@ def transform_google_ads_data(
     """
 
     step1 = master_budget_ad_type_mapping(master_budgets)
-    step2 = master_budget_campaigns_join(step1, campaigns)
-    step3 = master_budget_google_budgets_join(step2, budgets)
-    step4 = campaign_costs_join(step3, costs)
-
-    step5 = group_campaigns_by_budget(step4)
-    step6 = budget_allocation_join(step5, allocations)
-    step7 = budget_rollover_join(step6, rollovers)
-    step8 = budget_activePeriod_join(step7, activePeriod)
-    step9 = calculate_daily_budget(step8)
-
-    # --------------------------------------------------
-    # SORT RESULT USING PANDAS
-    # --------------------------------------------------
-    df = pd.DataFrame(step9)
-
-    df_sorted = df.sort_values(
-        by=["accountCode", "adTypeCode"], ascending=[True, False], na_position="last"
+    step2 = group_campaigns_by_budget(
+        step1,
+        campaigns,
+        budgets,
+        costs,
     )
+    step3 = budget_allocation_join(step2, allocations)
+    step4 = budget_rollover_join(step3, rollovers)
+    step5 = budget_activePeriod_join(step4, activePeriod)
+    step6 = calculate_daily_budget(step5)
 
-    result = df_sorted.to_dict(orient="records")
+    # --------------------------------------------------
+    # SORT RESULTS (accountCode ASC, adTypeCode DESC)
+    # --------------------------------------------------
+    result = list(step6)
+    result.sort(key=lambda r: (r.get("adTypeCode") or ""), reverse=True)
+    result.sort(
+        key=lambda r: (r.get("accountCode") is None, r.get("accountCode") or "")
+    )
 
     return result
