@@ -5,8 +5,12 @@ from apps.spendsphere.api.v1.helpers import db_queries as v1_db_queries
 # ACCOUNTS
 # ============================================================
 
-def get_accounts(account_codes: str | list[str] | None = None) -> list[dict]:
-    return v1_db_queries.get_accounts(account_codes)
+def get_accounts(
+    account_codes: str | list[str] | None = None,
+    *,
+    include_all: bool = False,
+) -> list[dict]:
+    return v1_db_queries.get_accounts(account_codes, include_all=include_all)
 
 
 # ============================================================

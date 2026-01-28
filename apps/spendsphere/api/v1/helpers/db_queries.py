@@ -8,11 +8,15 @@ from apps.spendsphere.api.v1.helpers.config import get_service_budgets
 # ============================================================
 
 
-def get_accounts(account_codes: str | list[str] | None = None) -> list[dict]:
+def get_accounts(
+    account_codes: str | list[str] | None = None,
+    *,
+    include_all: bool = False,
+) -> list[dict]:
     """
     Fetch accounts from DB.
 
-    - account_codes is None or empty -> return ALL accounts
+    - account_codes is None or empty -> return all active accounts (or all when include_all=True)
     - account_codes is str -> return that account if exists
     - account_codes is list[str] -> return matching accounts
     """
@@ -41,6 +45,8 @@ def get_accounts(account_codes: str | list[str] | None = None) -> list[dict]:
             SELECT code, name
             FROM Accounts
         """
+        if not include_all:
+            query += " WHERE active = 1"
         params = ()
     else:
         placeholders = ",".join(["%s"] * len(codes))
@@ -49,6 +55,8 @@ def get_accounts(account_codes: str | list[str] | None = None) -> list[dict]:
             FROM Accounts
             WHERE UPPER(code) IN ({placeholders})
         """
+        if not include_all:
+            query += " AND active = 1"
         params = tuple(codes)
 
     return fetch_all(query, params)

@@ -4,7 +4,7 @@ from types import SimpleNamespace
 from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, BackgroundTasks, Request
-from pydantic import BaseModel
+from pydantic import BaseModel, ConfigDict, Field
 
 from apps.spendsphere.api.v1.helpers.pipeline import run_google_ads_budget_pipeline
 from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
@@ -27,15 +27,17 @@ _API_LOGGER = get_logger("api")
 
 
 class GoogleAdsUpdateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
     accountCodes: str | list[str] | None = None
     dryRun: bool = False
     includeTransformResults: bool = False
+    includeAll: bool = Field(default=False, alias="include_all")
 
 
 @router.post("/updateBudget")
 def update_google_ads(payload: GoogleAdsUpdateRequest):
     if should_validate_account_codes(payload.accountCodes):
-        validate_account_codes(payload.accountCodes)
+        validate_account_codes(payload.accountCodes, include_all=payload.includeAll)
 
     result = run_google_ads_budget_pipeline(
         account_codes=payload.accountCodes,
@@ -84,7 +86,7 @@ def update_google_ads_async(
     request: Request,
 ):
     if should_validate_account_codes(payload.accountCodes):
-        validate_account_codes(payload.accountCodes)
+        validate_account_codes(payload.accountCodes, include_all=payload.includeAll)
 
     request_id = ensure_request_id(request)
     tenant_id = getattr(request.state, "tenant_id", None)
