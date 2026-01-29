@@ -5,6 +5,7 @@ from datetime import date, datetime, timedelta
 import ast
 import json
 from pathlib import Path
+import re
 
 from fpdf import FPDF
 
@@ -63,58 +64,14 @@ def _normalize_orientation(value: str | None) -> str:
     raise ValueError("orientation must be 'portrait' or 'landscape'")
 
 
-def _parse_env_float(key: str, default: float) -> float:
-    raw = get_env(key)
+def _normalize_pdf_key(key: str) -> str:
+    return re.sub(r"[^a-z0-9]", "", str(key).lower())
+
+
+def _parse_pdf_raw() -> dict[str, object] | None:
+    raw = get_env("PDF") or get_env("pdf")
     if raw is None or str(raw).strip() == "":
-        return default
-    try:
-        return float(str(raw).strip())
-    except ValueError as exc:
-        raise ValueError(f"Invalid {key} value") from exc
-
-
-def _parse_env_text(key: str, default: str) -> str:
-    raw = get_env(key)
-    if raw is None or str(raw).strip() == "":
-        return default
-    return str(raw)
-
-
-def _parse_env_color(key: str, default: tuple[int, int, int]) -> tuple[int, int, int]:
-    raw = get_env(key)
-    if raw is None or str(raw).strip() == "":
-        return default
-    text = str(raw).strip()
-    parsed = None
-    for parser in (json.loads, ast.literal_eval):
-        try:
-            parsed = parser(text)
-        except Exception:
-            parsed = None
-        if isinstance(parsed, (list, tuple)) and len(parsed) == 3:
-            break
-    if parsed is None:
-        parts = [p for p in text.replace(",", " ").split() if p]
-        if len(parts) == 3:
-            parsed = parts
-
-    if not isinstance(parsed, (list, tuple)) or len(parsed) != 3:
-        raise ValueError(f"Invalid {key} value")
-
-    try:
-        values = tuple(int(float(item)) for item in parsed)
-    except (TypeError, ValueError) as exc:
-        raise ValueError(f"Invalid {key} value") from exc
-
-    if any(v < 0 or v > 255 for v in values):
-        raise ValueError(f"Invalid {key} value")
-    return values
-
-
-def _parse_env_json_map(key: str, default: dict[str, str]) -> dict[str, str]:
-    raw = get_env(key)
-    if raw is None or str(raw).strip() == "":
-        return default
+        return None
     text = str(raw).strip()
     try:
         parsed = json.loads(text)
@@ -122,32 +79,108 @@ def _parse_env_json_map(key: str, default: dict[str, str]) -> dict[str, str]:
         try:
             parsed = ast.literal_eval(text)
         except (SyntaxError, ValueError) as exc:
-            raise ValueError(f"Invalid {key} value") from exc
+            raise ValueError("Invalid PDF config") from exc
     if not isinstance(parsed, dict):
-        raise ValueError(f"Invalid {key} value")
-    return {str(k): str(v) for k, v in parsed.items()}
+        raise ValueError("Invalid PDF config")
+    return parsed
+
+
+def _coerce_pdf_float(value: object, key: str) -> float:
+    if value is None:
+        raise ValueError(f"Invalid PDF.{key} value")
+    try:
+        return float(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid PDF.{key} value") from exc
+
+
+def _coerce_pdf_text(value: object, key: str) -> str:
+    if value is None:
+        raise ValueError(f"Invalid PDF.{key} value")
+    return str(value)
+
+
+def _coerce_pdf_color(value: object, key: str) -> tuple[int, int, int]:
+    parsed = value
+    if isinstance(value, str):
+        text = value.strip()
+        for parser in (json.loads, ast.literal_eval):
+            try:
+                parsed = parser(text)
+            except Exception:
+                parsed = None
+            if isinstance(parsed, (list, tuple)) and len(parsed) == 3:
+                break
+        if parsed is None:
+            parts = [p for p in text.replace(",", " ").split() if p]
+            if len(parts) == 3:
+                parsed = parts
+
+    if not isinstance(parsed, (list, tuple)) or len(parsed) != 3:
+        raise ValueError(f"Invalid PDF.{key} value")
+
+    try:
+        values = tuple(int(float(item)) for item in parsed)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"Invalid PDF.{key} value") from exc
+
+    if any(v < 0 or v > 255 for v in values):
+        raise ValueError(f"Invalid PDF.{key} value")
+    return values
+
+
+def _coerce_pdf_map(value: object, key: str) -> dict[str, str]:
+    if not isinstance(value, dict):
+        raise ValueError(f"Invalid PDF.{key} value")
+    return {str(k): str(v) for k, v in value.items()}
 
 
 def _load_pdf_config() -> dict[str, object]:
-    return {
-        "position_icon_map": _parse_env_json_map("_POSITION_ICON_MAP", {}),
-        "position_icon_base_path": _parse_env_text("_POSITION_ICON_BASE_PATH", ""),
-        "icon_size": _parse_env_float("_ICON_SIZE", _ICON_SIZE),
-        "icon_gap": _parse_env_float("_ICON_GAP", _ICON_GAP),
-        "line_height": _parse_env_float("_LINE_HEIGHT", _LINE_HEIGHT),
-        "cell_padding_x": _parse_env_float("_CELL_PADDING_X", _CELL_PADDING_X),
-        "cell_padding_top": _parse_env_float("_CELL_PADDING_TOP", _CELL_PADDING_TOP),
-        "cell_padding_bottom": _parse_env_float(
-            "_CELL_PADDING_BOTTOM",
-            _CELL_PADDING_BOTTOM,
-        ),
-        "footer_height": _parse_env_float("_FOOTER_HEIGHT", _FOOTER_HEIGHT),
-        "footer_text": _parse_env_text("_FOOTER_TEXT", _FOOTER_TEXT),
-        "note_color": _parse_env_color("_NOTE_COLOR", _NOTE_COLOR),
-        "section_font_size": _parse_env_float("_SECTION_FONT_SIZE", _SECTION_FONT_SIZE),
-        "section_height": _parse_env_float("_SECTION_HEIGHT", _SECTION_HEIGHT),
-        "name_col_width": _parse_env_float("_NAME_COL_WIDTH", _NAME_COL_WIDTH),
+    config = {
+        "position_icon_map": {},
+        "position_icon_base_path": "",
+        "icon_size": _ICON_SIZE,
+        "icon_gap": _ICON_GAP,
+        "line_height": _LINE_HEIGHT,
+        "cell_padding_x": _CELL_PADDING_X,
+        "cell_padding_top": _CELL_PADDING_TOP,
+        "cell_padding_bottom": _CELL_PADDING_BOTTOM,
+        "footer_height": _FOOTER_HEIGHT,
+        "footer_text": _FOOTER_TEXT,
+        "note_color": _NOTE_COLOR,
+        "section_font_size": _SECTION_FONT_SIZE,
+        "section_height": _SECTION_HEIGHT,
+        "name_col_width": _NAME_COL_WIDTH,
     }
+
+    raw = _parse_pdf_raw()
+    if not raw:
+        return config
+
+    normalized = {_normalize_pdf_key(k): v for k, v in raw.items()}
+    mapping: dict[str, tuple[str, callable]] = {
+        "positioniconmap": ("position_icon_map", _coerce_pdf_map),
+        "positioniconbasepath": ("position_icon_base_path", _coerce_pdf_text),
+        "iconsize": ("icon_size", _coerce_pdf_float),
+        "icongap": ("icon_gap", _coerce_pdf_float),
+        "lineheight": ("line_height", _coerce_pdf_float),
+        "cellpaddingx": ("cell_padding_x", _coerce_pdf_float),
+        "cellpaddingtop": ("cell_padding_top", _coerce_pdf_float),
+        "cellpaddingbottom": ("cell_padding_bottom", _coerce_pdf_float),
+        "footerheight": ("footer_height", _coerce_pdf_float),
+        "footertext": ("footer_text", _coerce_pdf_text),
+        "notecolor": ("note_color", _coerce_pdf_color),
+        "sectionfontsize": ("section_font_size", _coerce_pdf_float),
+        "sectionheight": ("section_height", _coerce_pdf_float),
+        "namecolwidth": ("name_col_width", _coerce_pdf_float),
+    }
+
+    for key, value in normalized.items():
+        if key in mapping:
+            target, caster = mapping[key]
+            config[target] = caster(value, target)
+
+    return config
 
 
 def _resolve_base_path(value: str | None) -> Path | None:

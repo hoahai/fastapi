@@ -74,6 +74,10 @@ def _get_db_tables_raw() -> str | None:
     return get_env("DB_TABLES") or get_env("db_tables")
 
 
+def _get_pdf_raw() -> str | None:
+    return get_env("PDF") or get_env("pdf")
+
+
 def get_position_areas() -> list[str]:
     return _parse_list("POSITION_AREAS_ENUM")
 
@@ -194,6 +198,18 @@ def validate_tenant_config(tenant_id: str | None = None) -> None:
             for key in sorted(missing_keys):
                 missing.append(f"DB_TABLES.{key}")
 
+        def _check_pdf() -> None:
+            raw = _get_pdf_raw()
+            if raw is None or str(raw).strip() == "":
+                return
+            try:
+                parsed = _parse_raw_value(raw, "PDF", dict)
+            except TenantConfigValidationError:
+                invalid.append("PDF")
+                return
+            if not isinstance(parsed, dict):
+                invalid.append("PDF")
+
         _check_int("START_WEEK_NO")
         _check_start_date()
 
@@ -207,6 +223,7 @@ def validate_tenant_config(tenant_id: str | None = None) -> None:
         _check_list("POSITION_AREAS_ENUM")
         _check_list("SCHEDULE_SECTIONS_ENUM")
         _check_db_tables()
+        _check_pdf()
 
         if missing or invalid:
             raise TenantConfigValidationError(
