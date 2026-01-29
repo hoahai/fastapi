@@ -3,7 +3,7 @@ from __future__ import annotations
 from datetime import date, datetime, time as time_type, timedelta
 from uuid import uuid4
 
-from apps.shiftzy.api.v1.helpers.config import get_schedule_sections
+from apps.shiftzy.api.v1.helpers.config import get_db_tables, get_schedule_sections
 from apps.shiftzy.api.v1.helpers.weeks import build_week_info
 from shared.db import execute_many, fetch_all, run_transaction
 
@@ -102,6 +102,8 @@ def _compute_duration(start_time: object, end_time: object) -> str | None:
 # ============================================================
 
 def get_positions(code: str | None = None, include_all: bool = False) -> list[dict]:
+    tables = get_db_tables()
+    positions_table = tables["POSITIONS"]
     where_clauses: list[str] = []
     params: list[object] = []
 
@@ -112,13 +114,15 @@ def get_positions(code: str | None = None, include_all: bool = False) -> list[di
     if not include_all:
         where_clauses.append("active = 1")
 
-    query = "SELECT code, name, icon, active FROM positions"
+    query = f"SELECT code, name, icon, active FROM {positions_table}"
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
     return fetch_all(query, tuple(params))
 
 
 def insert_positions(positions: list[dict] | dict) -> int:
+    tables = get_db_tables()
+    positions_table = tables["POSITIONS"]
     rows = _ensure_list(positions, name="positions")
     values: list[tuple] = []
     for item in rows:
@@ -133,13 +137,15 @@ def insert_positions(positions: list[dict] | dict) -> int:
         values.append((code, name, icon, active))
 
     query = (
-        "INSERT INTO positions (code, name, icon, active) "
+        f"INSERT INTO {positions_table} (code, name, icon, active) "
         "VALUES (%s, %s, %s, %s)"
     )
     return execute_many(query, values)
 
 
 def update_positions(positions: list[dict] | dict) -> int:
+    tables = get_db_tables()
+    positions_table = tables["POSITIONS"]
     rows = _ensure_list(positions, name="positions")
     if not rows:
         return 0
@@ -180,7 +186,7 @@ def update_positions(positions: list[dict] | dict) -> int:
             raise ValueError(f"No updatable fields provided for position code {code}")
 
         params.append(code)
-        query = "UPDATE positions SET " + ", ".join(fields) + " WHERE code = %s"
+        query = f"UPDATE {positions_table} SET " + ", ".join(fields) + " WHERE code = %s"
         statements.append((query, tuple(params)))
 
     def _work(cursor) -> int:
@@ -194,6 +200,8 @@ def update_positions(positions: list[dict] | dict) -> int:
 
 
 def delete_positions(positions: list[dict] | dict) -> int:
+    tables = get_db_tables()
+    positions_table = tables["POSITIONS"]
     rows = _ensure_list(positions, name="positions")
     if not rows:
         return 0
@@ -211,7 +219,7 @@ def delete_positions(positions: list[dict] | dict) -> int:
         codes.append(code)
 
     placeholders = ", ".join(["%s"] * len(codes))
-    query = f"UPDATE positions SET active = 0 WHERE code IN ({placeholders})"
+    query = f"UPDATE {positions_table} SET active = 0 WHERE code IN ({placeholders})"
 
     def _work(cursor) -> int:
         cursor.execute(query, tuple(codes))
@@ -227,6 +235,8 @@ def delete_positions(positions: list[dict] | dict) -> int:
 def get_employees(
     employee_id: str | None = None, include_all: bool = False
 ) -> list[dict]:
+    tables = get_db_tables()
+    employees_table = tables["EMPLOYEES"]
     where_clauses: list[str] = []
     params: list[object] = []
 
@@ -239,7 +249,7 @@ def get_employees(
 
     query = (
         "SELECT id, name, schedule_section, note, ref_positionCode, active "
-        "FROM employees"
+        f"FROM {employees_table}"
     )
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
@@ -247,6 +257,8 @@ def get_employees(
 
 
 def insert_employees(employees: list[dict] | dict) -> int:
+    tables = get_db_tables()
+    employees_table = tables["EMPLOYEES"]
     rows = _ensure_list(employees, name="employees")
     allowed_sections = {v.strip() for v in get_schedule_sections()}
     values: list[tuple] = []
@@ -268,7 +280,7 @@ def insert_employees(employees: list[dict] | dict) -> int:
         )
 
     query = (
-        "INSERT INTO employees "
+        f"INSERT INTO {employees_table} "
         "(id, name, schedule_section, note, ref_positionCode, active) "
         "VALUES (%s, %s, %s, %s, %s, %s)"
     )
@@ -276,6 +288,8 @@ def insert_employees(employees: list[dict] | dict) -> int:
 
 
 def update_employees(employees: list[dict] | dict) -> int:
+    tables = get_db_tables()
+    employees_table = tables["EMPLOYEES"]
     rows = _ensure_list(employees, name="employees")
     if not rows:
         return 0
@@ -332,7 +346,7 @@ def update_employees(employees: list[dict] | dict) -> int:
             )
 
         params.append(employee_id)
-        query = "UPDATE employees SET " + ", ".join(fields) + " WHERE id = %s"
+        query = f"UPDATE {employees_table} SET " + ", ".join(fields) + " WHERE id = %s"
         statements.append((query, tuple(params)))
 
     def _work(cursor) -> int:
@@ -346,6 +360,8 @@ def update_employees(employees: list[dict] | dict) -> int:
 
 
 def delete_employees(employees: list[dict] | dict) -> int:
+    tables = get_db_tables()
+    employees_table = tables["EMPLOYEES"]
     rows = _ensure_list(employees, name="employees")
     if not rows:
         return 0
@@ -363,7 +379,7 @@ def delete_employees(employees: list[dict] | dict) -> int:
         employee_ids.append(employee_id)
 
     placeholders = ", ".join(["%s"] * len(employee_ids))
-    query = f"UPDATE employees SET active = 0 WHERE id IN ({placeholders})"
+    query = f"UPDATE {employees_table} SET active = 0 WHERE id IN ({placeholders})"
 
     def _work(cursor) -> int:
         cursor.execute(query, tuple(employee_ids))
@@ -379,6 +395,8 @@ def delete_employees(employees: list[dict] | dict) -> int:
 def get_shifts(
     shift_id: int | str | None = None, include_all: bool = False
 ) -> list[dict]:
+    tables = get_db_tables()
+    shifts_table = tables["SHIFTS"]
     where_clauses: list[str] = []
     params: list[object] = []
 
@@ -389,7 +407,7 @@ def get_shifts(
     if not include_all:
         where_clauses.append("active = 1")
 
-    query = "SELECT id, name, start_time, end_time, active FROM shifts"
+    query = f"SELECT id, name, start_time, end_time, active FROM {shifts_table}"
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
     rows = fetch_all(query, tuple(params))
@@ -404,6 +422,8 @@ def get_shifts(
 
 
 def insert_shifts(shifts: list[dict] | dict) -> int:
+    tables = get_db_tables()
+    shifts_table = tables["SHIFTS"]
     rows = _ensure_list(shifts, name="shifts")
     values: list[tuple] = []
     for item in rows:
@@ -416,13 +436,15 @@ def insert_shifts(shifts: list[dict] | dict) -> int:
         values.append((name, start_time, end_time, active))
 
     query = (
-        "INSERT INTO shifts (name, start_time, end_time, active) "
+        f"INSERT INTO {shifts_table} (name, start_time, end_time, active) "
         "VALUES (%s, %s, %s, %s)"
     )
     return execute_many(query, values)
 
 
 def update_shifts(shifts: list[dict] | dict) -> int:
+    tables = get_db_tables()
+    shifts_table = tables["SHIFTS"]
     rows = _ensure_list(shifts, name="shifts")
     if not rows:
         return 0
@@ -470,7 +492,7 @@ def update_shifts(shifts: list[dict] | dict) -> int:
             raise ValueError(f"No updatable fields provided for shift id {shift_id}")
 
         params.append(shift_id)
-        query = "UPDATE shifts SET " + ", ".join(fields) + " WHERE id = %s"
+        query = f"UPDATE {shifts_table} SET " + ", ".join(fields) + " WHERE id = %s"
         statements.append((query, tuple(params)))
 
     def _work(cursor) -> int:
@@ -484,6 +506,8 @@ def update_shifts(shifts: list[dict] | dict) -> int:
 
 
 def delete_shifts(shifts: list[dict] | dict) -> int:
+    tables = get_db_tables()
+    shifts_table = tables["SHIFTS"]
     rows = _ensure_list(shifts, name="shifts")
     if not rows:
         return 0
@@ -502,7 +526,7 @@ def delete_shifts(shifts: list[dict] | dict) -> int:
         shift_ids.append(raw)
 
     placeholders = ", ".join(["%s"] * len(shift_ids))
-    query = f"UPDATE shifts SET active = 0 WHERE id IN ({placeholders})"
+    query = f"UPDATE {shifts_table} SET active = 0 WHERE id IN ({placeholders})"
 
     def _work(cursor) -> int:
         cursor.execute(query, tuple(shift_ids))
@@ -526,6 +550,11 @@ def get_schedules(
     end_time: time_type | datetime | str | None = None,
     week_no: int | None = None,
 ) -> list[dict]:
+    tables = get_db_tables()
+    schedules_table = tables["SCHEDULES"]
+    employees_table = tables["EMPLOYEES"]
+    positions_table = tables["POSITIONS"]
+    shifts_table = tables["SHIFTS"]
     if week_no is not None and (date_value or start_date or end_date):
         raise ValueError("Use week_no or date/date range, not both")
     if date_value and (start_date or end_date):
@@ -586,10 +615,10 @@ def get_schedules(
         "e.schedule_section AS schedule_section, "
         "p.name AS position_name, "
         "sh.name AS shift_name "
-        "FROM schedules AS s "
-        "LEFT JOIN employees AS e ON e.id = s.employee_id "
-        "LEFT JOIN positions AS p ON p.code = s.position_code "
-        "LEFT JOIN shifts AS sh ON sh.id = s.shift_id "
+        f"FROM {schedules_table} AS s "
+        f"LEFT JOIN {employees_table} AS e ON e.id = s.employee_id "
+        f"LEFT JOIN {positions_table} AS p ON p.code = s.position_code "
+        f"LEFT JOIN {shifts_table} AS sh ON sh.id = s.shift_id "
     )
 
     if where_clauses:
@@ -613,15 +642,17 @@ def duplicate_week_schedules(
     delta_days: int,
     overwrite: bool,
 ) -> int:
+    tables = get_db_tables()
+    schedules_table = tables["SCHEDULES"]
     def _work(cursor) -> int:
         if overwrite:
             cursor.execute(
-                "DELETE FROM schedules WHERE date >= %s AND date <= %s",
+                f"DELETE FROM {schedules_table} WHERE date >= %s AND date <= %s",
                 (target_start, target_end),
             )
-            insert_prefix = "INSERT INTO schedules "
+            insert_prefix = f"INSERT INTO {schedules_table} "
         else:
-            insert_prefix = "INSERT IGNORE INTO schedules "
+            insert_prefix = f"INSERT IGNORE INTO {schedules_table} "
 
         cursor.execute(
             insert_prefix
@@ -629,7 +660,7 @@ def duplicate_week_schedules(
             "SELECT "
             "UUID(), s.employee_id, s.position_code, s.shift_id, "
             "DATE_ADD(s.date, INTERVAL %s DAY), s.start_time, s.end_time, s.note "
-            "FROM schedules AS s "
+            f"FROM {schedules_table} AS s "
             "WHERE s.date >= %s AND s.date <= %s",
             (delta_days, source_start, source_end),
         )
@@ -668,10 +699,12 @@ def delete_schedules_by_week(week_no: int) -> int:
     week_info = build_week_info(week_no)
     start_date = _parse_date(week_info["start_date"])
     end_date = _parse_date(week_info["end_date"])
+    tables = get_db_tables()
+    schedules_table = tables["SCHEDULES"]
 
     def _work(cursor) -> int:
         cursor.execute(
-            "DELETE FROM schedules WHERE date >= %s AND date <= %s",
+            f"DELETE FROM {schedules_table} WHERE date >= %s AND date <= %s",
             (start_date, end_date),
         )
         return cursor.rowcount
@@ -707,8 +740,10 @@ def apply_schedule_changes(payload: dict) -> dict:
 
 
 def _schedule_insert_query() -> str:
+    tables = get_db_tables()
+    schedules_table = tables["SCHEDULES"]
     return (
-        "INSERT INTO schedules "
+        f"INSERT INTO {schedules_table} "
         "(id, employee_id, position_code, shift_id, date, start_time, end_time, note) "
         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s)"
     )
@@ -818,6 +853,8 @@ def _execute_schedule_inserts(cursor, values: list[tuple]) -> int:
 
 
 def _build_schedule_update_statements(rows: list[dict]) -> list[tuple[str, tuple]]:
+    tables = get_db_tables()
+    schedules_table = tables["SCHEDULES"]
     statements: list[tuple[str, tuple]] = []
     for item in rows:
         if not isinstance(item, dict):
@@ -881,7 +918,7 @@ def _build_schedule_update_statements(rows: list[dict]) -> list[tuple[str, tuple
             )
 
         params.append(schedule_id)
-        query = "UPDATE schedules SET " + ", ".join(fields) + " WHERE id = %s"
+        query = f"UPDATE {schedules_table} SET " + ", ".join(fields) + " WHERE id = %s"
         statements.append((query, tuple(params)))
 
     return statements
@@ -896,6 +933,8 @@ def _execute_schedule_updates(cursor, statements: list[tuple[str, tuple]]) -> in
 
 
 def _build_schedule_delete_payload(rows: list) -> tuple[str, tuple] | None:
+    tables = get_db_tables()
+    schedules_table = tables["SCHEDULES"]
     if not rows:
         return None
     schedule_ids: list[str] = []
@@ -906,7 +945,7 @@ def _build_schedule_delete_payload(rows: list) -> tuple[str, tuple] | None:
         schedule_ids.append(schedule_id)
 
     placeholders = ", ".join(["%s"] * len(schedule_ids))
-    query = f"DELETE FROM schedules WHERE id IN ({placeholders})"
+    query = f"DELETE FROM {schedules_table} WHERE id IN ({placeholders})"
     return query, tuple(schedule_ids)
 
 

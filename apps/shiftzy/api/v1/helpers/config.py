@@ -3,6 +3,7 @@ from __future__ import annotations
 import ast
 from datetime import date
 import json
+import re
 import threading
 
 from shared.tenant import (
@@ -13,6 +14,13 @@ from shared.tenant import (
 
 APP_NAME = "Shiftzy"
 
+_DB_TABLE_RE = re.compile(r"^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*$")
+_REQUIRED_DB_TABLE_KEYS = {
+    "POSITIONS",
+    "EMPLOYEES",
+    "SHIFTS",
+    "SCHEDULES",
+}
 
 _VALIDATED_TENANTS: set[str] = set()
 _VALIDATION_LOCK = threading.Lock()
@@ -45,12 +53,62 @@ def _parse_list(key: str) -> list[str]:
     return [str(item) for item in parsed]
 
 
+def _parse_raw_value(raw: str, key: str, expected_type):
+    try:
+        parsed = json.loads(raw)
+    except json.JSONDecodeError:
+        try:
+            parsed = ast.literal_eval(raw)
+        except (ValueError, SyntaxError) as exc:
+            raise TenantConfigValidationError(
+                app_name=APP_NAME,
+                invalid=[key],
+            ) from exc
+
+    if not isinstance(parsed, expected_type):
+        raise TenantConfigValidationError(app_name=APP_NAME, invalid=[key])
+    return parsed
+
+
+def _get_db_tables_raw() -> str | None:
+    return get_env("DB_TABLES") or get_env("db_tables")
+
+
 def get_position_areas() -> list[str]:
     return _parse_list("POSITION_AREAS_ENUM")
 
 
 def get_schedule_sections() -> list[str]:
     return _parse_list("SCHEDULE_SECTIONS_ENUM")
+
+
+def get_db_tables() -> dict[str, str]:
+    raw = _get_db_tables_raw()
+    if raw is None or str(raw).strip() == "":
+        raise TenantConfigValidationError(app_name=APP_NAME, missing=["DB_TABLES"])
+
+    parsed = _parse_raw_value(raw, "DB_TABLES", dict)
+    tables: dict[str, str] = {}
+    for key, value in parsed.items():
+        name = str(value).strip()
+        if not name:
+            raise TenantConfigValidationError(
+                app_name=APP_NAME,
+                invalid=[f"DB_TABLES.{key}"],
+            )
+        if not _DB_TABLE_RE.fullmatch(name):
+            raise TenantConfigValidationError(
+                app_name=APP_NAME,
+                invalid=[f"DB_TABLES.{key}"],
+            )
+        tables[str(key).upper()] = name
+
+    missing_keys = _REQUIRED_DB_TABLE_KEYS.difference(tables.keys())
+    if missing_keys:
+        missing = [f"DB_TABLES.{key}" for key in sorted(missing_keys)]
+        raise TenantConfigValidationError(app_name=APP_NAME, missing=missing)
+
+    return tables
 
 
 # ============================================================
@@ -114,6 +172,28 @@ def validate_tenant_config(tenant_id: str | None = None) -> None:
             if not isinstance(parsed, list):
                 invalid.append(key)
 
+        def _check_db_tables() -> None:
+            raw = _get_db_tables_raw()
+            if raw is None or str(raw).strip() == "":
+                missing.append("DB_TABLES")
+                return
+            try:
+                parsed = _parse_raw_value(raw, "DB_TABLES", dict)
+            except TenantConfigValidationError:
+                invalid.append("DB_TABLES")
+                return
+
+            normalized: dict[str, str] = {}
+            for key, value in parsed.items():
+                name = str(value).strip()
+                if not name or not _DB_TABLE_RE.fullmatch(name):
+                    invalid.append(f"DB_TABLES.{key}")
+                normalized[str(key).upper()] = name
+
+            missing_keys = _REQUIRED_DB_TABLE_KEYS.difference(normalized.keys())
+            for key in sorted(missing_keys):
+                missing.append(f"DB_TABLES.{key}")
+
         _check_int("START_WEEK_NO")
         _check_start_date()
 
@@ -126,6 +206,7 @@ def validate_tenant_config(tenant_id: str | None = None) -> None:
 
         _check_list("POSITION_AREAS_ENUM")
         _check_list("SCHEDULE_SECTIONS_ENUM")
+        _check_db_tables()
 
         if missing or invalid:
             raise TenantConfigValidationError(

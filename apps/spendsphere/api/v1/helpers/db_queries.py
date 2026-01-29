@@ -1,6 +1,6 @@
 from shared.db import fetch_all
 from shared.utils import get_current_period
-from apps.spendsphere.api.v1.helpers.config import get_service_budgets
+from apps.spendsphere.api.v1.helpers.config import get_db_tables, get_service_budgets
 
 
 # ============================================================
@@ -40,10 +40,12 @@ def get_accounts(
     # -----------------------------------------
     # Build query
     # -----------------------------------------
+    tables = get_db_tables()
+    accounts_table = tables["ACCOUNTS"]
     if not codes:
-        query = """
+        query = f"""
             SELECT code, name
-            FROM Accounts
+            FROM {accounts_table}
         """
         if not include_all:
             query += " WHERE active = 1"
@@ -52,7 +54,7 @@ def get_accounts(
         placeholders = ",".join(["%s"] * len(codes))
         query = f"""
             SELECT code, name
-            FROM Accounts
+            FROM {accounts_table}
             WHERE UPPER(code) IN ({placeholders})
         """
         if not include_all:
@@ -88,6 +90,10 @@ def get_masterbudgets(
 
     service_placeholders = ", ".join(["%s"] * len(service_budgets))
 
+    tables = get_db_tables()
+    budgets_table = tables["BUDGETS"]
+    services_table = tables["SERVICES"]
+
     query = (
         "SELECT "
         "b.accountCode, "
@@ -97,8 +103,8 @@ def get_masterbudgets(
         "b.month, "
         "b.year, "
         "b.netAmount "
-        "FROM Budgets AS b "
-        "JOIN Services AS s ON s.id = b.serviceId "
+        f"FROM {budgets_table} AS b "
+        f"JOIN {services_table} AS s ON s.id = b.serviceId "
         "WHERE b.month = %s "
         "AND b.year = %s "
         f"AND b.serviceId IN ({service_placeholders})"
@@ -131,13 +137,16 @@ def get_allocations(
     month = period["month"]
     year = period["year"]
 
+    tables = get_db_tables()
+    allocations_table = tables["ALLOCATIONS"]
+
     query = (
         "SELECT "
         "id, "
         "accountCode, "
         "ggBudgetId, "
         "allocation "
-        "FROM SpendShere_Allocations "
+        f"FROM {allocations_table} "
         "WHERE month = %s "
         "AND year = %s"
     )
@@ -170,13 +179,16 @@ def get_rollbreakdowns(
     month = period["month"]
     year = period["year"]
 
+    tables = get_db_tables()
+    rollbreakdowns_table = tables["ROLLBREAKDOWNS"]
+
     query = (
         "SELECT "
         "id, "
         "accountCode, "
         "adTypeCode, "
         "amount "
-        "FROM SpendShere_RollBreakdowns "
+        f"FROM {rollbreakdowns_table} "
         "WHERE month = %s "
         "AND year = %s"
     )
