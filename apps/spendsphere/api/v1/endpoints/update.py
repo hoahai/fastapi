@@ -36,6 +36,23 @@ class GoogleAdsUpdateRequest(BaseModel):
 
 @router.post("/updateBudget")
 def update_google_ads(payload: GoogleAdsUpdateRequest):
+    """
+    Example request:
+    {
+      "accountCodes": ["TAAA"],
+      "dryRun": true,
+      "includeTransformResults": false,
+      "include_all": false
+    }
+
+    Example response:
+    {
+      "summary": {
+        "budget_updates": 1,
+        "campaign_updates": 0
+      }
+    }
+    """
     if should_validate_account_codes(payload.accountCodes):
         validate_account_codes(payload.accountCodes, include_all=payload.includeAll)
 
@@ -85,6 +102,21 @@ def update_google_ads_async(
     background_tasks: BackgroundTasks,
     request: Request,
 ):
+    """
+    Example request:
+    {
+      "accountCodes": ["TAAA"],
+      "dryRun": true,
+      "includeTransformResults": true,
+      "include_all": false
+    }
+
+    Example response:
+    {
+      "request_id": "c13d30fd-1966-4c04-b47d-23f6c2d3b9b1",
+      "status": "accepted"
+    }
+    """
     if should_validate_account_codes(payload.accountCodes):
         validate_account_codes(payload.accountCodes, include_all=payload.includeAll)
 

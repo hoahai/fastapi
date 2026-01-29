@@ -8,6 +8,7 @@ from apps.spendsphere.api.v1.helpers.dataTransform import (
     build_update_payloads_from_inputs,
 )
 from apps.spendsphere.api.v2.helpers.db_queries import (
+    get_accelerations,
     get_allocations,
     get_masterbudgets,
     get_rollbreakdowns,
@@ -97,11 +98,12 @@ def run_google_ads_budget_pipeline(
     # =====================================================
     # 1. Database (parallel)
     # =====================================================
-    master_budgets, allocations, rollbreakdowns = run_parallel(
+    master_budgets, allocations, rollbreakdowns, accelerations = run_parallel(
         tasks=[
             (get_masterbudgets, (account_codes,)),
             (get_allocations, (account_codes,)),
             (get_rollbreakdowns, (account_codes,)),
+            (get_accelerations, (account_codes,)),
         ],
         api_name="database",
     )
@@ -143,6 +145,7 @@ def run_google_ads_budget_pipeline(
         costs=costs,
         allocations=allocations,
         rollovers=rollbreakdowns,
+        accelerations=accelerations,
         activePeriod=active_period,
         include_transform_results=include_transform_results,
     )

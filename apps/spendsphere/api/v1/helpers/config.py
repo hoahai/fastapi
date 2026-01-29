@@ -18,6 +18,7 @@ _REQUIRED_DB_TABLE_KEYS = {
     "SERVICES",
     "ALLOCATIONS",
     "ROLLBREAKDOWNS",
+    "ACCELERATIONS",
 }
 
 
@@ -77,6 +78,14 @@ def get_service_mapping() -> dict:
 
 def get_adtypes() -> dict:
     return _parse_env_value("ADTYPES", dict)
+
+
+def get_acceleration_scope_types() -> list[str]:
+    raw = get_env("ACCELERATION_SCOPE_TYPES")
+    if raw is None or str(raw).strip() == "":
+        return ["ACCOUNT", "AD_TYPE", "BUDGET"]
+    parsed = _parse_raw_value(raw, "ACCELERATION_SCOPE_TYPES", list)
+    return [str(v).strip().upper() for v in parsed if str(v).strip()]
 
 
 def get_db_tables() -> dict[str, str]:

@@ -3,9 +3,12 @@
 from typing import Callable, TypeVar
 import hashlib
 import threading
+import time
+import random
 
 import mysql.connector
 from mysql.connector import pooling
+from mysql.connector.errors import PoolError
 
 from shared.utils import load_env
 from shared.tenant import get_env
@@ -21,7 +24,33 @@ _POOLS: dict[str, pooling.MySQLConnectionPool] = {}
 def get_connection():
     if not _pooling_enabled():
         return mysql.connector.connect(**_build_connection_kwargs())
-    return _get_pool().get_connection()
+    pool = _get_pool()
+    timeout_ms = _pool_acquire_timeout_ms()
+    backoff_ms = _pool_acquire_backoff_ms()
+    max_backoff_ms = _pool_acquire_max_backoff_ms()
+    deadline = (
+        time.monotonic() + (timeout_ms / 1000)
+        if timeout_ms > 0
+        else None
+    )
+    attempt = 0
+
+    while True:
+        try:
+            return pool.get_connection()
+        except PoolError as exc:
+            message = str(exc).lower()
+            if "exhausted" not in message and "failed getting connection" not in message:
+                raise
+            if deadline is not None and time.monotonic() >= deadline:
+                raise
+            attempt += 1
+            sleep_ms = min(
+                max_backoff_ms,
+                backoff_ms * (1 + attempt * 0.2),
+            )
+            sleep_ms *= random.uniform(0.75, 1.25)
+            time.sleep(max(sleep_ms, 1) / 1000)
 
 
 def _pooling_enabled() -> bool:
@@ -41,6 +70,33 @@ def _pool_size() -> int:
 def _pool_reset_session() -> bool:
     value = get_env("DB_POOL_RESET_SESSION", "true")
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def _pool_acquire_timeout_ms() -> int:
+    raw = get_env("DB_POOL_ACQUIRE_TIMEOUT_MS", "2000")
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        value = 2000
+    return max(value, 0)
+
+
+def _pool_acquire_backoff_ms() -> int:
+    raw = get_env("DB_POOL_ACQUIRE_BACKOFF_MS", "50")
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        value = 50
+    return max(value, 1)
+
+
+def _pool_acquire_max_backoff_ms() -> int:
+    raw = get_env("DB_POOL_ACQUIRE_MAX_BACKOFF_MS", "500")
+    try:
+        value = int(str(raw).strip())
+    except (TypeError, ValueError):
+        value = 500
+    return max(value, 1)
 
 
 def _build_connection_kwargs() -> dict:

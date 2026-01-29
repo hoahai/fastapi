@@ -8,6 +8,7 @@ from apps.spendsphere.api.v1.endpoints import (
     update as v1_update,
 )
 from apps.spendsphere.api.v2.endpoints import (
+    accelerations,
     allocations,
     budgets,
     rollovers,
@@ -17,6 +18,7 @@ from apps.spendsphere.api.v2.endpoints import (
 router = APIRouter(prefix="/v2")
 router.include_router(budgets.router, tags=["spendsphere"])
 router.include_router(allocations.router, tags=["spendsphere"])
+router.include_router(accelerations.router, tags=["spendsphere"])
 router.include_router(rollovers.router, tags=["spendsphere"])
 router.include_router(update.router, tags=["spendsphere"])
 

@@ -288,6 +288,25 @@ def _coerce_date(value) -> date | None:
     return None
 
 
+def _coerce_datetime(value) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime.combine(value, time.min)
+    if isinstance(value, str) and value.strip():
+        value = value.strip()
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                return datetime.strptime(value, fmt)
+            except ValueError:
+                continue
+        try:
+            return datetime.fromisoformat(value)
+        except ValueError:
+            return None
+    return None
+
+
 def budget_activePeriod_join(
     budgets: list[dict],
     activePeriod: list[dict] | None,
@@ -376,11 +395,19 @@ def calculate_daily_budget(
             continue
 
         allocation_pct = Decimal(str(allocation)) / Decimal("100")
+        remaining_base = (net + rollover) * allocation_pct - Decimal(str(total_cost))
+        daily_base = remaining_base / days_left if days_left > 0 else Decimal("0")
 
-        remaining = (net + rollover) * allocation_pct - total_cost
+        accel_multiplier = Decimal(str(b.get("accelerationMultiplier", 100)))
+        allocation_pct_accel = allocation_pct * (accel_multiplier / Decimal("100"))
+
+        remaining = (net + rollover) * allocation_pct_accel - Decimal(str(total_cost))
         daily = remaining / days_left if days_left > 0 else Decimal("0")
 
         b["remainingBudget"] = remaining.quantize(Decimal("0.01"))
+
+        if accel_multiplier != Decimal("100"):
+            b["dailyBudgetBase"] = daily_base.quantize(Decimal("0.01"))
 
         if b.get("isActive") is False:
             b["dailyBudget"] = Decimal("0.00")
@@ -391,7 +418,77 @@ def calculate_daily_budget(
 
 
 # ============================================================
-# 9. UPDATE PAYLOADS
+# 9. APPLY ACCELERATIONS
+# ============================================================
+
+
+def apply_budget_accelerations(
+    budgets: list[dict],
+    accelerations: list[dict] | None = None,
+) -> list[dict]:
+    if not accelerations:
+        return budgets
+
+    account_accels: dict[str, list[dict]] = defaultdict(list)
+    ad_type_accels: dict[tuple[str, str], list[dict]] = defaultdict(list)
+    budget_accels: dict[tuple[str, str], list[dict]] = defaultdict(list)
+
+    for accel in accelerations:
+        account_code = str(accel.get("accountCode", "")).upper()
+        scope_type = str(accel.get("scopeType", "")).upper()
+        scope_value = str(accel.get("scopeValue", "")).strip()
+
+        if not account_code or not scope_type:
+            continue
+
+        if scope_type == "ACCOUNT":
+            account_accels[account_code].append(accel)
+        elif scope_type == "AD_TYPE" and scope_value:
+            ad_type_accels[(account_code, scope_value)].append(accel)
+        elif scope_type == "BUDGET" and scope_value:
+            budget_accels[(account_code, scope_value)].append(accel)
+
+    def _accel_sort_key(a: dict) -> tuple[datetime, int]:
+        updated = _coerce_datetime(a.get("dateUpdated") or a.get("dateCreated"))
+        try:
+            accel_id = int(a.get("id") or 0)
+        except (TypeError, ValueError):
+            accel_id = 0
+        return (updated or datetime.min, accel_id)
+
+    def _best(accels: list[dict] | None) -> dict | None:
+        if not accels:
+            return None
+        return max(accels, key=_accel_sort_key)
+
+    for b in budgets:
+        account_code = str(b.get("accountCode", "")).upper()
+        budget_id = str(b.get("budgetId", "")).strip()
+        ad_type = str(b.get("adTypeCode", "")).strip()
+
+        accel = None
+        if budget_id:
+            accel = _best(budget_accels.get((account_code, budget_id)))
+        if accel is None and ad_type:
+            accel = _best(ad_type_accels.get((account_code, ad_type)))
+        if accel is None:
+            accel = _best(account_accels.get(account_code))
+
+        if not accel:
+            continue
+
+        multiplier = Decimal(str(accel.get("multiplier", 0)))
+        if multiplier <= 0:
+            continue
+
+        b["accelerationId"] = accel.get("id")
+        b["accelerationMultiplier"] = multiplier
+
+    return budgets
+
+
+# ============================================================
+# 10. UPDATE PAYLOADS
 # ============================================================
 
 
@@ -520,6 +617,7 @@ def _build_budget_rows(
     costs: list[dict],
     allocations: list[dict],
     rollovers: list[dict],
+    accelerations: list[dict] | None = None,
     activePeriod: list[dict] | None = None,
     *,
     include_transform_results: bool = True,
@@ -539,15 +637,16 @@ def _build_budget_rows(
     step3 = budget_allocation_join(step2, allocations)
     step4 = budget_rollover_join(step3, rollovers)
     step5 = budget_activePeriod_join(step4, activePeriod)
-    step6 = calculate_daily_budget(step5)
+    step6 = apply_budget_accelerations(step5, accelerations)
+    step7 = calculate_daily_budget(step6)
 
     if not include_transform_results:
-        return list(step6)
+        return list(step7)
 
     # --------------------------------------------------
     # SORT RESULTS (accountCode ASC, adTypeCode DESC)
     # --------------------------------------------------
-    result = list(step6)
+    result = list(step7)
     result.sort(key=lambda r: (r.get("adTypeCode") or ""), reverse=True)
     result.sort(
         key=lambda r: (r.get("accountCode") is None, r.get("accountCode") or "")
@@ -563,6 +662,7 @@ def transform_google_ads_data(
     costs: list[dict],
     allocations: list[dict],
     rollovers: list[dict],
+    accelerations: list[dict] | None = None,
     activePeriod: list[dict] | None = None,
     *,
     include_transform_results: bool = True,
@@ -577,6 +677,7 @@ def transform_google_ads_data(
         costs,
         allocations,
         rollovers,
+        accelerations=accelerations,
         activePeriod=activePeriod,
         include_transform_results=include_transform_results,
     )
@@ -589,6 +690,7 @@ def build_update_payloads_from_inputs(
     costs: list[dict],
     allocations: list[dict],
     rollovers: list[dict],
+    accelerations: list[dict] | None = None,
     activePeriod: list[dict] | None = None,
     *,
     include_transform_results: bool = False,
@@ -604,6 +706,7 @@ def build_update_payloads_from_inputs(
         costs,
         allocations,
         rollovers,
+        accelerations=accelerations,
         activePeriod=activePeriod,
         include_transform_results=include_transform_results,
     )

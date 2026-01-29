@@ -46,3 +46,13 @@ def get_rollbreakdowns(
     account_codes: list[str] | None = None,
 ) -> list[dict]:
     return v1_db_queries.get_rollbreakdowns(account_codes)
+
+
+# ============================================================
+# ACCELERATIONS
+# ============================================================
+
+def get_accelerations(
+    account_codes: list[str] | None = None,
+) -> list[dict]:
+    return v1_db_queries.get_accelerations(account_codes)
