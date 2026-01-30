@@ -620,6 +620,7 @@ def _build_budget_rows(
     accelerations: list[dict] | None = None,
     activePeriod: list[dict] | None = None,
     *,
+    today: date | None = None,
     include_transform_results: bool = True,
 ) -> list[dict]:
     """
@@ -638,7 +639,7 @@ def _build_budget_rows(
     step4 = budget_rollover_join(step3, rollovers)
     step5 = budget_activePeriod_join(step4, activePeriod)
     step6 = apply_budget_accelerations(step5, accelerations)
-    step7 = calculate_daily_budget(step6)
+    step7 = calculate_daily_budget(step6, today=today)
 
     if not include_transform_results:
         return list(step7)
@@ -665,6 +666,7 @@ def transform_google_ads_data(
     accelerations: list[dict] | None = None,
     activePeriod: list[dict] | None = None,
     *,
+    today: date | None = None,
     include_transform_results: bool = True,
 ) -> list[dict]:
     """
@@ -679,6 +681,7 @@ def transform_google_ads_data(
         rollovers,
         accelerations=accelerations,
         activePeriod=activePeriod,
+        today=today,
         include_transform_results=include_transform_results,
     )
 

@@ -12,6 +12,8 @@ def _get_sheet(name: str) -> dict[str, str]:
 
 def get_rollovers(
     account_codes: list[str] | None = None,
+    month: int | None = None,
+    year: int | None = None,
 ) -> list[dict]:
     """
     Get rollover data for the current month/year.
@@ -32,9 +34,10 @@ def get_rollovers(
     if isinstance(account_codes, str):
         account_codes = [account_codes]
 
-    period = get_current_period()
-    month = period["month"]
-    year = period["year"]
+    if month is None or year is None:
+        period = get_current_period()
+        month = period["month"]
+        year = period["year"]
 
     normalized_accounts = (
         {c.strip().upper() for c in account_codes}

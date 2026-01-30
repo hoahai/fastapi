@@ -34,13 +34,18 @@ router = APIRouter()
 @router.get(
     "/accelerations/{account_code}",
     summary="List active accelerations for an account",
-    description="Returns today's active accelerations for the specified account code.",
+    description=(
+        "Returns active accelerations for the specified account code. "
+        "Optionally filter by a date range or a month/year."
+    ),
 )
 def get_accelerations_route(
     account_code: str,
     include_all: bool = False,
     start_date: date | None = None,
     end_date: date | None = None,
+    month: int | None = None,
+    year: int | None = None,
 ):
     """
     Example request:
@@ -48,6 +53,9 @@ def get_accelerations_route(
 
     Example request (filter by dates):
     GET /spendsphere/api/v1/accelerations/TAAA?start_date=2026-01-01&end_date=2026-01-31
+
+    Example request (filter by month/year):
+    GET /spendsphere/api/v1/accelerations/TAAA?month=1&year=2026
 
     Note:
     When start_date/end_date are provided, results include any accelerations that
@@ -75,6 +83,26 @@ def get_accelerations_route(
             status_code=400,
             detail="start_date and end_date must be provided together",
         )
+
+    if (month is None) != (year is None):
+        raise HTTPException(
+            status_code=400,
+            detail="month and year must be provided together",
+        )
+
+    if (start_date or end_date) and (month or year):
+        raise HTTPException(
+            status_code=400,
+            detail="Provide either start_date/end_date or month/year, not both",
+        )
+
+    if month is not None:
+        if month < 1 or month > 12:
+            raise HTTPException(status_code=400, detail="Invalid month")
+        if year < 2000 or year > 2100:
+            raise HTTPException(status_code=400, detail="Invalid year")
+        start_date = date(year, month, 1)
+        end_date = date(year, month, calendar.monthrange(year, month)[1])
 
     data = get_accelerations(
         account_code,

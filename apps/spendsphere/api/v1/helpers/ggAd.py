@@ -1,6 +1,8 @@
 # api/v1/helpers/ggAd.py
 
 import re
+import calendar
+from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from google.ads.googleads.client import GoogleAdsClient
 from google.protobuf.field_mask_pb2 import FieldMask
@@ -372,11 +374,32 @@ def get_ggad_campaigns(accounts: list[dict]) -> list[dict]:
 # =====================
 
 
-def get_ggad_spent(customer_id: str) -> list[dict]:
+def _resolve_period(
+    month: int | None,
+    year: int | None,
+) -> dict:
+    if month is None or year is None:
+        return get_current_period()
+    start_date = date(year, month, 1)
+    last_day = calendar.monthrange(year, month)[1]
+    end_date = date(year, month, last_day)
+    return {
+        "year": year,
+        "month": month,
+        "start_date": start_date.isoformat(),
+        "end_date": end_date.isoformat(),
+    }
+
+
+def get_ggad_spent(
+    customer_id: str,
+    month: int | None = None,
+    year: int | None = None,
+) -> list[dict]:
     """
-    Get campaign spend for a single Google Ads account for the current period.
+    Get campaign spend for a single Google Ads account for the selected period.
     """
-    period = get_current_period()
+    period = _resolve_period(month, year)
     client = get_client()
     ga_service = client.get_service("GoogleAdsService")
 
@@ -421,13 +444,21 @@ def get_ggad_spent(customer_id: str) -> list[dict]:
     return results
 
 
-def get_ggad_spents(accounts: list[dict]) -> list[dict]:
+def get_ggad_spents(
+    accounts: list[dict],
+    month: int | None = None,
+    year: int | None = None,
+) -> list[dict]:
     """
     Get campaign spend for multiple Google Ads accounts (parallelized).
     """
 
     def per_account_func(account: dict) -> list[dict]:
-        spents = get_ggad_spent(account["id"])
+        spents = get_ggad_spent(
+            account["id"],
+            month=month,
+            year=year,
+        )
         return [
             {
                 "customerId": account["id"],

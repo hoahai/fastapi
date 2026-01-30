@@ -1,10 +1,30 @@
-from fastapi import APIRouter, Query
+import math
+from datetime import date, datetime
+from decimal import Decimal
+
+import pytz
+from fastapi import APIRouter, HTTPException, Query
 
 from apps.spendsphere.api.v1.endpoints.periods import (
     build_periods_data,
     validate_month_offsets,
 )
-from apps.spendsphere.api.v1.helpers.ggAd import get_ggad_accounts
+from apps.spendsphere.api.v1.helpers.config import get_service_mapping
+from apps.spendsphere.api.v1.helpers.dataTransform import transform_google_ads_data
+from apps.spendsphere.api.v1.helpers.db_queries import (
+    get_accelerations,
+    get_allocations,
+    get_masterbudgets,
+    get_rollbreakdowns,
+)
+from apps.spendsphere.api.v1.helpers.ggAd import (
+    get_ggad_accounts,
+    get_ggad_budgets,
+    get_ggad_campaigns,
+    get_ggad_spents,
+)
+from apps.spendsphere.api.v1.helpers.ggSheet import get_active_period, get_rollovers
+from shared.tenant import get_timezone
 from shared.utils import run_parallel
 
 router = APIRouter()
@@ -12,6 +32,230 @@ router = APIRouter()
 
 def _get_google_ads_clients(refresh_cache: bool) -> list[dict]:
     return get_ggad_accounts(refresh_cache=refresh_cache)
+
+
+def _parse_optional_int(raw: str | None, name: str) -> int | None:
+    if raw is None:
+        return None
+    if isinstance(raw, int):
+        return raw
+    value = str(raw).strip()
+    if value == "":
+        return None
+    try:
+        return int(value)
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": f"Invalid {name}", "value": raw},
+        ) from exc
+
+
+def _resolve_period_date(month: int | None, year: int | None) -> date:
+    tz = pytz.timezone(get_timezone())
+    today = datetime.now(tz).date()
+    if month is None or year is None:
+        return today
+    if month == today.month and year == today.year:
+        return today
+    return date(year, month, 1)
+
+
+def _to_float(value: object) -> float | None:
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return float(value)
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _get_accelerations_for_period(
+    account_codes: list[str],
+    period_date: date,
+) -> list[dict]:
+    return get_accelerations(account_codes, today=period_date)
+
+
+def _build_master_budgets(master_budgets: list[dict]) -> dict:
+    service_mapping = get_service_mapping()
+    result: dict[str, object] = {}
+    grand_total = Decimal("0")
+
+    for mb in master_budgets:
+        mapping = service_mapping.get(mb.get("serviceId"))
+        if not mapping:
+            continue
+        ad_type = mapping.get("adTypeCode")
+        if not ad_type:
+            continue
+
+        net_amount = Decimal(str(mb.get("netAmount", 0)))
+        entry = result.setdefault(
+            ad_type, {"budgets": [], "total": Decimal("0")}
+        )
+        entry["budgets"].append(
+            {
+                "serviceName": mb.get("serviceName") or mapping.get("serviceName"),
+                "subService": mb.get("subService") or "",
+                "netAmount": _to_float(net_amount),
+                "adTypeCode": ad_type,
+            }
+        )
+        entry["total"] += net_amount
+        grand_total += net_amount
+
+    for key, value in result.items():
+        if isinstance(value, dict) and isinstance(value.get("total"), Decimal):
+            value["total"] = _to_float(value.get("total"))
+
+    result["grandTotalBudget"] = _to_float(grand_total)
+    return result
+
+
+def _build_roll_breakdown(rollbreakdowns: list[dict]) -> dict:
+    result: dict[str, object] = {}
+    grand_total = Decimal("0")
+
+    for row in rollbreakdowns:
+        ad_type = row.get("adTypeCode")
+        if not ad_type:
+            continue
+        amount = Decimal(str(row.get("amount", 0)))
+        entry = result.setdefault(
+            ad_type, {"totalRoll": Decimal("0"), "rollovers": []}
+        )
+        entry["rollovers"].append(
+            {
+                "id": row.get("id"),
+                "adTypeCode": ad_type,
+                "amount": _to_float(amount),
+            }
+        )
+        entry["totalRoll"] += amount
+        grand_total += amount
+
+    for key, value in result.items():
+        if isinstance(value, dict) and isinstance(value.get("totalRoll"), Decimal):
+            value["totalRoll"] = _to_float(value.get("totalRoll"))
+
+    result["grandTotalRollBreakdown"] = _to_float(grand_total)
+    return result
+
+
+def _format_campaign_names(campaigns: list[dict]) -> str:
+    names = sorted(
+        {
+            c.get("campaignName")
+            for c in campaigns
+            if c.get("campaignName")
+        }
+    )
+    if not names:
+        return ""
+    return "<br/>".join(
+        f'<span style="font-size: 15px;">{name}</span>' for name in names
+    )
+
+
+def _format_campaign_statuses(campaigns: list[dict]) -> str:
+    statuses = sorted(
+        {
+            c.get("campaignStatus")
+            or c.get("status")
+            for c in campaigns
+            if c.get("campaignStatus") or c.get("status")
+        }
+    )
+    if not statuses:
+        return ""
+    if len(statuses) == 1:
+        return statuses[0]
+    return ", ".join(statuses)
+
+
+def _build_table_data(
+    rows: list[dict],
+    budgets: list[dict],
+    allocations: list[dict],
+) -> list[dict]:
+    budget_lookup = {b.get("budgetId"): b for b in budgets}
+    allocation_lookup: dict[tuple[str | None, str | None], dict] = {}
+    for a in allocations:
+        allocation_lookup[(a.get("accountCode"), a.get("ggBudgetId"))] = {
+            "id": a.get("id"),
+            "allocation": _to_float(a.get("allocation")),
+        }
+
+    table_data: list[dict] = []
+    for row in rows:
+        budget_id = row.get("budgetId")
+        budget_meta = budget_lookup.get(budget_id, {})
+        campaigns = row.get("campaigns", [])
+        allocation = allocation_lookup.get(
+            (row.get("accountCode"), budget_id)
+        )
+
+        normalized_campaigns = [
+            {
+                "campaignId": c.get("campaignId"),
+                "campaignName": c.get("campaignName"),
+                "campaignStatus": c.get("status"),
+            }
+            for c in campaigns
+        ]
+        campaign_names = _format_campaign_names(normalized_campaigns)
+
+        table_data.append(
+            {
+                "accountId": row.get("ggAccountId"),
+                "name": row.get("budgetName"),
+                "explicitlyShared": budget_meta.get("explicitlyShared"),
+                "status": budget_meta.get("status") or row.get("budgetStatus"),
+                "dailyBudget": _to_float(row.get("dailyBudget")),
+                "dailyBudgetBase": _to_float(row.get("dailyBudgetBase")),
+                "budgetId": budget_id,
+                "campaignStatuses": _format_campaign_statuses(normalized_campaigns),
+                "campaigns": normalized_campaigns,
+                "spent": _to_float(row.get("totalCost")),
+                "allocation": allocation,
+                "adTypeCode": row.get("adTypeCode"),
+                "accelerationId": row.get("accelerationId"),
+                "accelerationMultiplier": _to_float(
+                    row.get("accelerationMultiplier")
+                ),
+                "isFiltered": False,
+                "_campaignNames": campaign_names,
+            }
+        )
+
+    def _sort_key(item: dict) -> tuple:
+        allocation_value = item.get("allocation", {}) or {}
+        allocation_amount = allocation_value.get("allocation")
+        if allocation_amount is None:
+            allocation_amount = -math.inf
+
+        spent_value = item.get("spent")
+        if spent_value is None:
+            spent_value = -math.inf
+
+        return (
+            item.get("isFiltered", False),
+            item.get("adTypeCode") or "",
+            -allocation_amount,
+            -spent_value,
+            item.get("_campaignNames") or "",
+        )
+
+    table_data.sort(key=_sort_key)
+
+    for idx, item in enumerate(table_data):
+        item["sortedIndex"] = idx
+        item.pop("_campaignNames", None)
+
+    return table_data
 
 
 # ============================================================
@@ -94,4 +338,190 @@ def get_ui_selections_route(
     return {
         "googleAdsClients": clients,
         "periods": periods,
+    }
+
+
+@router.get(
+    "/ui/load",
+    summary="Load SpendSphere UI data for a Google Ads account",
+    description=(
+        "Returns master budgets, rollovers, roll breakdown, and "
+        "table data for the specified Google Ads account."
+    ),
+)
+def load_ui_route(
+    googleId: str = Query(..., description="Google Ads account ID."),
+    month: str | None = Query(
+        None, description="Optional month (1-12)."
+    ),
+    year: str | None = Query(
+        None, description="Optional year (e.g., 2026)."
+    ),
+):
+    """
+    Example request:
+    GET /api/spendsphere/v1/ui/load?googleId=6563107233&month=1&year=2026
+    Header: X-Tenant-Id: acme
+
+    Example request (current period):
+    GET /api/spendsphere/v1/ui/load?googleId=6563107233
+    Header: X-Tenant-Id: acme
+
+    Example response:
+    {
+      "masterBudgets": {
+        "grandTotalBudget": 9729.44,
+        "PM": {
+          "budgets": [
+            {
+              "serviceName": "Vehicle Listing Ads",
+              "subService": "",
+              "netAmount": 680,
+              "adTypeCode": "PM"
+            }
+          ],
+          "total": 680
+        }
+      },
+      "rollOvers": 1000.0,
+      "rollBreakdown": {
+        "grandTotalRollBreakdown": 1000,
+        "SEM": {
+          "totalRoll": 1000,
+          "rollovers": [
+            {
+              "id": "0ad1dc44-35f2-4fb6-9f1f-19527ab193e3",
+              "adTypeCode": "SEM",
+              "amount": 1000
+            }
+          ]
+        }
+      },
+      "tableData": [
+        {
+          "accountId": "6563107233",
+          "name": "AUC_DIS_Remarketing",
+          "explicitlyShared": false,
+          "status": "ENABLED",
+          "dailyBudget": 65.4,
+          "dailyBudgetBase": 54.5,
+          "budgetId": "15225876848",
+          "campaignStatuses": "ENABLED",
+          "campaigns": [
+            {
+              "campaignId": "21427314948",
+              "campaignName": "AUC_DIS_Remarketing",
+              "campaignStatus": "ENABLED"
+            }
+          ],
+          "spent": 586.09,
+          "allocation": {
+            "id": "b98d38c5-448f-4746-bed3-8dfdadd2959c",
+            "allocation": 97.364
+          },
+          "adTypeCode": "DIS",
+          "accelerationId": "3f5d9c0c-83a9-4a2d-8c7b-3cc5b1c1a021",
+          "accelerationMultiplier": 120,
+          "isFiltered": false,
+          "sortedIndex": 0
+        }
+      ]
+    }
+    """
+    google_id = googleId.strip() if isinstance(googleId, str) else ""
+    if not google_id:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "googleId is required"},
+        )
+
+    month_value = _parse_optional_int(month, "month")
+    year_value = _parse_optional_int(year, "year")
+
+    if (month_value is None) != (year_value is None):
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "month and year must be provided together"},
+        )
+    if month_value is not None and not 1 <= month_value <= 12:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "month must be between 1 and 12"},
+        )
+    if year_value is not None and not 2000 <= year_value <= 2100:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "year must be between 2000 and 2100"},
+        )
+
+    period_date = _resolve_period_date(month_value, year_value)
+
+    accounts = get_ggad_accounts()
+    account = next(
+        (acc for acc in accounts if str(acc.get("id")) == google_id),
+        None,
+    )
+    if not account:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"No Google Ads account found for {google_id}"},
+        )
+
+    account_code = account.get("accountCode")
+    if not account_code:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": f"No account code found for {google_id}"},
+        )
+
+    account_codes = [account_code]
+
+    master_budgets, allocations, rollbreakdowns, accelerations = run_parallel(
+        tasks=[
+            (get_masterbudgets, (account_codes, month_value, year_value)),
+            (get_allocations, (account_codes, month_value, year_value)),
+            (get_rollbreakdowns, (account_codes, month_value, year_value)),
+            (_get_accelerations_for_period, (account_codes, period_date)),
+        ],
+        api_name="spendsphere_v1_ui_load_db",
+    )
+
+    campaigns, budgets, costs = run_parallel(
+        tasks=[
+            (get_ggad_campaigns, ([account],)),
+            (get_ggad_budgets, ([account],)),
+            (get_ggad_spents, ([account], month_value, year_value)),
+        ],
+        api_name="spendsphere_v1_ui_load_google_ads",
+    )
+
+    active_period = get_active_period(account_codes)
+    rollovers = get_rollovers(account_codes, month_value, year_value)
+
+    rows = transform_google_ads_data(
+        master_budgets=master_budgets,
+        campaigns=campaigns,
+        budgets=budgets,
+        costs=costs,
+        allocations=allocations,
+        rollovers=rollbreakdowns,
+        accelerations=accelerations,
+        activePeriod=active_period,
+        today=period_date,
+        include_transform_results=True,
+    )
+
+    master_budgets_payload = _build_master_budgets(master_budgets)
+    roll_breakdown_payload = _build_roll_breakdown(rollbreakdowns)
+    table_data = _build_table_data(rows, budgets, allocations)
+
+    rollovers_total = _to_float(
+        sum(Decimal(str(r.get("amount", 0))) for r in rollovers)
+    )
+
+    return {
+        "masterBudgets": master_budgets_payload,
+        "rollOvers": rollovers_total,
+        "rollBreakdown": roll_breakdown_payload,
+        "tableData": table_data,
     }

@@ -11,6 +11,15 @@ from apps.spendsphere.api.v1.helpers.config import get_db_tables, get_service_bu
 # ACCOUNTS
 # ============================================================
 
+def _resolve_period(
+    month: int | None,
+    year: int | None,
+) -> tuple[int, int]:
+    if month is not None and year is not None:
+        return month, year
+    period = get_current_period()
+    return period["month"], period["year"]
+
 
 def get_accounts(
     account_codes: str | list[str] | None = None,
@@ -74,6 +83,8 @@ def get_accounts(
 
 def get_masterbudgets(
     account_codes: list[str] | None = None,
+    month: int | None = None,
+    year: int | None = None,
 ) -> list[dict]:
     """
     Get master budgets for the current month/year.
@@ -84,9 +95,7 @@ def get_masterbudgets(
     if isinstance(account_codes, str):
         account_codes = [account_codes]
 
-    period = get_current_period()
-    month = period["month"]
-    year = period["year"]
+    month, year = _resolve_period(month, year)
 
     service_budgets = get_service_budgets()
     if not service_budgets:
@@ -130,6 +139,8 @@ def get_masterbudgets(
 
 def get_allocations(
     account_codes: list[str] | None = None,
+    month: int | None = None,
+    year: int | None = None,
 ) -> list[dict]:
     """
     Get SpendShare allocations for the current month/year.
@@ -137,9 +148,7 @@ def get_allocations(
     if isinstance(account_codes, str):
         account_codes = [account_codes]
 
-    period = get_current_period()
-    month = period["month"]
-    year = period["year"]
+    month, year = _resolve_period(month, year)
 
     tables = get_db_tables()
     allocations_table = tables["ALLOCATIONS"]
@@ -213,6 +222,8 @@ def duplicate_allocations(
 
 def get_rollbreakdowns(
     account_codes: list[str] | None = None,
+    month: int | None = None,
+    year: int | None = None,
 ) -> list[dict]:
     """
     Get SpendShare roll breakdowns for one or more accounts
@@ -221,9 +232,7 @@ def get_rollbreakdowns(
     if isinstance(account_codes, str):
         account_codes = [account_codes]
 
-    period = get_current_period()
-    month = period["month"]
-    year = period["year"]
+    month, year = _resolve_period(month, year)
 
     tables = get_db_tables()
     rollbreakdowns_table = tables["ROLLBREAKDOWNS"]
