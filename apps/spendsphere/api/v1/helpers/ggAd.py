@@ -23,6 +23,10 @@ from shared.constants import (
 )
 from shared.logger import get_logger
 from apps.spendsphere.api.v1.helpers.config import get_adtypes
+from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
+    get_google_ads_clients_cache_entry,
+    set_google_ads_clients_cache,
+)
 
 logger = get_logger("Google Ads")
 
@@ -154,13 +158,19 @@ def get_mcc_accounts() -> list[dict]:
     return results
 
 
-def get_ggad_accounts() -> list[dict]:
+def get_ggad_accounts(*, refresh_cache: bool = False) -> list[dict]:
     """
     Return normalized Google Ads accounts that follow naming convention:
     [zzz.][AccountCode]_[Account Name]
     """
+    if not refresh_cache:
+        cached, is_stale = get_google_ads_clients_cache_entry()
+        if cached is not None and not is_stale:
+            return cached
+
     raw_accounts = get_mcc_accounts()
     if not raw_accounts:
+        set_google_ads_clients_cache([])
         return []
 
     results: list[dict] = []
@@ -188,6 +198,7 @@ def get_ggad_accounts() -> list[dict]:
             }
         )
 
+    set_google_ads_clients_cache(results)
     return results
 
 

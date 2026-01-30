@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Query
 
 from apps.spendsphere.api.v1.helpers.ggAd import get_ggad_accounts
 
@@ -15,10 +15,19 @@ router = APIRouter()
     summary="List Google Ads clients",
     description="Returns Google Ads clients that match the SpendSphere naming convention.",
 )
-def get_google_ads_clients_route():
+def get_google_ads_clients_route(
+    refresh_cache: bool = Query(
+        False, description="When true, refreshes the Google Ads client cache."
+    ),
+):
     """
     Example request:
-    GET /spendsphere/api/v1/google-ads
+    GET /api/spendsphere/v1/google-ads
+    Header: X-Tenant-Id: acme
+
+    Example request (force refresh):
+    GET /api/spendsphere/v1/google-ads?refresh_cache=true
+    Header: X-Tenant-Id: acme
 
     Example response:
     [
@@ -30,4 +39,30 @@ def get_google_ads_clients_route():
       }
     ]
     """
-    return get_ggad_accounts()
+    return get_ggad_accounts(refresh_cache=refresh_cache)
+
+
+@router.post(
+    "/google-ads/refresh",
+    summary="Refresh Google Ads client cache",
+    description="Forces a refresh of the Google Ads client cache for the current tenant.",
+)
+def refresh_google_ads_clients_route():
+    """
+    Example request:
+    POST /api/spendsphere/v1/google-ads/refresh
+    Header: X-Tenant-Id: acme
+
+    Example response:
+    {
+      "googleAdsClients": [
+        {
+          "id": "6563107233",
+          "descriptiveName": "AUC_Autocity Credit",
+          "accountCode": "AUC",
+          "accountName": "Autocity Credit"
+        }
+      ]
+    }
+    """
+    return {"googleAdsClients": get_ggad_accounts(refresh_cache=True)}

@@ -51,6 +51,4 @@ logs/
 # ------------------
 # Catches
 # ------------------
-account_code_cache.json
-account_code_cache.lock
-account_code_cache.tmp
+caches.json.lock

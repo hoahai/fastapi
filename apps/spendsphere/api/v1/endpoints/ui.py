@@ -10,6 +10,10 @@ from shared.utils import run_parallel
 router = APIRouter()
 
 
+def _get_google_ads_clients(refresh_cache: bool) -> list[dict]:
+    return get_ggad_accounts(refresh_cache=refresh_cache)
+
+
 # ============================================================
 # UI
 # ============================================================
@@ -27,10 +31,18 @@ def get_ui_selections_route(
     months_after: int = Query(
         1, description="Number of months after the current month to include."
     ),
+    refresh_cache: bool = Query(
+        False, description="When true, refreshes the Google Ads client cache."
+    ),
 ):
     """
     Example request:
-    GET /spendsphere/api/v1/ui/selections
+    GET /api/spendsphere/v1/ui/selections
+    Header: X-Tenant-Id: acme
+
+    Example request (force refresh):
+    GET /api/spendsphere/v1/ui/selections?refresh_cache=true
+    Header: X-Tenant-Id: acme
 
     Example response:
     {
@@ -72,7 +84,7 @@ def get_ui_selections_route(
     validate_month_offsets(months_before, months_after)
 
     tasks = [
-        (get_ggad_accounts, ()),
+        (_get_google_ads_clients, (refresh_cache,)),
         (build_periods_data, (months_before, months_after)),
     ]
     clients, periods = run_parallel(
