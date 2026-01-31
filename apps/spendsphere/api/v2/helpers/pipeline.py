@@ -82,7 +82,6 @@ def run_google_ads_budget_pipeline(
     account_codes: list[str] | str | None = None,
     dry_run: bool = False,
     include_transform_results: bool = False,
-    use_account_end_date: bool = True,
 ) -> dict:
     """
     Full Google Ads budget + campaign update pipeline.
@@ -149,7 +148,6 @@ def run_google_ads_budget_pipeline(
         accelerations=accelerations,
         activePeriod=active_period,
         include_transform_results=include_transform_results,
-        use_account_end_date=use_account_end_date,
     )
 
     # =====================================================

@@ -366,8 +366,6 @@ def budget_activePeriod_join(
 def calculate_daily_budget(
     budgets: list[dict],
     today: date | None = None,
-    *,
-    use_account_end_date: bool = True,
 ) -> list[dict]:
     """
     Calculate daily budget per budgetId.
@@ -382,16 +380,11 @@ def calculate_daily_budget(
 
     for b in budgets:
         days_left_value = month_days_left
-        if use_account_end_date:
-            end_date = _coerce_date(b.get("endDate"))
-            if (
-                end_date
-                and end_date.year == today.year
-                and end_date.month == today.month
-            ):
-                days_left_value = (end_date - today).days + 1
-                if days_left_value < 0:
-                    days_left_value = 0
+        end_date = _coerce_date(b.get("endDate"))
+        if end_date and end_date.year == today.year and end_date.month == today.month:
+            days_left_value = (end_date - today).days + 1
+            if days_left_value < 0:
+                days_left_value = 0
         days_left = Decimal(str(days_left_value))
 
         total_cost = b.get("totalCost")
@@ -637,7 +630,6 @@ def _build_budget_rows(
     *,
     today: date | None = None,
     include_transform_results: bool = True,
-    use_account_end_date: bool = True,
 ) -> list[dict]:
     """
     Full Google Ads budget pipeline (BUDGET-CENTRIC).
@@ -658,7 +650,6 @@ def _build_budget_rows(
     step7 = calculate_daily_budget(
         step6,
         today=today,
-        use_account_end_date=use_account_end_date,
     )
 
     if not include_transform_results:
@@ -688,7 +679,6 @@ def transform_google_ads_data(
     *,
     today: date | None = None,
     include_transform_results: bool = True,
-    use_account_end_date: bool = True,
 ) -> list[dict]:
     """
     Full Google Ads budget pipeline (BUDGET-CENTRIC).
@@ -704,7 +694,6 @@ def transform_google_ads_data(
         activePeriod=activePeriod,
         today=today,
         include_transform_results=include_transform_results,
-        use_account_end_date=use_account_end_date,
     )
 
 
@@ -719,7 +708,6 @@ def build_update_payloads_from_inputs(
     activePeriod: list[dict] | None = None,
     *,
     include_transform_results: bool = False,
-    use_account_end_date: bool = True,
 ) -> tuple[list[dict], list[dict], list[dict] | None]:
     """
     Build update payloads directly from raw inputs, optionally returning
@@ -735,7 +723,6 @@ def build_update_payloads_from_inputs(
         accelerations=accelerations,
         activePeriod=activePeriod,
         include_transform_results=include_transform_results,
-        use_account_end_date=use_account_end_date,
     )
     budget_payloads, campaign_payloads = generate_update_payloads(rows)
     if include_transform_results:

@@ -1,3 +1,4 @@
+import calendar
 import math
 from datetime import date, datetime
 from decimal import Decimal
@@ -59,6 +60,64 @@ def _resolve_period_date(month: int | None, year: int | None) -> date:
     if month == today.month and year == today.year:
         return today
     return date(year, month, 1)
+
+
+def _coerce_date(value: object) -> date | None:
+    if isinstance(value, date) and not isinstance(value, datetime):
+        return value
+    if isinstance(value, datetime):
+        return value.date()
+    if isinstance(value, str) and value.strip():
+        cleaned = value.strip()
+        for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%m/%d/%y"):
+            try:
+                return datetime.strptime(cleaned, fmt).date()
+            except ValueError:
+                continue
+        try:
+            return datetime.fromisoformat(cleaned).date()
+        except ValueError:
+            return None
+    return None
+
+
+def _build_monthly_active_period(
+    row: dict | None,
+    *,
+    month: int,
+    year: int,
+) -> dict:
+    month_start = date(year, month, 1)
+    last_day = calendar.monthrange(year, month)[1]
+    month_end = date(year, month, last_day)
+
+    start_date = _coerce_date(row.get("startDate") if row else None)
+    end_date = _coerce_date(row.get("endDate") if row else None)
+
+    start_ok = True if start_date is None else start_date <= month_end
+    end_ok = True if end_date is None else end_date >= month_start
+    is_active = start_ok and end_ok
+
+    response: dict[str, object] = {"isActive": is_active}
+    message_parts: list[str] = []
+
+    if start_date and month_start <= start_date <= month_end:
+        response["startDate"] = start_date.isoformat()
+        message_parts.append(
+            f"Account will start on {start_date.strftime('%m/%d/%Y')}"
+        )
+    if end_date and month_start <= end_date <= month_end:
+        response["endDate"] = end_date.isoformat()
+        message_parts.append(
+            f"Account last day on {end_date.strftime('%m/%d/%Y')} EOD"
+        )
+        message_parts.append(
+            f"Daily budgets and pacing as of {end_date.strftime('%m/%d')}"
+        )
+
+    if message_parts:
+        response["message"] = message_parts
+    return response
 
 
 def _to_float(value: object) -> float | None:
@@ -394,6 +453,14 @@ def load_ui_route(
         }
       },
       "rollOvers": 1000.0,
+      "activePeriod": {
+        "isActive": true,
+        "endDate": "2026-01-31",
+        "message": [
+          "Account last day on 01/31/2026 EOD",
+          "Daily budgets and pacing as of 01/31"
+        ]
+      },
       "rollBreakdown": {
         "grandTotalRollBreakdown": 1000,
         "SEM": {
@@ -529,9 +596,19 @@ def load_ui_route(
         sum(Decimal(str(r.get("amount", 0))) for r in rollovers)
     )
 
+    period_month = month_value if month_value is not None else period_date.month
+    period_year = year_value if year_value is not None else period_date.year
+    active_period_row = active_period[0] if active_period else None
+    active_period_payload = _build_monthly_active_period(
+        active_period_row,
+        month=period_month,
+        year=period_year,
+    )
+
     return {
         "masterBudgets": master_budgets_payload,
         "rollOvers": rollovers_total,
+        "activePeriod": active_period_payload,
         "rollBreakdown": roll_breakdown_payload,
         "tableData": table_data,
     }
