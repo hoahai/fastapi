@@ -335,8 +335,18 @@ def get_ui_selections_route(
         tasks=tasks,
         api_name="spendsphere_v1_ui_selections",
     )
+    clients_sorted = sorted(
+        clients, key=lambda client: (client.get("accountName") or "").casefold()
+    )
+    months_array = periods.get("monthsArray")
+    if isinstance(months_array, list):
+        months_array_sorted = sorted(
+            months_array,
+            key=lambda item: (item.get("year") or 0, item.get("month") or 0),
+        )
+        periods = {**periods, "monthsArray": months_array_sorted}
     return {
-        "googleAdsClients": clients,
+        "googleAdsClients": clients_sorted,
         "periods": periods,
     }
 

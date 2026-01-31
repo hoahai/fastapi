@@ -1,5 +1,7 @@
 from fastapi import APIRouter, HTTPException, Query
 
+from apps.spendsphere.api.v1.helpers.ggSheet import get_active_period
+from apps.spendsphere.api.v1.helpers.spendsphere_helpers import require_account_code
 from shared.utils import get_current_period
 
 router = APIRouter()
@@ -115,3 +117,31 @@ def get_current_period_route():
     }
     """
     return get_current_period()
+
+
+@router.get(
+    "/active-period/{account_code}",
+    summary="Get active period for an account",
+    description="Returns the active period metadata from the active period sheet.",
+)
+def get_active_period_route(account_code: str):
+    """
+    Example request:
+    GET /spendsphere/api/v1/active-period/TAAA
+
+    Example response:
+    {
+      "accountCode": "TAAA",
+      "startDate": "2026-01-01",
+      "endDate": "2026-01-31",
+      "isActive": true
+    }
+    """
+    account_code = require_account_code(account_code)
+    data = get_active_period([account_code])
+    if not data:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No active period found for account_code '{account_code}'",
+        )
+    return data[0]

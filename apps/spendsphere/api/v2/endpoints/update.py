@@ -31,6 +31,9 @@ class GoogleAdsUpdateRequest(BaseModel):
     accountCodes: str | list[str] | None = None
     dryRun: bool = False
     includeTransformResults: bool = False
+    useAccountEndDate: bool = Field(
+        default=True, alias="use_account_end_date"
+    )
     includeAll: bool = Field(default=False, alias="include_all")
 
 
@@ -43,6 +46,7 @@ def update_google_ads(payload: GoogleAdsUpdateRequest):
         account_codes=payload.accountCodes,
         dry_run=payload.dryRun,
         include_transform_results=payload.includeTransformResults,
+        use_account_end_date=payload.useAccountEndDate,
     )
 
     return result
@@ -65,6 +69,7 @@ def _run_update_job(
             account_codes=payload.accountCodes,
             dry_run=payload.dryRun,
             include_transform_results=payload.includeTransformResults,
+            use_account_end_date=payload.useAccountEndDate,
         )
         _log_async_update_response(
             request_id=request_id,
