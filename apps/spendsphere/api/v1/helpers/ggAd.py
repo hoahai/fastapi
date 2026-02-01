@@ -41,6 +41,10 @@ def _chunked(items: list[dict], size: int):
         yield items[i : i + size]
 
 
+def _is_zzz_name(name: str | None) -> bool:
+    return bool(name) and str(name).strip().lower().startswith("zzz.")
+
+
 # =====================
 # CLIENT
 # =====================
@@ -506,6 +510,8 @@ def validate_updates(
 
         for r in updates:
             try:
+                if _is_zzz_name(r.get("campaignName")):
+                    continue
                 if "campaignId" not in r:
                     raise ValueError("Missing campaignId")
 
@@ -737,13 +743,36 @@ def update_campaign_statuses(
             { campaignId, status }
         ]
     """
+    filtered_updates = [
+        u
+        for u in updates
+        if not _is_zzz_name(u.get("campaignName"))
+    ]
+    if not filtered_updates:
+        account_code = next(
+            (r.get("accountCode") for r in updates if r.get("accountCode")), None
+        )
+        return {
+            "customerId": customer_id,
+            "accountCode": account_code,
+            "operation": "update_campaign_statuses",
+            "summary": {
+                "total": 0,
+                "succeeded": 0,
+                "failed": 0,
+            },
+            "successes": [],
+            "failures": [],
+        }
+
     valid, invalid = validate_updates(
         customer_id=customer_id,
-        updates=updates,
+        updates=filtered_updates,
         mode="campaign_status",
     )
     account_code = next(
-        (r.get("accountCode") for r in updates if r.get("accountCode")), None
+        (r.get("accountCode") for r in filtered_updates if r.get("accountCode")),
+        None,
     )
 
     if not valid:
@@ -752,7 +781,7 @@ def update_campaign_statuses(
             "accountCode": account_code,
             "operation": "update_campaign_statuses",
             "summary": {
-                "total": len(updates),
+                "total": len(filtered_updates),
                 "succeeded": 0,
                 "failed": len(invalid),
             },
@@ -821,7 +850,7 @@ def update_campaign_statuses(
         "accountCode": account_code,
         "operation": "update_campaign_statuses",
         "summary": {
-            "total": len(updates),
+            "total": len(filtered_updates),
             "succeeded": len(successes),
             "failed": len(failures),
         },

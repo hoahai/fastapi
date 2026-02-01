@@ -13,6 +13,10 @@ from shared.tenant import get_timezone
 
 logger = get_logger("Data Transform")
 
+
+def _is_zzz_name(name: str | None) -> bool:
+    return bool(name) and str(name).strip().lower().startswith("zzz.")
+
 # ============================================================
 # 1. MASTER BUDGET → AD TYPE MAPPING
 # ============================================================
@@ -538,15 +542,24 @@ def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
             for c in campaigns
             if c.get("campaignName")
         ]
+        zzz_campaigns = [
+            c
+            for c in campaigns
+            if _is_zzz_name(c.get("campaignName"))
+        ]
+        all_campaigns_zzz = bool(campaigns) and len(zzz_campaigns) == len(campaigns)
 
         # -------------------------
         # Campaign status updates (independent)
         # -------------------------
         for campaign in campaigns:
+            if _is_zzz_name(campaign.get("campaignName")):
+                continue
             if campaign["status"] != expected_status:
                 customer_updates = campaign_updates.setdefault(customer_id, {})
                 customer_updates[str(campaign["campaignId"])] = {
                     "campaignId": campaign["campaignId"],
+                    "campaignName": campaign.get("campaignName"),
                     "oldStatus": campaign["status"],
                     "newStatus": expected_status,
                     "accountCode": row.get("accountCode"),
@@ -555,6 +568,8 @@ def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
         # -------------------------
         # Budget updates (stricter rules)
         # -------------------------
+        if all_campaigns_zzz:
+            continue
         if daily_budget is None:
             continue
         if budget_amount_raw is None:
