@@ -16,6 +16,8 @@ from shared.logger import (
     get_logger,
     set_request_id,
     reset_request_id,
+    set_client_id,
+    reset_client_id,
     add_debug_handler,
     remove_debug_handler,
     create_request_debug_handler,
@@ -546,58 +548,67 @@ async def api_key_auth_middleware(request: Request, call_next):
     if request.method == "OPTIONS":
         return await call_next(request)
 
+    client_token = None
     try:
-        registry = _get_api_key_registry()
-    except ValueError:
-        if is_api_route:
+        try:
+            registry = _get_api_key_registry()
+        except ValueError:
+            if is_api_route:
+                return _error_response(
+                    request,
+                    status_code=500,
+                    detail="API key registry is misconfigured",
+                    duration_s=_duration_since(request, start_time),
+                )
+            registry = {}
+
+        if not registry and is_api_route:
             return _error_response(
                 request,
                 status_code=500,
-                detail="API key registry is misconfigured",
-                duration_s=_duration_since(request, start_time),
-            )
-        registry = {}
-
-    if not registry and is_api_route:
-        return _error_response(
-            request,
-            status_code=500,
-            detail="API key registry is not configured",
-            duration_s=_duration_since(request, start_time),
-        )
-
-    api_key = _extract_api_key(request)
-    client_id = _match_api_key(api_key, registry) if api_key and registry else None
-
-    if is_api_route:
-        if not api_key:
-            request.state.client_id = "Unauthenticated"
-            return _error_response(
-                request,
-                status_code=401,
-                detail="Missing API key",
-                duration_s=_duration_since(request, start_time),
-            )
-        if not client_id:
-            request.state.client_id = "Not Found"
-            return _error_response(
-                request,
-                status_code=401,
-                detail="Invalid API key",
+                detail="API key registry is not configured",
                 duration_s=_duration_since(request, start_time),
             )
 
-        request.state.client_id = client_id
+        api_key = _extract_api_key(request)
+        client_id = _match_api_key(api_key, registry) if api_key and registry else None
+
+        if is_api_route:
+            if not api_key:
+                request.state.client_id = "Unauthenticated"
+                client_token = set_client_id(request.state.client_id)
+                return _error_response(
+                    request,
+                    status_code=401,
+                    detail="Missing API key",
+                    duration_s=_duration_since(request, start_time),
+                )
+            if not client_id:
+                request.state.client_id = "Not Found"
+                client_token = set_client_id(request.state.client_id)
+                return _error_response(
+                    request,
+                    status_code=401,
+                    detail="Invalid API key",
+                    duration_s=_duration_since(request, start_time),
+                )
+
+            request.state.client_id = client_id
+            client_token = set_client_id(client_id)
+            response = await call_next(request)
+            response.headers["X-API-Client"] = client_id
+            return response
+
+        if api_key:
+            client_label = client_id or "Not Found"
+        else:
+            client_label = "Unauthenticated"
+
+        request.state.client_id = client_label
+        client_token = set_client_id(client_label)
         response = await call_next(request)
-        response.headers["X-API-Client"] = client_id
+        response.headers["X-API-Client"] = client_label
         return response
-
-    if api_key:
-        client_label = client_id or "Not Found"
-    else:
-        client_label = "Unauthenticated"
-
-    request.state.client_id = client_label
-    response = await call_next(request)
-    response.headers["X-API-Client"] = client_label
-    return response
+    finally:
+        if client_token is not None:
+            reset_client_id(client_token)

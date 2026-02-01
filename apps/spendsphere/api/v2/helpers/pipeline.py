@@ -1,9 +1,9 @@
 from __future__ import annotations
 
-
 from apps.spendsphere.api.v1.helpers.dataTransform import (
     build_update_payloads_from_inputs,
 )
+from apps.spendsphere.api.v1.helpers.email import build_google_ads_alert_email
 from apps.spendsphere.api.v2.helpers.db_queries import (
     get_accelerations,
     get_allocations,
@@ -11,6 +11,7 @@ from apps.spendsphere.api.v2.helpers.db_queries import (
     get_rollbreakdowns,
 )
 from apps.spendsphere.api.v1.helpers.ggSheet import get_active_period
+from shared.email import send_google_ads_result_email
 from shared.logger import get_logger
 from shared.utils import run_parallel
 
@@ -328,5 +329,23 @@ def run_google_ads_budget_pipeline(
         "Google Ads pipeline completed",
         extra={"extra_fields": pipeline_result},
     )
+
+    has_failures = overall_summary.get("failed", 0) > 0
+    has_warnings = overall_summary.get("warnings", 0) > 0 or bool(warning_rows)
+    if has_failures or has_warnings:
+        try:
+            subject, text_body, html_body = build_google_ads_alert_email(
+                full_report=pipeline_result,
+            )
+            send_google_ads_result_email(
+                subject,
+                text_body,
+                html=html_body,
+            )
+        except Exception as exc:
+            logger.error(
+                "Failed to send Google Ads alert email",
+                extra={"extra_fields": {"error": str(exc)}},
+            )
 
     return pipeline_result

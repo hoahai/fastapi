@@ -1,0 +1,43 @@
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>$subject</title>
+  </head>
+  <body style="margin:0;padding:0;background:#f3f4f6;font-family:Arial, sans-serif;color:#111827;">
+    <div style="max-width:720px;margin:0 auto;padding:24px;">
+      <div style="background:#111827;color:#f9fafb;padding:18px 22px;border-radius:12px;">
+        <div style="font-size:14px;letter-spacing:0.08em;text-transform:uppercase;opacity:0.8;">$app_label</div>
+        <div style="font-size:22px;font-weight:700;margin-top:6px;">Google Ads Alert</div>
+        <div style="margin-top:8px;font-size:12px;opacity:0.85;line-height:1.6;">
+          <div>Timestamp: $generated_at</div>
+          <div>Request ID: $request_id</div>
+          <div>Client ID: $client_id</div>
+          <div>Tenant ID: $tenant_id</div>
+          <div>Operation: $campaign_status_summary</div>
+          <div>Dry run: $dry_run</div>
+        </div>
+      </div>
+
+      <div style="background:#ffffff;padding:20px;border-radius:12px;margin-top:16px;box-shadow:0 10px 25px rgba(0,0,0,0.04);">
+        <div style="font-size:16px;font-weight:600;margin-bottom:12px;">Summary</div>
+        <table role="presentation" cellpadding="0" cellspacing="10" style="width:100%;border-collapse:separate;">
+          <tr>
+            $stats_html
+          </tr>
+        </table>
+      </div>
+
+      <div style="margin-top:16px;background:#ffffff;padding:20px;border-radius:12px;box-shadow:0 10px 25px rgba(0,0,0,0.04);">
+        <div style="font-size:16px;font-weight:600;margin-bottom:12px;color:#f97316;">Warnings</div>
+        $warnings_html
+      </div>
+
+      <div style="margin-top:16px;background:#ffffff;padding:20px;border-radius:12px;box-shadow:0 10px 25px rgba(0,0,0,0.04);">
+        <div style="font-size:16px;font-weight:600;margin-bottom:12px;color:#dc2626;">Failures</div>
+        $failures_html
+      </div>
+    </div>
+  </body>
+</html>

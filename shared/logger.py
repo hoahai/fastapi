@@ -49,6 +49,7 @@ RUN_LOG_FILE = "api.log"
 # ======================================================
 
 _REQUEST_ID: ContextVar[str | None] = ContextVar("request_id", default=None)
+_CLIENT_ID: ContextVar[str | None] = ContextVar("client_id", default=None)
 
 
 def set_request_id(request_id: str) -> ContextVar.Token:
@@ -61,6 +62,18 @@ def reset_request_id(token: ContextVar.Token) -> None:
 
 def get_request_id() -> str | None:
     return _REQUEST_ID.get()
+
+
+def set_client_id(client_id: str) -> ContextVar.Token:
+    return _CLIENT_ID.set(client_id)
+
+
+def reset_client_id(token: ContextVar.Token) -> None:
+    _CLIENT_ID.reset(token)
+
+
+def get_client_id() -> str | None:
+    return _CLIENT_ID.get()
 
 
 class RequestIdFilter(logging.Filter):
