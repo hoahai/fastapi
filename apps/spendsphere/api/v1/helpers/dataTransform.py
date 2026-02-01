@@ -389,6 +389,7 @@ def calculate_daily_budget(
             days_left_value = (end_date - today).days + 1
             if days_left_value < 0:
                 days_left_value = 0
+        b["daysLeft"] = int(days_left_value)
         days_left = Decimal(str(days_left_value))
 
         total_cost = b.get("totalCost")
@@ -601,6 +602,12 @@ def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
                 "campaignNames": campaign_names,
                 "currentAmount": float(budget_amount),
                 "newAmount": float(amount_to_set),
+                "remainingBudget": (
+                    float(row.get("remainingBudget"))
+                    if row.get("remainingBudget") is not None
+                    else None
+                ),
+                "daysLeft": row.get("daysLeft"),
             }
         )
 

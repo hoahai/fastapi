@@ -1,7 +1,5 @@
 from __future__ import annotations
 
-from datetime import datetime
-from zoneinfo import ZoneInfo
 
 from apps.spendsphere.api.v1.helpers.dataTransform import (
     build_update_payloads_from_inputs,
@@ -13,9 +11,7 @@ from apps.spendsphere.api.v1.helpers.db_queries import (
     get_rollbreakdowns,
 )
 from apps.spendsphere.api.v1.helpers.ggSheet import get_active_period
-from shared.email import build_google_ads_result_email, send_google_ads_result_email
 from shared.logger import get_logger
-from shared.tenant import get_timezone
 from shared.utils import run_parallel
 
 # =========================================================
@@ -254,12 +250,13 @@ def run_google_ads_budget_pipeline(
     # =====================================================
     # 5. Aggregate results
     # =====================================================
-    overall_summary = {"total": 0, "succeeded": 0, "failed": 0}
+    overall_summary = {"total": 0, "succeeded": 0, "failed": 0, "warnings": 0}
 
     for r in mutation_results:
         overall_summary["total"] += r["summary"]["total"]
         overall_summary["succeeded"] += r["summary"]["succeeded"]
         overall_summary["failed"] += r["summary"]["failed"]
+        overall_summary["warnings"] += r["summary"].get("warnings", 0)
 
     pipeline_result = {
         "dry_run": dry_run,
@@ -273,19 +270,58 @@ def run_google_ads_budget_pipeline(
         pipeline_result["transform_results"] = results
 
     # =====================================================
-    # 6. Email FULL report on failures
+    # 6. Log failures summary (single entry)
     # =====================================================
     if overall_summary.get("failed", 0) > 0:
-        local_time = datetime.now(ZoneInfo(get_timezone())).strftime(
-            "%d/%m/%Y %H:%M:%S"
+        failure_rows: list[dict] = []
+        for r in mutation_results:
+            failures = r.get("failures") or []
+            if not failures:
+                continue
+            failure_rows.append(
+                {
+                    "customerId": r.get("customerId"),
+                    "accountCode": r.get("accountCode"),
+                    "operation": r.get("operation"),
+                    "failures": failures,
+                }
+            )
+        if failure_rows:
+            logger.error(
+                "Google Ads pipeline failures",
+                extra={
+                    "extra_fields": {
+                        "failed_count": overall_summary.get("failed", 0),
+                        "failure_rows": failure_rows,
+                    }
+                },
+            )
+
+    # =====================================================
+    # 7. Log warnings summary (single entry)
+    # =====================================================
+    warning_rows: list[dict] = []
+    for r in mutation_results:
+        warnings = r.get("warnings") or []
+        if not warnings:
+            continue
+        warning_rows.append(
+            {
+                "customerId": r.get("customerId"),
+                "accountCode": r.get("accountCode"),
+                "operation": r.get("operation"),
+                "warnings": warnings,
+            }
         )
-        email_body = build_google_ads_result_email(full_report=pipeline_result)
-        send_google_ads_result_email(
-            subject=(
-                "Spendsphere – Google Ads update report "
-                f"(failures detected) {local_time}"
-            ),
-            body=email_body,
+    if warning_rows:
+        logger.warning(
+            "Google Ads pipeline warnings",
+            extra={
+                "extra_fields": {
+                    "warning_count": sum(len(r["warnings"]) for r in warning_rows),
+                    "warning_rows": warning_rows,
+                }
+            },
         )
 
     logger.debug(

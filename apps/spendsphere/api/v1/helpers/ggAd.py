@@ -538,17 +538,6 @@ def validate_updates(
 
             except Exception as e:
                 invalid.append({**r, "error": str(e)})
-                logger.error(
-                    "Campaign row excluded by validation",
-                    extra={
-                        "extra_fields": {
-                            "operation": "validate_campaign_status",
-                            "customerId": customer_id,
-                            "reason": str(e),
-                            "row": r,
-                        }
-                    },
-                )
 
     # =====================
     # BUDGET
@@ -564,31 +553,45 @@ def validate_updates(
                 budget_id = r["budgetId"]
                 new_amount = r["newAmount"]
                 current_amount = r["currentAmount"]
+                remaining_budget = r.get("remainingBudget")
+                days_left = r.get("daysLeft")
 
                 if budget_id in seen_ids:
                     raise ValueError("Duplicate budgetId")
 
-                # ✅ BLOCK UPWARD spikes ONLY
+                # ✅ BLOCK UPWARD spikes ONLY (allow within expected daily budget)
+                expected_daily = None
+                if remaining_budget is not None and days_left is not None:
+                    try:
+                        days_left_dec = Decimal(str(days_left))
+                        if days_left_dec > 0:
+                            expected_daily = (
+                                Decimal(str(remaining_budget)) / days_left_dec
+                            ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+                    except Exception:
+                        expected_daily = None
+
                 if new_amount > current_amount * GGADS_MAX_BUDGET_MULTIPLIER:
-                    raise ValueError("Budget spike exceeds allowed multiplier")
+                    if expected_daily is not None:
+                        new_amount_dec = Decimal(str(new_amount)).quantize(
+                            Decimal("0.01"), rounding=ROUND_HALF_UP
+                        )
+                        if new_amount_dec <= expected_daily:
+                            r["validationWarning"] = (
+                                "Budget spike exceeds the allowed multiplier; "
+                                "update allowed within expected daily budget."
+                            )
+                            r["expectedDaily"] = float(expected_daily)
+                        else:
+                            raise ValueError("Budget spike exceeds allowed multiplier")
+                    else:
+                        raise ValueError("Budget spike exceeds allowed multiplier")
 
                 seen_ids.add(budget_id)
                 valid.append(r)
 
             except Exception as e:
                 invalid.append({**r, "error": str(e)})
-                logger.error(
-                    "Budget row excluded by validation",
-                    extra={
-                        "extra_fields": {
-                            "operation": "validate_budget",
-                            "customerId": customer_id,
-                            "reason": str(e),
-                            "row": r,
-                            "intendedAmount": r.get("newAmount"),
-                        }
-                    },
-                )
 
     else:
         raise ValueError(f"Unknown validation mode: {mode}")
@@ -641,6 +644,7 @@ def update_budgets(
 
     successes: list[dict] = []
     failures = invalid.copy()
+    warnings: list[dict] = []
 
     for chunk in _chunked(valid, GGADS_MAX_UPDATES_PER_REQUEST):
         operations = []
@@ -703,14 +707,28 @@ def update_budgets(
                 )
 
         for i in successful_indices:
-            successes.append(
-                {
-                    "budgetId": chunk[i]["budgetId"],
-                    "campaignNames": chunk[i].get("campaignNames", []),
-                    "oldAmount": chunk[i].get("currentAmount"),
-                    "newAmount": max(chunk[i]["newAmount"], GGADS_MIN_BUDGET),
-                }
-            )
+            warning = chunk[i].get("validationWarning")
+            if warning:
+                warnings.append(
+                    {
+                        "budgetId": chunk[i].get("budgetId"),
+                        "accountCode": chunk[i].get("accountCode"),
+                        "campaignNames": chunk[i].get("campaignNames", []),
+                        "currentAmount": chunk[i].get("currentAmount"),
+                        "newAmount": chunk[i].get("newAmount"),
+                        "expectedDaily": chunk[i].get("expectedDaily"),
+                        "error": warning,
+                    }
+                )
+            else:
+                successes.append(
+                    {
+                        "budgetId": chunk[i]["budgetId"],
+                        "campaignNames": chunk[i].get("campaignNames", []),
+                        "oldAmount": chunk[i].get("currentAmount"),
+                        "newAmount": max(chunk[i]["newAmount"], GGADS_MIN_BUDGET),
+                    }
+                )
 
     return {
         "customerId": customer_id,
@@ -720,9 +738,11 @@ def update_budgets(
             "total": len(updates),
             "succeeded": len(successes),
             "failed": len(failures),
+            "warnings": len(warnings),
         },
         "successes": successes,
         "failures": failures,
+        "warnings": warnings,
     }
 
 

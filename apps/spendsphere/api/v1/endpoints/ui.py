@@ -183,22 +183,17 @@ def _build_roll_breakdown(rollbreakdowns: list[dict]) -> dict:
         if not ad_type:
             continue
         amount = Decimal(str(row.get("amount", 0)))
-        entry = result.setdefault(
-            ad_type, {"totalRoll": Decimal("0"), "rollovers": []}
-        )
-        entry["rollovers"].append(
-            {
+        if ad_type not in result:
+            result[ad_type] = {
                 "id": row.get("id"),
-                "adTypeCode": ad_type,
                 "amount": _to_float(amount),
             }
-        )
-        entry["totalRoll"] += amount
+        else:
+            existing = result[ad_type]
+            if isinstance(existing, dict):
+                existing_amount = Decimal(str(existing.get("amount", 0)))
+                existing["amount"] = _to_float(existing_amount + amount)
         grand_total += amount
-
-    for key, value in result.items():
-        if isinstance(value, dict) and isinstance(value.get("totalRoll"), Decimal):
-            value["totalRoll"] = _to_float(value.get("totalRoll"))
 
     result["grandTotalRollBreakdown"] = _to_float(grand_total)
     return result
@@ -461,48 +456,45 @@ def load_ui_route(
           "Daily budgets and pacing as of 01/31"
         ]
       },
-      "rollBreakdown": {
+        "rollBreakdown": {
         "grandTotalRollBreakdown": 1000,
         "SEM": {
-          "totalRoll": 1000,
-          "rollovers": [
-            {
-              "id": "0ad1dc44-35f2-4fb6-9f1f-19527ab193e3",
-              "adTypeCode": "SEM",
-              "amount": 1000
-            }
-          ]
+          "id": "0ad1dc44-35f2-4fb6-9f1f-19527ab193e3",
+          "amount": 1000
         }
       },
-      "tableData": [
-        {
-          "accountId": "6563107233",
-          "name": "AUC_DIS_Remarketing",
-          "explicitlyShared": false,
-          "status": "ENABLED",
-          "dailyBudget": 65.4,
-          "dailyBudgetBase": 54.5,
-          "budgetId": "15225876848",
-          "campaignStatuses": "ENABLED",
-          "campaigns": [
-            {
-              "campaignId": "21427314948",
-              "campaignName": "AUC_DIS_Remarketing",
-              "campaignStatus": "ENABLED"
-            }
-          ],
-          "spent": 586.09,
-          "allocation": {
-            "id": "b98d38c5-448f-4746-bed3-8dfdadd2959c",
-            "allocation": 97.364
-          },
-          "adTypeCode": "DIS",
-          "accelerationId": "3f5d9c0c-83a9-4a2d-8c7b-3cc5b1c1a021",
-          "accelerationMultiplier": 120,
-          "isFiltered": false,
-          "sortedIndex": 0
-        }
-      ]
+      "tableData": {
+        "grandTotalSpent": 586.09,
+        "data": [
+          {
+            "accountId": "6563107233",
+            "name": "AUC_DIS_Remarketing",
+            "explicitlyShared": false,
+            "status": "ENABLED",
+            "dailyBudget": 65.4,
+            "dailyBudgetBase": 54.5,
+            "budgetId": "15225876848",
+            "campaignStatuses": "ENABLED",
+            "campaigns": [
+              {
+                "campaignId": "21427314948",
+                "campaignName": "AUC_DIS_Remarketing",
+                "campaignStatus": "ENABLED"
+              }
+            ],
+            "spent": 586.09,
+            "allocation": {
+              "id": "b98d38c5-448f-4746-bed3-8dfdadd2959c",
+              "allocation": 97.364
+            },
+            "adTypeCode": "DIS",
+            "accelerationId": "3f5d9c0c-83a9-4a2d-8c7b-3cc5b1c1a021",
+            "accelerationMultiplier": 120,
+            "isFiltered": false,
+            "sortedIndex": 0
+          }
+        ]
+      }
     }
     """
     google_id = googleId.strip() if isinstance(googleId, str) else ""
@@ -591,6 +583,12 @@ def load_ui_route(
     master_budgets_payload = _build_master_budgets(master_budgets)
     roll_breakdown_payload = _build_roll_breakdown(rollbreakdowns)
     table_data = _build_table_data(rows, budgets, allocations)
+    grand_total_spent = _to_float(
+        sum(
+            Decimal(str(item.get("spent", 0) or 0))
+            for item in table_data
+        )
+    )
 
     rollovers_total = _to_float(
         sum(Decimal(str(r.get("amount", 0))) for r in rollovers)
@@ -610,5 +608,8 @@ def load_ui_route(
         "rollOvers": rollovers_total,
         "activePeriod": active_period_payload,
         "rollBreakdown": roll_breakdown_payload,
-        "tableData": table_data,
+        "tableData": {
+            "grandTotalSpent": grand_total_spent,
+            "data": table_data,
+        },
     }
