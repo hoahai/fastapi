@@ -11,16 +11,12 @@ from zoneinfo import ZoneInfo
 from fastapi import Request
 from starlette.responses import JSONResponse, Response
 
-from shared.constants import LOG_LEVEL
 from shared.logger import (
     get_logger,
     set_request_id,
     reset_request_id,
     set_client_id,
     reset_client_id,
-    add_debug_handler,
-    remove_debug_handler,
-    create_request_debug_handler,
 )
 from shared.tenant import (
     TenantConfigError,
@@ -436,11 +432,6 @@ async def request_response_logger_middleware(request: Request, call_next):
     start_time = time.perf_counter()
     request_id = ensure_request_id(request)
     token = set_request_id(request_id)
-    debug_handler = None
-
-    if LOG_LEVEL == "DEBUG":
-        debug_handler = create_request_debug_handler(request_id)
-        add_debug_handler(debug_handler)
 
     try:
         body_bytes = await request.body()
@@ -510,8 +501,6 @@ async def request_response_logger_middleware(request: Request, call_next):
 
         return response
     finally:
-        if debug_handler:
-            remove_debug_handler(debug_handler)
         reset_request_id(token)
 
 
