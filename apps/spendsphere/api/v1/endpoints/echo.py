@@ -8,8 +8,8 @@ router = APIRouter()
 
 
 @router.post("/echo", summary="Echo request body")
-def echo_route(payload: object = Body(...)):
-    return payload
+def echo_route(request_payload: object = Body(...)):
+    return request_payload
 
 
 class TestEmailRequest(BaseModel):
@@ -21,8 +21,8 @@ class TestEmailRequest(BaseModel):
 
 
 @router.post("/echo/test-email", summary="Send a test email via Zoho Mail")
-def test_email_route(payload: TestEmailRequest):
-    if payload.simulate_alert:
+def test_email_route(request_payload: TestEmailRequest):
+    if request_payload.simulate_alert:
         sample_report = {
             "dry_run": True,
             "account_codes": ["TEST"],
@@ -92,13 +92,16 @@ def test_email_route(payload: TestEmailRequest):
         )
         return {"status": "sent", "mode": "alert", "zoho": response}
 
-    subject = payload.subject or "Zoho Mail test"
-    body = payload.body or "This is a test email sent from the SpendSphere API."
+    subject = request_payload.subject or "Zoho Mail test"
+    body = (
+        request_payload.body
+        or "This is a test email sent from the SpendSphere API."
+    )
     response = send_google_ads_result_email(
         subject,
         body,
-        html=payload.html,
-        app_name=payload.app_name,
+        html=request_payload.html,
+        app_name=request_payload.app_name,
         return_response=True,
     )
 

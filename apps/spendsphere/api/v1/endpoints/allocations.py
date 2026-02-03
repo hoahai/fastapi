@@ -53,7 +53,7 @@ class AllocationDuplicateRequest(BaseModel):
 
 
 @router.post("/allocations/duplicate")
-def duplicate_allocations_route(payload: AllocationDuplicateRequest):
+def duplicate_allocations_route(request_payload: AllocationDuplicateRequest):
     """
     Example request:
     {
@@ -70,20 +70,20 @@ def duplicate_allocations_route(payload: AllocationDuplicateRequest):
       "data": {"inserted": 42}
     }
     """
-    if payload.fromMonth < 1 or payload.fromMonth > 12:
+    if request_payload.fromMonth < 1 or request_payload.fromMonth > 12:
         raise HTTPException(status_code=400, detail="fromMonth must be 1-12")
-    if payload.toMonth < 1 or payload.toMonth > 12:
+    if request_payload.toMonth < 1 or request_payload.toMonth > 12:
         raise HTTPException(status_code=400, detail="toMonth must be 1-12")
-    if payload.fromYear < 2000 or payload.fromYear > 2100:
+    if request_payload.fromYear < 2000 or request_payload.fromYear > 2100:
         raise HTTPException(status_code=400, detail="fromYear must be 2000-2100")
-    if payload.toYear < 2000 or payload.toYear > 2100:
+    if request_payload.toYear < 2000 or request_payload.toYear > 2100:
         raise HTTPException(status_code=400, detail="toYear must be 2000-2100")
 
     inserted = duplicate_allocations(
-        from_month=payload.fromMonth,
-        from_year=payload.fromYear,
-        to_month=payload.toMonth,
-        to_year=payload.toYear,
-        overwrite=payload.overwrite,
+        from_month=request_payload.fromMonth,
+        from_year=request_payload.fromYear,
+        to_month=request_payload.toMonth,
+        to_year=request_payload.toYear,
+        overwrite=request_payload.overwrite,
     )
     return {"inserted": inserted}

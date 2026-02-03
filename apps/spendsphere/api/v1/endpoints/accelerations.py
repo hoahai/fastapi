@@ -323,7 +323,7 @@ def _normalize_and_validate_rows(rows: list[dict]) -> list[dict]:
         },
     },
 )
-def create_accelerations(payload: list[AccelerationPayload]):
+def create_accelerations(request_payload: list[AccelerationPayload]):
     """
     Example request:
     [
@@ -343,7 +343,7 @@ def create_accelerations(payload: list[AccelerationPayload]):
       "data": {"inserted": 1}
     }
     """
-    rows = _normalize_and_validate_rows([p.model_dump() for p in payload])
+    rows = _normalize_and_validate_rows([p.model_dump() for p in request_payload])
     inserted = insert_accelerations(rows)
     return {"inserted": inserted}
 
@@ -362,7 +362,7 @@ def create_accelerations(payload: list[AccelerationPayload]):
         }
     },
 )
-def update_accelerations_route(payload: list[AccelerationPayload]):
+def update_accelerations_route(request_payload: list[AccelerationPayload]):
     """
     Example request:
     [
@@ -382,7 +382,7 @@ def update_accelerations_route(payload: list[AccelerationPayload]):
       "data": {"updated": 1}
     }
     """
-    rows = _normalize_and_validate_rows([p.model_dump() for p in payload])
+    rows = _normalize_and_validate_rows([p.model_dump() for p in request_payload])
     updated = update_accelerations(rows)
     return {"updated": updated}
 
@@ -401,7 +401,7 @@ def update_accelerations_route(payload: list[AccelerationPayload]):
         }
     },
 )
-def delete_accelerations(payload: list[AccelerationPayload]):
+def delete_accelerations(request_payload: list[AccelerationPayload]):
     """
     Example request:
     [
@@ -421,7 +421,7 @@ def delete_accelerations(payload: list[AccelerationPayload]):
       "data": {"deleted": 1}
     }
     """
-    rows = _normalize_and_validate_rows([p.model_dump() for p in payload])
+    rows = _normalize_and_validate_rows([p.model_dump() for p in request_payload])
     deleted = soft_delete_accelerations(rows)
     return {"deleted": deleted}
 
@@ -434,7 +434,7 @@ def delete_accelerations(payload: list[AccelerationPayload]):
         "startDate is always the first day of the month; endDate is startDate + dayFront."
     ),
 )
-def create_accelerations_by_month(payload: list[AccelerationMonthPayload]):
+def create_accelerations_by_month(request_payload: list[AccelerationMonthPayload]):
     """
     Example request:
     [
@@ -455,12 +455,12 @@ def create_accelerations_by_month(payload: list[AccelerationMonthPayload]):
       "data": {"inserted": 1}
     }
     """
-    if not payload:
+    if not request_payload:
         raise HTTPException(status_code=400, detail="No accelerations provided")
 
     rows: list[dict] = []
     errors: list[dict] = []
-    for idx, item in enumerate(payload):
+    for idx, item in enumerate(request_payload):
         data = item.model_dump()
         month = data.get("month")
         year = data.get("year")
@@ -524,7 +524,7 @@ def create_accelerations_by_month(payload: list[AccelerationMonthPayload]):
     ),
 )
 def create_accelerations_by_month_accounts(
-    payload: AccelerationMonthAccountsPayload,
+    request_payload: AccelerationMonthAccountsPayload,
 ):
     """
     Example request:
@@ -553,15 +553,15 @@ def create_accelerations_by_month_accounts(
       "data": {"inserted": 5}
     }
     """
-    account_codes = _resolve_account_codes(payload.accountCodes)
+    account_codes = _resolve_account_codes(request_payload.accountCodes)
     if not account_codes:
         raise HTTPException(
             status_code=400,
             detail="No accountCodes resolved for acceleration creation",
         )
 
-    start_date = payload.startDate
-    end_date = payload.endDate
+    start_date = request_payload.startDate
+    end_date = request_payload.endDate
 
     if (start_date and not end_date) or (end_date and not start_date):
         raise HTTPException(
@@ -576,8 +576,8 @@ def create_accelerations_by_month_accounts(
                 detail="startDate must be on or before endDate",
             )
     else:
-        month = payload.month
-        year = payload.year
+        month = request_payload.month
+        year = request_payload.year
         if not isinstance(month, int) or month < 1 or month > 12:
             raise HTTPException(status_code=400, detail="month must be 1-12")
         if not isinstance(year, int) or year < 2000 or year > 2100:
@@ -586,8 +586,8 @@ def create_accelerations_by_month_accounts(
         end_date = date(year, month, calendar.monthrange(year, month)[1])
 
     rows: list[dict] = []
-    scope_type = payload.scopeType
-    scope_value = payload.scopeValue
+    scope_type = request_payload.scopeType
+    scope_value = request_payload.scopeValue
     for code in account_codes:
         row = {
             "accountCode": code,
@@ -595,7 +595,7 @@ def create_accelerations_by_month_accounts(
             "scopeValue": scope_value,
             "startDate": start_date,
             "endDate": end_date,
-            "multiplier": payload.multiplier,
+            "multiplier": request_payload.multiplier,
         }
         if str(scope_type).strip().upper() == "ACCOUNT":
             row["scopeValue"] = code

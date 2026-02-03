@@ -685,7 +685,7 @@ def load_ui_route(
     ),
 )
 def update_ui_allocations_rollbreaks(
-    payload: UiAllocationRollBreakUpdateRequest,
+    request_payload: UiAllocationRollBreakUpdateRequest,
 ):
     """
     Example request:
@@ -739,32 +739,33 @@ def update_ui_allocations_rollbreaks(
       }
     }
     """
-    if not isinstance(payload, UiAllocationRollBreakUpdateRequest):
-        try:
-            payload = UiAllocationRollBreakUpdateRequest.model_validate(payload)
-        except ValidationError as exc:
-            raise HTTPException(
-                status_code=400,
-                detail={"error": "Invalid payload", "errors": exc.errors()},
-            ) from exc
+    try:
+        request_payload = UiAllocationRollBreakUpdateRequest.model_validate(
+            request_payload, from_attributes=True
+        )
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invalid payload", "errors": exc.errors()},
+        ) from exc
 
-    account_code = require_account_code(payload.accountCode)
+    account_code = require_account_code(request_payload.accountCode)
 
     errors: list[dict[str, object]] = []
 
-    if not 1 <= payload.month <= 12:
+    if not 1 <= request_payload.month <= 12:
         errors.append(
             {
                 "field": "month",
-                "value": payload.month,
+                "value": request_payload.month,
                 "message": "month must be between 1 and 12",
             }
         )
-    if not 2000 <= payload.year <= 2100:
+    if not 2000 <= request_payload.year <= 2100:
         errors.append(
             {
                 "field": "year",
-                "value": payload.year,
+                "value": request_payload.year,
                 "message": "year must be between 2000 and 2100",
             }
         )
@@ -776,7 +777,7 @@ def update_ui_allocations_rollbreaks(
     }
 
     allocation_rows: list[dict] = []
-    for idx, item in enumerate(payload.updatedAllocations):
+    for idx, item in enumerate(request_payload.updatedAllocations):
         row_id = _normalize_optional_str(item.id)
         budget_id = _normalize_optional_str(item.budgetId)
         allocation_value = _to_float(item.newAllocation)
@@ -811,7 +812,7 @@ def update_ui_allocations_rollbreaks(
             )
 
     rollbreak_rows: list[dict] = []
-    for idx, item in enumerate(payload.updatedRollBreakdowns):
+    for idx, item in enumerate(request_payload.updatedRollBreakdowns):
         row_id = _normalize_optional_str(item.id)
         item_account = _normalize_optional_str(item.accountCode)
         ad_type = _normalize_optional_str(item.adTypeCode)
@@ -871,7 +872,9 @@ def update_ui_allocations_rollbreaks(
     if errors:
         raise HTTPException(status_code=400, detail={"error": "Invalid payload", "errors": errors})
 
-    month_value, year_value = _resolve_period(payload.month, payload.year)
+    month_value, year_value = _resolve_period(
+        request_payload.month, request_payload.year
+    )
 
     allocations_result = upsert_allocations(
         allocation_rows,
@@ -890,7 +893,7 @@ def update_ui_allocations_rollbreaks(
         and year_value == current_period["year"]
     )
 
-    needs_google_data = payload.returnNewData or is_current_period
+    needs_google_data = request_payload.returnNewData or is_current_period
     account_codes = [account_code]
     period_date = _resolve_period_date(month_value, year_value)
 
@@ -951,18 +954,18 @@ def update_ui_allocations_rollbreaks(
             budget_payloads, campaign_payloads = generate_update_payloads(rows)
 
             mutation_tasks = []
-            for payload in budget_payloads:
-                updates = payload.get("updates", [])
+            for budget_payload in budget_payloads:
+                updates = budget_payload.get("updates", [])
                 if updates:
                     mutation_tasks.append(
-                        (_run_budget_update, (payload["customer_id"], updates))
+                        (_run_budget_update, (budget_payload["customer_id"], updates))
                     )
 
-            for payload in campaign_payloads:
-                updates = payload.get("updates", [])
+            for campaign_payload in campaign_payloads:
+                updates = campaign_payload.get("updates", [])
                 if updates:
                     mutation_tasks.append(
-                        (_run_campaign_update, (payload["customer_id"], updates))
+                        (_run_campaign_update, (campaign_payload["customer_id"], updates))
                     )
 
             mutation_results = (
@@ -987,7 +990,7 @@ def update_ui_allocations_rollbreaks(
         },
     }
 
-    if payload.returnNewData:
+    if request_payload.returnNewData:
         roll_breakdown_payload = _build_roll_breakdown(rollbreakdowns)
         table_data = _build_table_data(rows, budgets, allocations)
         grand_total_spent = _to_float(

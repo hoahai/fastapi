@@ -35,7 +35,7 @@ class GoogleAdsUpdateRequest(BaseModel):
 
 
 @router.post("/updateBudget")
-def update_google_ads(payload: GoogleAdsUpdateRequest):
+def update_google_ads(request_payload: GoogleAdsUpdateRequest):
     """
     Example request:
     {
@@ -53,13 +53,16 @@ def update_google_ads(payload: GoogleAdsUpdateRequest):
       }
     }
     """
-    if should_validate_account_codes(payload.accountCodes):
-        validate_account_codes(payload.accountCodes, include_all=payload.includeAll)
+    if should_validate_account_codes(request_payload.accountCodes):
+        validate_account_codes(
+            request_payload.accountCodes,
+            include_all=request_payload.includeAll,
+        )
 
     result = run_google_ads_budget_pipeline(
-        account_codes=payload.accountCodes,
-        dry_run=payload.dryRun,
-        include_transform_results=payload.includeTransformResults,
+        account_codes=request_payload.accountCodes,
+        dry_run=request_payload.dryRun,
+        include_transform_results=request_payload.includeTransformResults,
     )
 
     return result
@@ -69,7 +72,7 @@ def _run_update_job(
     *,
     request_id: str,
     tenant_id: str | None,
-    payload: GoogleAdsUpdateRequest,
+    request_payload: GoogleAdsUpdateRequest,
     log_context: dict[str, object | None],
 ) -> None:
     request_token = set_request_id(request_id)
@@ -79,9 +82,9 @@ def _run_update_job(
         if tenant_id:
             tenant_token = set_tenant_context(tenant_id)
         result = run_google_ads_budget_pipeline(
-            account_codes=payload.accountCodes,
-            dry_run=payload.dryRun,
-            include_transform_results=payload.includeTransformResults,
+            account_codes=request_payload.accountCodes,
+            dry_run=request_payload.dryRun,
+            include_transform_results=request_payload.includeTransformResults,
         )
         _log_async_update_response(
             request_id=request_id,
@@ -98,7 +101,7 @@ def _run_update_job(
 
 @router.post("/updateBudgetAsync")
 def update_google_ads_async(
-    payload: GoogleAdsUpdateRequest,
+    request_payload: GoogleAdsUpdateRequest,
     background_tasks: BackgroundTasks,
     request: Request,
 ):
@@ -117,8 +120,11 @@ def update_google_ads_async(
       "status": "accepted"
     }
     """
-    if should_validate_account_codes(payload.accountCodes):
-        validate_account_codes(payload.accountCodes, include_all=payload.includeAll)
+    if should_validate_account_codes(request_payload.accountCodes):
+        validate_account_codes(
+            request_payload.accountCodes,
+            include_all=request_payload.includeAll,
+        )
 
     request_id = ensure_request_id(request)
     tenant_id = getattr(request.state, "tenant_id", None)
@@ -134,13 +140,13 @@ def update_google_ads_async(
         _run_update_job,
         request_id=request_id,
         tenant_id=tenant_id,
-        payload=payload,
+        request_payload=request_payload,
         log_context={
             "client_id": client_id,
             "request_host": request_host,
             "request_scheme": request_scheme,
             "request_path": request_path,
-            "request_body": dump_model(payload),
+            "request_body": dump_model(request_payload),
             "request_params": normalize_query_params(request.query_params),
         },
     )
