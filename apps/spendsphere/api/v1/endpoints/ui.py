@@ -280,25 +280,28 @@ def _build_table_data(
         ]
         campaign_names = _format_campaign_names(normalized_campaigns)
 
+        current_budget = budget_meta.get("amount")
+        if current_budget is None:
+            current_budget = row.get("budgetAmount")
+
         table_data.append(
             {
                 "accountId": row.get("ggAccountId"),
                 "name": row.get("budgetName"),
+                "budgetId": budget_id,
                 "explicitlyShared": budget_meta.get("explicitlyShared"),
                 "status": budget_meta.get("status") or row.get("budgetStatus"),
-                "dailyBudget": _to_float(row.get("dailyBudget")),
-                "dailyBudgetBase": _to_float(row.get("dailyBudgetBase")),
-                "budgetId": budget_id,
-                "campaignStatuses": _format_campaign_statuses(normalized_campaigns),
-                "campaigns": normalized_campaigns,
+                "currentBudget": _to_float(current_budget),
                 "spent": _to_float(row.get("totalCost")),
-                "allocation": allocation,
                 "adTypeCode": row.get("adTypeCode"),
-                "accelerationId": row.get("accelerationId"),
-                "accelerationMultiplier": _to_float(
-                    row.get("accelerationMultiplier")
-                ),
-                "isFiltered": False,
+                "allocation": allocation,
+                "acceleration": {
+                    "id": row.get("accelerationId"),
+                    "multiplier": _to_float(
+                        row.get("accelerationMultiplier")
+                    ),
+                },
+                "campaigns": normalized_campaigns,
                 "_campaignNames": campaign_names,
             }
         )
@@ -314,7 +317,6 @@ def _build_table_data(
             spent_value = -math.inf
 
         return (
-            item.get("isFiltered", False),
             item.get("adTypeCode") or "",
             -allocation_amount,
             -spent_value,
@@ -324,7 +326,7 @@ def _build_table_data(
     table_data.sort(key=_sort_key)
 
     for idx, item in enumerate(table_data):
-        item["sortedIndex"] = idx
+        item["dataNo"] = idx
         item.pop("_campaignNames", None)
 
     return table_data
@@ -516,12 +518,20 @@ def load_ui_route(
           {
             "accountId": "6563107233",
             "name": "AUC_DIS_Remarketing",
+            "budgetId": "15225876848",
             "explicitlyShared": false,
             "status": "ENABLED",
-            "dailyBudget": 65.4,
-            "dailyBudgetBase": 54.5,
-            "budgetId": "15225876848",
-            "campaignStatuses": "ENABLED",
+            "currentBudget": 65.4,
+            "spent": 586.09,
+            "adTypeCode": "DIS",
+            "allocation": {
+              "id": "b98d38c5-448f-4746-bed3-8dfdadd2959c",
+              "allocation": 97.364
+            },
+            "acceleration": {
+              "id": "3f5d9c0c-83a9-4a2d-8c7b-3cc5b1c1a021",
+              "multiplier": 120
+            },
             "campaigns": [
               {
                 "campaignId": "21427314948",
@@ -529,16 +539,7 @@ def load_ui_route(
                 "campaignStatus": "ENABLED"
               }
             ],
-            "spent": 586.09,
-            "allocation": {
-              "id": "b98d38c5-448f-4746-bed3-8dfdadd2959c",
-              "allocation": 97.364
-            },
-            "adTypeCode": "DIS",
-            "accelerationId": "3f5d9c0c-83a9-4a2d-8c7b-3cc5b1c1a021",
-            "accelerationMultiplier": 120,
-            "isFiltered": false,
-            "sortedIndex": 0
+            "dataNo": 0
           }
         ]
       }
