@@ -950,10 +950,11 @@ def update_ui_allocations_rollbreaks(
             include_transform_results=True,
         )
 
+        mutation_tasks: list[tuple] = []
+
         if is_current_period:
             budget_payloads, campaign_payloads = generate_update_payloads(rows)
 
-            mutation_tasks = []
             for budget_payload in budget_payloads:
                 updates = budget_payload.get("updates", [])
                 if updates:
@@ -973,6 +974,9 @@ def update_ui_allocations_rollbreaks(
                 if mutation_tasks
                 else []
             )
+
+            if request_payload.returnNewData and mutation_tasks:
+                budgets = get_ggad_budgets([account])
 
             for result in mutation_results:
                 summary = result.get("summary", {})
