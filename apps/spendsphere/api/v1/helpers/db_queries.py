@@ -1,7 +1,7 @@
 from datetime import datetime, date
 import pytz
 
-from shared.db import execute_write, fetch_all
+from shared.db import execute_many, execute_write, fetch_all
 from shared.utils import get_current_period
 from shared.tenant import get_timezone
 from apps.spendsphere.api.v1.helpers.config import get_db_tables, get_service_budgets
@@ -216,6 +216,64 @@ def duplicate_allocations(
     return execute_write(query, tuple(params))
 
 
+def upsert_allocations(
+    rows: list[dict],
+    *,
+    month: int,
+    year: int,
+) -> dict[str, int]:
+    if not rows:
+        return {"updated": 0, "inserted": 0}
+
+    tables = get_db_tables()
+    allocations_table = tables["ALLOCATIONS"]
+
+    update_rows = [r for r in rows if r.get("id")]
+    insert_rows = [r for r in rows if not r.get("id")]
+
+    updated = 0
+    inserted = 0
+
+    if update_rows:
+        update_query = (
+            f"UPDATE {allocations_table} "
+            "SET allocation = %s "
+            "WHERE id = %s AND accountCode = %s AND month = %s AND year = %s"
+        )
+        update_params = [
+            (
+                row.get("allocation"),
+                row.get("id"),
+                row.get("accountCode"),
+                month,
+                year,
+            )
+            for row in update_rows
+        ]
+        updated = execute_many(update_query, update_params)
+
+    if insert_rows:
+        insert_query = (
+            f"INSERT INTO {allocations_table} "
+            "(id, accountCode, ggBudgetId, allocation, month, year) "
+            "VALUES (UUID(), %s, %s, %s, %s, %s) "
+            "ON DUPLICATE KEY UPDATE allocation = VALUES(allocation)"
+        )
+        insert_params = [
+            (
+                row.get("accountCode"),
+                row.get("ggBudgetId"),
+                row.get("allocation"),
+                month,
+                year,
+            )
+            for row in insert_rows
+        ]
+        inserted = execute_many(insert_query, insert_params)
+
+    return {"updated": updated, "inserted": inserted}
+
+
 # ============================================================
 # ROLLBREAKDOWNS
 # ============================================================
@@ -256,6 +314,64 @@ def get_rollbreakdowns(
         params.extend(account_codes)
 
     return fetch_all(query, tuple(params))
+
+
+def upsert_rollbreakdowns(
+    rows: list[dict],
+    *,
+    month: int,
+    year: int,
+) -> dict[str, int]:
+    if not rows:
+        return {"updated": 0, "inserted": 0}
+
+    tables = get_db_tables()
+    rollbreakdowns_table = tables["ROLLBREAKDOWNS"]
+
+    update_rows = [r for r in rows if r.get("id")]
+    insert_rows = [r for r in rows if not r.get("id")]
+
+    updated = 0
+    inserted = 0
+
+    if update_rows:
+        update_query = (
+            f"UPDATE {rollbreakdowns_table} "
+            "SET amount = %s "
+            "WHERE id = %s AND accountCode = %s AND month = %s AND year = %s"
+        )
+        update_params = [
+            (
+                row.get("amount"),
+                row.get("id"),
+                row.get("accountCode"),
+                month,
+                year,
+            )
+            for row in update_rows
+        ]
+        updated = execute_many(update_query, update_params)
+
+    if insert_rows:
+        insert_query = (
+            f"INSERT INTO {rollbreakdowns_table} "
+            "(id, accountCode, adTypeCode, amount, month, year) "
+            "VALUES (UUID(), %s, %s, %s, %s, %s) "
+            "ON DUPLICATE KEY UPDATE amount = VALUES(amount)"
+        )
+        insert_params = [
+            (
+                row.get("accountCode"),
+                row.get("adTypeCode"),
+                row.get("amount"),
+                month,
+                year,
+            )
+            for row in insert_rows
+        ]
+        inserted = execute_many(insert_query, insert_params)
+
+    return {"updated": updated, "inserted": inserted}
 
 
 # ============================================================

@@ -5,18 +5,21 @@ from decimal import Decimal
 
 import pytz
 from fastapi import APIRouter, HTTPException, Query
+from pydantic import BaseModel, ConfigDict, Field
 
 from apps.spendsphere.api.v1.endpoints.periods import (
     build_periods_data,
     validate_month_offsets,
 )
-from apps.spendsphere.api.v1.helpers.config import get_service_mapping
+from apps.spendsphere.api.v1.helpers.config import get_adtypes, get_service_mapping
 from apps.spendsphere.api.v1.helpers.dataTransform import transform_google_ads_data
 from apps.spendsphere.api.v1.helpers.db_queries import (
     get_accelerations,
     get_allocations,
     get_masterbudgets,
     get_rollbreakdowns,
+    upsert_allocations,
+    upsert_rollbreakdowns,
 )
 from apps.spendsphere.api.v1.helpers.ggAd import (
     get_ggad_accounts,
@@ -25,8 +28,9 @@ from apps.spendsphere.api.v1.helpers.ggAd import (
     get_ggad_spents,
 )
 from apps.spendsphere.api.v1.helpers.ggSheet import get_active_period, get_rollovers
+from apps.spendsphere.api.v1.helpers.spendsphere_helpers import require_account_code
 from shared.tenant import get_timezone
-from shared.utils import run_parallel
+from shared.utils import get_current_period, run_parallel
 
 router = APIRouter()
 
@@ -79,6 +83,20 @@ def _coerce_date(value: object) -> date | None:
         except ValueError:
             return None
     return None
+
+
+def _resolve_period(month: int | None, year: int | None) -> tuple[int, int]:
+    if month is not None and year is not None:
+        return month, year
+    period = get_current_period()
+    return period["month"], period["year"]
+
+
+def _normalize_optional_str(value: object | None) -> str | None:
+    if value is None:
+        return None
+    cleaned = str(value).strip()
+    return cleaned or None
 
 
 def _build_monthly_active_period(
@@ -310,6 +328,35 @@ def _build_table_data(
         item.pop("_campaignNames", None)
 
     return table_data
+
+
+class UiAllocationUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    id: str | None = None
+    budgetId: str | None = Field(default=None, alias="ggBudgetId")
+    currentAllocation: float | None = None
+    newAllocation: float | None = None
+
+
+class UiRollBreakUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    id: str | None = None
+    accountCode: str | None = None
+    adTypeCode: str | None = None
+    currentAmount: float | None = None
+    newAmount: float | None = None
+
+
+class UiAllocationRollBreakUpdateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    accountCode: str
+    month: int
+    year: int
+    returnNewData: bool = Field(default=False, alias="includeData")
+    updatedRollBreakdowns: list[UiRollBreakUpdate] = Field(
+        default_factory=list, alias="updatedRollBreaks"
+    )
+    updatedAllocations: list[UiAllocationUpdate] = Field(default_factory=list)
 
 
 # ============================================================
@@ -613,3 +660,281 @@ def load_ui_route(
             "data": table_data,
         },
     }
+
+
+@router.post(
+    "/ui/update",
+    summary="Update UI allocations and roll breakdowns",
+    description=(
+        "Upsert allocations (budget level) and roll breakdowns (ad type) "
+        "for a single account."
+    ),
+)
+def update_ui_allocations_rollbreaks(
+    payload: UiAllocationRollBreakUpdateRequest,
+):
+    """
+    Example request:
+    POST /api/spendsphere/v1/ui/update
+    {
+      "accountCode": "TAAA",
+      "month": 1,
+      "year": 2026,
+      "returnNewData": true,
+      "updatedRollBreakdowns": [
+        {
+          "id": "0ad1dc44-35f2-4fb6-9f1f-19527ab193e3",
+          "adTypeCode": "SEM",
+          "currentAmount": 0,
+          "newAmount": 100
+        }
+      ],
+      "updatedAllocations": [
+        {
+          "id": "7d963d35-ae9c-4c33-9ce3-375d0a8e1287",
+          "budgetId": "15225876848",
+          "currentAllocation": 40,
+          "newAllocation": 80
+        }
+      ]
+    }
+
+    Example response:
+    {
+      "updatedAllocations": {"updated": 1, "inserted": 0},
+      "updatedRollBreakdowns": {"updated": 1, "inserted": 0},
+      "rollBreakdown": {
+        "grandTotalRollBreakdown": 1000,
+        "SEM": {"id": "0ad1dc44-35f2-4fb6-9f1f-19527ab193e3", "amount": 1000}
+      },
+      "tableData": {
+        "grandTotalSpent": 586.09,
+        "data": []
+      }
+    }
+    """
+    account_code = require_account_code(payload.accountCode)
+
+    errors: list[dict[str, object]] = []
+
+    if not 1 <= payload.month <= 12:
+        errors.append(
+            {
+                "field": "month",
+                "value": payload.month,
+                "message": "month must be between 1 and 12",
+            }
+        )
+    if not 2000 <= payload.year <= 2100:
+        errors.append(
+            {
+                "field": "year",
+                "value": payload.year,
+                "message": "year must be between 2000 and 2100",
+            }
+        )
+
+    if not payload.updatedAllocations and not payload.updatedRollBreakdowns:
+        errors.append(
+            {
+                "field": "payload",
+                "message": "updatedAllocations or updatedRollBreakdowns is required",
+            }
+        )
+
+    allowed_adtypes = {
+        str(key).strip().upper()
+        for key in get_adtypes().keys()
+        if str(key).strip()
+    }
+
+    allocation_rows: list[dict] = []
+    for idx, item in enumerate(payload.updatedAllocations):
+        row_id = _normalize_optional_str(item.id)
+        budget_id = _normalize_optional_str(item.budgetId)
+        allocation_value = _to_float(item.newAllocation)
+
+        if allocation_value is None:
+            errors.append(
+                {
+                    "index": idx,
+                    "field": "updatedAllocations.newAllocation",
+                    "value": item.newAllocation,
+                    "message": "newAllocation is required and must be numeric",
+                }
+            )
+
+        if not row_id and not budget_id:
+            errors.append(
+                {
+                    "index": idx,
+                    "field": "updatedAllocations.budgetId",
+                    "message": "budgetId is required when id is not provided",
+                }
+            )
+
+        if allocation_value is not None:
+            allocation_rows.append(
+                {
+                    "id": row_id,
+                    "accountCode": account_code,
+                    "ggBudgetId": budget_id,
+                    "allocation": allocation_value,
+                }
+            )
+
+    rollbreak_rows: list[dict] = []
+    for idx, item in enumerate(payload.updatedRollBreakdowns):
+        row_id = _normalize_optional_str(item.id)
+        item_account = _normalize_optional_str(item.accountCode)
+        ad_type = _normalize_optional_str(item.adTypeCode)
+        if ad_type:
+            ad_type = ad_type.upper()
+        amount_value = _to_float(item.newAmount)
+
+        if item_account and item_account.upper() != account_code:
+            errors.append(
+                {
+                    "index": idx,
+                    "field": "updatedRollBreakdowns.accountCode",
+                    "value": item.accountCode,
+                    "message": "accountCode must match payload.accountCode",
+                }
+            )
+
+        if not ad_type:
+            errors.append(
+                {
+                    "index": idx,
+                    "field": "updatedRollBreakdowns.adTypeCode",
+                    "value": item.adTypeCode,
+                    "message": "adTypeCode is required",
+                }
+            )
+        elif allowed_adtypes and ad_type not in allowed_adtypes:
+            errors.append(
+                {
+                    "index": idx,
+                    "field": "updatedRollBreakdowns.adTypeCode",
+                    "value": ad_type,
+                    "allowed": sorted(allowed_adtypes),
+                }
+            )
+
+        if amount_value is None:
+            errors.append(
+                {
+                    "index": idx,
+                    "field": "updatedRollBreakdowns.newAmount",
+                    "value": item.newAmount,
+                    "message": "newAmount is required and must be numeric",
+                }
+            )
+
+        if ad_type and amount_value is not None:
+            rollbreak_rows.append(
+                {
+                    "id": row_id,
+                    "accountCode": account_code,
+                    "adTypeCode": ad_type,
+                    "amount": amount_value,
+                }
+            )
+
+    if errors:
+        raise HTTPException(status_code=400, detail={"error": "Invalid payload", "errors": errors})
+
+    account = None
+    if payload.returnNewData:
+        accounts = get_ggad_accounts()
+        account = next(
+            (
+                acc
+                for acc in accounts
+                if str(acc.get("accountCode", "")).strip().upper() == account_code
+            ),
+            None,
+        )
+        if not account:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"No Google Ads account found for {account_code}"},
+            )
+
+    month_value, year_value = _resolve_period(payload.month, payload.year)
+
+    allocations_result = upsert_allocations(
+        allocation_rows,
+        month=month_value,
+        year=year_value,
+    )
+    rollbreaks_result = upsert_rollbreakdowns(
+        rollbreak_rows,
+        month=month_value,
+        year=year_value,
+    )
+
+    response: dict[str, object] = {
+        "updatedAllocations": allocations_result,
+        "updatedRollBreakdowns": rollbreaks_result,
+    }
+
+    if payload.returnNewData and account is not None:
+        account_codes = [account_code]
+        period_date = _resolve_period_date(month_value, year_value)
+
+        master_budgets, allocations, rollbreakdowns, accelerations = run_parallel(
+            tasks=[
+                (get_masterbudgets, (account_codes, month_value, year_value)),
+                (get_allocations, (account_codes, month_value, year_value)),
+                (get_rollbreakdowns, (account_codes, month_value, year_value)),
+                (_get_accelerations_for_period, (account_codes, period_date)),
+            ],
+            api_name="spendsphere_v1_ui_update_db",
+        )
+
+        campaigns, budgets, costs = run_parallel(
+            tasks=[
+                (get_ggad_campaigns, ([account],)),
+                (get_ggad_budgets, ([account],)),
+                (get_ggad_spents, ([account], month_value, year_value)),
+            ],
+            api_name="spendsphere_v1_ui_update_google_ads",
+        )
+
+        active_period = get_active_period(account_codes)
+        rollovers = get_rollovers(account_codes, month_value, year_value)
+
+        rows = transform_google_ads_data(
+            master_budgets=master_budgets,
+            campaigns=campaigns,
+            budgets=budgets,
+            costs=costs,
+            allocations=allocations,
+            rollovers=rollbreakdowns,
+            accelerations=accelerations,
+            activePeriod=active_period,
+            today=period_date,
+            include_transform_results=True,
+        )
+
+        roll_breakdown_payload = _build_roll_breakdown(rollbreakdowns)
+        table_data = _build_table_data(rows, budgets, allocations)
+        grand_total_spent = _to_float(
+            sum(
+                Decimal(str(item.get("spent", 0) or 0))
+                for item in table_data
+            )
+        )
+
+        response.update(
+            {
+                "rollBreakdown": roll_breakdown_payload,
+                "tableData": {
+                    "grandTotalSpent": grand_total_spent,
+                    "data": table_data,
+                },
+            }
+        )
+
+    return response
