@@ -5,14 +5,17 @@ from decimal import Decimal
 
 import pytz
 from fastapi import APIRouter, HTTPException, Query
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from apps.spendsphere.api.v1.endpoints.periods import (
     build_periods_data,
     validate_month_offsets,
 )
 from apps.spendsphere.api.v1.helpers.config import get_adtypes, get_service_mapping
-from apps.spendsphere.api.v1.helpers.dataTransform import transform_google_ads_data
+from apps.spendsphere.api.v1.helpers.dataTransform import (
+    generate_update_payloads,
+    transform_google_ads_data,
+)
 from apps.spendsphere.api.v1.helpers.db_queries import (
     get_accelerations,
     get_allocations,
@@ -26,6 +29,8 @@ from apps.spendsphere.api.v1.helpers.ggAd import (
     get_ggad_budgets,
     get_ggad_campaigns,
     get_ggad_spents,
+    update_budgets,
+    update_campaign_statuses,
 )
 from apps.spendsphere.api.v1.helpers.ggSheet import get_active_period, get_rollovers
 from apps.spendsphere.api.v1.helpers.spendsphere_helpers import require_account_code
@@ -33,6 +38,14 @@ from shared.tenant import get_timezone
 from shared.utils import get_current_period, run_parallel
 
 router = APIRouter()
+
+
+def _run_budget_update(customer_id: str, updates: list[dict]) -> dict:
+    return update_budgets(customer_id=customer_id, updates=updates)
+
+
+def _run_campaign_update(customer_id: str, updates: list[dict]) -> dict:
+    return update_campaign_statuses(customer_id=customer_id, updates=updates)
 
 
 def _get_google_ads_clients(refresh_cache: bool) -> list[dict]:
@@ -700,10 +713,22 @@ def update_ui_allocations_rollbreaks(
       ]
     }
 
+    Note: Google Ads budget/status mutations run only when the payload
+    month/year match the current period.
+
     Example response:
     {
       "updatedAllocations": {"updated": 1, "inserted": 0},
       "updatedRollBreakdowns": {"updated": 1, "inserted": 0},
+      "googleAdsUpdates": {
+        "overallSummary": {
+          "total": 1,
+          "succeeded": 1,
+          "failed": 0,
+          "warnings": 0
+        },
+        "mutationResults": []
+      },
       "rollBreakdown": {
         "grandTotalRollBreakdown": 1000,
         "SEM": {"id": "0ad1dc44-35f2-4fb6-9f1f-19527ab193e3", "amount": 1000}
@@ -714,6 +739,15 @@ def update_ui_allocations_rollbreaks(
       }
     }
     """
+    if not isinstance(payload, UiAllocationRollBreakUpdateRequest):
+        try:
+            payload = UiAllocationRollBreakUpdateRequest.model_validate(payload)
+        except ValidationError as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": "Invalid payload", "errors": exc.errors()},
+            ) from exc
+
     account_code = require_account_code(payload.accountCode)
 
     errors: list[dict[str, object]] = []
@@ -732,14 +766,6 @@ def update_ui_allocations_rollbreaks(
                 "field": "year",
                 "value": payload.year,
                 "message": "year must be between 2000 and 2100",
-            }
-        )
-
-    if not payload.updatedAllocations and not payload.updatedRollBreakdowns:
-        errors.append(
-            {
-                "field": "payload",
-                "message": "updatedAllocations or updatedRollBreakdowns is required",
             }
         )
 
@@ -845,8 +871,33 @@ def update_ui_allocations_rollbreaks(
     if errors:
         raise HTTPException(status_code=400, detail={"error": "Invalid payload", "errors": errors})
 
-    account = None
-    if payload.returnNewData:
+    month_value, year_value = _resolve_period(payload.month, payload.year)
+
+    allocations_result = upsert_allocations(
+        allocation_rows,
+        month=month_value,
+        year=year_value,
+    )
+    rollbreaks_result = upsert_rollbreakdowns(
+        rollbreak_rows,
+        month=month_value,
+        year=year_value,
+    )
+
+    current_period = get_current_period()
+    is_current_period = (
+        month_value == current_period["month"]
+        and year_value == current_period["year"]
+    )
+
+    needs_google_data = payload.returnNewData or is_current_period
+    account_codes = [account_code]
+    period_date = _resolve_period_date(month_value, year_value)
+
+    mutation_results: list[dict] = []
+    overall_summary = {"total": 0, "succeeded": 0, "failed": 0, "warnings": 0}
+
+    if needs_google_data:
         accounts = get_ggad_accounts()
         account = next(
             (
@@ -861,28 +912,6 @@ def update_ui_allocations_rollbreaks(
                 status_code=404,
                 detail={"error": f"No Google Ads account found for {account_code}"},
             )
-
-    month_value, year_value = _resolve_period(payload.month, payload.year)
-
-    allocations_result = upsert_allocations(
-        allocation_rows,
-        month=month_value,
-        year=year_value,
-    )
-    rollbreaks_result = upsert_rollbreakdowns(
-        rollbreak_rows,
-        month=month_value,
-        year=year_value,
-    )
-
-    response: dict[str, object] = {
-        "updatedAllocations": allocations_result,
-        "updatedRollBreakdowns": rollbreaks_result,
-    }
-
-    if payload.returnNewData and account is not None:
-        account_codes = [account_code]
-        period_date = _resolve_period_date(month_value, year_value)
 
         master_budgets, allocations, rollbreakdowns, accelerations = run_parallel(
             tasks=[
@@ -904,7 +933,6 @@ def update_ui_allocations_rollbreaks(
         )
 
         active_period = get_active_period(account_codes)
-        rollovers = get_rollovers(account_codes, month_value, year_value)
 
         rows = transform_google_ads_data(
             master_budgets=master_budgets,
@@ -919,6 +947,47 @@ def update_ui_allocations_rollbreaks(
             include_transform_results=True,
         )
 
+        if is_current_period:
+            budget_payloads, campaign_payloads = generate_update_payloads(rows)
+
+            mutation_tasks = []
+            for payload in budget_payloads:
+                updates = payload.get("updates", [])
+                if updates:
+                    mutation_tasks.append(
+                        (_run_budget_update, (payload["customer_id"], updates))
+                    )
+
+            for payload in campaign_payloads:
+                updates = payload.get("updates", [])
+                if updates:
+                    mutation_tasks.append(
+                        (_run_campaign_update, (payload["customer_id"], updates))
+                    )
+
+            mutation_results = (
+                run_parallel(tasks=mutation_tasks, api_name="google_ads_mutation")
+                if mutation_tasks
+                else []
+            )
+
+            for result in mutation_results:
+                summary = result.get("summary", {})
+                overall_summary["total"] += summary.get("total", 0)
+                overall_summary["succeeded"] += summary.get("succeeded", 0)
+                overall_summary["failed"] += summary.get("failed", 0)
+                overall_summary["warnings"] += summary.get("warnings", 0)
+
+    response: dict[str, object] = {
+        "updatedAllocations": allocations_result,
+        "updatedRollBreakdowns": rollbreaks_result,
+        "googleAdsUpdates": {
+            "overallSummary": overall_summary,
+            "mutationResults": mutation_results,
+        },
+    }
+
+    if payload.returnNewData:
         roll_breakdown_payload = _build_roll_breakdown(rollbreakdowns)
         table_data = _build_table_data(rows, budgets, allocations)
         grand_total_spent = _to_float(
