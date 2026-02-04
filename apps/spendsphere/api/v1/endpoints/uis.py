@@ -1,7 +1,8 @@
 import calendar
 import math
+import re
 from datetime import date, datetime
-from decimal import Decimal
+from decimal import Decimal, InvalidOperation
 
 import pytz
 from fastapi import APIRouter, HTTPException, Query
@@ -160,6 +161,28 @@ def _to_float(value: object) -> float | None:
         return float(value)
     except (TypeError, ValueError):
         return None
+
+
+def _to_decimal(value: object, *, fallback: Decimal = Decimal("0")) -> Decimal:
+    if value is None:
+        return fallback
+    if isinstance(value, Decimal):
+        return value
+    cleaned = str(value).strip()
+    if not cleaned:
+        return fallback
+    is_negative = cleaned.startswith("(") and cleaned.endswith(")")
+    if is_negative:
+        cleaned = cleaned[1:-1]
+    cleaned = cleaned.replace("$", "").replace(",", "")
+    cleaned = re.sub(r"\s+", "", cleaned)
+    if cleaned in {"-", ".", "-.", ".-"}:
+        return fallback
+    try:
+        parsed = Decimal(cleaned)
+    except (InvalidOperation, TypeError, ValueError):
+        return fallback
+    return -parsed if is_negative else parsed
 
 
 def _get_accelerations_for_period(
@@ -665,7 +688,7 @@ def load_ui_route(
     )
 
     rollovers_total = _to_float(
-        sum(Decimal(str(r.get("amount", 0))) for r in rollovers)
+        sum(_to_decimal(r.get("amount", 0)) for r in rollovers)
     )
 
     active_period_row = active_period[0] if active_period else None
