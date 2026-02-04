@@ -509,7 +509,7 @@ def load_ui_route(
               "total": 680
             }
           },
-          "rollOvers": 1000.0,
+          "rolloverTotal": 1000.0,
           "activePeriod": {
             "isActive": true,
             "endDate": "2026-01-31",
@@ -625,8 +625,16 @@ def load_ui_route(
         api_name="spendsphere_v1_ui_load_google_ads",
     )
 
+    period_month = month_value if month_value is not None else period_date.month
+    period_year = year_value if year_value is not None else period_date.year
+
     active_period = get_active_period(account_codes)
-    rollovers = get_rollovers(account_codes, month_value, year_value)
+    rollovers = get_rollovers(
+        account_codes,
+        period_month,
+        period_year,
+        include_unrollable=False,
+    )
 
     rows = transform_google_ads_data(
         master_budgets=master_budgets,
@@ -655,8 +663,6 @@ def load_ui_route(
         sum(Decimal(str(r.get("amount", 0))) for r in rollovers)
     )
 
-    period_month = month_value if month_value is not None else period_date.month
-    period_year = year_value if year_value is not None else period_date.year
     active_period_row = active_period[0] if active_period else None
     active_period_payload = _build_monthly_active_period(
         active_period_row,
@@ -666,7 +672,7 @@ def load_ui_route(
 
     return {
         "masterBudgets": master_budgets_payload,
-        "rollOvers": rollovers_total,
+        "rolloverTotal": rollovers_total,
         "activePeriod": active_period_payload,
         "rollBreakdown": roll_breakdown_payload,
         "tableData": {

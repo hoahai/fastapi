@@ -46,10 +46,35 @@ def refresh_google_sheet_cache(name: str) -> list[dict]:
     return _get_sheet_data(name, refresh_cache=True)
 
 
+def _is_rollable(value: object) -> bool:
+    if value is None:
+        return True
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return value != 0
+    if isinstance(value, str):
+        cleaned = value.strip().lower()
+        if cleaned in {"0", "false", "no", "n", "off"}:
+            return False
+        if cleaned in {"1", "true", "yes", "y", "on"}:
+            return True
+        try:
+            return int(cleaned) != 0
+        except ValueError:
+            return True
+    return True
+
+
+def _normalize_rollable_value(value: object) -> int:
+    return 1 if _is_rollable(value) else 0
+
+
 def get_rollovers(
     account_codes: list[str] | None = None,
     month: int | None = None,
     year: int | None = None,
+    include_unrollable: bool = False,
 ) -> list[dict]:
     """
     Get rollover data for the current month/year.
@@ -76,16 +101,21 @@ def get_rollovers(
         else None
     )
 
-    return [
-        row
-        for row in data
-        if int(row.get("month", 0)) == month
-        and int(row.get("year", 0)) == year
-        and (
-            normalized_accounts is None
-            or row.get("accountCode", "").strip().upper() in normalized_accounts
-        )
-    ]
+    results: list[dict] = []
+    for row in data:
+        if int(row.get("month", 0)) != month:
+            continue
+        if int(row.get("year", 0)) != year:
+            continue
+        rollable_value = _normalize_rollable_value(row.get("rollable"))
+        if not include_unrollable and rollable_value == 0:
+            continue
+        if normalized_accounts is not None and (
+            row.get("accountCode", "").strip().upper() not in normalized_accounts
+        ):
+            continue
+        results.append({**row, "rollable": rollable_value})
+    return results
 
 
 def get_active_period(
