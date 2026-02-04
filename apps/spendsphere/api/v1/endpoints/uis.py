@@ -342,6 +342,77 @@ def _build_table_data(
             }
         )
 
+    return _finalize_table_data(table_data)
+
+
+def _build_table_data_fallback(
+    campaigns: list[dict],
+    budgets: list[dict],
+    costs: list[dict],
+) -> list[dict]:
+    if not campaigns:
+        return []
+
+    budget_lookup: dict[tuple[str | None, str | None], dict] = {
+        (b.get("customerId"), b.get("budgetId")): b for b in budgets
+    }
+
+    cost_lookup: dict[tuple[str | None, str | None], Decimal] = {}
+    for cost in costs:
+        key = (cost.get("customerId"), cost.get("campaignId"))
+        cost_lookup[key] = cost_lookup.get(key, Decimal("0")) + _to_decimal(
+            cost.get("cost", 0)
+        )
+
+    grouped: dict[tuple[str | None, str | None], dict] = {}
+    for campaign in campaigns:
+        customer_id = campaign.get("customerId")
+        budget_id = campaign.get("budgetId")
+        if not customer_id or not budget_id:
+            continue
+
+        key = (customer_id, budget_id)
+        entry = grouped.get(key)
+        if entry is None:
+            budget_meta = budget_lookup.get(key, {})
+            entry = {
+                "accountId": customer_id,
+                "name": budget_meta.get("budgetName")
+                or campaign.get("campaignName"),
+                "budgetId": budget_id,
+                "explicitlyShared": budget_meta.get("explicitlyShared"),
+                "status": budget_meta.get("status") or campaign.get("status"),
+                "currentBudget": _to_float(budget_meta.get("amount")),
+                "spent": Decimal("0"),
+                "adTypeCode": campaign.get("adTypeCode"),
+                "allocation": {"id": None, "allocation": None},
+                "acceleration": {"id": None, "multiplier": None},
+                "campaigns": [],
+                "_campaignNames": "",
+            }
+            grouped[key] = entry
+
+        entry["campaigns"].append(
+            {
+                "campaignId": campaign.get("campaignId"),
+                "campaignName": campaign.get("campaignName"),
+                "campaignStatus": campaign.get("status"),
+            }
+        )
+
+        entry["spent"] += cost_lookup.get(
+            (customer_id, campaign.get("campaignId")),
+            Decimal("0"),
+        )
+
+    for entry in grouped.values():
+        entry["_campaignNames"] = _format_campaign_names(entry["campaigns"])
+        entry["spent"] = _to_float(entry.get("spent"))
+
+    return _finalize_table_data(list(grouped.values()))
+
+
+def _finalize_table_data(table_data: list[dict]) -> list[dict]:
     def _sort_key(item: dict) -> tuple:
         allocation_value = item.get("allocation", {}) or {}
         allocation_amount = allocation_value.get("allocation")
@@ -679,7 +750,10 @@ def load_ui_route(
 
     master_budgets_payload = _build_master_budgets(master_budgets)
     roll_breakdown_payload = _build_roll_breakdown(rollbreakdowns)
-    table_data = _build_table_data(rows, budgets, allocations)
+    if rows:
+        table_data = _build_table_data(rows, budgets, allocations)
+    else:
+        table_data = _build_table_data_fallback(campaigns, budgets, costs)
     grand_total_spent = _to_float(
         sum(
             Decimal(str(item.get("spent", 0) or 0))
