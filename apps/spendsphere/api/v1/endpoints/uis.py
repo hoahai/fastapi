@@ -585,6 +585,10 @@ def load_ui_route(
         )
 
     period_date = _resolve_period_date(month_value, year_value)
+    if month_value is None:
+        month_value = period_date.month
+    if year_value is None:
+        year_value = period_date.year
 
     accounts = get_ggad_accounts()
     account = next(
@@ -625,14 +629,15 @@ def load_ui_route(
         api_name="spendsphere_v1_ui_load_google_ads",
     )
 
-    period_month = month_value if month_value is not None else period_date.month
-    period_year = year_value if year_value is not None else period_date.year
-
-    active_period = get_active_period(account_codes)
+    active_period = get_active_period(
+        account_codes,
+        month_value,
+        year_value,
+    )
     rollovers = get_rollovers(
         account_codes,
-        period_month,
-        period_year,
+        month_value,
+        year_value,
         include_unrollable=False,
     )
 
@@ -666,8 +671,8 @@ def load_ui_route(
     active_period_row = active_period[0] if active_period else None
     active_period_payload = _build_monthly_active_period(
         active_period_row,
-        month=period_month,
-        year=period_year,
+        month=month_value,
+        year=year_value,
     )
 
     return {
@@ -941,7 +946,11 @@ def update_ui_allocations_rollbreaks(
             api_name="spendsphere_v1_ui_update_google_ads",
         )
 
-        active_period = get_active_period(account_codes)
+        active_period = get_active_period(
+            account_codes,
+            month_value,
+            year_value,
+        )
 
         rows = transform_google_ads_data(
             master_budgets=master_budgets,

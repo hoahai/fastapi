@@ -226,12 +226,14 @@ def get_active_period_month_route(
     last_day = calendar.monthrange(year_value, month_value)[1]
     month_end = date(year_value, month_value, last_day)
 
-    data = get_active_period([account_code])
+    data = get_active_period([account_code], month_value, year_value)
     if not data:
-        raise HTTPException(
-            status_code=404,
-            detail=f"No active period found for account_code '{account_code}'",
-        )
+        return {
+            "accountCode": account_code,
+            "month": month_value,
+            "year": year_value,
+            "isActive": False,
+        }
 
     row = data[0]
     start_date = _coerce_date(row.get("startDate"))
