@@ -5,7 +5,7 @@ from apps.spendsphere.api.v1.endpoints import (
     budgets as v1_budgets,
     periods as v1_periods,
     rollovers as v1_rollovers,
-    update as v1_update,
+    updates as v1_update,
 )
 from apps.spendsphere.api.v2.endpoints import (
     accelerations,

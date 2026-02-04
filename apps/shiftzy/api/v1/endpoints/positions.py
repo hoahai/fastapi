@@ -45,20 +45,21 @@ def update_positions_route(
 ):
     """
     Example request:
-    [
-      {
-        "code": "FR-CASH",
-        "name": "Cashier",
-        "icon": "cashier.svg",
-        "active": 1
-      }
-    ]
+        PUT /api/shiftzy/v1/positions
+        [
+          {
+            "code": "FR-CASH",
+            "name": "Cashier",
+            "icon": "cashier.svg",
+            "active": 1
+          }
+        ]
 
     Example response:
-    {
-      "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
-      "data": {"updated": 1}
-    }
+        {
+          "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
+          "data": {"updated": 1}
+        }
     """
     try:
         updated = update_positions(payload)
@@ -73,13 +74,14 @@ def delete_positions_route(
 ):
     """
     Example request:
-    ["FR-CASH", "FR-HOST"]
+        DELETE /api/shiftzy/v1/positions
+        ["FR-CASH", "FR-HOST"]
 
     Example response:
-    {
-      "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
-      "data": {"deleted": 2}
-    }
+        {
+          "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
+          "data": {"deleted": 2}
+        }
     """
     try:
         deleted = delete_positions(payload)

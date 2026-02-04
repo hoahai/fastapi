@@ -13,8 +13,12 @@ This document describes the SpendSphere cache behavior for account codes and Goo
 
 ## TTL behavior
 - Default TTL: 86400 seconds (24 hours).
-- Tenant override: `spendsphere -> CACHE -> ttl_time` in `tenant.yaml`.
-- Optional env override: `SPENDSPHERE_GOOGLE_ADS_CLIENTS_CACHE_TTL_SECONDS` (takes priority if set).
+- Tenant default: `spendsphere -> CACHE -> ttl_time` in `tenant.yaml`.
+- Cache-specific tenant overrides in `spendsphere -> CACHE`:
+  - `account_codes_ttl_time`
+  - `google_ads_clients_ttl_time`
+  - `google_sheet_ttl_time`
+- Optional env override (highest priority): `SPENDSPHERE_GOOGLE_ADS_CLIENTS_CACHE_TTL_SECONDS`.
 
 If a cache entry is stale, the API **blocks and refreshes** from the source before returning data.
 
@@ -30,7 +34,16 @@ If a cache entry is stale, the API **blocks and refreshes** from the source befo
 - Reads return cached data when fresh.
 - If stale or `refresh_cache=true`, data is fetched from Google Ads and the cache is updated.
 
+## Google Sheets cache
+- Stored under `google_sheets` per tenant.
+- Sheets cached:
+  - `rollovers`
+  - `active_period`
+- Reads return cached data when fresh.
+- If stale, data is fetched from Google Sheets and the cache is updated.
+
 ## Refresh controls
 - `GET /api/spendsphere/v1/google-ads?refresh_cache=true`
-- `GET /api/spendsphere/v1/ui/selections?refresh_cache=true`
+- `GET /api/spendsphere/v1/uis/selections?refresh_cache=true`
 - `POST /api/spendsphere/v1/google-ads/refresh`
+- `POST /api/spendsphere/v1/cache/refresh`

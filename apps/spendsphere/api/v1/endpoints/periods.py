@@ -109,37 +109,37 @@ def get_periods_route(
 ):
     """
     Example request:
-    GET /spendsphere/api/v1/periods
+        GET /api/spendsphere/v1/periods
 
     Example request (custom window):
-    GET /spendsphere/api/v1/periods?months_before=3&months_after=2
+        GET /api/spendsphere/v1/periods?months_before=3&months_after=2
 
     Example response:
-    {
-      "currentPeriod": "1/2026",
-      "monthsArray": [
         {
-          "month": 11,
-          "year": 2025,
-          "period": "11/2025"
-        },
-        {
-          "month": 12,
-          "year": 2025,
-          "period": "12/2025"
-        },
-        {
-          "month": 1,
-          "year": 2026,
-          "period": "1/2026"
-        },
-        {
-          "month": 2,
-          "year": 2026,
-          "period": "2/2026"
+          "currentPeriod": "1/2026",
+          "monthsArray": [
+            {
+              "month": 11,
+              "year": 2025,
+              "period": "11/2025"
+            },
+            {
+              "month": 12,
+              "year": 2025,
+              "period": "12/2025"
+            },
+            {
+              "month": 1,
+              "year": 2026,
+              "period": "1/2026"
+            },
+            {
+              "month": 2,
+              "year": 2026,
+              "period": "2/2026"
+            }
+          ]
         }
-      ]
-    }
     """
     validate_month_offsets(months_before, months_after)
     return build_periods_data(months_before, months_after)
@@ -150,15 +150,15 @@ def get_periods_route(
 def get_current_period_route():
     """
     Example request:
-    GET /spendsphere/api/v1/current-period
+        GET /api/spendsphere/v1/current-period
 
     Example response:
-    {
-      "year": 2026,
-      "month": 1,
-      "start_date": "2026-01-01",
-      "end_date": "2026-01-31"
-    }
+        {
+          "year": 2026,
+          "month": 1,
+          "start_date": "2026-01-01",
+          "end_date": "2026-01-31"
+        }
     """
     return get_current_period()
 
@@ -173,15 +173,15 @@ def get_active_period_route(
 ):
     """
     Example request:
-    GET /spendsphere/api/v1/active-period?accountCode=TAAA
+        GET /api/spendsphere/v1/active-period?accountCode=TAAA
 
     Example response:
-    {
-      "accountCode": "TAAA",
-      "startDate": "2026-01-01",
-      "endDate": "2026-01-31",
-      "isActive": true
-    }
+        {
+          "accountCode": "TAAA",
+          "startDate": "2026-01-01",
+          "endDate": "2026-01-31",
+          "isActive": true
+        }
     """
     account_code = require_account_code(account_code)
     data = get_active_period([account_code])
@@ -208,16 +208,16 @@ def get_active_period_month_route(
 ):
     """
     Example request:
-    GET /spendsphere/api/v1/active-period-by-month?accountCode=TAAA&month=12&year=2025
+        GET /api/spendsphere/v1/active-period-by-month?accountCode=TAAA&month=12&year=2025
 
     Example response:
-    {
-      "accountCode": "TAAA",
-      "month": 12,
-      "year": 2025,
-      "isActive": true,
-      "endDate": "2025-12-15"
-    }
+        {
+          "accountCode": "TAAA",
+          "month": 12,
+          "year": 2025,
+          "isActive": true,
+          "endDate": "2025-12-15"
+        }
     """
     account_code = require_account_code(account_code)
     month_value, year_value = _resolve_month_year(month, year)

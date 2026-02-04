@@ -43,22 +43,23 @@ def update_employees_route(
 ):
     """
     Example request:
-    [
-      {
-        "id": "948f09c9-f6b9-11f0-b7f6-5a4783e25118",
-        "name": "Taylor Reed",
-        "schedule_section": "Front",
-        "ref_positionCode": "FR-CASH",
-        "note": "Prefers mornings",
-        "active": 1
-      }
-    ]
+        PUT /api/shiftzy/v1/employees
+        [
+          {
+            "id": "948f09c9-f6b9-11f0-b7f6-5a4783e25118",
+            "name": "Taylor Reed",
+            "schedule_section": "Front",
+            "ref_positionCode": "FR-CASH",
+            "note": "Prefers mornings",
+            "active": 1
+          }
+        ]
 
     Example response:
-    {
-      "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
-      "data": {"updated": 1}
-    }
+        {
+          "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
+          "data": {"updated": 1}
+        }
     """
     try:
         updated = update_employees(payload)
@@ -73,13 +74,14 @@ def delete_employees_route(
 ):
     """
     Example request:
-    ["948f09c9-f6b9-11f0-b7f6-5a4783e25118"]
+        DELETE /api/shiftzy/v1/employees
+        ["948f09c9-f6b9-11f0-b7f6-5a4783e25118"]
 
     Example response:
-    {
-      "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
-      "data": {"deleted": 1}
-    }
+        {
+          "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
+          "data": {"deleted": 1}
+        }
     """
     try:
         deleted = delete_employees(payload)

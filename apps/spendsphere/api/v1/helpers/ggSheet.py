@@ -1,6 +1,10 @@
 from shared.ggSheet import _read_sheet_raw
 from shared.utils import get_current_period
 from apps.spendsphere.api.v1.helpers.config import get_spendsphere_sheets
+from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
+    get_google_sheet_cache_entry,
+    set_google_sheet_cache,
+)
 
 
 def _get_sheet(name: str) -> dict[str, str]:
@@ -8,6 +12,38 @@ def _get_sheet(name: str) -> dict[str, str]:
     if name not in sheets:
         raise ValueError(f"Unknown sheet: {name}")
     return sheets[name]
+
+
+def _build_sheet_cache_hash(sheet: dict[str, str]) -> str:
+    return f"{sheet['spreadsheet_id']}::{sheet['range_name']}"
+
+
+def _get_sheet_data(
+    name: str,
+    *,
+    refresh_cache: bool = False,
+) -> list[dict]:
+    sheet = _get_sheet(name)
+    config_hash = _build_sheet_cache_hash(sheet)
+
+    if not refresh_cache:
+        cached, is_stale = get_google_sheet_cache_entry(
+            name,
+            config_hash=config_hash,
+        )
+        if cached is not None and not is_stale:
+            return cached
+
+    data = _read_sheet_raw(
+        spreadsheet_id=sheet["spreadsheet_id"],
+        range_name=sheet["range_name"],
+    )
+    set_google_sheet_cache(name, data, config_hash=config_hash)
+    return data
+
+
+def refresh_google_sheet_cache(name: str) -> list[dict]:
+    return _get_sheet_data(name, refresh_cache=True)
 
 
 def get_rollovers(
@@ -21,12 +57,7 @@ def get_rollovers(
     NOTE:
     - Must NOT be called in a process that uses threads
     """
-    sheet = _get_sheet("rollovers")
-
-    data = _read_sheet_raw(
-        spreadsheet_id=sheet["spreadsheet_id"],
-        range_name=sheet["range_name"],
-    )
+    data = _get_sheet_data("rollovers")
 
     if not data:
         return []
@@ -66,12 +97,7 @@ def get_active_period(
     NOTE:
     - Must NOT be called in a process that uses threads
     """
-    sheet = _get_sheet("active_period")
-
-    data = _read_sheet_raw(
-        spreadsheet_id=sheet["spreadsheet_id"],
-        range_name=sheet["range_name"],
-    )
+    data = _get_sheet_data("active_period")
 
     if not data:
         return []

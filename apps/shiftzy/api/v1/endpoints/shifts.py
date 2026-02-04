@@ -43,21 +43,22 @@ def update_shifts_route(
 ):
     """
     Example request:
-    [
-      {
-        "id": 3,
-        "name": "Morning",
-        "start_time": "08:00",
-        "end_time": "12:00",
-        "active": 1
-      }
-    ]
+        PUT /api/shiftzy/v1/shifts
+        [
+          {
+            "id": 3,
+            "name": "Morning",
+            "start_time": "08:00",
+            "end_time": "12:00",
+            "active": 1
+          }
+        ]
 
     Example response:
-    {
-      "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
-      "data": {"updated": 1}
-    }
+        {
+          "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
+          "data": {"updated": 1}
+        }
     """
     try:
         updated = update_shifts(payload)
@@ -72,13 +73,14 @@ def delete_shifts_route(
 ):
     """
     Example request:
-    [3, 4]
+        DELETE /api/shiftzy/v1/shifts
+        [3, 4]
 
     Example response:
-    {
-      "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
-      "data": {"deleted": 2}
-    }
+        {
+          "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
+          "data": {"deleted": 2}
+        }
     """
     try:
         deleted = delete_shifts(payload)

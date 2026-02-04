@@ -1,4 +1,6 @@
 from datetime import datetime
+import ast
+import json
 import os
 from pathlib import Path
 from threading import Lock
@@ -18,9 +20,10 @@ _CACHE_BASE_PATH = Path(
 )
 _ACCOUNT_CODES_KEY = "account_codes"
 _GOOGLE_ADS_CLIENTS_KEY = "google_ads_clients"
+_GOOGLE_SHEETS_KEY = "google_sheets"
 _GOOGLE_ADS_CLIENTS_CACHE_TTL_ENV = "SPENDSPHERE_GOOGLE_ADS_CLIENTS_CACHE_TTL_SECONDS"
 _GOOGLE_ADS_CLIENTS_CACHE_TTL_FALLBACK_ENV = "ttl_time"
-_DEFAULT_GOOGLE_ADS_CLIENTS_CACHE_TTL_SECONDS = 86400
+_DEFAULT_SPENDSPHERE_CACHE_TTL_SECONDS = 86400
 _ACCOUNT_CODES_SCOPE_ACTIVE = "active"
 _ACCOUNT_CODES_SCOPE_ALL = "all"
 _CACHE_STORES: dict[str, FileCache] = {}
@@ -165,7 +168,11 @@ def _load_cache_root(cache_store: FileCache) -> dict[str, object]:
     if not isinstance(data, dict):
         data = {}
 
-    if _ACCOUNT_CODES_KEY in data or _GOOGLE_ADS_CLIENTS_KEY in data:
+    if (
+        _ACCOUNT_CODES_KEY in data
+        or _GOOGLE_ADS_CLIENTS_KEY in data
+        or _GOOGLE_SHEETS_KEY in data
+    ):
         root = data
     else:
         root = {_ACCOUNT_CODES_KEY: data}
@@ -177,9 +184,14 @@ def _load_cache_root(cache_store: FileCache) -> dict[str, object]:
     if not isinstance(google_ads, dict):
         google_ads = {}
 
+    google_sheets = root.get(_GOOGLE_SHEETS_KEY)
+    if not isinstance(google_sheets, dict):
+        google_sheets = {}
+
     return {
         _ACCOUNT_CODES_KEY: account_cache,
         _GOOGLE_ADS_CLIENTS_KEY: google_ads,
+        _GOOGLE_SHEETS_KEY: google_sheets,
     }
 
 
@@ -241,23 +253,118 @@ def _get_account_cache_entry(
     return _normalize_account_map(accounts), updated_at
 
 
-def get_spendsphere_cache_ttl_seconds() -> int:
-    raw = get_env(_GOOGLE_ADS_CLIENTS_CACHE_TTL_ENV)
-    if raw is None or str(raw).strip() == "":
-        raw = get_env(_GOOGLE_ADS_CLIENTS_CACHE_TTL_FALLBACK_ENV)
-    if raw is None or str(raw).strip() == "":
-        return _DEFAULT_GOOGLE_ADS_CLIENTS_CACHE_TTL_SECONDS
+def _parse_cache_config(raw: object) -> dict[str, object]:
+    if raw is None:
+        return {}
+    if isinstance(raw, dict):
+        return raw
+    if not isinstance(raw, str):
+        return {}
+    cleaned = raw.strip()
+    if not cleaned:
+        return {}
     try:
-        value = int(str(raw).strip())
-    except ValueError:
-        return _DEFAULT_GOOGLE_ADS_CLIENTS_CACHE_TTL_SECONDS
+        parsed = json.loads(cleaned)
+    except json.JSONDecodeError:
+        try:
+            parsed = ast.literal_eval(cleaned)
+        except (ValueError, SyntaxError):
+            return {}
+    return parsed if isinstance(parsed, dict) else {}
+
+
+def _get_cache_config() -> dict[str, object]:
+    raw = get_env("CACHE") or get_env("cache")
+    config = _parse_cache_config(raw)
+    normalized: dict[str, object] = {}
+    for key, value in config.items():
+        if not isinstance(key, str):
+            continue
+        normalized[key.strip().lower()] = value
+    return normalized
+
+
+def _parse_ttl_value(raw: object) -> int | None:
+    if raw is None:
+        return None
+    if isinstance(raw, bool):
+        return None
+    if isinstance(raw, int):
+        value = raw
+    else:
+        cleaned = str(raw).strip()
+        if not cleaned:
+            return None
+        try:
+            value = int(cleaned)
+        except ValueError:
+            return None
     if value < 0:
-        return _DEFAULT_GOOGLE_ADS_CLIENTS_CACHE_TTL_SECONDS
+        return None
+    return value
+
+
+def _get_cache_override(keys: tuple[str, ...]) -> int | None:
+    config = _get_cache_config()
+    for key in keys:
+        raw = config.get(key)
+        value = _parse_ttl_value(raw)
+        if value is not None:
+            return value
+    return None
+
+
+def get_spendsphere_cache_ttl_seconds() -> int:
+    value = _get_cache_override(("ttl_time", "ttl"))
+    if value is None:
+        value = _parse_ttl_value(get_env(_GOOGLE_ADS_CLIENTS_CACHE_TTL_FALLBACK_ENV))
+    if value is None:
+        return _DEFAULT_SPENDSPHERE_CACHE_TTL_SECONDS
+    return value
+
+
+def get_account_codes_cache_ttl_seconds() -> int:
+    value = _get_cache_override(
+        (
+            "account_codes_ttl_time",
+            "account_code_ttl_time",
+            "accountcode_ttl_time",
+        )
+    )
+    if value is None:
+        return get_spendsphere_cache_ttl_seconds()
     return value
 
 
 def get_google_ads_clients_cache_ttl_seconds() -> int:
-    return get_spendsphere_cache_ttl_seconds()
+    raw = get_env(_GOOGLE_ADS_CLIENTS_CACHE_TTL_ENV)
+    value = _parse_ttl_value(raw)
+    if value is not None:
+        return value
+    value = _get_cache_override(
+        (
+            "google_ads_clients_ttl_time",
+            "google_ads_client_ttl_time",
+            "google_ads_ttl_time",
+            "googleadsclients_ttl_time",
+        )
+    )
+    if value is None:
+        return get_spendsphere_cache_ttl_seconds()
+    return value
+
+
+def get_google_sheet_cache_ttl_seconds() -> int:
+    value = _get_cache_override(
+        (
+            "google_sheet_ttl_time",
+            "google_sheets_ttl_time",
+            "googlesheet_ttl_time",
+        )
+    )
+    if value is None:
+        return get_spendsphere_cache_ttl_seconds()
+    return value
 
 
 def _write_account_codes_cache(
@@ -310,7 +417,7 @@ def get_google_ads_clients_cache_entry(
     if not isinstance(clients, list):
         return None, False
 
-    ttl_seconds = get_spendsphere_cache_ttl_seconds()
+    ttl_seconds = get_google_ads_clients_cache_ttl_seconds()
     updated_at = _parse_cache_datetime(entry.get("updated_at"))
     if ttl_seconds <= 0:
         return clients, False
@@ -342,6 +449,102 @@ def set_google_ads_clients_cache(
         }
         root[_GOOGLE_ADS_CLIENTS_KEY] = google_ads
         _write_cache_root(cache_store, root)
+
+
+def get_google_sheet_cache_entry(
+    sheet_key: str,
+    *,
+    config_hash: str | None = None,
+    tenant_id: str | None = None,
+) -> tuple[list[dict] | None, bool]:
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+
+    google_sheets = root.get(_GOOGLE_SHEETS_KEY)
+    if not isinstance(google_sheets, dict):
+        return None, False
+
+    tenant_entry = google_sheets.get(tenant_key)
+    if not isinstance(tenant_entry, dict):
+        return None, False
+
+    entry = tenant_entry.get(sheet_key)
+    if not isinstance(entry, dict):
+        return None, False
+
+    rows = entry.get("rows")
+    if not isinstance(rows, list):
+        return None, False
+
+    entry_hash = entry.get("config_hash") if isinstance(entry.get("config_hash"), str) else None
+    hash_mismatch = bool(config_hash and entry_hash and entry_hash != config_hash)
+
+    ttl_seconds = get_google_sheet_cache_ttl_seconds()
+    updated_at = _parse_cache_datetime(entry.get("updated_at"))
+    if ttl_seconds <= 0:
+        return rows, hash_mismatch
+    if updated_at is None:
+        return rows, True
+
+    now = datetime.now(ZoneInfo(get_timezone()))
+    age_seconds = (now - updated_at).total_seconds()
+    is_stale = age_seconds > ttl_seconds or hash_mismatch
+    return rows, is_stale
+
+
+def set_google_sheet_cache(
+    sheet_key: str,
+    rows: list[dict],
+    *,
+    config_hash: str | None = None,
+    tenant_id: str | None = None,
+) -> None:
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+        google_sheets = root.get(_GOOGLE_SHEETS_KEY)
+        if not isinstance(google_sheets, dict):
+            google_sheets = {}
+        tenant_entry = google_sheets.get(tenant_key)
+        if not isinstance(tenant_entry, dict):
+            tenant_entry = {}
+        tenant_entry[sheet_key] = {
+            "rows": rows,
+            "updated_at": datetime.now(ZoneInfo(get_timezone())).isoformat(),
+            "config_hash": config_hash,
+        }
+        google_sheets[tenant_key] = tenant_entry
+        root[_GOOGLE_SHEETS_KEY] = google_sheets
+        _write_cache_root(cache_store, root)
+
+
+def refresh_account_codes_cache(
+    *,
+    include_all: bool,
+    tenant_id: str | None = None,
+) -> list[dict]:
+    accounts = get_accounts(None, include_all=include_all)
+    accounts_map = {a["code"].upper(): a for a in accounts}
+    cache_path = _get_cache_path(include_all)
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_store = _get_cache_store(cache_path)
+
+    with cache_store.lock():
+        _write_account_codes_cache(
+            cache_path,
+            tenant_key=tenant_key,
+            accounts=accounts_map,
+            include_all=include_all,
+        )
+
+    return accounts
 
 
 def validate_account_codes(
@@ -385,7 +588,7 @@ def validate_account_codes(
         include_all=include_all,
     )
 
-    ttl_seconds = get_spendsphere_cache_ttl_seconds()
+    ttl_seconds = get_account_codes_cache_ttl_seconds()
     updated_at = _parse_cache_datetime(tenant_updated_at)
     is_stale = False
     if ttl_seconds > 0:
@@ -405,16 +608,11 @@ def validate_account_codes(
 
     source_accounts: dict[str, dict]
     if missing_codes or is_stale:
-        db_accounts = get_accounts(None, include_all=include_all)
-        db_accounts_map = {a["code"].upper(): a for a in db_accounts}
-        with cache_store.lock():
-                _write_account_codes_cache(
-                    cache_path,
-                    tenant_key=tenant_key,
-                    accounts=db_accounts_map,
-                    include_all=include_all,
-                )
-        source_accounts = db_accounts_map
+        db_accounts = refresh_account_codes_cache(
+            include_all=include_all,
+            tenant_id=tenant_key,
+        )
+        source_accounts = {a["code"].upper(): a for a in db_accounts}
     else:
         source_accounts = tenant_accounts
 

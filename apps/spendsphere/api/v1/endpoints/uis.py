@@ -380,7 +380,7 @@ class UiAllocationRollBreakUpdateRequest(BaseModel):
 
 
 @router.get(
-    "/ui/selections",
+    "/uis/selections",
     summary="Get Google Ads clients and period metadata",
     description="Returns Google Ads clients and period data in a single response.",
 )
@@ -397,49 +397,49 @@ def get_ui_selections_route(
 ):
     """
     Example request:
-    GET /api/spendsphere/v1/ui/selections
-    Header: X-Tenant-Id: acme
+        GET /api/spendsphere/v1/uis/selections
+        Header: X-Tenant-Id: acme
 
     Example request (force refresh):
-    GET /api/spendsphere/v1/ui/selections?refresh_cache=true
-    Header: X-Tenant-Id: acme
+        GET /api/spendsphere/v1/uis/selections?refresh_cache=true
+        Header: X-Tenant-Id: acme
 
     Example response:
-    {
-      "googleAdsClients": [
         {
-          "id": "6563107233",
-          "descriptiveName": "AUC_Autocity Credit",
-          "accountCode": "AUC",
-          "accountName": "Autocity Credit"
-        }
-      ],
-      "periods": {
-        "currentPeriod": "1/2026",
-        "monthsArray": [
-          {
-            "month": 11,
-            "year": 2025,
-            "period": "11/2025"
-          },
-          {
-            "month": 12,
-            "year": 2025,
-            "period": "12/2025"
-          },
-          {
-            "month": 1,
-            "year": 2026,
-            "period": "1/2026"
-          },
-          {
-            "month": 2,
-            "year": 2026,
-            "period": "2/2026"
+          "googleAdsClients": [
+            {
+              "id": "6563107233",
+              "descriptiveName": "AUC_Autocity Credit",
+              "accountCode": "AUC",
+              "accountName": "Autocity Credit"
+            }
+          ],
+          "periods": {
+            "currentPeriod": "1/2026",
+            "monthsArray": [
+              {
+                "month": 11,
+                "year": 2025,
+                "period": "11/2025"
+              },
+              {
+                "month": 12,
+                "year": 2025,
+                "period": "12/2025"
+              },
+              {
+                "month": 1,
+                "year": 2026,
+                "period": "1/2026"
+              },
+              {
+                "month": 2,
+                "year": 2026,
+                "period": "2/2026"
+              }
+            ]
           }
-        ]
-      }
-    }
+        }
     """
     validate_month_offsets(months_before, months_after)
 
@@ -468,7 +468,7 @@ def get_ui_selections_route(
 
 
 @router.get(
-    "/ui/load",
+    "/uis/load",
     summary="Load SpendSphere UI data for a Google Ads account",
     description=(
         "Returns master budgets, rollovers, roll breakdown, and "
@@ -486,77 +486,77 @@ def load_ui_route(
 ):
     """
     Example request:
-    GET /api/spendsphere/v1/ui/load?googleId=6563107233&month=1&year=2026
-    Header: X-Tenant-Id: acme
+        GET /api/spendsphere/v1/uis/load?googleId=6563107233&month=1&year=2026
+        Header: X-Tenant-Id: acme
 
     Example request (current period):
-    GET /api/spendsphere/v1/ui/load?googleId=6563107233
-    Header: X-Tenant-Id: acme
+        GET /api/spendsphere/v1/uis/load?googleId=6563107233
+        Header: X-Tenant-Id: acme
 
     Example response:
-    {
-      "masterBudgets": {
-        "grandTotalBudget": 9729.44,
-        "PM": {
-          "budgets": [
-            {
-              "serviceName": "Vehicle Listing Ads",
-              "subService": "",
-              "netAmount": 680,
-              "adTypeCode": "PM"
+        {
+          "masterBudgets": {
+            "grandTotalBudget": 9729.44,
+            "PM": {
+              "budgets": [
+                {
+                  "serviceName": "Vehicle Listing Ads",
+                  "subService": "",
+                  "netAmount": 680,
+                  "adTypeCode": "PM"
+                }
+              ],
+              "total": 680
             }
-          ],
-          "total": 680
-        }
-      },
-      "rollOvers": 1000.0,
-      "activePeriod": {
-        "isActive": true,
-        "endDate": "2026-01-31",
-        "message": [
-          "Account last day on 01/31/2026 EOD",
-          "Daily budgets and pacing as of 01/31"
-        ]
-      },
-        "rollBreakdown": {
-        "grandTotalRollBreakdown": 1000,
-        "SEM": {
-          "id": "0ad1dc44-35f2-4fb6-9f1f-19527ab193e3",
-          "amount": 1000
-        }
-      },
-      "tableData": {
-        "grandTotalSpent": 586.09,
-        "data": [
-          {
-            "accountId": "6563107233",
-            "name": "AUC_DIS_Remarketing",
-            "budgetId": "15225876848",
-            "explicitlyShared": false,
-            "status": "ENABLED",
-            "currentBudget": 65.4,
-            "spent": 586.09,
-            "adTypeCode": "DIS",
-            "allocation": {
-              "id": "b98d38c5-448f-4746-bed3-8dfdadd2959c",
-              "allocation": 97.364
-            },
-            "acceleration": {
-              "id": "3f5d9c0c-83a9-4a2d-8c7b-3cc5b1c1a021",
-              "multiplier": 120
-            },
-            "campaigns": [
+          },
+          "rollOvers": 1000.0,
+          "activePeriod": {
+            "isActive": true,
+            "endDate": "2026-01-31",
+            "message": [
+              "Account last day on 01/31/2026 EOD",
+              "Daily budgets and pacing as of 01/31"
+            ]
+          },
+          "rollBreakdown": {
+            "grandTotalRollBreakdown": 1000,
+            "SEM": {
+              "id": "0ad1dc44-35f2-4fb6-9f1f-19527ab193e3",
+              "amount": 1000
+            }
+          },
+          "tableData": {
+            "grandTotalSpent": 586.09,
+            "data": [
               {
-                "campaignId": "21427314948",
-                "campaignName": "AUC_DIS_Remarketing",
-                "campaignStatus": "ENABLED"
+                "accountId": "6563107233",
+                "name": "AUC_DIS_Remarketing",
+                "budgetId": "15225876848",
+                "explicitlyShared": false,
+                "status": "ENABLED",
+                "currentBudget": 65.4,
+                "spent": 586.09,
+                "adTypeCode": "DIS",
+                "allocation": {
+                  "id": "b98d38c5-448f-4746-bed3-8dfdadd2959c",
+                  "allocation": 97.364
+                },
+                "acceleration": {
+                  "id": "3f5d9c0c-83a9-4a2d-8c7b-3cc5b1c1a021",
+                  "multiplier": 120
+                },
+                "campaigns": [
+                  {
+                    "campaignId": "21427314948",
+                    "campaignName": "AUC_DIS_Remarketing",
+                    "campaignStatus": "ENABLED"
+                  }
+                ],
+                "dataNo": 0
               }
-            ],
-            "dataNo": 0
+            ]
           }
-        ]
-      }
-    }
+        }
     """
     google_id = googleId.strip() if isinstance(googleId, str) else ""
     if not google_id:
@@ -677,7 +677,7 @@ def load_ui_route(
 
 
 @router.post(
-    "/ui/update",
+    "/uis/update",
     summary="Update UI allocations and roll breakdowns",
     description=(
         "Upsert allocations (budget level) and roll breakdowns (ad type) "
@@ -689,55 +689,55 @@ def update_ui_allocations_rollbreaks(
 ):
     """
     Example request:
-    POST /api/spendsphere/v1/ui/update
-    {
-      "accountCode": "TAAA",
-      "month": 1,
-      "year": 2026,
-      "returnNewData": true,
-      "updatedRollBreakdowns": [
+        POST /api/spendsphere/v1/uis/update
         {
-          "id": "0ad1dc44-35f2-4fb6-9f1f-19527ab193e3",
-          "adTypeCode": "SEM",
-          "currentAmount": 0,
-          "newAmount": 100
+          "accountCode": "TAAA",
+          "month": 1,
+          "year": 2026,
+          "returnNewData": true,
+          "updatedRollBreakdowns": [
+            {
+              "id": "0ad1dc44-35f2-4fb6-9f1f-19527ab193e3",
+              "adTypeCode": "SEM",
+              "currentAmount": 0,
+              "newAmount": 100
+            }
+          ],
+          "updatedAllocations": [
+            {
+              "id": "7d963d35-ae9c-4c33-9ce3-375d0a8e1287",
+              "budgetId": "15225876848",
+              "currentAllocation": 40,
+              "newAllocation": 80
+            }
+          ]
         }
-      ],
-      "updatedAllocations": [
-        {
-          "id": "7d963d35-ae9c-4c33-9ce3-375d0a8e1287",
-          "budgetId": "15225876848",
-          "currentAllocation": 40,
-          "newAllocation": 80
-        }
-      ]
-    }
 
     Note: Google Ads budget/status mutations run only when the payload
     month/year match the current period.
 
     Example response:
-    {
-      "updatedAllocations": {"updated": 1, "inserted": 0},
-      "updatedRollBreakdowns": {"updated": 1, "inserted": 0},
-      "googleAdsUpdates": {
-        "overallSummary": {
-          "total": 1,
-          "succeeded": 1,
-          "failed": 0,
-          "warnings": 0
-        },
-        "mutationResults": []
-      },
-      "rollBreakdown": {
-        "grandTotalRollBreakdown": 1000,
-        "SEM": {"id": "0ad1dc44-35f2-4fb6-9f1f-19527ab193e3", "amount": 1000}
-      },
-      "tableData": {
-        "grandTotalSpent": 586.09,
-        "data": []
-      }
-    }
+        {
+          "updatedAllocations": {"updated": 1, "inserted": 0},
+          "updatedRollBreakdowns": {"updated": 1, "inserted": 0},
+          "googleAdsUpdates": {
+            "overallSummary": {
+              "total": 1,
+              "succeeded": 1,
+              "failed": 0,
+              "warnings": 0
+            },
+            "mutationResults": []
+          },
+          "rollBreakdown": {
+            "grandTotalRollBreakdown": 1000,
+            "SEM": {"id": "0ad1dc44-35f2-4fb6-9f1f-19527ab193e3", "amount": 1000}
+          },
+          "tableData": {
+            "grandTotalSpent": 586.09,
+            "data": []
+          }
+        }
     """
     try:
         request_payload = UiAllocationRollBreakUpdateRequest.model_validate(

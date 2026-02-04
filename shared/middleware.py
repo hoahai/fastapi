@@ -418,7 +418,11 @@ def _is_update_budget_async_accept_response(
     if request.method != "POST":
         return False
     path = _normalize_path(request.url.path or "")
-    if not (path.endswith("/updateBudgetAsync") or path.endswith("/update/async")):
+    if not (
+        path.endswith("/updates/budgetAsync")
+        or path.endswith("/updateBudgetAsync")
+        or path.endswith("/update/async")
+    ):
         return False
     if response.status_code >= 400:
         return False

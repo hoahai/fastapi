@@ -129,23 +129,24 @@ def create_schedules(
 ):
     """
     Example request:
-    [
-      {
-        "employee_id": "948f09c9-f6b9-11f0-b7f6-5a4783e25118",
-        "position_code": "FR-CASH",
-        "shift_id": "9941aa49-f6b9-11f0-b7f6-5a4783e25118",
-        "date": "2026-01-20",
-        "start_time": "10:00",
-        "end_time": "14:00",
-        "note": null
-      }
-    ]
+        POST /api/shiftzy/v1/schedules
+        [
+          {
+            "employee_id": "948f09c9-f6b9-11f0-b7f6-5a4783e25118",
+            "position_code": "FR-CASH",
+            "shift_id": "9941aa49-f6b9-11f0-b7f6-5a4783e25118",
+            "date": "2026-01-20",
+            "start_time": "10:00",
+            "end_time": "14:00",
+            "note": null
+          }
+        ]
 
     Example response:
-    {
-      "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 3},
-      "data": {"inserted": 1}
-    }
+        {
+          "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 3},
+          "data": {"inserted": 1}
+        }
     """
     normalized = normalize_payload_list(payload, name="schedules")
     try:
@@ -161,20 +162,21 @@ def update_schedules(
 ):
     """
     Example request:
-    [
-      {
-        "id": "66495150-aada-4a11-bffa-e90e84d90662",
-        "start_time": "09:00",
-        "end_time": "13:30",
-        "note": "Cover shift"
-      }
-    ]
+        PUT /api/shiftzy/v1/schedules
+        [
+          {
+            "id": "66495150-aada-4a11-bffa-e90e84d90662",
+            "start_time": "09:00",
+            "end_time": "13:30",
+            "note": "Cover shift"
+          }
+        ]
 
     Example response:
-    {
-      "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 3},
-      "data": {"updated": 1}
-    }
+        {
+          "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 3},
+          "data": {"updated": 1}
+        }
     """
     normalized = normalize_payload_list(payload, name="schedules")
     try:
@@ -190,13 +192,14 @@ def delete_schedules(
 ):
     """
     Example request:
-    ["50e20973-9584-4d2c-a4a7-0977e8e4d80a"]
+        DELETE /api/shiftzy/v1/schedules
+        ["50e20973-9584-4d2c-a4a7-0977e8e4d80a"]
 
     Example response:
-    {
-      "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
-      "data": {"deleted": 1}
-    }
+        {
+          "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
+          "data": {"deleted": 1}
+        }
     """
     normalized = normalize_payload_list(payload, name="schedules")
     try:
@@ -213,13 +216,13 @@ def delete_schedules_by_week(
 ):
     """
     Example request:
-    DELETE /schedules/week?week_no=12
+        DELETE /api/shiftzy/v1/schedules/week?week_no=12
 
     Example response:
-    {
-      "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 4},
-      "data": {"deleted": 7, "week_no": 12}
-    }
+        {
+          "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 4},
+          "data": {"deleted": 7, "week_no": 12}
+        }
     """
     try:
         deleted = delete_schedules_by_week_db(week_no)
@@ -234,28 +237,29 @@ def batch_schedules(
 ):
     """
     Example request:
-    {
-      "toCreate": [],
-      "toUpdate": [
+        POST /api/shiftzy/v1/schedules/batchUpdates
         {
-          "id": "66495150-aada-4a11-bffa-e90e84d90662",
-          "employee_id": "948f09c9-f6b9-11f0-b7f6-5a4783e25118",
-          "position_code": "FR-CASH",
-          "shift_id": "9941aa49-f6b9-11f0-b7f6-5a4783e25118",
-          "date": "2026-01-20",
-          "start_time": "10:00",
-          "end_time": "14:00",
-          "note": null
+          "toCreate": [],
+          "toUpdate": [
+            {
+              "id": "66495150-aada-4a11-bffa-e90e84d90662",
+              "employee_id": "948f09c9-f6b9-11f0-b7f6-5a4783e25118",
+              "position_code": "FR-CASH",
+              "shift_id": "9941aa49-f6b9-11f0-b7f6-5a4783e25118",
+              "date": "2026-01-20",
+              "start_time": "10:00",
+              "end_time": "14:00",
+              "note": null
+            }
+          ],
+          "toDelete": ["50e20973-9584-4d2c-a4a7-0977e8e4d80a"]
         }
-      ],
-      "toDelete": ["50e20973-9584-4d2c-a4a7-0977e8e4d80a"]
-    }
 
     Example response:
-    {
-      "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 5},
-      "data": {"inserted": 0, "updated": 1, "deleted": 1}
-    }
+        {
+          "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 5},
+          "data": {"inserted": 0, "updated": 1, "deleted": 1}
+        }
     """
     normalized = normalize_payload(
         payload,

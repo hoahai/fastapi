@@ -34,24 +34,25 @@ class GoogleAdsUpdateRequest(BaseModel):
     includeAll: bool = Field(default=False, alias="include_all")
 
 
-@router.post("/updateBudget")
+@router.post("/updates/budget")
 def update_google_ads(request_payload: GoogleAdsUpdateRequest):
     """
     Example request:
-    {
-      "accountCodes": ["TAAA"],
-      "dryRun": true,
-      "includeTransformResults": false,
-      "include_all": false
-    }
+        POST /api/spendsphere/v1/updates/budget
+        {
+          "accountCodes": ["TAAA"],
+          "dryRun": true,
+          "includeTransformResults": false,
+          "include_all": false
+        }
 
     Example response:
-    {
-      "summary": {
-        "budget_updates": 1,
-        "campaign_updates": 0
-      }
-    }
+        {
+          "summary": {
+            "budget_updates": 1,
+            "campaign_updates": 0
+          }
+        }
     """
     if should_validate_account_codes(request_payload.accountCodes):
         validate_account_codes(
@@ -99,7 +100,7 @@ def _run_update_job(
         reset_request_id(request_token)
 
 
-@router.post("/updateBudgetAsync")
+@router.post("/updates/budgetAsync")
 def update_google_ads_async(
     request_payload: GoogleAdsUpdateRequest,
     background_tasks: BackgroundTasks,
@@ -107,18 +108,19 @@ def update_google_ads_async(
 ):
     """
     Example request:
-    {
-      "accountCodes": ["TAAA"],
-      "dryRun": true,
-      "includeTransformResults": true,
-      "include_all": false
-    }
+        POST /api/spendsphere/v1/updates/budgetAsync
+        {
+          "accountCodes": ["TAAA"],
+          "dryRun": true,
+          "includeTransformResults": true,
+          "include_all": false
+        }
 
     Example response:
-    {
-      "request_id": "c13d30fd-1966-4c04-b47d-23f6c2d3b9b1",
-      "status": "accepted"
-    }
+        {
+          "request_id": "c13d30fd-1966-4c04-b47d-23f6c2d3b9b1",
+          "status": "accepted"
+        }
     """
     if should_validate_account_codes(request_payload.accountCodes):
         validate_account_codes(

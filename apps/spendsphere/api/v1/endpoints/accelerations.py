@@ -49,32 +49,32 @@ def get_accelerations_route(
 ):
     """
     Example request:
-    GET /spendsphere/api/v1/accelerations/TAAA?include_all=false
+        GET /api/spendsphere/v1/accelerations/TAAA?include_all=false
 
     Example request (filter by dates):
-    GET /spendsphere/api/v1/accelerations/TAAA?start_date=2026-01-01&end_date=2026-01-31
+        GET /api/spendsphere/v1/accelerations/TAAA?start_date=2026-01-01&end_date=2026-01-31
 
     Example request (filter by month/year):
-    GET /spendsphere/api/v1/accelerations/TAAA?month=1&year=2026
+        GET /api/spendsphere/v1/accelerations/TAAA?month=1&year=2026
 
     Note:
     When start_date/end_date are provided, results include any accelerations that
     overlap the range (startDate <= end_date AND endDate >= start_date).
 
     Example response:
-    [
-      {
-        "id": 12,
-        "accountCode": "TAAA",
-        "scopeType": "ACCOUNT",
-        "scopeValue": "TAAA",
-        "startDate": "2026-01-01",
-        "endDate": "2026-01-31",
-        "multiplier": 120.0,
-        "dateCreated": "2026-01-01 00:00:00",
-        "dateUpdated": "2026-01-10 08:12:00"
-      }
-    ]
+        [
+          {
+            "id": 12,
+            "accountCode": "TAAA",
+            "scopeType": "ACCOUNT",
+            "scopeValue": "TAAA",
+            "startDate": "2026-01-01",
+            "endDate": "2026-01-31",
+            "multiplier": 120.0,
+            "dateCreated": "2026-01-01 00:00:00",
+            "dateUpdated": "2026-01-10 08:12:00"
+          }
+        ]
     """
     account_code = require_account_code(account_code)
 
@@ -145,7 +145,7 @@ class AccelerationPayload(BaseModel):
 
 
 class AccelerationMonthPayload(BaseModel):
-    accountCode: str
+    accountCode: str | list[str]
     scopeType: str
     scopeValue: str = Field(alias="scope_value")
     multiplier: float
@@ -158,9 +158,9 @@ class AccelerationMonthPayload(BaseModel):
         json_schema_extra={
             "examples": [
                 {
-                    "accountCode": "TAAA",
-                    "scopeType": "ACCOUNT",
-                    "scope_value": "TAAA",
+                    "accountCode": ["TAAA", "LACS"],
+                    "scopeType": "AD_TYPE",
+                    "scope_value": "SEM",
                     "multiplier": 120.0,
                     "month": 1,
                     "year": 2026,
@@ -243,6 +243,25 @@ def _normalize_and_validate_rows(rows: list[dict]) -> list[dict]:
         account_code = str(data.get("accountCode", "")).strip().upper()
         scope_type = str(data.get("scopeType", "")).strip().upper()
         scope_value = str(data.get("scopeValue", "")).strip()
+        multiplier = data.get("multiplier")
+        if isinstance(multiplier, bool) or not isinstance(multiplier, (int, float)):
+            errors.append(
+                {
+                    "index": idx,
+                    "field": "multiplier",
+                    "value": multiplier,
+                    "message": "multiplier must be a number",
+                }
+            )
+        elif multiplier < 0:
+            errors.append(
+                {
+                    "index": idx,
+                    "field": "multiplier",
+                    "value": multiplier,
+                    "message": "multiplier must be >= 0",
+                }
+            )
 
         if scope_type not in allowed_scopes:
             errors.append(
@@ -284,7 +303,14 @@ def _normalize_and_validate_rows(rows: list[dict]) -> list[dict]:
     if errors:
         raise HTTPException(status_code=400, detail={"error": "Invalid payload", "items": errors})
 
-    validate_account_codes([r.get("accountCode") for r in rows])
+    deduped_codes = _normalize_codes(
+        [
+            r.get("accountCode")
+            for r in rows
+            if isinstance(r.get("accountCode"), str)
+        ]
+    )
+    validate_account_codes(deduped_codes)
 
     return rows
 
@@ -326,22 +352,23 @@ def _normalize_and_validate_rows(rows: list[dict]) -> list[dict]:
 def create_accelerations(request_payload: list[AccelerationPayload]):
     """
     Example request:
-    [
-      {
-        "accountCode": "TAAA",
-        "scopeType": "ACCOUNT",
-        "scopeValue": "TAAA",
-        "startDate": "2026-01-01",
-        "endDate": "2026-01-31",
-        "multiplier": 120.0
-      }
-    ]
+        POST /api/spendsphere/v1/accelerations
+        [
+          {
+            "accountCode": "TAAA",
+            "scopeType": "ACCOUNT",
+            "scopeValue": "TAAA",
+            "startDate": "2026-01-01",
+            "endDate": "2026-01-31",
+            "multiplier": 120.0
+          }
+        ]
 
     Example response:
-    {
-      "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
-      "data": {"inserted": 1}
-    }
+        {
+          "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
+          "data": {"inserted": 1}
+        }
     """
     rows = _normalize_and_validate_rows([p.model_dump() for p in request_payload])
     inserted = insert_accelerations(rows)
@@ -365,22 +392,23 @@ def create_accelerations(request_payload: list[AccelerationPayload]):
 def update_accelerations_route(request_payload: list[AccelerationPayload]):
     """
     Example request:
-    [
-      {
-        "accountCode": "TAAA",
-        "scopeType": "ACCOUNT",
-        "scopeValue": "TAAA",
-        "startDate": "2026-01-01",
-        "endDate": "2026-01-31",
-        "multiplier": 150.0
-      }
-    ]
+        PUT /api/spendsphere/v1/accelerations
+        [
+          {
+            "accountCode": "TAAA",
+            "scopeType": "ACCOUNT",
+            "scopeValue": "TAAA",
+            "startDate": "2026-01-01",
+            "endDate": "2026-01-31",
+            "multiplier": 150.0
+          }
+        ]
 
     Example response:
-    {
-      "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
-      "data": {"updated": 1}
-    }
+        {
+          "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
+          "data": {"updated": 1}
+        }
     """
     rows = _normalize_and_validate_rows([p.model_dump() for p in request_payload])
     updated = update_accelerations(rows)
@@ -404,22 +432,23 @@ def update_accelerations_route(request_payload: list[AccelerationPayload]):
 def delete_accelerations(request_payload: list[AccelerationPayload]):
     """
     Example request:
-    [
-      {
-        "accountCode": "TAAA",
-        "scopeType": "ACCOUNT",
-        "scopeValue": "TAAA",
-        "startDate": "2026-01-01",
-        "endDate": "2026-01-31",
-        "multiplier": 120.0
-      }
-    ]
+        DELETE /api/spendsphere/v1/accelerations
+        [
+          {
+            "accountCode": "TAAA",
+            "scopeType": "ACCOUNT",
+            "scopeValue": "TAAA",
+            "startDate": "2026-01-01",
+            "endDate": "2026-01-31",
+            "multiplier": 120.0
+          }
+        ]
 
     Example response:
-    {
-      "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
-      "data": {"deleted": 1}
-    }
+        {
+          "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
+          "data": {"deleted": 1}
+        }
     """
     rows = _normalize_and_validate_rows([p.model_dump() for p in request_payload])
     deleted = soft_delete_accelerations(rows)
@@ -431,29 +460,48 @@ def delete_accelerations(request_payload: list[AccelerationPayload]):
     summary="Create accelerations by month (bulk)",
     description=(
         "Bulk insert accelerations using month/year/dayFront to compute start/end dates. "
+        "accountCode may be a string or a list of strings. "
         "startDate is always the first day of the month; endDate is startDate + dayFront."
     ),
 )
 def create_accelerations_by_month(request_payload: list[AccelerationMonthPayload]):
     """
     Example request:
-    [
-      {
-        "accountCode": "TAAA",
-        "scopeType": "ACCOUNT",
-        "scope_value": "TAAA",
-        "multiplier": 120.0,
-        "month": 1,
-        "year": 2026,
-        "dayFront": 15
-      }
-    ]
+        POST /api/spendsphere/v1/accelerations/by-month
+        [
+          {
+            "accountCode": ["TAAA", "LACS"],
+            "scopeType": "AD_TYPE",
+            "scope_value": "SEM",
+            "multiplier": 120.0,
+            "month": 1,
+            "year": 2026,
+            "dayFront": 15
+          }
+        ]
 
     Example response:
-    {
-      "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
-      "data": {"inserted": 1}
-    }
+        {
+          "summary": {"requested": 2, "inserted": 2},
+          "accelerations": [
+            {
+              "accountCode": "TAAA",
+              "scopeType": "AD_TYPE",
+              "scopeValue": "SEM",
+              "startDate": "2026-01-01",
+              "endDate": "2026-01-16",
+              "multiplier": 120.0
+            },
+            {
+              "accountCode": "LACS",
+              "scopeType": "AD_TYPE",
+              "scopeValue": "SEM",
+              "startDate": "2026-01-01",
+              "endDate": "2026-01-16",
+              "multiplier": 120.0
+            }
+          ]
+        }
     """
     if not request_payload:
         raise HTTPException(status_code=400, detail="No accelerations provided")
@@ -465,6 +513,30 @@ def create_accelerations_by_month(request_payload: list[AccelerationMonthPayload
         month = data.get("month")
         year = data.get("year")
         day_front = data.get("dayFront")
+        multiplier = data.get("multiplier")
+        raw_account_code = data.get("accountCode")
+        if isinstance(raw_account_code, list):
+            account_codes = [
+                code.strip().upper()
+                for code in raw_account_code
+                if isinstance(code, str) and code.strip()
+            ]
+        elif isinstance(raw_account_code, str):
+            account_codes = [raw_account_code.strip().upper()] if raw_account_code.strip() else []
+        else:
+            account_codes = []
+        account_codes = _normalize_codes(account_codes)
+
+        if not account_codes:
+            errors.append(
+                {
+                    "index": idx,
+                    "field": "accountCode",
+                    "value": raw_account_code,
+                    "message": "accountCode must be a non-empty string or list of strings",
+                }
+            )
+            continue
 
         if not isinstance(month, int) or month < 1 or month > 12:
             errors.append(
@@ -486,6 +558,26 @@ def create_accelerations_by_month(request_payload: list[AccelerationMonthPayload
                 }
             )
             continue
+        if isinstance(multiplier, bool) or not isinstance(multiplier, (int, float)):
+            errors.append(
+                {
+                    "index": idx,
+                    "field": "multiplier",
+                    "value": multiplier,
+                    "message": "multiplier must be a number",
+                }
+            )
+            continue
+        if multiplier < 0:
+            errors.append(
+                {
+                    "index": idx,
+                    "field": "multiplier",
+                    "value": multiplier,
+                    "message": "multiplier must be >= 0",
+                }
+            )
+            continue
 
         try:
             start_date = date(year, month, 1)
@@ -497,22 +589,30 @@ def create_accelerations_by_month(request_payload: list[AccelerationMonthPayload
 
         end_date = start_date + timedelta(days=day_front)
 
-        row = {
-            "accountCode": data.get("accountCode"),
-            "scopeType": data.get("scopeType"),
-            "scopeValue": data.get("scopeValue"),
-            "startDate": start_date,
-            "endDate": end_date,
-            "multiplier": data.get("multiplier"),
-        }
-        rows.append(row)
+        scope_type = data.get("scopeType")
+        scope_value = data.get("scopeValue")
+        for account_code in account_codes:
+            if str(scope_type).strip().upper() == "ACCOUNT":
+                scope_value = account_code
+            row = {
+                "accountCode": account_code,
+                "scopeType": scope_type,
+                "scopeValue": scope_value,
+                "startDate": start_date,
+                "endDate": end_date,
+                "multiplier": multiplier,
+            }
+            rows.append(row)
 
     if errors:
         raise HTTPException(status_code=400, detail={"error": "Invalid payload", "items": errors})
 
     rows = _normalize_and_validate_rows(rows)
     inserted = insert_accelerations(rows)
-    return {"inserted": inserted}
+    return {
+        "summary": {"requested": len(rows), "inserted": inserted},
+        "accelerations": rows,
+    }
 
 
 @router.post(
@@ -528,30 +628,32 @@ def create_accelerations_by_month_accounts(
 ):
     """
     Example request:
-    {
-      "accountCodes": [],
-      "scopeType": "AD_TYPE",
-      "scope_value": "SEM",
-      "multiplier": 120.0,
-      "month": 1,
-      "year": 2026
-    }
+        POST /api/spendsphere/v1/accelerations/by-month/accounts
+        {
+          "accountCodes": [],
+          "scopeType": "AD_TYPE",
+          "scope_value": "SEM",
+          "multiplier": 120.0,
+          "month": 1,
+          "year": 2026
+        }
 
     Example request (custom dates):
-    {
-      "accountCodes": ["TAAA"],
-      "scopeType": "ACCOUNT",
-      "scope_value": "TAAA",
-      "multiplier": 110.0,
-      "startDate": "2026-01-05",
-      "endDate": "2026-01-20"
-    }
+        POST /api/spendsphere/v1/accelerations/by-month/accounts
+        {
+          "accountCodes": ["TAAA"],
+          "scopeType": "ACCOUNT",
+          "scope_value": "TAAA",
+          "multiplier": 110.0,
+          "startDate": "2026-01-05",
+          "endDate": "2026-01-20"
+        }
 
     Example response:
-    {
-      "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
-      "data": {"inserted": 5}
-    }
+        {
+          "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
+          "data": {"inserted": 5}
+        }
     """
     account_codes = _resolve_account_codes(request_payload.accountCodes)
     if not account_codes:

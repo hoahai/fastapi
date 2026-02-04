@@ -22,22 +22,22 @@ def get_google_ads_clients_route(
 ):
     """
     Example request:
-    GET /api/spendsphere/v1/google-ads
-    Header: X-Tenant-Id: acme
+        GET /api/spendsphere/v1/google-ads
+        Header: X-Tenant-Id: acme
 
     Example request (force refresh):
-    GET /api/spendsphere/v1/google-ads?refresh_cache=true
-    Header: X-Tenant-Id: acme
+        GET /api/spendsphere/v1/google-ads?refresh_cache=true
+        Header: X-Tenant-Id: acme
 
     Example response:
-    [
-      {
-        "id": "6563107233",
-        "descriptiveName": "AUC_Autocity Credit",
-        "accountCode": "AUC",
-        "accountName": "Autocity Credit"
-      }
-    ]
+        [
+          {
+            "id": "6563107233",
+            "descriptiveName": "AUC_Autocity Credit",
+            "accountCode": "AUC",
+            "accountName": "Autocity Credit"
+          }
+        ]
     """
     return get_ggad_accounts(refresh_cache=refresh_cache)
 
@@ -50,19 +50,19 @@ def get_google_ads_clients_route(
 def refresh_google_ads_clients_route():
     """
     Example request:
-    POST /api/spendsphere/v1/google-ads/refresh
-    Header: X-Tenant-Id: acme
+        POST /api/spendsphere/v1/google-ads/refresh
+        Header: X-Tenant-Id: acme
 
     Example response:
-    {
-      "googleAdsClients": [
         {
-          "id": "6563107233",
-          "descriptiveName": "AUC_Autocity Credit",
-          "accountCode": "AUC",
-          "accountName": "Autocity Credit"
+          "googleAdsClients": [
+            {
+              "id": "6563107233",
+              "descriptiveName": "AUC_Autocity Credit",
+              "accountCode": "AUC",
+              "accountName": "Autocity Credit"
+            }
+          ]
         }
-      ]
-    }
     """
     return {"googleAdsClients": get_ggad_accounts(refresh_cache=True)}

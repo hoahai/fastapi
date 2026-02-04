@@ -19,17 +19,17 @@ router = APIRouter()
 def get_allocations_route(account_code: str):
     """
     Example request:
-    GET /spendsphere/api/v1/allocations/TAAA
+        GET /api/spendsphere/v1/allocations/TAAA
 
     Example response:
-    [
-      {
-        "id": 1,
-        "accountCode": "TAAA",
-        "ggBudgetId": "15264548297",
-        "allocation": 60.0
-      }
-    ]
+        [
+          {
+            "id": 1,
+            "accountCode": "TAAA",
+            "ggBudgetId": "15264548297",
+            "allocation": 60.0
+          }
+        ]
     """
     account_code = require_account_code(account_code)
 
@@ -56,19 +56,20 @@ class AllocationDuplicateRequest(BaseModel):
 def duplicate_allocations_route(request_payload: AllocationDuplicateRequest):
     """
     Example request:
-    {
-      "fromMonth": 12,
-      "fromYear": 2025,
-      "toMonth": 1,
-      "toYear": 2026,
-      "overwrite": false
-    }
+        POST /api/spendsphere/v1/allocations/duplicate
+        {
+          "fromMonth": 12,
+          "fromYear": 2025,
+          "toMonth": 1,
+          "toYear": 2026,
+          "overwrite": false
+        }
 
     Example response:
-    {
-      "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
-      "data": {"inserted": 42}
-    }
+        {
+          "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
+          "data": {"inserted": 42}
+        }
     """
     if request_payload.fromMonth < 1 or request_payload.fromMonth > 12:
         raise HTTPException(status_code=400, detail="fromMonth must be 1-12")

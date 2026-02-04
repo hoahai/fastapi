@@ -16,16 +16,16 @@ router = APIRouter()
 def get_rollovers_route(account_code: str):
     """
     Example request:
-    GET /spendsphere/api/v1/rollovers/TAAA
+        GET /api/spendsphere/v1/rollovers/TAAA
 
     Example response:
-    [
-      {
-        "accountCode": "TAAA",
-        "adTypeCode": "SEM",
-        "amount": 250.0
-      }
-    ]
+        [
+          {
+            "accountCode": "TAAA",
+            "adTypeCode": "SEM",
+            "amount": 250.0
+          }
+        ]
     """
     account_code = require_account_code(account_code)
 
@@ -43,17 +43,17 @@ def get_rollovers_route(account_code: str):
 def get_rollovers_breakdown(account_code: str):
     """
     Example request:
-    GET /spendsphere/api/v1/rollovers/breakdown/TAAA
+        GET /api/spendsphere/v1/rollovers/breakdown/TAAA
 
     Example response:
-    [
-      {
-        "id": 1,
-        "accountCode": "TAAA",
-        "adTypeCode": "SEM",
-        "amount": 250.0
-      }
-    ]
+        [
+          {
+            "id": 1,
+            "accountCode": "TAAA",
+            "adTypeCode": "SEM",
+            "amount": 250.0
+          }
+        ]
     """
     account_code = require_account_code(account_code)
 
