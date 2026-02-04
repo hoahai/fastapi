@@ -476,6 +476,9 @@ async def request_response_logger_middleware(request: Request, call_next):
             "host"
         )
         request_scheme = request.headers.get("x-forwarded-proto") or request.url.scheme
+        user_name = request.headers.get("x-user-name")
+        if user_name is not None:
+            user_name = user_name.strip() or None
 
         if not _is_update_budget_async_accept_response(
             request,
@@ -494,6 +497,7 @@ async def request_response_logger_middleware(request: Request, call_next):
                         "duration_ms": duration_ms,
                         "client_id": getattr(request.state, "client_id", None),
                         "tenant_id": getattr(request.state, "tenant_id", None),
+                        "user_name": user_name,
                         "request_host": request_host,
                         "request_scheme": request_scheme,
                         "request_body": request_body,
