@@ -11,6 +11,7 @@ from google.ads.googleads.v22.errors.types.errors import GoogleAdsFailure
 
 from shared.utils import (
     get_current_period,
+    run_parallel,
     run_parallel_flatten,
     LOCAL_SECRETS_DIR,
 )
@@ -26,7 +27,11 @@ from shared.constants import (
 from shared.logger import get_logger
 from apps.spendsphere.api.v1.helpers.config import get_adtypes
 from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
+    get_google_ads_budgets_cache_entries,
+    get_google_ads_campaigns_cache_entries,
     get_google_ads_clients_cache_entry,
+    set_google_ads_budgets_cache,
+    set_google_ads_campaigns_cache,
     set_google_ads_clients_cache,
 )
 
@@ -254,7 +259,11 @@ def get_ggad_budget(customer_id: str) -> list[dict]:
     return results
 
 
-def get_ggad_budgets(accounts: list[dict]) -> list[dict]:
+def get_ggad_budgets(
+    accounts: list[dict],
+    *,
+    refresh_cache: bool = False,
+) -> list[dict]:
     """
     Get campaign budgets for multiple Google Ads accounts (parallelized).
     """
@@ -271,9 +280,39 @@ def get_ggad_budgets(accounts: list[dict]) -> list[dict]:
             for b in budgets
         ]
 
-    tasks = [(per_account_func, (account,)) for account in accounts]
+    if not accounts:
+        return []
 
-    return run_parallel_flatten(tasks=tasks, api_name="google_ads")
+    account_map: dict[str, dict] = {}
+    account_codes: list[str] = []
+    for account in accounts:
+        code = str(account.get("accountCode", "")).strip().upper()
+        if not code or code in account_map:
+            continue
+        account_map[code] = account
+        account_codes.append(code)
+
+    cached: dict[str, list[dict]] = {}
+    missing: set[str] = set(account_codes)
+    if not refresh_cache:
+        cached, missing = get_google_ads_budgets_cache_entries(account_codes)
+
+    results: list[dict] = []
+    for code in account_codes:
+        if code in cached:
+            results.extend(cached[code])
+
+    if missing:
+        missing_accounts = [account_map[code] for code in account_codes if code in missing]
+        tasks = [(per_account_func, (account,)) for account in missing_accounts]
+        fetched_lists = run_parallel(tasks=tasks, api_name="google_ads")
+
+        for account, fetched in zip(missing_accounts, fetched_lists):
+            budgets = fetched if isinstance(fetched, list) else []
+            results.extend(budgets)
+            set_google_ads_budgets_cache(account.get("accountCode"), budgets)
+
+    return results
 
 
 # =====================
@@ -327,7 +366,11 @@ def get_ggad_campaign(customer_id: str) -> list[dict]:
     return results
 
 
-def get_ggad_campaigns(accounts: list[dict]) -> list[dict]:
+def get_ggad_campaigns(
+    accounts: list[dict],
+    *,
+    refresh_cache: bool = False,
+) -> list[dict]:
     """
     Get Google Ads campaigns for multiple accounts,
     filtered by naming convention:
@@ -369,8 +412,39 @@ def get_ggad_campaigns(accounts: list[dict]) -> list[dict]:
 
         return filtered
 
-    tasks = [(per_account_func, (account,)) for account in accounts]
-    return run_parallel_flatten(tasks=tasks, api_name="google_ads")
+    if not accounts:
+        return []
+
+    account_map: dict[str, dict] = {}
+    account_codes: list[str] = []
+    for account in accounts:
+        code = str(account.get("accountCode", "")).strip().upper()
+        if not code or code in account_map:
+            continue
+        account_map[code] = account
+        account_codes.append(code)
+
+    cached: dict[str, list[dict]] = {}
+    missing: set[str] = set(account_codes)
+    if not refresh_cache:
+        cached, missing = get_google_ads_campaigns_cache_entries(account_codes)
+
+    results: list[dict] = []
+    for code in account_codes:
+        if code in cached:
+            results.extend(cached[code])
+
+    if missing:
+        missing_accounts = [account_map[code] for code in account_codes if code in missing]
+        tasks = [(per_account_func, (account,)) for account in missing_accounts]
+        fetched_lists = run_parallel(tasks=tasks, api_name="google_ads")
+
+        for account, fetched in zip(missing_accounts, fetched_lists):
+            campaigns = fetched if isinstance(fetched, list) else []
+            results.extend(campaigns)
+            set_google_ads_campaigns_cache(account.get("accountCode"), campaigns)
+
+    return results
 
 
 # =====================

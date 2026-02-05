@@ -170,9 +170,22 @@ def run_transaction(
         conn.close()
 
 
+def _coerce_empty_strings(value: object) -> object:
+    if value == "":
+        return None
+    if isinstance(value, tuple):
+        return tuple(_coerce_empty_strings(v) for v in value)
+    if isinstance(value, list):
+        return [_coerce_empty_strings(v) for v in value]
+    if isinstance(value, dict):
+        return {k: _coerce_empty_strings(v) for k, v in value.items()}
+    return value
+
+
 def execute_write(query: str, params: tuple | None = None) -> int:
     def _work(cursor: mysql.connector.cursor.MySQLCursor) -> int:
-        cursor.execute(query, params)
+        normalized = _coerce_empty_strings(params)
+        cursor.execute(query, normalized)
         return cursor.rowcount
 
     return run_transaction(_work)
@@ -183,7 +196,8 @@ def execute_many(query: str, rows: list[tuple]) -> int:
         return 0
 
     def _work(cursor: mysql.connector.cursor.MySQLCursor) -> int:
-        cursor.executemany(query, rows)
+        normalized_rows = _coerce_empty_strings(rows)
+        cursor.executemany(query, normalized_rows)
         return cursor.rowcount
 
     return run_transaction(_work)

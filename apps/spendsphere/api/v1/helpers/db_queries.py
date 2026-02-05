@@ -409,6 +409,7 @@ def get_accelerations(
         "startDate, "
         "endDate, "
         "multiplier, "
+        "note, "
         "dateCreated, "
         "dateUpdated "
         f"FROM {accelerations_table} "
@@ -440,11 +441,11 @@ def insert_accelerations(rows: list[dict]) -> int:
     tables = get_db_tables()
     accelerations_table = tables["ACCELERATIONS"]
 
-    row_placeholder = "(%s, %s, %s, %s, %s, %s, 1)"
+    row_placeholder = "(%s, %s, %s, %s, %s, %s, %s, 1)"
     placeholders = ", ".join([row_placeholder] * len(rows))
     query = (
         f"INSERT INTO {accelerations_table} "
-        "(accountCode, scopeType, scopeValue, startDate, endDate, multiplier, active) "
+        "(accountCode, scopeType, scopeValue, startDate, endDate, multiplier, note, active) "
         f"VALUES {placeholders}"
     )
 
@@ -458,6 +459,7 @@ def insert_accelerations(rows: list[dict]) -> int:
                 r.get("startDate"),
                 r.get("endDate"),
                 r.get("multiplier"),
+                r.get("note"),
             ]
         )
 
@@ -473,7 +475,9 @@ def update_accelerations(rows: list[dict]) -> int:
 
     key_expr = "(accountCode, scopeType, scopeValue, startDate, endDate)"
     case_parts: list[str] = []
+    note_case_parts: list[str] = []
     params: list = []
+    note_params: list = []
 
     for r in rows:
         case_parts.append(f"WHEN {key_expr} = (%s, %s, %s, %s, %s) THEN %s")
@@ -487,8 +491,23 @@ def update_accelerations(rows: list[dict]) -> int:
                 r.get("multiplier"),
             ]
         )
+        if r.get("_note_provided"):
+            note_case_parts.append(
+                f"WHEN {key_expr} = (%s, %s, %s, %s, %s) THEN %s"
+            )
+            note_params.extend(
+                [
+                    r.get("accountCode"),
+                    r.get("scopeType"),
+                    r.get("scopeValue"),
+                    r.get("startDate"),
+                    r.get("endDate"),
+                    r.get("note"),
+                ]
+            )
 
     in_placeholders = ", ".join(["(%s, %s, %s, %s, %s)"] * len(rows))
+    params.extend(note_params)
     for r in rows:
         params.extend(
             [
@@ -500,13 +519,59 @@ def update_accelerations(rows: list[dict]) -> int:
             ]
         )
 
+    set_parts = [
+        f"multiplier = CASE {' '.join(case_parts)} ELSE multiplier END"
+    ]
+    if note_case_parts:
+        set_parts.append(f"note = CASE {' '.join(note_case_parts)} ELSE note END")
+
     query = (
         f"UPDATE {accelerations_table} "
-        f"SET multiplier = CASE {' '.join(case_parts)} ELSE multiplier END "
+        f"SET {', '.join(set_parts)} "
         f"WHERE {key_expr} IN ({in_placeholders})"
     )
 
     return execute_write(query, tuple(params))
+
+
+def get_existing_acceleration_keys(rows: list[dict]) -> set[tuple]:
+    if not rows:
+        return set()
+
+    tables = get_db_tables()
+    accelerations_table = tables["ACCELERATIONS"]
+
+    key_expr = "(accountCode, scopeType, scopeValue, startDate, endDate)"
+    placeholders = ", ".join(["(%s, %s, %s, %s, %s)"] * len(rows))
+    query = (
+        "SELECT accountCode, scopeType, scopeValue, startDate, endDate "
+        f"FROM {accelerations_table} "
+        f"WHERE {key_expr} IN ({placeholders})"
+    )
+
+    params: list = []
+    for r in rows:
+        params.extend(
+            [
+                r.get("accountCode"),
+                r.get("scopeType"),
+                r.get("scopeValue"),
+                r.get("startDate"),
+                r.get("endDate"),
+            ]
+        )
+
+    results = fetch_all(query, tuple(params))
+    return {
+        (
+            row.get("accountCode"),
+            row.get("scopeType"),
+            row.get("scopeValue"),
+            row.get("startDate"),
+            row.get("endDate"),
+        )
+        for row in results
+    }
 
 
 def soft_delete_accelerations(rows: list[dict]) -> int:

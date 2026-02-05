@@ -1,6 +1,6 @@
 # Cache Behavior (SpendSphere)
 
-This document describes the SpendSphere cache behavior for account codes and Google Ads clients.
+This document describes the SpendSphere cache behavior for account codes, Google Ads clients, budgets, and campaigns.
 
 ## Cache file
 - Location: `fastapi/caches.json`
@@ -17,6 +17,8 @@ This document describes the SpendSphere cache behavior for account codes and Goo
 - Cache-specific tenant overrides in `spendsphere -> CACHE`:
   - `account_codes_ttl_time`
   - `google_ads_clients_ttl_time`
+  - `google_ads_budgets_ttl_time`
+  - `google_ads_campaigns_ttl_time`
   - `google_sheet_ttl_time`
 - Optional env override (highest priority): `SPENDSPHERE_GOOGLE_ADS_CLIENTS_CACHE_TTL_SECONDS`.
 
@@ -33,6 +35,26 @@ If a cache entry is stale, the API **blocks and refreshes** from the source befo
 - Stored under `google_ads_clients` per tenant.
 - Reads return cached data when fresh.
 - If stale or `refresh_cache=true`, data is fetched from Google Ads and the cache is updated.
+
+## Google Ads budgets cache
+- Stored under `google_ads_budgets` per tenant (per accountCode).
+- Default TTL: 300 seconds (5 minutes).
+- Reads return cached data when fresh.
+- If stale, data is fetched from Google Ads and the cache is updated.
+
+## Google Ads campaigns cache
+- Stored under `google_ads_campaigns` per tenant (per accountCode).
+- Default TTL: 300 seconds (5 minutes).
+- Reads return cached data when fresh.
+- If stale, data is fetched from Google Ads and the cache is updated.
+
+Example tenant override:
+```yaml
+spendsphere:
+  CACHE:
+    google_ads_budgets_ttl_time: 300
+    google_ads_campaigns_ttl_time: 300
+```
 
 ## Google Sheets cache
 - Stored under `google_sheets` per tenant.

@@ -3,6 +3,8 @@ from datetime import date
 from datetime import timedelta
 import calendar
 
+from collections import defaultdict
+
 from fastapi import APIRouter, HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -13,11 +15,15 @@ from apps.spendsphere.api.v1.helpers.config import (
 from apps.spendsphere.api.v1.helpers.db_queries import (
     get_accounts,
     get_accelerations,
+    get_existing_acceleration_keys,
     insert_accelerations,
     soft_delete_accelerations,
     update_accelerations,
 )
-from apps.spendsphere.api.v1.helpers.ggAd import get_ggad_accounts
+from apps.spendsphere.api.v1.helpers.ggAd import (
+    get_ggad_accounts,
+    get_ggad_budgets,
+)
 from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
     require_account_code,
     validate_account_codes,
@@ -126,6 +132,7 @@ class AccelerationPayload(BaseModel):
     startDate: date
     endDate: date
     multiplier: float
+    note: str | None = Field(default=None, max_length=2048)
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -152,6 +159,7 @@ class AccelerationMonthPayload(BaseModel):
     month: int
     year: int
     dayFront: int = Field(alias="day_front")
+    note: str | None = Field(default=None, max_length=2048)
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -180,6 +188,7 @@ class AccelerationMonthAccountsPayload(BaseModel):
     year: int | None = None
     startDate: date | None = None
     endDate: date | None = None
+    note: str | None = Field(default=None, max_length=2048)
 
     model_config = ConfigDict(
         populate_by_name=True,
@@ -230,7 +239,9 @@ def _resolve_account_codes(account_codes: list[str]) -> list[str]:
     return _normalize_codes(account_codes)
 
 
-def _normalize_and_validate_rows(rows: list[dict]) -> list[dict]:
+def _normalize_and_validate_rows(
+    rows: list[dict], *, enforce_multiplier_min: bool = True
+) -> list[dict]:
     if not rows:
         raise HTTPException(status_code=400, detail="No accelerations provided")
 
@@ -244,6 +255,8 @@ def _normalize_and_validate_rows(rows: list[dict]) -> list[dict]:
         scope_type = str(data.get("scopeType", "")).strip().upper()
         scope_value = str(data.get("scopeValue", "")).strip()
         multiplier = data.get("multiplier")
+        start_date = data.get("startDate")
+        end_date = data.get("endDate")
         if isinstance(multiplier, bool) or not isinstance(multiplier, (int, float)):
             errors.append(
                 {
@@ -253,13 +266,22 @@ def _normalize_and_validate_rows(rows: list[dict]) -> list[dict]:
                     "message": "multiplier must be a number",
                 }
             )
-        elif multiplier < 0:
+        elif enforce_multiplier_min and multiplier < 100:
             errors.append(
                 {
                     "index": idx,
                     "field": "multiplier",
                     "value": multiplier,
-                    "message": "multiplier must be >= 0",
+                    "message": "multiplier must be >= 100",
+                }
+            )
+        if start_date and end_date and start_date > end_date:
+            errors.append(
+                {
+                    "index": idx,
+                    "field": "startDate",
+                    "value": str(start_date),
+                    "message": "startDate must be on or before endDate",
                 }
             )
 
@@ -273,6 +295,15 @@ def _normalize_and_validate_rows(rows: list[dict]) -> list[dict]:
                 }
             )
 
+        if scope_type in {"AD_TYPE", "BUDGET"} and not scope_value:
+            errors.append(
+                {
+                    "index": idx,
+                    "field": "scopeValue",
+                    "value": scope_value,
+                    "message": "scopeValue is required for AD_TYPE and BUDGET scopes",
+                }
+            )
         if scope_type == "AD_TYPE":
             scope_value = scope_value.upper()
             if scope_value not in allowed_adtypes:
@@ -313,6 +344,106 @@ def _normalize_and_validate_rows(rows: list[dict]) -> list[dict]:
     validate_account_codes(deduped_codes)
 
     return rows
+
+
+def _validate_budget_scope_values(rows: list[dict]) -> None:
+    budget_rows = [
+        (idx, row)
+        for idx, row in enumerate(rows)
+        if str(row.get("scopeType", "")).strip().upper() == "BUDGET"
+    ]
+    if not budget_rows:
+        return
+
+    account_codes = sorted(
+        {
+            str(row.get("accountCode", "")).strip().upper()
+            for _, row in budget_rows
+            if str(row.get("accountCode", "")).strip()
+        }
+    )
+    errors: list[dict] = []
+    gg_accounts = get_ggad_accounts()
+    gg_by_code = {
+        str(a.get("accountCode", "")).strip().upper(): a
+        for a in gg_accounts
+        if str(a.get("accountCode", "")).strip()
+    }
+
+    missing_accounts = [code for code in account_codes if code not in gg_by_code]
+    if missing_accounts:
+        errors.extend(
+            {
+                "index": idx,
+                "field": "accountCode",
+                "value": row.get("accountCode"),
+                "message": "No Google Ads account found for accountCode",
+            }
+            for idx, row in budget_rows
+            if str(row.get("accountCode", "")).strip().upper() in missing_accounts
+        )
+
+    accounts = [gg_by_code[code] for code in account_codes if code in gg_by_code]
+    budgets = get_ggad_budgets(accounts) if accounts else []
+    budget_ids_by_account: dict[str, set[str]] = defaultdict(set)
+    for budget in budgets:
+        account_code = str(budget.get("accountCode", "")).strip().upper()
+        budget_id = str(budget.get("budgetId", "")).strip()
+        if account_code and budget_id:
+            budget_ids_by_account[account_code].add(budget_id)
+
+    for idx, row in budget_rows:
+        account_code = str(row.get("accountCode", "")).strip().upper()
+        scope_value = str(row.get("scopeValue", "")).strip()
+        if account_code in missing_accounts:
+            continue
+        if scope_value not in budget_ids_by_account.get(account_code, set()):
+            errors.append(
+                {
+                    "index": idx,
+                    "field": "scopeValue",
+                    "value": scope_value,
+                    "message": "scopeValue is not a valid budgetId for accountCode",
+                }
+            )
+
+    if errors:
+        raise HTTPException(
+            status_code=400, detail={"error": "Invalid payload", "items": errors}
+        )
+
+
+def _validate_update_keys_exist(rows: list[dict]) -> None:
+    existing_keys = get_existing_acceleration_keys(rows)
+    missing: list[dict] = []
+    for idx, row in enumerate(rows):
+        key = (
+            row.get("accountCode"),
+            row.get("scopeType"),
+            row.get("scopeValue"),
+            row.get("startDate"),
+            row.get("endDate"),
+        )
+        if key not in existing_keys:
+            missing.append(
+                {
+                    "index": idx,
+                    "message": "Acceleration not found for update",
+                    "key": {
+                        "accountCode": row.get("accountCode"),
+                        "scopeType": row.get("scopeType"),
+                        "scopeValue": row.get("scopeValue"),
+                        "startDate": row.get("startDate"),
+                        "endDate": row.get("endDate"),
+                    },
+                }
+            )
+
+    if missing:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Update keys not found", "items": missing},
+        )
 
 
 @router.post(
@@ -370,7 +501,16 @@ def create_accelerations(request_payload: list[AccelerationPayload]):
           "data": {"inserted": 1}
         }
     """
-    rows = _normalize_and_validate_rows([p.model_dump() for p in request_payload])
+    rows = _normalize_and_validate_rows(
+        [
+            {
+                **p.model_dump(exclude_unset=True),
+                "_note_provided": "note" in p.model_fields_set,
+            }
+            for p in request_payload
+        ]
+    )
+    _validate_budget_scope_values(rows)
     inserted = insert_accelerations(rows)
     return {"inserted": inserted}
 
@@ -410,7 +550,17 @@ def update_accelerations_route(request_payload: list[AccelerationPayload]):
           "data": {"updated": 1}
         }
     """
-    rows = _normalize_and_validate_rows([p.model_dump() for p in request_payload])
+    rows = _normalize_and_validate_rows(
+        [
+            {
+                **p.model_dump(exclude_unset=True),
+                "_note_provided": "note" in p.model_fields_set,
+            }
+            for p in request_payload
+        ]
+    )
+    _validate_budget_scope_values(rows)
+    _validate_update_keys_exist(rows)
     updated = update_accelerations(rows)
     return {"updated": updated}
 
@@ -450,7 +600,10 @@ def delete_accelerations(request_payload: list[AccelerationPayload]):
           "data": {"deleted": 1}
         }
     """
-    rows = _normalize_and_validate_rows([p.model_dump() for p in request_payload])
+    rows = _normalize_and_validate_rows(
+        [p.model_dump() for p in request_payload],
+        enforce_multiplier_min=False,
+    )
     deleted = soft_delete_accelerations(rows)
     return {"deleted": deleted}
 
@@ -568,13 +721,13 @@ def create_accelerations_by_month(request_payload: list[AccelerationMonthPayload
                 }
             )
             continue
-        if multiplier < 0:
+        if multiplier < 100:
             errors.append(
                 {
                     "index": idx,
                     "field": "multiplier",
                     "value": multiplier,
-                    "message": "multiplier must be >= 0",
+                    "message": "multiplier must be >= 100",
                 }
             )
             continue
@@ -591,6 +744,7 @@ def create_accelerations_by_month(request_payload: list[AccelerationMonthPayload
 
         scope_type = data.get("scopeType")
         scope_value = data.get("scopeValue")
+        note = data.get("note")
         for account_code in account_codes:
             if str(scope_type).strip().upper() == "ACCOUNT":
                 scope_value = account_code
@@ -601,6 +755,7 @@ def create_accelerations_by_month(request_payload: list[AccelerationMonthPayload
                 "startDate": start_date,
                 "endDate": end_date,
                 "multiplier": multiplier,
+                "note": note,
             }
             rows.append(row)
 
@@ -608,6 +763,7 @@ def create_accelerations_by_month(request_payload: list[AccelerationMonthPayload
         raise HTTPException(status_code=400, detail={"error": "Invalid payload", "items": errors})
 
     rows = _normalize_and_validate_rows(rows)
+    _validate_budget_scope_values(rows)
     inserted = insert_accelerations(rows)
     return {
         "summary": {"requested": len(rows), "inserted": inserted},
@@ -690,6 +846,7 @@ def create_accelerations_by_month_accounts(
     rows: list[dict] = []
     scope_type = request_payload.scopeType
     scope_value = request_payload.scopeValue
+    note = request_payload.note
     for code in account_codes:
         row = {
             "accountCode": code,
@@ -698,11 +855,13 @@ def create_accelerations_by_month_accounts(
             "startDate": start_date,
             "endDate": end_date,
             "multiplier": request_payload.multiplier,
+            "note": note,
         }
         if str(scope_type).strip().upper() == "ACCOUNT":
             row["scopeValue"] = code
         rows.append(row)
 
     rows = _normalize_and_validate_rows(rows)
+    _validate_budget_scope_values(rows)
     inserted = insert_accelerations(rows)
     return {"inserted": inserted}

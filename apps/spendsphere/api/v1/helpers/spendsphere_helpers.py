@@ -20,10 +20,13 @@ _CACHE_BASE_PATH = Path(
 )
 _ACCOUNT_CODES_KEY = "account_codes"
 _GOOGLE_ADS_CLIENTS_KEY = "google_ads_clients"
+_GOOGLE_ADS_BUDGETS_KEY = "google_ads_budgets"
+_GOOGLE_ADS_CAMPAIGNS_KEY = "google_ads_campaigns"
 _GOOGLE_SHEETS_KEY = "google_sheets"
 _GOOGLE_ADS_CLIENTS_CACHE_TTL_ENV = "SPENDSPHERE_GOOGLE_ADS_CLIENTS_CACHE_TTL_SECONDS"
 _GOOGLE_ADS_CLIENTS_CACHE_TTL_FALLBACK_ENV = "ttl_time"
 _DEFAULT_SPENDSPHERE_CACHE_TTL_SECONDS = 86400
+_DEFAULT_GOOGLE_ADS_RESOURCE_CACHE_TTL_SECONDS = 300
 _ACCOUNT_CODES_SCOPE_ACTIVE = "active"
 _ACCOUNT_CODES_SCOPE_ALL = "all"
 _CACHE_STORES: dict[str, FileCache] = {}
@@ -184,6 +187,14 @@ def _load_cache_root(cache_store: FileCache) -> dict[str, object]:
     if not isinstance(google_ads, dict):
         google_ads = {}
 
+    google_ads_budgets = root.get(_GOOGLE_ADS_BUDGETS_KEY)
+    if not isinstance(google_ads_budgets, dict):
+        google_ads_budgets = {}
+
+    google_ads_campaigns = root.get(_GOOGLE_ADS_CAMPAIGNS_KEY)
+    if not isinstance(google_ads_campaigns, dict):
+        google_ads_campaigns = {}
+
     google_sheets = root.get(_GOOGLE_SHEETS_KEY)
     if not isinstance(google_sheets, dict):
         google_sheets = {}
@@ -191,6 +202,8 @@ def _load_cache_root(cache_store: FileCache) -> dict[str, object]:
     return {
         _ACCOUNT_CODES_KEY: account_cache,
         _GOOGLE_ADS_CLIENTS_KEY: google_ads,
+        _GOOGLE_ADS_BUDGETS_KEY: google_ads_budgets,
+        _GOOGLE_ADS_CAMPAIGNS_KEY: google_ads_campaigns,
         _GOOGLE_SHEETS_KEY: google_sheets,
     }
 
@@ -367,6 +380,32 @@ def get_google_sheet_cache_ttl_seconds() -> int:
     return value
 
 
+def get_google_ads_budgets_cache_ttl_seconds() -> int:
+    value = _get_cache_override(
+        (
+            "google_ads_budgets_ttl_time",
+            "google_ads_budget_ttl_time",
+            "googleadsbudgets_ttl_time",
+        )
+    )
+    if value is None:
+        return _DEFAULT_GOOGLE_ADS_RESOURCE_CACHE_TTL_SECONDS
+    return value
+
+
+def get_google_ads_campaigns_cache_ttl_seconds() -> int:
+    value = _get_cache_override(
+        (
+            "google_ads_campaigns_ttl_time",
+            "google_ads_campaign_ttl_time",
+            "googleadscampaigns_ttl_time",
+        )
+    )
+    if value is None:
+        return _DEFAULT_GOOGLE_ADS_RESOURCE_CACHE_TTL_SECONDS
+    return value
+
+
 def _write_account_codes_cache(
     cache_path: Path,
     *,
@@ -448,6 +487,182 @@ def set_google_ads_clients_cache(
             "updated_at": datetime.now(ZoneInfo(get_timezone())).isoformat(),
         }
         root[_GOOGLE_ADS_CLIENTS_KEY] = google_ads
+        _write_cache_root(cache_store, root)
+
+
+def get_google_ads_budgets_cache_entries(
+    account_codes: list[str] | None,
+    *,
+    tenant_id: str | None = None,
+) -> tuple[dict[str, list[dict]], set[str]]:
+    codes = _normalize_account_codes(account_codes)
+    if not codes:
+        return {}, set()
+
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+
+    budgets_cache = root.get(_GOOGLE_ADS_BUDGETS_KEY)
+    if not isinstance(budgets_cache, dict):
+        return {}, set(codes)
+
+    tenant_entry = budgets_cache.get(tenant_key)
+    if not isinstance(tenant_entry, dict):
+        return {}, set(codes)
+
+    ttl_seconds = get_google_ads_budgets_cache_ttl_seconds()
+    now = datetime.now(ZoneInfo(get_timezone()))
+
+    cached: dict[str, list[dict]] = {}
+    missing: set[str] = set()
+
+    for code in codes:
+        entry = tenant_entry.get(code)
+        if not isinstance(entry, dict):
+            missing.add(code)
+            continue
+        budgets = entry.get("budgets")
+        if not isinstance(budgets, list):
+            missing.add(code)
+            continue
+        if ttl_seconds <= 0:
+            cached[code] = budgets
+            continue
+        updated_at = _parse_cache_datetime(entry.get("updated_at"))
+        if updated_at is None:
+            missing.add(code)
+            continue
+        age_seconds = (now - updated_at).total_seconds()
+        if age_seconds > ttl_seconds:
+            missing.add(code)
+            continue
+        cached[code] = budgets
+
+    return cached, missing
+
+
+def set_google_ads_budgets_cache(
+    account_code: str,
+    budgets: list[dict],
+    *,
+    tenant_id: str | None = None,
+) -> None:
+    if not account_code or not isinstance(account_code, str):
+        return
+    code = account_code.strip().upper()
+    if not code:
+        return
+
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+        budgets_cache = root.get(_GOOGLE_ADS_BUDGETS_KEY)
+        if not isinstance(budgets_cache, dict):
+            budgets_cache = {}
+        tenant_entry = budgets_cache.get(tenant_key)
+        if not isinstance(tenant_entry, dict):
+            tenant_entry = {}
+        tenant_entry[code] = {
+            "budgets": budgets,
+            "updated_at": datetime.now(ZoneInfo(get_timezone())).isoformat(),
+        }
+        budgets_cache[tenant_key] = tenant_entry
+        root[_GOOGLE_ADS_BUDGETS_KEY] = budgets_cache
+        _write_cache_root(cache_store, root)
+
+
+def get_google_ads_campaigns_cache_entries(
+    account_codes: list[str] | None,
+    *,
+    tenant_id: str | None = None,
+) -> tuple[dict[str, list[dict]], set[str]]:
+    codes = _normalize_account_codes(account_codes)
+    if not codes:
+        return {}, set()
+
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+
+    campaigns_cache = root.get(_GOOGLE_ADS_CAMPAIGNS_KEY)
+    if not isinstance(campaigns_cache, dict):
+        return {}, set(codes)
+
+    tenant_entry = campaigns_cache.get(tenant_key)
+    if not isinstance(tenant_entry, dict):
+        return {}, set(codes)
+
+    ttl_seconds = get_google_ads_campaigns_cache_ttl_seconds()
+    now = datetime.now(ZoneInfo(get_timezone()))
+
+    cached: dict[str, list[dict]] = {}
+    missing: set[str] = set()
+
+    for code in codes:
+        entry = tenant_entry.get(code)
+        if not isinstance(entry, dict):
+            missing.add(code)
+            continue
+        campaigns = entry.get("campaigns")
+        if not isinstance(campaigns, list):
+            missing.add(code)
+            continue
+        if ttl_seconds <= 0:
+            cached[code] = campaigns
+            continue
+        updated_at = _parse_cache_datetime(entry.get("updated_at"))
+        if updated_at is None:
+            missing.add(code)
+            continue
+        age_seconds = (now - updated_at).total_seconds()
+        if age_seconds > ttl_seconds:
+            missing.add(code)
+            continue
+        cached[code] = campaigns
+
+    return cached, missing
+
+
+def set_google_ads_campaigns_cache(
+    account_code: str,
+    campaigns: list[dict],
+    *,
+    tenant_id: str | None = None,
+) -> None:
+    if not account_code or not isinstance(account_code, str):
+        return
+    code = account_code.strip().upper()
+    if not code:
+        return
+
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+        campaigns_cache = root.get(_GOOGLE_ADS_CAMPAIGNS_KEY)
+        if not isinstance(campaigns_cache, dict):
+            campaigns_cache = {}
+        tenant_entry = campaigns_cache.get(tenant_key)
+        if not isinstance(tenant_entry, dict):
+            tenant_entry = {}
+        tenant_entry[code] = {
+            "campaigns": campaigns,
+            "updated_at": datetime.now(ZoneInfo(get_timezone())).isoformat(),
+        }
+        campaigns_cache[tenant_key] = tenant_entry
+        root[_GOOGLE_ADS_CAMPAIGNS_KEY] = campaigns_cache
         _write_cache_root(cache_store, root)
 
 
