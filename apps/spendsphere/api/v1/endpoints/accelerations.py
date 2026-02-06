@@ -5,7 +5,7 @@ import calendar
 
 from collections import defaultdict
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
 from apps.spendsphere.api.v1.helpers.config import (
@@ -24,10 +24,7 @@ from apps.spendsphere.api.v1.helpers.ggAd import (
     get_ggad_accounts,
     get_ggad_budgets,
 )
-from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
-    require_account_code,
-    validate_account_codes,
-)
+from apps.spendsphere.api.v1.helpers.spendsphere_helpers import validate_account_codes
 
 router = APIRouter()
 
@@ -38,33 +35,28 @@ router = APIRouter()
 
 
 @router.get(
-    "/accelerations/{account_code}",
-    summary="List active accelerations for an account",
+    "/accelerations",
+    summary="List active accelerations for account codes",
     description=(
-        "Returns active accelerations for the specified account code. "
-        "Optionally filter by a date range or a month/year."
+        "Returns active accelerations for the specified account codes. "
+        "Optionally filter by a month/year."
     ),
 )
 def get_accelerations_route(
-    account_code: str,
-    include_all: bool = False,
-    start_date: date | None = None,
-    end_date: date | None = None,
-    month: int | None = None,
-    year: int | None = None,
+    account_codes: list[str] | None = Query(None, alias="accountCodes"),
+    account_code: str | None = Query(None, alias="accountCode"),
+    month: int | None = Query(None, description="Month (1-12)."),
+    year: int | None = Query(None, description="Year (e.g., 2026)."),
 ):
     """
     Example request:
-        GET /api/spendsphere/v1/accelerations/TAAA?include_all=false
-
-    Example request (filter by dates):
-        GET /api/spendsphere/v1/accelerations/TAAA?start_date=2026-01-01&end_date=2026-01-31
+        GET /api/spendsphere/v1/accelerations?accountCodes=TAAA
 
     Example request (filter by month/year):
-        GET /api/spendsphere/v1/accelerations/TAAA?month=1&year=2026
+        GET /api/spendsphere/v1/accelerations?accountCodes=TAAA&month=1&year=2026
 
     Note:
-    When start_date/end_date are provided, results include any accelerations that
+    When month/year are provided, results include any accelerations that
     overlap the range (startDate <= end_date AND endDate >= start_date).
 
     Example response:
@@ -77,29 +69,39 @@ def get_accelerations_route(
             "startDate": "2026-01-01",
             "endDate": "2026-01-31",
             "multiplier": 120.0,
-            "dateCreated": "2026-01-01 00:00:00",
-            "dateUpdated": "2026-01-10 08:12:00"
+            "note": "Front-load for January"
           }
         ]
     """
-    account_code = require_account_code(account_code)
+    def _normalize_codes(values: list[str] | None) -> list[str]:
+        if not values:
+            return []
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for value in values:
+            if not isinstance(value, str):
+                continue
+            for chunk in value.split(","):
+                code = chunk.strip().upper()
+                if not code or code in seen:
+                    continue
+                seen.add(code)
+                normalized.append(code)
+        return normalized
 
-    if (start_date and not end_date) or (end_date and not start_date):
+    requested_codes = _normalize_codes(account_codes)
+    if not requested_codes and isinstance(account_code, str) and account_code.strip():
+        requested_codes = _normalize_codes([account_code])
+    if not requested_codes:
         raise HTTPException(
             status_code=400,
-            detail="start_date and end_date must be provided together",
+            detail="accountCodes is required",
         )
 
     if (month is None) != (year is None):
         raise HTTPException(
             status_code=400,
             detail="month and year must be provided together",
-        )
-
-    if (start_date or end_date) and (month or year):
-        raise HTTPException(
-            status_code=400,
-            detail="Provide either start_date/end_date or month/year, not both",
         )
 
     if month is not None:
@@ -109,20 +111,35 @@ def get_accelerations_route(
             raise HTTPException(status_code=400, detail="Invalid year")
         start_date = date(year, month, 1)
         end_date = date(year, month, calendar.monthrange(year, month)[1])
+    else:
+        start_date = None
+        end_date = None
 
     data = get_accelerations(
-        account_code,
-        include_all=include_all,
+        requested_codes,
         start_date=start_date,
         end_date=end_date,
     )
     if not data:
         raise HTTPException(
             status_code=404,
-            detail=f"No accelerations found for account_code '{account_code}'",
+            detail="No accelerations found for requested account codes",
         )
 
-    return data
+    sanitized = []
+    for row in data:
+        if isinstance(row, dict):
+            sanitized.append(
+                {
+                    k: v
+                    for k, v in row.items()
+                    if k not in {"dateCreated", "dateUpdated"}
+                }
+            )
+        else:
+            sanitized.append(row)
+
+    return sanitized
 
 
 class AccelerationPayload(BaseModel):
