@@ -47,6 +47,11 @@ def get_accelerations_route(
     account_code: str | None = Query(None, alias="accountCode"),
     month: int | None = Query(None, description="Month (1-12)."),
     year: int | None = Query(None, description="Year (e.g., 2026)."),
+    include_all: bool = Query(
+        False,
+        alias="includeAll",
+        description="Include inactive accelerations when true.",
+    ),
 ):
     """
     Example request:
@@ -54,6 +59,9 @@ def get_accelerations_route(
 
     Example request (filter by month/year):
         GET /api/spendsphere/v1/accelerations?accountCodes=TAAA&month=1&year=2026
+
+    Example request (include inactive accelerations):
+        GET /api/spendsphere/v1/accelerations?accountCodes=TAAA&month=1&year=2026&includeAll=true
 
     Note:
     When month/year are provided, results include any accelerations that
@@ -64,12 +72,13 @@ def get_accelerations_route(
           {
             "id": 12,
             "accountCode": "TAAA",
-            "scopeType": "ACCOUNT",
+            "scopeLevel": "ACCOUNT",
             "scopeValue": "TAAA",
             "startDate": "2026-01-01",
             "endDate": "2026-01-31",
             "multiplier": 120.0,
-            "note": "Front-load for January"
+            "note": "Front-load for January",
+            "active": 1
           }
         ]
     """
@@ -119,6 +128,7 @@ def get_accelerations_route(
         requested_codes,
         start_date=start_date,
         end_date=end_date,
+        include_all=include_all,
     )
     if not data:
         raise HTTPException(
@@ -144,7 +154,7 @@ def get_accelerations_route(
 
 class AccelerationPayload(BaseModel):
     accountCode: str
-    scopeType: str
+    scopeLevel: str
     scopeValue: str
     startDate: date
     endDate: date
@@ -157,7 +167,7 @@ class AccelerationPayload(BaseModel):
             "examples": [
                 {
                     "accountCode": "TAAA",
-                    "scopeType": "ACCOUNT",
+                    "scopeLevel": "ACCOUNT",
                     "scopeValue": "TAAA",
                     "startDate": "2026-01-01",
                     "endDate": "2026-01-31",
@@ -170,7 +180,7 @@ class AccelerationPayload(BaseModel):
 
 class AccelerationMonthPayload(BaseModel):
     accountCode: str | list[str]
-    scopeType: str
+    scopeLevel: str
     scopeValue: str = Field(alias="scope_value")
     multiplier: float
     month: int
@@ -184,7 +194,7 @@ class AccelerationMonthPayload(BaseModel):
             "examples": [
                 {
                     "accountCode": ["TAAA", "LACS"],
-                    "scopeType": "AD_TYPE",
+                    "scopeLevel": "AD_TYPE",
                     "scope_value": "SEM",
                     "multiplier": 120.0,
                     "month": 1,
@@ -198,7 +208,7 @@ class AccelerationMonthPayload(BaseModel):
 
 class AccelerationMonthAccountsPayload(BaseModel):
     accountCodes: list[str] = Field(default_factory=list)
-    scopeType: str
+    scopeLevel: str
     scopeValue: str = Field(alias="scope_value")
     multiplier: float
     month: int | None = None
@@ -213,7 +223,7 @@ class AccelerationMonthAccountsPayload(BaseModel):
             "examples": [
                 {
                     "accountCodes": ["TAAA", "LACS"],
-                    "scopeType": "AD_TYPE",
+                    "scopeLevel": "AD_TYPE",
                     "scope_value": "SEM",
                     "multiplier": 120.0,
                     "month": 1,
@@ -269,7 +279,7 @@ def _normalize_and_validate_rows(
 
     for idx, data in enumerate(rows):
         account_code = str(data.get("accountCode", "")).strip().upper()
-        scope_type = str(data.get("scopeType", "")).strip().upper()
+        scope_type = str(data.get("scopeLevel", "")).strip().upper()
         scope_value = str(data.get("scopeValue", "")).strip()
         multiplier = data.get("multiplier")
         start_date = data.get("startDate")
@@ -306,7 +316,7 @@ def _normalize_and_validate_rows(
             errors.append(
                 {
                     "index": idx,
-                    "field": "scopeType",
+                    "field": "scopeLevel",
                     "value": scope_type,
                     "allowed": sorted(allowed_scopes),
                 }
@@ -345,7 +355,7 @@ def _normalize_and_validate_rows(
             scope_value = account_code
 
         data["accountCode"] = account_code
-        data["scopeType"] = scope_type
+        data["scopeLevel"] = scope_type
         data["scopeValue"] = scope_value
 
     if errors:
@@ -367,7 +377,7 @@ def _validate_budget_scope_values(rows: list[dict]) -> None:
     budget_rows = [
         (idx, row)
         for idx, row in enumerate(rows)
-        if str(row.get("scopeType", "")).strip().upper() == "BUDGET"
+        if str(row.get("scopeLevel", "")).strip().upper() == "BUDGET"
     ]
     if not budget_rows:
         return
@@ -436,7 +446,7 @@ def _validate_update_keys_exist(rows: list[dict]) -> None:
     for idx, row in enumerate(rows):
         key = (
             row.get("accountCode"),
-            row.get("scopeType"),
+            row.get("scopeLevel"),
             row.get("scopeValue"),
             row.get("startDate"),
             row.get("endDate"),
@@ -448,7 +458,7 @@ def _validate_update_keys_exist(rows: list[dict]) -> None:
                     "message": "Acceleration not found for update",
                     "key": {
                         "accountCode": row.get("accountCode"),
-                        "scopeType": row.get("scopeType"),
+                        "scopeLevel": row.get("scopeLevel"),
                         "scopeValue": row.get("scopeValue"),
                         "startDate": row.get("startDate"),
                         "endDate": row.get("endDate"),
@@ -485,7 +495,7 @@ def _validate_update_keys_exist(rows: list[dict]) -> None:
                             "items": [
                                 {
                                     "index": 0,
-                                    "field": "scopeType",
+                                    "field": "scopeLevel",
                                     "value": "BAD",
                                     "allowed": ["ACCOUNT", "AD_TYPE", "BUDGET"],
                                 }
@@ -504,7 +514,7 @@ def create_accelerations(request_payload: list[AccelerationPayload]):
         [
           {
             "accountCode": "TAAA",
-            "scopeType": "ACCOUNT",
+            "scopeLevel": "ACCOUNT",
             "scopeValue": "TAAA",
             "startDate": "2026-01-01",
             "endDate": "2026-01-31",
@@ -537,7 +547,7 @@ def create_accelerations(request_payload: list[AccelerationPayload]):
     summary="Update accelerations (bulk)",
     description=(
         "Bulk update accelerations by unique key "
-        "(accountCode, scopeType, scopeValue, startDate, endDate)."
+        "(accountCode, scopeLevel, scopeValue, startDate, endDate)."
     ),
     responses={
         200: {
@@ -553,7 +563,7 @@ def update_accelerations_route(request_payload: list[AccelerationPayload]):
         [
           {
             "accountCode": "TAAA",
-            "scopeType": "ACCOUNT",
+            "scopeLevel": "ACCOUNT",
             "scopeValue": "TAAA",
             "startDate": "2026-01-01",
             "endDate": "2026-01-31",
@@ -603,7 +613,7 @@ def delete_accelerations(request_payload: list[AccelerationPayload]):
         [
           {
             "accountCode": "TAAA",
-            "scopeType": "ACCOUNT",
+            "scopeLevel": "ACCOUNT",
             "scopeValue": "TAAA",
             "startDate": "2026-01-01",
             "endDate": "2026-01-31",
@@ -641,7 +651,7 @@ def create_accelerations_by_month(request_payload: list[AccelerationMonthPayload
         [
           {
             "accountCode": ["TAAA", "LACS"],
-            "scopeType": "AD_TYPE",
+            "scopeLevel": "AD_TYPE",
             "scope_value": "SEM",
             "multiplier": 120.0,
             "month": 1,
@@ -656,7 +666,7 @@ def create_accelerations_by_month(request_payload: list[AccelerationMonthPayload
           "accelerations": [
             {
               "accountCode": "TAAA",
-              "scopeType": "AD_TYPE",
+              "scopeLevel": "AD_TYPE",
               "scopeValue": "SEM",
               "startDate": "2026-01-01",
               "endDate": "2026-01-16",
@@ -664,7 +674,7 @@ def create_accelerations_by_month(request_payload: list[AccelerationMonthPayload
             },
             {
               "accountCode": "LACS",
-              "scopeType": "AD_TYPE",
+              "scopeLevel": "AD_TYPE",
               "scopeValue": "SEM",
               "startDate": "2026-01-01",
               "endDate": "2026-01-16",
@@ -759,7 +769,7 @@ def create_accelerations_by_month(request_payload: list[AccelerationMonthPayload
 
         end_date = start_date + timedelta(days=day_front)
 
-        scope_type = data.get("scopeType")
+        scope_type = data.get("scopeLevel")
         scope_value = data.get("scopeValue")
         note = data.get("note")
         for account_code in account_codes:
@@ -767,7 +777,7 @@ def create_accelerations_by_month(request_payload: list[AccelerationMonthPayload
                 scope_value = account_code
             row = {
                 "accountCode": account_code,
-                "scopeType": scope_type,
+                "scopeLevel": scope_type,
                 "scopeValue": scope_value,
                 "startDate": start_date,
                 "endDate": end_date,
@@ -804,7 +814,7 @@ def create_accelerations_by_month_accounts(
         POST /api/spendsphere/v1/accelerations/by-month/accounts
         {
           "accountCodes": [],
-          "scopeType": "AD_TYPE",
+          "scopeLevel": "AD_TYPE",
           "scope_value": "SEM",
           "multiplier": 120.0,
           "month": 1,
@@ -815,7 +825,7 @@ def create_accelerations_by_month_accounts(
         POST /api/spendsphere/v1/accelerations/by-month/accounts
         {
           "accountCodes": ["TAAA"],
-          "scopeType": "ACCOUNT",
+          "scopeLevel": "ACCOUNT",
           "scope_value": "TAAA",
           "multiplier": 110.0,
           "startDate": "2026-01-05",
@@ -861,13 +871,13 @@ def create_accelerations_by_month_accounts(
         end_date = date(year, month, calendar.monthrange(year, month)[1])
 
     rows: list[dict] = []
-    scope_type = request_payload.scopeType
+    scope_type = request_payload.scopeLevel
     scope_value = request_payload.scopeValue
     note = request_payload.note
     for code in account_codes:
         row = {
             "accountCode": code,
-            "scopeType": scope_type,
+            "scopeLevel": scope_type,
             "scopeValue": scope_value,
             "startDate": start_date,
             "endDate": end_date,

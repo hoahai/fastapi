@@ -192,6 +192,40 @@ def _get_accelerations_for_period(
     return get_accelerations(account_codes, today=period_date)
 
 
+def _get_accelerations_for_month(
+    account_codes: list[str],
+    month: int,
+    year: int,
+) -> list[dict]:
+    start_date = date(year, month, 1)
+    end_date = date(year, month, calendar.monthrange(year, month)[1])
+    return get_accelerations(
+        account_codes,
+        start_date=start_date,
+        end_date=end_date,
+    )
+
+
+def _filter_accelerations_for_date(
+    accelerations: list[dict],
+    period_date: date,
+) -> list[dict]:
+    if not accelerations:
+        return []
+    filtered: list[dict] = []
+    for row in accelerations:
+        if not isinstance(row, dict):
+            continue
+        start_date = _coerce_date(row.get("startDate"))
+        end_date = _coerce_date(row.get("endDate"))
+        if start_date and period_date < start_date:
+            continue
+        if end_date and period_date > end_date:
+            continue
+        filtered.append(row)
+    return filtered
+
+
 def _build_master_budgets(master_budgets: list[dict]) -> dict:
     service_mapping = get_service_mapping()
     result: dict[str, object] = {}
@@ -619,6 +653,18 @@ def load_ui_route(
               "amount": 1000
             }
           },
+          "accelerations": [
+            {
+              "id": 12,
+              "accountCode": "TAAA",
+              "scopeLevel": "ACCOUNT",
+              "scopeValue": "TAAA",
+              "startDate": "2026-01-01",
+              "endDate": "2026-01-31",
+              "multiplier": 120.0,
+              "note": "Front-load for January"
+            }
+          ],
           "tableData": {
             "grandTotalSpent": 586.09,
             "data": [
@@ -709,10 +755,11 @@ def load_ui_route(
             (get_masterbudgets, (account_codes, month_value, year_value)),
             (get_allocations, (account_codes, month_value, year_value)),
             (get_rollbreakdowns, (account_codes, month_value, year_value)),
-            (_get_accelerations_for_period, (account_codes, period_date)),
+            (_get_accelerations_for_month, (account_codes, month_value, year_value)),
         ],
         api_name="spendsphere_v1_ui_load_db",
     )
+    active_accelerations = _filter_accelerations_for_date(accelerations, period_date)
 
     campaigns, budgets, costs = run_parallel(
         tasks=[
@@ -742,7 +789,7 @@ def load_ui_route(
         costs=costs,
         allocations=allocations,
         rollovers=rollbreakdowns,
-        accelerations=accelerations,
+        accelerations=active_accelerations,
         activePeriod=active_period,
         today=period_date,
         include_transform_results=True,
@@ -750,6 +797,15 @@ def load_ui_route(
 
     master_budgets_payload = _build_master_budgets(master_budgets)
     roll_breakdown_payload = _build_roll_breakdown(rollbreakdowns)
+    sanitized_accelerations = [
+        {
+            k: v
+            for k, v in row.items()
+            if k not in {"dateCreated", "dateUpdated"}
+        }
+        for row in accelerations
+        if isinstance(row, dict)
+    ]
     if rows:
         table_data = _build_table_data(rows, budgets, allocations)
     else:
@@ -777,6 +833,7 @@ def load_ui_route(
         "rolloverTotal": rollovers_total,
         "activePeriod": active_period_payload,
         "rollBreakdown": roll_breakdown_payload,
+        "accelerations": sanitized_accelerations,
         "tableData": {
             "grandTotalSpent": grand_total_spent,
             "data": table_data,

@@ -404,12 +404,13 @@ def get_accelerations(
         "SELECT "
         "id, "
         "accountCode, "
-        "scopeType, "
+        "scopeLevel, "
         "scopeValue, "
         "startDate, "
         "endDate, "
         "multiplier, "
         "note, "
+        "active, "
         "dateCreated, "
         "dateUpdated "
         f"FROM {accelerations_table} "
@@ -445,7 +446,7 @@ def insert_accelerations(rows: list[dict]) -> int:
     placeholders = ", ".join([row_placeholder] * len(rows))
     query = (
         f"INSERT INTO {accelerations_table} "
-        "(accountCode, scopeType, scopeValue, startDate, endDate, multiplier, note, active) "
+        "(accountCode, scopeLevel, scopeValue, startDate, endDate, multiplier, note, active) "
         f"VALUES {placeholders}"
     )
 
@@ -454,7 +455,7 @@ def insert_accelerations(rows: list[dict]) -> int:
         params.extend(
             [
                 r.get("accountCode"),
-                r.get("scopeType"),
+                r.get("scopeLevel"),
                 r.get("scopeValue"),
                 r.get("startDate"),
                 r.get("endDate"),
@@ -473,7 +474,7 @@ def update_accelerations(rows: list[dict]) -> int:
     tables = get_db_tables()
     accelerations_table = tables["ACCELERATIONS"]
 
-    key_expr = "(accountCode, scopeType, scopeValue, startDate, endDate)"
+    key_expr = "(accountCode, scopeLevel, scopeValue, startDate, endDate)"
     case_parts: list[str] = []
     note_case_parts: list[str] = []
     params: list = []
@@ -484,7 +485,7 @@ def update_accelerations(rows: list[dict]) -> int:
         params.extend(
             [
                 r.get("accountCode"),
-                r.get("scopeType"),
+                r.get("scopeLevel"),
                 r.get("scopeValue"),
                 r.get("startDate"),
                 r.get("endDate"),
@@ -498,7 +499,7 @@ def update_accelerations(rows: list[dict]) -> int:
             note_params.extend(
                 [
                     r.get("accountCode"),
-                    r.get("scopeType"),
+                    r.get("scopeLevel"),
                     r.get("scopeValue"),
                     r.get("startDate"),
                     r.get("endDate"),
@@ -512,7 +513,7 @@ def update_accelerations(rows: list[dict]) -> int:
         params.extend(
             [
                 r.get("accountCode"),
-                r.get("scopeType"),
+                r.get("scopeLevel"),
                 r.get("scopeValue"),
                 r.get("startDate"),
                 r.get("endDate"),
@@ -541,10 +542,10 @@ def get_existing_acceleration_keys(rows: list[dict]) -> set[tuple]:
     tables = get_db_tables()
     accelerations_table = tables["ACCELERATIONS"]
 
-    key_expr = "(accountCode, scopeType, scopeValue, startDate, endDate)"
+    key_expr = "(accountCode, scopeLevel, scopeValue, startDate, endDate)"
     placeholders = ", ".join(["(%s, %s, %s, %s, %s)"] * len(rows))
     query = (
-        "SELECT accountCode, scopeType, scopeValue, startDate, endDate "
+        "SELECT accountCode, scopeLevel, scopeValue, startDate, endDate "
         f"FROM {accelerations_table} "
         f"WHERE {key_expr} IN ({placeholders})"
     )
@@ -554,7 +555,7 @@ def get_existing_acceleration_keys(rows: list[dict]) -> set[tuple]:
         params.extend(
             [
                 r.get("accountCode"),
-                r.get("scopeType"),
+                r.get("scopeLevel"),
                 r.get("scopeValue"),
                 r.get("startDate"),
                 r.get("endDate"),
@@ -565,7 +566,7 @@ def get_existing_acceleration_keys(rows: list[dict]) -> set[tuple]:
     return {
         (
             row.get("accountCode"),
-            row.get("scopeType"),
+            row.get("scopeLevel"),
             row.get("scopeValue"),
             row.get("startDate"),
             row.get("endDate"),
@@ -581,7 +582,7 @@ def soft_delete_accelerations(rows: list[dict]) -> int:
     tables = get_db_tables()
     accelerations_table = tables["ACCELERATIONS"]
 
-    key_expr = "(accountCode, scopeType, scopeValue, startDate, endDate)"
+    key_expr = "(accountCode, scopeLevel, scopeValue, startDate, endDate)"
     placeholders = ", ".join(["(%s, %s, %s, %s, %s)"] * len(rows))
     query = (
         f"UPDATE {accelerations_table} "
@@ -594,7 +595,7 @@ def soft_delete_accelerations(rows: list[dict]) -> int:
         params.extend(
             [
                 r.get("accountCode"),
-                r.get("scopeType"),
+                r.get("scopeLevel"),
                 r.get("scopeValue"),
                 r.get("startDate"),
                 r.get("endDate"),

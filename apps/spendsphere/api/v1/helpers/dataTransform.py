@@ -448,7 +448,7 @@ def apply_budget_accelerations(
 
     for accel in accelerations:
         account_code = str(accel.get("accountCode", "")).upper()
-        scope_type = str(accel.get("scopeType", "")).upper()
+        scope_type = str(accel.get("scopeLevel", "")).upper()
         scope_value = str(accel.get("scopeValue", "")).strip()
 
         if not account_code or not scope_type:
