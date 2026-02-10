@@ -12,16 +12,24 @@ from apps.spendsphere.api.v1.endpoints.periods import (
     build_periods_data,
     validate_month_offsets,
 )
-from apps.spendsphere.api.v1.helpers.config import get_adtypes, get_service_mapping
+from apps.spendsphere.api.v1.helpers.config import (
+    get_acceleration_scope_types,
+    get_adtypes,
+    get_service_mapping,
+)
 from apps.spendsphere.api.v1.helpers.dataTransform import (
     generate_update_payloads,
     transform_google_ads_data,
 )
 from apps.spendsphere.api.v1.helpers.db_queries import (
     get_accelerations,
+    get_accelerations_by_ids,
+    get_accelerations_by_keys,
     get_allocations,
     get_masterbudgets,
     get_rollbreakdowns,
+    insert_accelerations,
+    update_acceleration_by_id,
     upsert_allocations,
     upsert_rollbreakdowns,
 )
@@ -111,6 +119,44 @@ def _normalize_optional_str(value: object | None) -> str | None:
         return None
     cleaned = str(value).strip()
     return cleaned or None
+
+
+def _normalize_string_list(values: object) -> list[str]:
+    if values is None:
+        return []
+    if isinstance(values, str):
+        candidates = [values]
+    elif isinstance(values, list):
+        candidates = values
+    else:
+        return []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if not isinstance(candidate, str):
+            continue
+        cleaned = candidate.strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        normalized.append(cleaned)
+    return normalized
+
+
+def _sanitize_acceleration_rows(rows: list[dict]) -> list[dict]:
+    sanitized: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        sanitized.append(
+            {
+                k: v
+                for k, v in row.items()
+                if k not in {"dateCreated", "dateUpdated"}
+            }
+        )
+    return sanitized
 
 
 def _build_monthly_active_period(
@@ -500,6 +546,38 @@ class UiAllocationRollBreakUpdateRequest(BaseModel):
         default_factory=list, alias="updatedRollBreaks"
     )
     updatedAllocations: list[UiAllocationUpdate] = Field(default_factory=list)
+
+
+class UiAccelerationDate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    start: date
+    end: date
+
+
+class UiAccelerationUpsertRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+        json_schema_extra={
+            "examples": [
+                {
+                    "accountCode": "TAAA",
+                    "scopeLevel": "AD_TYPE",
+                    "scopeValue": ["SEM"],
+                    "date": {"start": "2026-02-10", "end": "2026-02-20"},
+                    "multiplier": 150,
+                    "note": "SEM promo window",
+                    "id": "",
+                }
+            ]
+        },
+    )
+    accountCode: str | None = None
+    scopeLevel: str
+    scopeValue: list[str] = Field(default_factory=list)
+    date: UiAccelerationDate
+    multiplier: float
+    note: str | None = Field(default=None, max_length=2048)
+    id: str | None = None
 
 
 # ============================================================
@@ -1184,3 +1262,315 @@ def update_ui_allocations_rollbreaks(
         )
 
     return response
+
+
+@router.post(
+    "/uis/accelerations",
+    summary="Create or update UI accelerations",
+    description=(
+        "Creates new accelerations when id is empty; updates an existing "
+        "acceleration when id is provided."
+    ),
+)
+def upsert_ui_acceleration(
+    request_payload: UiAccelerationUpsertRequest,
+):
+    """
+    Example request (create):
+        POST /api/spendsphere/v1/uis/accelerations
+        {
+          "accountCode": "TAAA",
+          "scopeLevel": "AD_TYPE",
+          "scopeValue": ["SEM"],
+          "date": {"start": "2026-02-10", "end": "2026-02-20"},
+          "multiplier": 150,
+          "note": "SEM promo window",
+          "id": ""
+        }
+
+    Example request (update):
+        POST /api/spendsphere/v1/uis/accelerations
+        {
+          "accountCode": "TAAA",
+          "scopeLevel": "AD_TYPE",
+          "scopeValue": ["SEM"],
+          "date": {"start": "2026-02-10", "end": "2026-02-20"},
+          "multiplier": 150,
+          "note": "SEM promo window",
+          "id": "102"
+        }
+
+    Example response:
+        {
+          "accelerations": [
+            {
+              "id": 102,
+              "accountCode": "TAAA",
+              "scopeLevel": "AD_TYPE",
+              "scopeValue": "SEM",
+              "startDate": "2026-02-10",
+              "endDate": "2026-02-20",
+              "multiplier": 150.0,
+              "note": "SEM promo window",
+              "active": 1
+            }
+          ]
+        }
+    """
+    try:
+        request_payload = UiAccelerationUpsertRequest.model_validate(
+            request_payload, from_attributes=True
+        )
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invalid payload", "errors": exc.errors()},
+        ) from exc
+
+    errors: list[dict[str, object]] = []
+    acceleration_id = _normalize_optional_str(request_payload.id)
+    is_create = not acceleration_id
+    note_provided = "note" in request_payload.model_fields_set
+
+    account_code_raw = _normalize_optional_str(request_payload.accountCode)
+    account_code: str | None = None
+    existing_row: dict | None = None
+
+    if not is_create:
+        existing_rows = get_accelerations_by_ids([acceleration_id])
+        if not existing_rows:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": "Acceleration not found", "id": acceleration_id},
+            )
+        existing_row = existing_rows[0] if isinstance(existing_rows[0], dict) else None
+        account_code = _normalize_optional_str(
+            existing_row.get("accountCode") if existing_row else None
+        )
+        if account_code:
+            account_code = account_code.upper()
+        if not account_code:
+            errors.append(
+                {
+                    "field": "accountCode",
+                    "value": request_payload.accountCode,
+                    "message": "Existing acceleration is missing accountCode",
+                }
+            )
+        if account_code_raw and account_code and account_code_raw.upper() != account_code:
+            errors.append(
+                {
+                    "field": "accountCode",
+                    "value": request_payload.accountCode,
+                    "message": "accountCode must match existing acceleration",
+                }
+            )
+    else:
+        if not account_code_raw:
+            errors.append(
+                {
+                    "field": "accountCode",
+                    "value": request_payload.accountCode,
+                    "message": "accountCode is required for create",
+                }
+            )
+        else:
+            account_code = require_account_code(account_code_raw)
+
+    scope_level = _normalize_optional_str(request_payload.scopeLevel)
+    if not scope_level:
+        errors.append(
+            {
+                "field": "scopeLevel",
+                "value": request_payload.scopeLevel,
+                "message": "scopeLevel is required",
+            }
+        )
+        scope_level = ""
+    scope_level = scope_level.upper()
+    allowed_scopes = {s.upper() for s in get_acceleration_scope_types()}
+    if scope_level and allowed_scopes and scope_level not in allowed_scopes:
+        errors.append(
+            {
+                "field": "scopeLevel",
+                "value": scope_level,
+                "allowed": sorted(allowed_scopes),
+            }
+        )
+
+    scope_values = _normalize_string_list(request_payload.scopeValue)
+    if is_create:
+        if scope_level in {"AD_TYPE", "BUDGET"} and not scope_values:
+            errors.append(
+                {
+                    "field": "scopeValue",
+                    "value": request_payload.scopeValue,
+                    "message": "scopeValue is required",
+                }
+            )
+    elif len(scope_values) != 1:
+        errors.append(
+            {
+                "field": "scopeValue",
+                "value": request_payload.scopeValue,
+                "message": "scopeValue must contain exactly one value for update",
+            }
+        )
+
+    start_date = request_payload.date.start
+    end_date = request_payload.date.end
+    if start_date and end_date and start_date > end_date:
+        errors.append(
+            {
+                "field": "date",
+                "value": request_payload.date.model_dump(),
+                "message": "date.start must be on or before date.end",
+            }
+        )
+
+    multiplier_value = _to_float(request_payload.multiplier)
+    if multiplier_value is None:
+        errors.append(
+            {
+                "field": "multiplier",
+                "value": request_payload.multiplier,
+                "message": "multiplier is required and must be numeric",
+            }
+        )
+    elif multiplier_value < 100:
+        errors.append(
+            {
+                "field": "multiplier",
+                "value": multiplier_value,
+                "message": "multiplier must be >= 100",
+            }
+        )
+
+    note_value = _normalize_optional_str(request_payload.note)
+
+    if scope_level == "AD_TYPE":
+        allowed_adtypes = {
+            str(key).strip().upper()
+            for key in get_adtypes().keys()
+            if str(key).strip()
+        }
+        normalized_values: list[str] = []
+        for value in scope_values:
+            normalized = value.upper()
+            if allowed_adtypes and normalized not in allowed_adtypes:
+                errors.append(
+                    {
+                        "field": "scopeValue",
+                        "value": value,
+                        "allowed": sorted(allowed_adtypes),
+                    }
+                )
+            normalized_values.append(normalized)
+        scope_values = normalized_values
+    elif scope_level == "ACCOUNT":
+        if not account_code:
+            errors.append(
+                {
+                    "field": "accountCode",
+                    "value": request_payload.accountCode,
+                    "message": "accountCode is required for ACCOUNT scope",
+                }
+            )
+        elif len(scope_values) > 1:
+            errors.append(
+                {
+                    "field": "scopeValue",
+                    "value": scope_values,
+                    "message": "scopeValue must contain exactly one value for ACCOUNT scope",
+                }
+            )
+        elif scope_values and scope_values[0].upper() != account_code:
+            errors.append(
+                {
+                    "field": "scopeValue",
+                    "value": scope_values,
+                    "message": "scopeValue must match accountCode for ACCOUNT scope",
+                }
+            )
+        scope_values = [account_code] if account_code else scope_values
+    elif scope_level == "BUDGET":
+        if not account_code:
+            errors.append(
+                {
+                    "field": "accountCode",
+                    "value": request_payload.accountCode,
+                    "message": "accountCode is required for BUDGET scope",
+                }
+            )
+        elif scope_values:
+            gg_accounts = get_ggad_accounts()
+            gg_account = next(
+                (
+                    acc
+                    for acc in gg_accounts
+                    if str(acc.get("accountCode", "")).strip().upper()
+                    == account_code
+                ),
+                None,
+            )
+            if not gg_account:
+                errors.append(
+                    {
+                        "field": "accountCode",
+                        "value": request_payload.accountCode,
+                        "message": "No Google Ads account found for accountCode",
+                    }
+                )
+            else:
+                budgets = get_ggad_budgets([gg_account])
+                valid_budget_ids = {
+                    str(budget.get("budgetId", "")).strip()
+                    for budget in budgets
+                    if str(budget.get("budgetId", "")).strip()
+                }
+                for value in scope_values:
+                    if value not in valid_budget_ids:
+                        errors.append(
+                            {
+                                "field": "scopeValue",
+                                "value": value,
+                                "message": "scopeValue is not a valid budgetId for accountCode",
+                            }
+                        )
+
+    if errors:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invalid payload", "errors": errors},
+        )
+
+    if is_create:
+        rows = [
+            {
+                "accountCode": account_code,
+                "scopeLevel": scope_level,
+                "scopeValue": scope_value,
+                "startDate": start_date,
+                "endDate": end_date,
+                "multiplier": multiplier_value,
+                "note": note_value,
+            }
+            for scope_value in scope_values
+        ]
+        insert_accelerations(rows)
+        created_rows = get_accelerations_by_keys(rows)
+        return {"accelerations": _sanitize_acceleration_rows(created_rows)}
+
+    update_row = {
+        "id": acceleration_id,
+        "scopeLevel": scope_level,
+        "scopeValue": scope_values[0] if scope_values else None,
+        "startDate": start_date,
+        "endDate": end_date,
+        "multiplier": multiplier_value,
+        "note": note_value,
+        "_note_provided": note_provided,
+    }
+    update_acceleration_by_id(update_row)
+    updated_rows = get_accelerations_by_ids([acceleration_id])
+    return {"accelerations": _sanitize_acceleration_rows(updated_rows)}

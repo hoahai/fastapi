@@ -435,6 +435,75 @@ def get_accelerations(
     return fetch_all(query, tuple(params))
 
 
+def get_accelerations_by_ids(ids: list[object]) -> list[dict]:
+    if not ids:
+        return []
+
+    tables = get_db_tables()
+    accelerations_table = tables["ACCELERATIONS"]
+
+    placeholders = ", ".join(["%s"] * len(ids))
+    query = (
+        "SELECT "
+        "id, "
+        "accountCode, "
+        "scopeLevel, "
+        "scopeValue, "
+        "startDate, "
+        "endDate, "
+        "multiplier, "
+        "note, "
+        "active, "
+        "dateCreated, "
+        "dateUpdated "
+        f"FROM {accelerations_table} "
+        f"WHERE id IN ({placeholders})"
+    )
+
+    return fetch_all(query, tuple(ids))
+
+
+def get_accelerations_by_keys(rows: list[dict]) -> list[dict]:
+    if not rows:
+        return []
+
+    tables = get_db_tables()
+    accelerations_table = tables["ACCELERATIONS"]
+
+    key_expr = "(accountCode, scopeLevel, scopeValue, startDate, endDate)"
+    placeholders = ", ".join(["(%s, %s, %s, %s, %s)"] * len(rows))
+    query = (
+        "SELECT "
+        "id, "
+        "accountCode, "
+        "scopeLevel, "
+        "scopeValue, "
+        "startDate, "
+        "endDate, "
+        "multiplier, "
+        "note, "
+        "active, "
+        "dateCreated, "
+        "dateUpdated "
+        f"FROM {accelerations_table} "
+        f"WHERE {key_expr} IN ({placeholders})"
+    )
+
+    params: list = []
+    for r in rows:
+        params.extend(
+            [
+                r.get("accountCode"),
+                r.get("scopeLevel"),
+                r.get("scopeValue"),
+                r.get("startDate"),
+                r.get("endDate"),
+            ]
+        )
+
+    return fetch_all(query, tuple(params))
+
+
 def insert_accelerations(rows: list[dict]) -> int:
     if not rows:
         return 0
@@ -463,6 +532,46 @@ def insert_accelerations(rows: list[dict]) -> int:
                 r.get("note"),
             ]
         )
+
+    return execute_write(query, tuple(params))
+
+
+def update_acceleration_by_id(row: dict) -> int:
+    if not row:
+        return 0
+
+    acceleration_id = row.get("id")
+    if not acceleration_id:
+        return 0
+
+    tables = get_db_tables()
+    accelerations_table = tables["ACCELERATIONS"]
+
+    set_parts = [
+        "scopeLevel = %s",
+        "scopeValue = %s",
+        "startDate = %s",
+        "endDate = %s",
+        "multiplier = %s",
+    ]
+    params: list = [
+        row.get("scopeLevel"),
+        row.get("scopeValue"),
+        row.get("startDate"),
+        row.get("endDate"),
+        row.get("multiplier"),
+    ]
+
+    if row.get("_note_provided"):
+        set_parts.append("note = %s")
+        params.append(row.get("note"))
+
+    params.append(acceleration_id)
+    query = (
+        f"UPDATE {accelerations_table} "
+        f"SET {', '.join(set_parts)} "
+        "WHERE id = %s"
+    )
 
     return execute_write(query, tuple(params))
 
@@ -603,3 +712,20 @@ def soft_delete_accelerations(rows: list[dict]) -> int:
         )
 
     return execute_write(query, tuple(params))
+
+
+def soft_delete_accelerations_by_ids(ids: list[object]) -> int:
+    if not ids:
+        return 0
+
+    tables = get_db_tables()
+    accelerations_table = tables["ACCELERATIONS"]
+
+    placeholders = ", ".join(["%s"] * len(ids))
+    query = (
+        f"UPDATE {accelerations_table} "
+        "SET active = 0 "
+        f"WHERE active = 1 AND id IN ({placeholders})"
+    )
+
+    return execute_write(query, tuple(ids))

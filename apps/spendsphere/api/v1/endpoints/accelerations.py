@@ -17,7 +17,7 @@ from apps.spendsphere.api.v1.helpers.db_queries import (
     get_accelerations,
     get_existing_acceleration_keys,
     insert_accelerations,
-    soft_delete_accelerations,
+    soft_delete_accelerations_by_ids,
     update_accelerations,
 )
 from apps.spendsphere.api.v1.helpers.ggAd import (
@@ -231,6 +231,19 @@ class AccelerationMonthAccountsPayload(BaseModel):
                     "startDate": None,
                     "endDate": None,
                 }
+            ]
+        },
+    )
+
+
+class AccelerationIdsPayload(BaseModel):
+    ids: list[object] = Field(default_factory=list)
+
+    model_config = ConfigDict(
+        populate_by_name=True,
+        json_schema_extra={
+            "examples": [
+                {"ids": [101, 102]}
             ]
         },
     )
@@ -594,44 +607,48 @@ def update_accelerations_route(request_payload: list[AccelerationPayload]):
 
 @router.delete(
     "/accelerations",
-    summary="Soft delete accelerations (bulk)",
-    description=(
-        "Bulk soft-delete accelerations by unique key. "
-        "Sets active = 0; does not remove rows."
-    ),
+    summary="Soft delete accelerations by ids",
+    description="Sets active = 0 for the requested acceleration ids.",
     responses={
         200: {
             "description": "Delete summary",
             "content": {"application/json": {"example": {"deleted": 2}}},
-        }
+        },
+        400: {
+            "description": "Validation error",
+            "content": {
+                "application/json": {
+                    "example": {
+                        "detail": {"error": "ids must contain at least one value"}
+                    }
+                }
+            },
+        },
     },
 )
-def delete_accelerations(request_payload: list[AccelerationPayload]):
+def delete_accelerations_by_ids(request_payload: AccelerationIdsPayload):
     """
     Example request:
         DELETE /api/spendsphere/v1/accelerations
-        [
-          {
-            "accountCode": "TAAA",
-            "scopeLevel": "ACCOUNT",
-            "scopeValue": "TAAA",
-            "startDate": "2026-01-01",
-            "endDate": "2026-01-31",
-            "multiplier": 120.0
-          }
-        ]
+        {
+          "ids": [101, 102]
+        }
 
     Example response:
         {
-          "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
-          "data": {"deleted": 1}
+          "deleted": 2
         }
     """
-    rows = _normalize_and_validate_rows(
-        [p.model_dump() for p in request_payload],
-        enforce_multiplier_min=False,
+    payload = AccelerationIdsPayload.model_validate(
+        request_payload, from_attributes=True
     )
-    deleted = soft_delete_accelerations(rows)
+    ids = [value for value in payload.ids if value is not None]
+    if not ids:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "ids must contain at least one value"},
+        )
+    deleted = soft_delete_accelerations_by_ids(ids)
     return {"deleted": deleted}
 
 
