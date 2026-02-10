@@ -4,6 +4,7 @@ import os
 import traceback
 
 from fastapi import FastAPI, Request
+from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
 
 from shared.logger import get_logger
@@ -71,4 +72,60 @@ def register_exception_handlers(app: FastAPI, *, logger_name: str) -> None:
         return JSONResponse(
             status_code=500,
             content=wrap_error(response_content, request),
+        )
+
+    @app.exception_handler(RequestValidationError)
+    async def request_validation_exception_handler(
+        request: Request,
+        exc: RequestValidationError,
+    ) -> JSONResponse:
+        errors = exc.errors()
+        def _format_loc(loc: object) -> str:
+            if not isinstance(loc, (list, tuple)):
+                return str(loc)
+            parts: list[str] = []
+            for item in loc:
+                if item == "body":
+                    continue
+                if isinstance(item, int):
+                    if parts:
+                        parts[-1] = f"{parts[-1]}[{item}]"
+                    else:
+                        parts.append(f"[{item}]")
+                else:
+                    parts.append(str(item))
+            return ".".join(parts) if parts else "body"
+
+        messages: list[str] = []
+        missing_fields: list[str] = []
+        for err in errors:
+            loc = _format_loc(err.get("loc"))
+            msg = err.get("msg") or "Invalid value"
+            if msg == "Field required":
+                if loc and loc != "body":
+                    missing_fields.append(loc)
+                else:
+                    missing_fields.append("body")
+                continue
+            if loc and loc != "body":
+                messages.append(f"{loc}: {msg}")
+            else:
+                messages.append(msg)
+
+        if missing_fields:
+            missing_fields_sorted = sorted(dict.fromkeys(missing_fields))
+            missing_joined = ", ".join(missing_fields_sorted)
+            suffix = "are required" if len(missing_fields_sorted) > 1 else "is required"
+            messages.insert(0, f"{missing_joined} {suffix}")
+
+        message = "; ".join(messages) if messages else "Invalid request payload"
+        payload = {
+            "error": "Invalid payload",
+            "message": message,
+            "messages": messages,
+            "errors": errors,
+        }
+        return JSONResponse(
+            status_code=422,
+            content=wrap_error(payload, request),
         )
