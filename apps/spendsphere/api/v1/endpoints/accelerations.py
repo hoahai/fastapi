@@ -131,10 +131,7 @@ def get_accelerations_route(
         include_all=include_all,
     )
     if not data:
-        raise HTTPException(
-            status_code=404,
-            detail="No accelerations found for requested account codes",
-        )
+        return []
 
     sanitized = []
     for row in data:

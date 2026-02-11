@@ -436,6 +436,18 @@ def get_accelerations(
 
 
 def get_accelerations_by_ids(ids: list[object]) -> list[dict]:
+    return _get_accelerations_by_ids(ids)
+
+
+def get_accelerations_by_ids_active(ids: list[object]) -> list[dict]:
+    return _get_accelerations_by_ids(ids, only_active=True)
+
+
+def _get_accelerations_by_ids(
+    ids: list[object],
+    *,
+    only_active: bool = False,
+) -> list[dict]:
     if not ids:
         return []
 
@@ -443,6 +455,10 @@ def get_accelerations_by_ids(ids: list[object]) -> list[dict]:
     accelerations_table = tables["ACCELERATIONS"]
 
     placeholders = ", ".join(["%s"] * len(ids))
+    where_clause = f"WHERE id IN ({placeholders})"
+    if only_active:
+        where_clause += " AND active = 1"
+
     query = (
         "SELECT "
         "id, "
@@ -457,7 +473,7 @@ def get_accelerations_by_ids(ids: list[object]) -> list[dict]:
         "dateCreated, "
         "dateUpdated "
         f"FROM {accelerations_table} "
-        f"WHERE id IN ({placeholders})"
+        f"{where_clause}"
     )
 
     return fetch_all(query, tuple(ids))

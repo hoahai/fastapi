@@ -25,6 +25,7 @@ from apps.spendsphere.api.v1.helpers.db_queries import (
     get_accelerations,
     get_accelerations_by_ids,
     get_accelerations_by_keys,
+    get_accelerations_by_ids_active,
     get_allocations,
     get_masterbudgets,
     get_rollbreakdowns,
@@ -1530,7 +1531,7 @@ def upsert_ui_acceleration(
 
     existing_by_id: dict[str, dict] = {}
     if update_ids:
-        existing_rows = get_accelerations_by_ids(update_ids)
+        existing_rows = get_accelerations_by_ids_active(update_ids)
         existing_by_id = {
             str(row.get("id")): row
             for row in existing_rows
