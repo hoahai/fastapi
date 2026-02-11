@@ -160,6 +160,37 @@ def _sanitize_acceleration_rows(rows: list[dict]) -> list[dict]:
     return sanitized
 
 
+def _build_validation_error_detail(errors: list[dict[str, object]]) -> dict[str, object]:
+    seen: set[tuple[str, str | None, str | None]] = set()
+    deduped: list[dict[str, object]] = []
+    for item in errors:
+        field = str(item.get("field") or "")
+        message = str(item.get("message") or "")
+        value = item.get("value")
+        key = (field, message, str(value))
+        if key in seen:
+            continue
+        seen.add(key)
+        deduped.append(item)
+
+    messages: list[str] = []
+    for item in deduped:
+        field = str(item.get("field") or "")
+        msg = str(item.get("message") or "Invalid value")
+        if field:
+            messages.append(f"{field}: {msg}")
+        else:
+            messages.append(msg)
+
+    message = "; ".join(messages) if messages else "Invalid payload"
+    return {
+        "error": "Invalid payload",
+        "message": message,
+        "messages": messages,
+        "errors": deduped,
+    }
+
+
 def _build_monthly_active_period(
     row: dict | None,
     *,
@@ -741,9 +772,9 @@ class UiAccelerationUpsertRequest(BaseModel):
 class UiAccelerationDeleteRequest(BaseModel):
     model_config = ConfigDict(
         populate_by_name=True,
-        json_schema_extra={"examples": [{"id": [101, 102]}]},
+        json_schema_extra={"examples": [{"ids": [101, 102]}]},
     )
-    id: list[object] = Field(default_factory=list)
+    ids: list[object] = Field(default_factory=list)
 
 
 # ============================================================
@@ -1727,20 +1758,9 @@ def upsert_ui_acceleration(
             )
 
     if errors:
-        seen: set[tuple[str, str | None, str | None]] = set()
-        deduped: list[dict[str, object]] = []
-        for item in errors:
-            field = str(item.get("field") or "")
-            message = str(item.get("message") or "")
-            value = item.get("value")
-            key = (field, message, str(value))
-            if key in seen:
-                continue
-            seen.add(key)
-            deduped.append(item)
         raise HTTPException(
             status_code=400,
-            detail={"error": "Invalid payload", "errors": deduped},
+            detail=_build_validation_error_detail(errors),
         )
 
     period_date = _resolve_period_date(month_value, year_value)
@@ -1797,7 +1817,7 @@ def delete_ui_accelerations(
     Example request:
         DELETE /api/spendsphere/v1/uis/accelerations
         {
-          "id": [101, 102]
+          "ids": [101, 102]
         }
 
     Example response:
@@ -1819,22 +1839,29 @@ def delete_ui_accelerations(
             detail={"error": "Invalid payload", "errors": exc.errors()},
         ) from exc
 
+    errors: list[dict[str, object]] = []
     ids = [
         _normalize_optional_str(value)
-        for value in request_payload.id
+        for value in request_payload.ids
     ]
     ids = [value for value in ids if value]
     if not ids:
-        raise HTTPException(
-            status_code=400,
-            detail={"error": "id must contain at least one value"},
+        errors.append(
+            {
+                "field": "ids",
+                "value": request_payload.ids,
+                "message": "ids must contain at least one value",
+            }
         )
 
     rows = get_accelerations_by_ids(ids)
-    if not rows:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "No accelerations found for ids", "ids": ids},
+    if not rows and ids:
+        errors.append(
+            {
+                "field": "ids",
+                "value": ids,
+                "message": "No accelerations found for ids",
+            }
         )
 
     found_ids = {
@@ -1844,9 +1871,12 @@ def delete_ui_accelerations(
     }
     missing_ids = [value for value in ids if value not in found_ids]
     if missing_ids:
-        raise HTTPException(
-            status_code=404,
-            detail={"error": "Acceleration ids not found", "ids": missing_ids},
+        errors.append(
+            {
+                "field": "ids",
+                "value": missing_ids,
+                "message": "Acceleration ids not found",
+            }
         )
 
     account_codes = {
@@ -1855,14 +1885,17 @@ def delete_ui_accelerations(
         if isinstance(row, dict) and str(row.get("accountCode", "")).strip()
     }
     if len(account_codes) != 1:
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "error": "ids must belong to a single accountCode",
+        errors.append(
+            {
+                "field": "ids",
+                "value": ids,
+                "message": "ids must belong to a single accountCode",
                 "accountCodes": sorted(account_codes),
-            },
+            }
         )
-    account_code = next(iter(account_codes))
+        account_code = None
+    else:
+        account_code = next(iter(account_codes))
 
     month_years = set()
     for row in rows:
@@ -1870,22 +1903,30 @@ def delete_ui_accelerations(
             continue
         start_date = _coerce_date(row.get("startDate"))
         if not start_date:
-            raise HTTPException(
-                status_code=400,
-                detail={
-                    "error": "startDate is required to resolve table data",
-                    "id": row.get("id"),
-                },
+            errors.append(
+                {
+                    "field": "startDate",
+                    "value": row.get("id"),
+                    "message": "startDate is required to resolve table data",
+                }
             )
+            continue
         month_years.add((start_date.month, start_date.year))
 
     if len(month_years) != 1:
+        errors.append(
+            {
+                "field": "ids",
+                "value": ids,
+                "message": "ids must belong to a single month/year",
+                "monthYears": sorted(month_years),
+            }
+        )
+
+    if errors:
         raise HTTPException(
             status_code=400,
-            detail={
-                "error": "ids must belong to a single month/year",
-                "monthYears": sorted(month_years),
-            },
+            detail=_build_validation_error_detail(errors),
         )
 
     month_value, year_value = next(iter(month_years))
