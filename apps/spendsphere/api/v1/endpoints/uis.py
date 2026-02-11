@@ -561,6 +561,7 @@ def _get_ui_context_with_mutations(
     return_new_data: bool,
     is_current_period: bool | None = None,
     allow_mutations: bool = True,
+    refresh_budgets: bool = False,
     api_name_prefix: str = "spendsphere_v1_ui",
 ) -> dict[str, object]:
     accounts = get_ggad_accounts()
@@ -590,10 +591,13 @@ def _get_ui_context_with_mutations(
         api_name=f"{api_name_prefix}_db",
     )
 
+    def _get_budgets(accounts: list[dict]) -> list[dict]:
+        return get_ggad_budgets(accounts, refresh_cache=refresh_budgets)
+
     campaigns, budgets, costs = run_parallel(
         tasks=[
             (get_ggad_campaigns, ([account],)),
-            (get_ggad_budgets, ([account],)),
+            (_get_budgets, ([account],)),
             (get_ggad_spents, ([account], month, year)),
         ],
         api_name=f"{api_name_prefix}_google_ads",
@@ -649,7 +653,7 @@ def _get_ui_context_with_mutations(
         )
 
         if return_new_data and mutation_tasks:
-            budgets = get_ggad_budgets([account])
+            budgets = get_ggad_budgets([account], refresh_cache=refresh_budgets)
 
         for result in mutation_results:
             summary = result.get("summary", {})
@@ -1348,6 +1352,7 @@ def update_ui_allocations_rollbreaks(
             period_date=period_date,
             return_new_data=request_payload.returnNewData,
             is_current_period=is_current_period,
+            refresh_budgets=request_payload.returnNewData,
             api_name_prefix="spendsphere_v1_ui_update",
         )
         rows = ui_context["rows"]
