@@ -29,6 +29,7 @@ from apps.spendsphere.api.v1.helpers.db_queries import (
     get_masterbudgets,
     get_rollbreakdowns,
     insert_accelerations,
+    soft_delete_accelerations_by_ids,
     update_acceleration_by_id,
     upsert_allocations,
     upsert_rollbreakdowns,
@@ -640,6 +641,27 @@ def _get_ui_context_with_mutations(
     }
 
 
+def _build_table_data_payload(
+    rows: list[dict],
+    *,
+    budgets: list[dict],
+    allocations: list[dict],
+    campaigns: list[dict],
+    costs: list[dict],
+) -> dict:
+    if rows:
+        table_data_rows = _build_table_data(rows, budgets, allocations)
+    else:
+        table_data_rows = _build_table_data_fallback(campaigns, budgets, costs)
+    grand_total_spent = _to_float(
+        sum(Decimal(str(item.get("spent", 0) or 0)) for item in table_data_rows)
+    )
+    return {
+        "grandTotalSpent": grand_total_spent,
+        "data": table_data_rows,
+    }
+
+
 class UiAllocationUpdate(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     id: str | None = None
@@ -714,6 +736,14 @@ class UiAccelerationUpsertRequest(BaseModel):
     year: int
     returnNewData: bool = Field(default=False, alias="includeData")
     newAccelerations: list[UiAccelerationUpsertItem] = Field(default_factory=list)
+
+
+class UiAccelerationDeleteRequest(BaseModel):
+    model_config = ConfigDict(
+        populate_by_name=True,
+        json_schema_extra={"examples": [{"id": [101, 102]}]},
+    )
+    id: list[object] = Field(default_factory=list)
 
 
 # ============================================================
@@ -1742,17 +1772,142 @@ def upsert_ui_acceleration(
     allocations = ui_context["allocations"]
     campaigns = ui_context["campaigns"]
     costs = ui_context["costs"]
-    if rows:
-        table_data_rows = _build_table_data(rows, budgets, allocations)
-    else:
-        table_data_rows = _build_table_data_fallback(campaigns, budgets, costs)
-    table_data = {
-        "grandTotalSpent": _to_float(
-            sum(Decimal(str(item.get("spent", 0) or 0)) for item in table_data_rows)
-        ),
-        "data": table_data_rows,
-    }
+    table_data = _build_table_data_payload(
+        rows,
+        budgets=budgets,
+        allocations=allocations,
+        campaigns=campaigns,
+        costs=costs,
+    )
     return {
         "accelerations": _sanitize_acceleration_rows(created_rows + updated_rows),
         "tableData": table_data,
     }
+
+
+@router.delete(
+    "/uis/accelerations",
+    summary="Delete UI accelerations by ids",
+    description="Soft deletes accelerations by id and returns updated table data.",
+)
+def delete_ui_accelerations(
+    request_payload: UiAccelerationDeleteRequest,
+):
+    """
+    Example request:
+        DELETE /api/spendsphere/v1/uis/accelerations
+        {
+          "id": [101, 102]
+        }
+
+    Example response:
+        {
+          "deleted": 2,
+          "tableData": {
+            "grandTotalSpent": 586.09,
+            "data": []
+          }
+        }
+    """
+    try:
+        request_payload = UiAccelerationDeleteRequest.model_validate(
+            request_payload, from_attributes=True
+        )
+    except ValidationError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invalid payload", "errors": exc.errors()},
+        ) from exc
+
+    ids = [
+        _normalize_optional_str(value)
+        for value in request_payload.id
+    ]
+    ids = [value for value in ids if value]
+    if not ids:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "id must contain at least one value"},
+        )
+
+    rows = get_accelerations_by_ids(ids)
+    if not rows:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "No accelerations found for ids", "ids": ids},
+        )
+
+    found_ids = {
+        _normalize_optional_str(row.get("id"))
+        for row in rows
+        if isinstance(row, dict)
+    }
+    missing_ids = [value for value in ids if value not in found_ids]
+    if missing_ids:
+        raise HTTPException(
+            status_code=404,
+            detail={"error": "Acceleration ids not found", "ids": missing_ids},
+        )
+
+    account_codes = {
+        str(row.get("accountCode", "")).strip().upper()
+        for row in rows
+        if isinstance(row, dict) and str(row.get("accountCode", "")).strip()
+    }
+    if len(account_codes) != 1:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "ids must belong to a single accountCode",
+                "accountCodes": sorted(account_codes),
+            },
+        )
+    account_code = next(iter(account_codes))
+
+    month_years = set()
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        start_date = _coerce_date(row.get("startDate"))
+        if not start_date:
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "startDate is required to resolve table data",
+                    "id": row.get("id"),
+                },
+            )
+        month_years.add((start_date.month, start_date.year))
+
+    if len(month_years) != 1:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "ids must belong to a single month/year",
+                "monthYears": sorted(month_years),
+            },
+        )
+
+    month_value, year_value = next(iter(month_years))
+    period_date = _resolve_period_date(month_value, year_value)
+
+    deleted = soft_delete_accelerations_by_ids(ids)
+
+    ui_context = _get_ui_context_with_mutations(
+        account_code,
+        month=month_value,
+        year=year_value,
+        period_date=period_date,
+        return_new_data=True,
+        allow_mutations=False,
+        api_name_prefix="spendsphere_v1_ui_accelerations",
+    )
+    table_data = _build_table_data_payload(
+        ui_context["rows"],
+        budgets=ui_context["budgets"],
+        allocations=ui_context["allocations"],
+        campaigns=ui_context["campaigns"],
+        costs=ui_context["costs"],
+    )
+
+    return {"deleted": deleted, "tableData": table_data}

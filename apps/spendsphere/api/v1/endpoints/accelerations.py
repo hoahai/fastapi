@@ -609,22 +609,6 @@ def update_accelerations_route(request_payload: list[AccelerationPayload]):
     "/accelerations",
     summary="Soft delete accelerations by ids",
     description="Sets active = 0 for the requested acceleration ids.",
-    responses={
-        200: {
-            "description": "Delete summary",
-            "content": {"application/json": {"example": {"deleted": 2}}},
-        },
-        400: {
-            "description": "Validation error",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": {"error": "ids must contain at least one value"}
-                    }
-                }
-            },
-        },
-    },
 )
 def delete_accelerations_by_ids(request_payload: AccelerationIdsPayload):
     """
