@@ -16,16 +16,15 @@ router = APIRouter()
 @router.get("/allocations")
 def get_allocations_route(
     account_codes: list[str] | None = Query(None, alias="accountCodes"),
-    account_code: str | None = Query(None, alias="accountCode"),
     month: int | None = Query(None, description="Month (1-12)."),
     year: int | None = Query(None, description="Year (e.g., 2026)."),
 ):
     """
     Example request:
-        GET /api/spendsphere/v1/allocations?accountCodes=TAAA
+        GET /api/spendsphere/v1/allocations?accountCodes=TAAA&accountCodes=TBBB
 
     Example request (specific period):
-        GET /api/spendsphere/v1/allocations?accountCodes=TAAA&month=1&year=2026
+        GET /api/spendsphere/v1/allocations?accountCodes=TAAA&accountCodes=TBBB&month=1&year=2026
 
     Example response:
         [
@@ -54,8 +53,6 @@ def get_allocations_route(
         return normalized
 
     requested_codes = _normalize_codes(account_codes)
-    if not requested_codes and isinstance(account_code, str) and account_code.strip():
-        requested_codes = _normalize_codes([account_code])
     if not requested_codes:
         raise HTTPException(
             status_code=400,
@@ -90,6 +87,7 @@ def get_allocations_route(
 
 class AllocationDuplicateRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
+    accountCodes: list[str] | None = None
     fromMonth: int
     fromYear: int
     toMonth: int
@@ -103,17 +101,19 @@ def duplicate_allocations_route(request_payload: AllocationDuplicateRequest):
     Example request:
         POST /api/spendsphere/v1/allocations/duplicate
         {
+          "accountCodes": ["TAAA", "TBBB"],
           "fromMonth": 12,
           "fromYear": 2025,
           "toMonth": 1,
           "toYear": 2026,
           "overwrite": false
         }
+        - accountCodes is required and must not be null or [].
+        - allocations with value 0 are skipped during duplication.
 
     Example response:
         {
-          "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
-          "data": {"inserted": 42}
+          "inserted": 42
         }
     """
     if request_payload.fromMonth < 1 or request_payload.fromMonth > 12:
@@ -125,11 +125,27 @@ def duplicate_allocations_route(request_payload: AllocationDuplicateRequest):
     if request_payload.toYear < 2000 or request_payload.toYear > 2100:
         raise HTTPException(status_code=400, detail="toYear must be 2000-2100")
 
+    normalized_codes: list[str] = []
+    seen: set[str] = set()
+    if request_payload.accountCodes:
+        for value in request_payload.accountCodes:
+            if not isinstance(value, str):
+                continue
+            for chunk in value.split(","):
+                code = chunk.strip().upper()
+                if not code or code in seen:
+                    continue
+                seen.add(code)
+                normalized_codes.append(code)
+    if not normalized_codes:
+        raise HTTPException(status_code=400, detail="accountCodes is required")
+
     inserted = duplicate_allocations(
         from_month=request_payload.fromMonth,
         from_year=request_payload.fromYear,
         to_month=request_payload.toMonth,
         to_year=request_payload.toYear,
+        account_codes=normalized_codes,
         overwrite=request_payload.overwrite,
     )
     return {"inserted": inserted}

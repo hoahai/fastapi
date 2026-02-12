@@ -12,7 +12,6 @@ router = APIRouter()
 @router.get("/budgets")
 def get_budgets(
     account_codes: list[str] | None = Query(None, alias="accountCodes"),
-    account_code: str | None = Query(None, alias="accountCode"),
     month: int | None = Query(None, description="Month (1-12)."),
     year: int | None = Query(None, description="Year (e.g., 2026)."),
 ):
@@ -33,8 +32,6 @@ def get_budgets(
         return normalized
 
     requested_codes = _normalize_codes(account_codes)
-    if not requested_codes and isinstance(account_code, str) and account_code.strip():
-        requested_codes = _normalize_codes([account_code])
     if not requested_codes:
         raise HTTPException(
             status_code=400,

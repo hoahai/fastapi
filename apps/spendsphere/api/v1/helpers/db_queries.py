@@ -180,11 +180,13 @@ def duplicate_allocations(
     from_year: int,
     to_month: int,
     to_year: int,
+    account_codes: list[str],
     overwrite: bool = False,
 ) -> int:
     """
     Duplicate allocations from one month/year to another for active accounts only.
     Skips rows that already exist in the target month/year.
+    Only duplicates rows for requested account codes and with non-zero allocation.
     """
     tables = get_db_tables()
     allocations_table = tables["ALLOCATIONS"]
@@ -207,6 +209,13 @@ def duplicate_allocations(
     )
 
     params: list = [to_month, to_year, to_month, to_year, from_month, from_year]
+
+    if account_codes:
+        placeholders = ", ".join(["%s"] * len(account_codes))
+        query += f"AND a.accountCode IN ({placeholders}) "
+        params.extend(account_codes)
+
+    query += "AND a.allocation <> 0 "
 
     if not overwrite:
         query += "AND t.id IS NULL"
