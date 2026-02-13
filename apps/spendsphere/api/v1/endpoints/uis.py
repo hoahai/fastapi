@@ -1,7 +1,7 @@
 import calendar
 import math
 import re
-from datetime import date, datetime
+from datetime import date, datetime, time
 from decimal import Decimal, InvalidOperation
 
 import pytz
@@ -104,6 +104,25 @@ def _coerce_date(value: object) -> date | None:
                 continue
         try:
             return datetime.fromisoformat(cleaned).date()
+        except ValueError:
+            return None
+    return None
+
+
+def _coerce_datetime(value: object) -> datetime | None:
+    if isinstance(value, datetime):
+        return value
+    if isinstance(value, date):
+        return datetime.combine(value, time.min)
+    if isinstance(value, str) and value.strip():
+        cleaned = value.strip()
+        for fmt in ("%Y-%m-%d %H:%M:%S", "%Y-%m-%dT%H:%M:%S"):
+            try:
+                return datetime.strptime(cleaned, fmt)
+            except ValueError:
+                continue
+        try:
+            return datetime.fromisoformat(cleaned)
         except ValueError:
             return None
     return None
@@ -381,22 +400,6 @@ def _format_campaign_names(campaigns: list[dict]) -> str:
     )
 
 
-def _format_campaign_statuses(campaigns: list[dict]) -> str:
-    statuses = sorted(
-        {
-            c.get("campaignStatus")
-            or c.get("status")
-            for c in campaigns
-            if c.get("campaignStatus") or c.get("status")
-        }
-    )
-    if not statuses:
-        return ""
-    if len(statuses) == 1:
-        return statuses[0]
-    return ", ".join(statuses)
-
-
 def _build_table_data(
     rows: list[dict],
     budgets: list[dict],
@@ -462,9 +465,61 @@ def _build_table_data_fallback(
     campaigns: list[dict],
     budgets: list[dict],
     costs: list[dict],
+    *,
+    allocations: list[dict] | None = None,
+    accelerations: list[dict] | None = None,
 ) -> list[dict]:
     if not campaigns:
         return []
+
+    allocation_lookup: dict[tuple[str, str], dict] = {}
+    for allocation in allocations or []:
+        account_code = str(allocation.get("accountCode", "")).strip().upper()
+        budget_id = str(allocation.get("ggBudgetId", "")).strip()
+        if not account_code or not budget_id:
+            continue
+        allocation_lookup[(account_code, budget_id)] = {
+            "id": allocation.get("id"),
+            "allocation": _to_float(allocation.get("allocation")),
+        }
+
+    def _accel_sort_key(accel: dict) -> tuple[datetime, int]:
+        updated = _coerce_datetime(accel.get("dateUpdated") or accel.get("dateCreated"))
+        try:
+            accel_id = int(accel.get("id") or 0)
+        except (TypeError, ValueError):
+            accel_id = 0
+        return (updated or datetime.min, accel_id)
+
+    def _pick_better(candidate: dict | None, current: dict | None) -> dict | None:
+        if candidate is None:
+            return current
+        if current is None:
+            return candidate
+        return candidate if _accel_sort_key(candidate) > _accel_sort_key(current) else current
+
+    account_accels: dict[str, dict] = {}
+    ad_type_accels: dict[tuple[str, str], dict] = {}
+    budget_accels: dict[tuple[str, str], dict] = {}
+
+    for accel in accelerations or []:
+        account_code = str(accel.get("accountCode", "")).strip().upper()
+        scope_type = str(accel.get("scopeLevel", "")).strip().upper()
+        scope_value = str(accel.get("scopeValue", "")).strip()
+
+        if not account_code or not scope_type:
+            continue
+
+        if scope_type == "ACCOUNT":
+            account_accels[account_code] = _pick_better(
+                accel, account_accels.get(account_code)
+            )
+        elif scope_type == "AD_TYPE" and scope_value:
+            key = (account_code, scope_value.upper())
+            ad_type_accels[key] = _pick_better(accel, ad_type_accels.get(key))
+        elif scope_type == "BUDGET" and scope_value:
+            key = (account_code, scope_value)
+            budget_accels[key] = _pick_better(accel, budget_accels.get(key))
 
     budget_lookup: dict[tuple[str | None, str | None], dict] = {
         (b.get("customerId"), b.get("budgetId")): b for b in budgets
@@ -484,10 +539,32 @@ def _build_table_data_fallback(
         if not customer_id or not budget_id:
             continue
 
+        budget_meta = budget_lookup.get((customer_id, budget_id), {})
+        account_code = str(
+            budget_meta.get("accountCode") or campaign.get("accountCode") or ""
+        ).strip().upper()
+
         key = (customer_id, budget_id)
         entry = grouped.get(key)
         if entry is None:
-            budget_meta = budget_lookup.get(key, {})
+            allocation_value = allocation_lookup.get(
+                (account_code, str(budget_id).strip())
+            ) or {"id": None, "allocation": None}
+
+            accel = None
+            if account_code:
+                accel = budget_accels.get((account_code, str(budget_id).strip()))
+                if accel is None and campaign.get("adTypeCode"):
+                    accel = ad_type_accels.get(
+                        (account_code, str(campaign.get("adTypeCode")).upper())
+                    )
+                if accel is None:
+                    accel = account_accels.get(account_code)
+            acceleration_value = {
+                "id": accel.get("id"),
+                "multiplier": _to_float(accel.get("multiplier")),
+            } if accel else {"id": None, "multiplier": None}
+
             entry = {
                 "accountId": customer_id,
                 "name": budget_meta.get("budgetName")
@@ -498,8 +575,8 @@ def _build_table_data_fallback(
                 "currentBudget": _to_float(budget_meta.get("amount")),
                 "spent": Decimal("0"),
                 "adTypeCode": campaign.get("adTypeCode"),
-                "allocation": {"id": None, "allocation": None},
-                "acceleration": {"id": None, "multiplier": None},
+                "allocation": allocation_value,
+                "acceleration": acceleration_value,
                 "campaigns": [],
                 "_campaignNames": "",
             }
@@ -668,6 +745,7 @@ def _get_ui_context_with_mutations(
         "budgets": budgets,
         "allocations": allocations,
         "rollbreakdowns": rollbreakdowns,
+        "accelerations": accelerations,
         "campaigns": campaigns,
         "costs": costs,
         "googleAdsUpdates": {
@@ -684,11 +762,18 @@ def _build_table_data_payload(
     allocations: list[dict],
     campaigns: list[dict],
     costs: list[dict],
+    accelerations: list[dict] | None = None,
 ) -> dict:
     if rows:
         table_data_rows = _build_table_data(rows, budgets, allocations)
     else:
-        table_data_rows = _build_table_data_fallback(campaigns, budgets, costs)
+        table_data_rows = _build_table_data_fallback(
+            campaigns,
+            budgets,
+            costs,
+            allocations=allocations,
+            accelerations=accelerations,
+        )
     grand_total_spent = _to_float(
         sum(Decimal(str(item.get("spent", 0) or 0)) for item in table_data_rows)
     )
@@ -1077,24 +1162,14 @@ def load_ui_route(
 
     master_budgets_payload = _build_master_budgets(master_budgets)
     roll_breakdown_payload = _build_roll_breakdown(rollbreakdowns)
-    sanitized_accelerations = [
-        {
-            k: v
-            for k, v in row.items()
-            if k not in {"dateCreated", "dateUpdated"}
-        }
-        for row in accelerations
-        if isinstance(row, dict)
-    ]
-    if rows:
-        table_data = _build_table_data(rows, budgets, allocations)
-    else:
-        table_data = _build_table_data_fallback(campaigns, budgets, costs)
-    grand_total_spent = _to_float(
-        sum(
-            Decimal(str(item.get("spent", 0) or 0))
-            for item in table_data
-        )
+    sanitized_accelerations = _sanitize_acceleration_rows(accelerations)
+    table_data = _build_table_data_payload(
+        rows,
+        budgets=budgets,
+        allocations=allocations,
+        campaigns=campaigns,
+        costs=costs,
+        accelerations=active_accelerations,
     )
 
     rollovers_total = _to_float(
@@ -1114,10 +1189,7 @@ def load_ui_route(
         "activePeriod": active_period_payload,
         "rollBreakdown": roll_breakdown_payload,
         "accelerations": sanitized_accelerations,
-        "tableData": {
-            "grandTotalSpent": grand_total_spent,
-            "data": table_data,
-        },
+        "tableData": table_data,
     }
 
 
@@ -1358,6 +1430,7 @@ def update_ui_allocations_rollbreaks(
         rows = ui_context["rows"]
         budgets = ui_context["budgets"]
         allocations = ui_context["allocations"]
+        accelerations = ui_context["accelerations"]
         rollbreakdowns = ui_context["rollbreakdowns"]
         campaigns = ui_context["campaigns"]
         costs = ui_context["costs"]
@@ -1376,21 +1449,19 @@ def update_ui_allocations_rollbreaks(
 
     if request_payload.returnNewData:
         roll_breakdown_payload = _build_roll_breakdown(rollbreakdowns)
-        table_data = _build_table_data(rows, budgets, allocations)
-        grand_total_spent = _to_float(
-            sum(
-                Decimal(str(item.get("spent", 0) or 0))
-                for item in table_data
-            )
+        table_data = _build_table_data_payload(
+            rows,
+            budgets=budgets,
+            allocations=allocations,
+            campaigns=campaigns,
+            costs=costs,
+            accelerations=accelerations,
         )
 
         response.update(
             {
                 "rollBreakdown": roll_breakdown_payload,
-                "tableData": {
-                    "grandTotalSpent": grand_total_spent,
-                    "data": table_data,
-                },
+                "tableData": table_data,
             }
         )
 
@@ -1796,6 +1867,7 @@ def upsert_ui_acceleration(
     rows = ui_context["rows"]
     budgets = ui_context["budgets"]
     allocations = ui_context["allocations"]
+    accelerations = ui_context["accelerations"]
     campaigns = ui_context["campaigns"]
     costs = ui_context["costs"]
     table_data = _build_table_data_payload(
@@ -1804,6 +1876,7 @@ def upsert_ui_acceleration(
         allocations=allocations,
         campaigns=campaigns,
         costs=costs,
+        accelerations=accelerations,
     )
     return {
         "accelerations": _sanitize_acceleration_rows(created_rows + updated_rows),
@@ -1955,6 +2028,7 @@ def delete_ui_accelerations(
         allocations=ui_context["allocations"],
         campaigns=ui_context["campaigns"],
         costs=ui_context["costs"],
+        accelerations=ui_context["accelerations"],
     )
 
     return {"deleted": deleted, "tableData": table_data}
