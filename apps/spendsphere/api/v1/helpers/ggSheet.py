@@ -1,8 +1,11 @@
 import calendar
 from datetime import date, datetime
 
+import pytz
+
 from shared.ggSheet import _read_sheet_raw
 from shared.utils import get_current_period
+from shared.tenant import get_timezone
 from apps.spendsphere.api.v1.helpers.config import get_spendsphere_sheets
 from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
     get_google_sheet_cache_entry,
@@ -144,6 +147,8 @@ def get_active_period(
     account_codes: list[str] | None = None,
     month: int | None = None,
     year: int | None = None,
+    *,
+    as_of: date | None = None,
 ) -> list[dict]:
     """
     Get active period data.
@@ -156,14 +161,6 @@ def get_active_period(
     if not data:
         return []
 
-    if month is None or year is None:
-        period = get_current_period()
-        month = period["month"]
-        year = period["year"]
-
-    if not isinstance(month, int) or not isinstance(year, int):
-        return []
-
     if isinstance(account_codes, str):
         account_codes = [account_codes]
 
@@ -172,6 +169,93 @@ def get_active_period(
         if account_codes
         else None
     )
+
+    if as_of is None and (month is None or year is None):
+        tz = pytz.timezone(get_timezone())
+        as_of = datetime.now(tz).date()
+
+    if as_of is not None:
+        if isinstance(as_of, datetime):
+            as_of = as_of.date()
+        if not isinstance(as_of, date):
+            return []
+
+        rows_by_account: dict[str, list[tuple[date, int, dict]]] = {}
+        active_rows_by_account: dict[str, list[tuple[int, dict]]] = {}
+        next_start_by_account: dict[str, date] = {}
+
+        for idx, row in enumerate(data):
+            account_code = row.get("accountCode", "").strip().upper()
+            if not account_code:
+                continue
+            if normalized_accounts is not None and account_code not in normalized_accounts:
+                continue
+
+            start_date = _coerce_date(row.get("startDate"))
+            end_date = _coerce_date(row.get("endDate"))
+            start_key = start_date or date.min
+            rows_by_account.setdefault(account_code, []).append((start_key, idx, row))
+
+            start_ok = True if start_date is None else start_date <= as_of
+            end_ok = True if end_date is None else end_date >= as_of
+            if start_ok and end_ok:
+                active_rows_by_account.setdefault(account_code, []).append((idx, row))
+
+            if start_date and start_date > as_of:
+                existing = next_start_by_account.get(account_code)
+                if existing is None or start_date < existing:
+                    next_start_by_account[account_code] = start_date
+
+        results: list[tuple[int, dict]] = []
+        for rows in rows_by_account.values():
+            rows.sort(key=lambda item: (item[0], item[1]))
+
+            account_code = rows[0][2].get("accountCode", "").strip().upper()
+            active_rows = active_rows_by_account.get(account_code, [])
+            if len(active_rows) > 1:
+                raise ValueError(
+                    "Overlapping active_period rows for "
+                    f"{account_code} on {as_of.isoformat()}"
+                )
+
+            if active_rows:
+                selected_idx, selected_row = active_rows[0]
+            else:
+                selected_idx = rows[0][1]
+                selected_row = rows[0][2]
+                for start_key, idx, row in rows:
+                    if start_key <= as_of:
+                        selected_idx = idx
+                        selected_row = row
+                    else:
+                        break
+
+            start_date = _coerce_date(selected_row.get("startDate"))
+            end_date = _coerce_date(selected_row.get("endDate"))
+            start_ok = True if start_date is None else start_date <= as_of
+            end_ok = True if end_date is None else end_date >= as_of
+            is_active = start_ok and end_ok
+            next_start = next_start_by_account.get(account_code)
+
+            results.append(
+                (
+                    selected_idx,
+                    {
+                        **selected_row,
+                        "isActive": is_active,
+                        **(
+                            {"nextStartDate": next_start.isoformat()}
+                            if next_start
+                            else {}
+                        ),
+                    },
+                )
+            )
+
+        return [row for _, row in sorted(results, key=lambda item: item[0])]
+
+    if not isinstance(month, int) or not isinstance(year, int):
+        return []
 
     month_start = date(year, month, 1)
     month_end = date(year, month, calendar.monthrange(year, month)[1])

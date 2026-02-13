@@ -85,9 +85,38 @@ def _resolve_period_date(month: int | None, year: int | None) -> date:
     today = datetime.now(tz).date()
     if month is None or year is None:
         return today
-    if month == today.month and year == today.year:
+
+    current_period = get_current_period()
+    current_key = (current_period["year"], current_period["month"])
+    target_key = (year, month)
+
+    if target_key == current_key:
         return today
+    if target_key < current_key:
+        last_day = calendar.monthrange(year, month)[1]
+        return date(year, month, last_day)
     return date(year, month, 1)
+
+
+def _get_active_period_checked(
+    account_codes: list[str],
+    month: int,
+    year: int,
+    *,
+    as_of: date,
+) -> list[dict]:
+    try:
+        return get_active_period(
+            account_codes,
+            month,
+            year,
+            as_of=as_of,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Overlapping active periods", "message": str(exc)},
+        ) from exc
 
 
 def _coerce_date(value: object) -> date | None:
@@ -216,6 +245,7 @@ def _build_monthly_active_period(
     *,
     month: int,
     year: int,
+    as_of: date | None = None,
 ) -> dict:
     month_start = date(year, month, 1)
     last_day = calendar.monthrange(year, month)[1]
@@ -223,24 +253,62 @@ def _build_monthly_active_period(
 
     start_date = _coerce_date(row.get("startDate") if row else None)
     end_date = _coerce_date(row.get("endDate") if row else None)
+    next_start_date = _coerce_date(row.get("nextStartDate") if row else None)
 
-    start_ok = True if start_date is None else start_date <= month_end
-    end_ok = True if end_date is None else end_date >= month_start
-    is_active = start_ok and end_ok
+    if as_of is None:
+        as_of = _resolve_period_date(month, year)
+
+    if row and "isActive" in row:
+        is_active = bool(row.get("isActive"))
+    else:
+        start_ok = True if start_date is None else start_date <= as_of
+        end_ok = True if end_date is None else end_date >= as_of
+        is_active = start_ok and end_ok
 
     response: dict[str, object] = {"isActive": is_active}
     message_parts: list[str] = []
 
-    if start_date and month_start <= start_date <= month_end:
+    current_period = get_current_period()
+    current_start = date(current_period["year"], current_period["month"], 1)
+    current_last_day = calendar.monthrange(
+        current_period["year"], current_period["month"]
+    )[1]
+    current_end = date(current_period["year"], current_period["month"], current_last_day)
+    request_is_current = (year, month) == (
+        current_period["year"],
+        current_period["month"],
+    )
+    show_daily_message = (
+        bool(end_date)
+        and request_is_current
+        and current_start <= end_date <= current_end
+    )
+
+    if start_date:
         response["startDate"] = start_date.isoformat()
+    if end_date:
+        response["endDate"] = end_date.isoformat()
+    if next_start_date:
+        response["nextStartDate"] = next_start_date.isoformat()
+
+    if start_date and as_of < start_date:
         message_parts.append(
             f"Account will start on {start_date.strftime('%m/%d/%Y')}"
         )
-    if end_date and month_start <= end_date <= month_end:
-        response["endDate"] = end_date.isoformat()
+    elif end_date and as_of <= end_date:
         message_parts.append(
             f"Account last day on {end_date.strftime('%m/%d/%Y')} EOD"
         )
+    elif end_date and as_of > end_date:
+        message_parts.append(
+            f"Account ended on {end_date.strftime('%m/%d/%Y')} EOD"
+        )
+        if next_start_date and next_start_date > as_of:
+            message_parts.append(
+                f"Account will start on {next_start_date.strftime('%m/%d/%Y')}"
+            )
+
+    if show_daily_message:
         message_parts.append(
             f"Daily budgets and pacing as of {end_date.strftime('%m/%d')}"
         )
@@ -680,7 +748,12 @@ def _get_ui_context_with_mutations(
         api_name=f"{api_name_prefix}_google_ads",
     )
 
-    active_period = get_active_period(account_codes, month, year)
+    active_period = _get_active_period_checked(
+        account_codes,
+        month,
+        year,
+        as_of=period_date,
+    )
 
     rows = transform_google_ads_data(
         master_budgets=master_budgets,
@@ -1135,10 +1208,11 @@ def load_ui_route(
         api_name="spendsphere_v1_ui_load_google_ads",
     )
 
-    active_period = get_active_period(
+    active_period = _get_active_period_checked(
         account_codes,
         month_value,
         year_value,
+        as_of=period_date,
     )
     rollovers = get_rollovers(
         account_codes,
@@ -1181,6 +1255,7 @@ def load_ui_route(
         active_period_row,
         month=month_value,
         year=year_value,
+        as_of=period_date,
     )
 
     return {

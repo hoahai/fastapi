@@ -1,10 +1,13 @@
 import calendar
 from datetime import date, datetime
 
+import pytz
+
 from fastapi import APIRouter, HTTPException, Query
 
 from apps.spendsphere.api.v1.helpers.ggSheet import get_active_period
 from apps.spendsphere.api.v1.helpers.spendsphere_helpers import require_account_code
+from shared.tenant import get_timezone
 from shared.utils import get_current_period
 
 router = APIRouter()
@@ -87,6 +90,21 @@ def _resolve_month_year(
             detail="year must be between 2000 and 2100",
         )
     return month, year
+
+
+def _resolve_as_of_date(month: int, year: int) -> date:
+    tz = pytz.timezone(get_timezone())
+    today = datetime.now(tz).date()
+    current = get_current_period()
+    current_key = (current["year"], current["month"])
+    target_key = (year, month)
+
+    if target_key == current_key:
+        return today
+    if target_key < current_key:
+        last_day = calendar.monthrange(year, month)[1]
+        return date(year, month, last_day)
+    return date(year, month, 1)
 
 
 # ============================================================
@@ -184,7 +202,13 @@ def get_active_period_route(
         }
     """
     account_code = require_account_code(account_code)
-    data = get_active_period([account_code])
+    try:
+        data = get_active_period([account_code])
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Overlapping active periods", "message": str(exc)},
+        ) from exc
     if not data:
         raise HTTPException(
             status_code=404,
@@ -225,8 +249,20 @@ def get_active_period_month_route(
     month_start = date(year_value, month_value, 1)
     last_day = calendar.monthrange(year_value, month_value)[1]
     month_end = date(year_value, month_value, last_day)
+    as_of = _resolve_as_of_date(month_value, year_value)
 
-    data = get_active_period([account_code], month_value, year_value)
+    try:
+        data = get_active_period(
+            [account_code],
+            month_value,
+            year_value,
+            as_of=as_of,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Overlapping active periods", "message": str(exc)},
+        ) from exc
     if not data:
         return {
             "accountCode": account_code,
@@ -239,9 +275,12 @@ def get_active_period_month_route(
     start_date = _coerce_date(row.get("startDate"))
     end_date = _coerce_date(row.get("endDate"))
 
-    start_ok = True if start_date is None else start_date <= month_end
-    end_ok = True if end_date is None else end_date >= month_start
-    is_active = start_ok and end_ok
+    if "isActive" in row:
+        is_active = bool(row.get("isActive"))
+    else:
+        start_ok = True if start_date is None else start_date <= as_of
+        end_ok = True if end_date is None else end_date >= as_of
+        is_active = start_ok and end_ok
 
     response = {
         "accountCode": account_code,
