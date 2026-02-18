@@ -25,7 +25,7 @@ from shared.constants import (
     GGADS_ALLOWED_CAMPAIGN_STATUSES,
 )
 from shared.logger import get_logger
-from apps.spendsphere.api.v1.helpers.config import get_adtypes
+from apps.spendsphere.api.v1.helpers.config import get_adtypes, get_google_ads_naming
 from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
     get_google_ads_budgets_cache_entries,
     get_google_ads_campaigns_cache_entries,
@@ -48,6 +48,178 @@ def _chunked(items: list[dict], size: int):
 
 def _is_zzz_name(name: str | None) -> bool:
     return bool(name) and str(name).strip().lower().startswith("zzz.")
+
+
+_DEFAULT_NAMING_TOKEN_PATTERNS = {
+    "accountCode": r"[A-Za-z0-9]+",
+    "adTypeCode": r"[A-Za-z0-9]+",
+    "accountName": r".+",
+    "campaignName": r".+",
+}
+_UNKNOWN_ADTYPE_CODE = "UNK"
+
+
+def _build_ad_type_pattern(adtypes: dict) -> str:
+    codes = [str(code).strip() for code in adtypes.keys() if str(code).strip()]
+    if not codes:
+        return _DEFAULT_NAMING_TOKEN_PATTERNS["adTypeCode"]
+    return "|".join(sorted((re.escape(code) for code in codes), key=len, reverse=True))
+
+
+def _get_naming_token_patterns(adtypes: dict) -> dict[str, str]:
+    naming = get_google_ads_naming()
+    token_patterns = dict(_DEFAULT_NAMING_TOKEN_PATTERNS)
+    token_patterns["adTypeCode"] = _build_ad_type_pattern(adtypes)
+
+    raw_token_patterns = naming.get("tokenPatterns")
+    if isinstance(raw_token_patterns, dict):
+        for key, value in raw_token_patterns.items():
+            token = str(key).strip()
+            pattern = str(value).strip()
+            if token and pattern:
+                token_patterns[token] = pattern
+
+    return token_patterns
+
+
+def _compile_format_pattern(
+    *,
+    section: str,
+    format_pattern: str,
+    token_patterns: dict[str, str],
+) -> re.Pattern:
+    seen_tokens: set[str] = set()
+
+    def parse_segment(start_idx: int, *, in_optional: bool) -> tuple[str, int]:
+        parts: list[str] = []
+        idx = start_idx
+
+        while idx < len(format_pattern):
+            ch = format_pattern[idx]
+
+            if ch == "[":
+                nested, idx = parse_segment(idx + 1, in_optional=True)
+                parts.append(f"(?:{nested})?")
+                continue
+
+            if ch == "]":
+                if in_optional:
+                    return "".join(parts), idx + 1
+                raise TenantConfigError(
+                    f"Invalid GOOGLE_ADS_NAMING.{section}.format: unexpected ']'"
+                )
+
+            if ch == "{":
+                end_idx = format_pattern.find("}", idx + 1)
+                if end_idx == -1:
+                    raise TenantConfigError(
+                        f"Invalid GOOGLE_ADS_NAMING.{section}.format: missing '}}'"
+                    )
+
+                token = format_pattern[idx + 1 : end_idx].strip()
+                if not token:
+                    raise TenantConfigError(
+                        f"Invalid GOOGLE_ADS_NAMING.{section}.format: empty token"
+                    )
+
+                token_pattern = token_patterns.get(token)
+                if not token_pattern:
+                    raise TenantConfigError(
+                        "Invalid GOOGLE_ADS_NAMING."
+                        f"{section}.format: unknown token '{token}'"
+                    )
+
+                if token in seen_tokens:
+                    parts.append(f"(?:{token_pattern})")
+                else:
+                    parts.append(f"(?P<{token}>{token_pattern})")
+                    seen_tokens.add(token)
+                idx = end_idx + 1
+                continue
+
+            parts.append(re.escape(ch))
+            idx += 1
+
+        if in_optional:
+            raise TenantConfigError(
+                f"Invalid GOOGLE_ADS_NAMING.{section}.format: missing ']'"
+            )
+
+        return "".join(parts), idx
+
+    body, _ = parse_segment(0, in_optional=False)
+    try:
+        return re.compile(f"^{body}$", re.IGNORECASE)
+    except re.error as exc:
+        raise TenantConfigError(
+            f"Invalid GOOGLE_ADS_NAMING.{section}.format pattern: {exc}"
+        ) from exc
+
+
+def _compile_naming_pattern(section: str, adtypes: dict) -> re.Pattern:
+    naming = get_google_ads_naming()
+    section_config = naming.get(section)
+    if not isinstance(section_config, dict):
+        raise TenantConfigError(f"Missing GOOGLE_ADS_NAMING.{section} config")
+
+    token_patterns = _get_naming_token_patterns(adtypes)
+    regex_value = section_config.get("regex")
+    format_value = section_config.get("format")
+
+    if isinstance(regex_value, str) and regex_value.strip():
+        try:
+            pattern = re.compile(regex_value.strip(), re.IGNORECASE)
+        except re.error as exc:
+            raise TenantConfigError(
+                f"Invalid GOOGLE_ADS_NAMING.{section}.regex: {exc}"
+            ) from exc
+    elif isinstance(format_value, str) and format_value.strip():
+        pattern = _compile_format_pattern(
+            section=section,
+            format_pattern=format_value.strip(),
+            token_patterns=token_patterns,
+        )
+    else:
+        raise TenantConfigError(
+            f"Missing GOOGLE_ADS_NAMING.{section}.format or .regex"
+        )
+
+    if section == "account" and "accountCode" not in pattern.groupindex:
+        raise TenantConfigError(
+            "GOOGLE_ADS_NAMING.account must include named group 'accountCode'"
+        )
+
+    return pattern
+
+
+def _normalize_named_groups(match: re.Match[str]) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    for key, value in match.groupdict().items():
+        if value is None:
+            continue
+        text = str(value).strip()
+        if text:
+            normalized[str(key)] = text
+    return normalized
+
+
+def _build_channel_type_to_adtype_map(adtypes: dict) -> dict[str, str]:
+    mapping: dict[str, str] = {}
+    for ad_type_code, config in adtypes.items():
+        code = str(ad_type_code).strip().upper()
+        if not code or not isinstance(config, dict):
+            continue
+
+        query_value = config.get("adTypeQuery")
+        if isinstance(query_value, str) and query_value.strip():
+            mapping[query_value.strip().upper()] = code
+        elif isinstance(query_value, list):
+            for item in query_value:
+                channel = str(item).strip().upper()
+                if channel:
+                    mapping[channel] = code
+
+    return mapping
 
 
 # =====================
@@ -171,8 +343,7 @@ def get_mcc_accounts() -> list[dict]:
 
 def get_ggad_accounts(*, refresh_cache: bool = False) -> list[dict]:
     """
-    Return normalized Google Ads accounts that follow naming convention:
-    [zzz.][AccountCode]_[Account Name]
+    Return normalized Google Ads accounts based on tenant naming config.
     """
     if not refresh_cache:
         cached, is_stale = get_google_ads_clients_cache_entry()
@@ -184,11 +355,9 @@ def get_ggad_accounts(*, refresh_cache: bool = False) -> list[dict]:
         set_google_ads_clients_cache([])
         return []
 
-    results: list[dict] = []
+    account_name_pattern = _compile_naming_pattern("account", get_adtypes())
 
-    account_name_pattern = re.compile(
-        r"^(?:zzz\.)?(?P<code>[A-Za-z0-9]+)_(?P<name>.+)$"
-    )
+    results: list[dict] = []
 
     for acc in raw_accounts:
         descriptive_name = acc.get("name", "").strip()
@@ -197,15 +366,26 @@ def get_ggad_accounts(*, refresh_cache: bool = False) -> list[dict]:
         if not match:
             continue
 
-        if descriptive_name.lower().startswith("zzz."):
+        if _is_zzz_name(descriptive_name):
             continue
+
+        groups = _normalize_named_groups(match)
+        account_code = groups.get("accountCode")
+        if not account_code:
+            continue
+
+        account_name = (
+            groups.get("accountName")
+            or groups.get("campaignName")
+            or descriptive_name
+        )
 
         results.append(
             {
                 "id": acc.get("id"),
                 "descriptiveName": descriptive_name,
-                "accountCode": match.group("code").strip(),
-                "accountName": match.group("name").strip(),
+                "accountCode": account_code,
+                "accountName": account_name,
             }
         )
 
@@ -372,32 +552,42 @@ def get_ggad_campaigns(
     refresh_cache: bool = False,
 ) -> list[dict]:
     """
-    Get Google Ads campaigns for multiple accounts,
-    filtered by naming convention:
-    [zzz.][accountCode]_[adTypeCode]_[Name]
+    Get Google Ads campaigns for multiple accounts based on tenant naming config.
     """
     adtypes = get_adtypes()
-    ad_type_pattern = "|".join(map(re.escape, adtypes.keys()))
+    allowed_adtypes = {str(code).strip().upper() for code in adtypes.keys() if code}
+    allowed_adtypes.add(_UNKNOWN_ADTYPE_CODE)
+    campaign_name_pattern = _compile_naming_pattern("campaign", adtypes)
+    channel_to_adtype = _build_channel_type_to_adtype_map(adtypes)
 
     def per_account_func(account: dict) -> list[dict]:
         campaigns = get_ggad_campaign(account["id"])
-        account_code = account.get("accountCode")
-
-        pattern = re.compile(
-            rf"^(zzz\.)?{re.escape(account_code)}_({ad_type_pattern})_.+",
-            re.IGNORECASE,
-        )
+        account_code = str(account.get("accountCode", "")).strip()
+        account_code_upper = account_code.upper()
 
         filtered: list[dict] = []
 
         for c in campaigns:
-            name = c.get("campaignName", "")
-            match = pattern.match(name)
+            name = str(c.get("campaignName", "")).strip()
+            match = campaign_name_pattern.match(name)
 
             if not match:
                 continue
 
-            if name.lower().startswith("zzz."):
+            if _is_zzz_name(name):
+                continue
+
+            groups = _normalize_named_groups(match)
+            parsed_account_code = str(groups.get("accountCode", "")).strip().upper()
+            if parsed_account_code and parsed_account_code != account_code_upper:
+                continue
+
+            ad_type = str(groups.get("adTypeCode", "")).strip().upper()
+            if not ad_type:
+                channel_type = str(c.get("channelType", "")).strip().upper()
+                ad_type = channel_to_adtype.get(channel_type, _UNKNOWN_ADTYPE_CODE)
+
+            if not ad_type or ad_type not in allowed_adtypes:
                 continue
 
             filtered.append(
@@ -405,7 +595,7 @@ def get_ggad_campaigns(
                     "customerId": account["id"],
                     "accountCode": account_code,
                     "accountName": account.get("accountName"),
-                    "adTypeCode": match.group(2).upper(),
+                    "adTypeCode": ad_type,
                     **c,
                 }
             )

@@ -20,6 +20,7 @@ _REQUIRED_DB_TABLE_KEYS = {
     "ROLLBREAKDOWNS",
     "ACCELERATIONS",
 }
+_GOOGLE_ADS_NAMING_SECTIONS = ("account", "campaign")
 
 
 def _require_env_value(key: str) -> str:
@@ -77,7 +78,77 @@ def get_service_mapping() -> dict:
 
 
 def get_adtypes() -> dict:
-    return _parse_env_value("ADTYPES", dict)
+    parsed = _parse_env_value("ADTYPES", dict)
+
+    has_unknown = any(str(key).strip().upper() == "UNK" for key in parsed.keys())
+    if has_unknown:
+        return parsed
+
+    with_unknown = dict(parsed)
+    with_unknown["UNK"] = {
+        "order": 9999,
+        "adTypeQuery": "UNKNOWN",
+        "fullName": "Unknown",
+        "shortName": "Unknown",
+    }
+    return with_unknown
+
+
+def _validate_google_ads_naming(parsed: dict, key: str = "GOOGLE_ADS_NAMING") -> dict:
+    if not isinstance(parsed, dict):
+        raise TenantConfigValidationError(app_name=APP_NAME, invalid=[key])
+
+    missing: list[str] = []
+    invalid: list[str] = []
+
+    for section in _GOOGLE_ADS_NAMING_SECTIONS:
+        section_key = f"{key}.{section}"
+        section_config = parsed.get(section)
+        if section_config is None:
+            missing.append(section_key)
+            continue
+        if not isinstance(section_config, dict):
+            invalid.append(section_key)
+            continue
+
+        has_format = (
+            isinstance(section_config.get("format"), str)
+            and bool(section_config.get("format", "").strip())
+        )
+        has_regex = (
+            isinstance(section_config.get("regex"), str)
+            and bool(section_config.get("regex", "").strip())
+        )
+        if not has_format and not has_regex:
+            missing.append(f"{section_key}.format|regex")
+
+        if "format" in section_config and not has_format:
+            invalid.append(f"{section_key}.format")
+        if "regex" in section_config and not has_regex:
+            invalid.append(f"{section_key}.regex")
+
+    token_patterns = parsed.get("tokenPatterns")
+    if token_patterns is not None and not isinstance(token_patterns, dict):
+        invalid.append(f"{key}.tokenPatterns")
+    elif isinstance(token_patterns, dict):
+        for token_name, token_pattern in token_patterns.items():
+            token_key = f"{key}.tokenPatterns.{token_name}"
+            if not isinstance(token_pattern, str) or not token_pattern.strip():
+                invalid.append(token_key)
+
+    if missing or invalid:
+        raise TenantConfigValidationError(
+            app_name=APP_NAME,
+            missing=missing,
+            invalid=invalid,
+        )
+
+    return parsed
+
+
+def get_google_ads_naming() -> dict:
+    parsed = _parse_env_value("GOOGLE_ADS_NAMING", dict)
+    return _validate_google_ads_naming(parsed)
 
 
 def get_acceleration_scope_types() -> list[str]:
@@ -239,11 +310,23 @@ def validate_tenant_config(tenant_id: str | None = None) -> None:
             ):
                 missing.append("SPREADSHEET.activePriodSheetName")
 
+        def _check_google_ads_naming() -> None:
+            raw = _check_required("GOOGLE_ADS_NAMING")
+            if raw is None:
+                return
+            try:
+                parsed = _parse_raw_value(raw, "GOOGLE_ADS_NAMING", dict)
+                _validate_google_ads_naming(parsed)
+            except TenantConfigValidationError as exc:
+                missing.extend(exc.missing)
+                invalid.extend(exc.invalid)
+
         _check_json("SERVICE_BUDGETS", list)
         _check_json("SERVICE_MAPPING", dict)
         _check_json("ADTYPES", dict)
         _check_db_tables()
         _check_spreadsheet()
+        _check_google_ads_naming()
 
         if missing or invalid:
             raise TenantConfigValidationError(
