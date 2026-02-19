@@ -8,14 +8,24 @@ import pytz
 
 from shared.constants import GGADS_MIN_BUDGET_DELTA
 from shared.logger import get_logger
-from apps.spendsphere.api.v1.helpers.config import get_service_mapping
+from apps.spendsphere.api.v1.helpers.config import (
+    get_google_ads_inactive_prefixes,
+    get_service_mapping,
+    is_google_ads_inactive_name,
+)
 from shared.tenant import get_timezone
 
 logger = get_logger("Data Transform")
 
 
-def _is_zzz_name(name: str | None) -> bool:
-    return bool(name) and str(name).strip().lower().startswith("zzz.")
+def _is_zzz_name(
+    name: str | None,
+    inactive_prefixes: tuple[str, ...] | None = None,
+) -> bool:
+    return is_google_ads_inactive_name(
+        name,
+        inactive_prefixes=inactive_prefixes,
+    )
 
 # ============================================================
 # 1. MASTER BUDGET → AD TYPE MAPPING
@@ -508,6 +518,7 @@ def apply_budget_accelerations(
 def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
     budget_updates: dict[str, list[dict]] = {}
     campaign_updates: dict[str, dict[str, dict]] = {}
+    inactive_prefixes = get_google_ads_inactive_prefixes()
 
     for row in data:
         customer_id = row["ggAccountId"]
@@ -546,7 +557,10 @@ def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
         zzz_campaigns = [
             c
             for c in campaigns
-            if _is_zzz_name(c.get("campaignName"))
+            if _is_zzz_name(
+                c.get("campaignName"),
+                inactive_prefixes=inactive_prefixes,
+            )
         ]
         all_campaigns_zzz = bool(campaigns) and len(zzz_campaigns) == len(campaigns)
 
@@ -554,7 +568,10 @@ def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
         # Campaign status updates (independent)
         # -------------------------
         for campaign in campaigns:
-            if _is_zzz_name(campaign.get("campaignName")):
+            if _is_zzz_name(
+                campaign.get("campaignName"),
+                inactive_prefixes=inactive_prefixes,
+            ):
                 continue
             if campaign["status"] != expected_status:
                 customer_updates = campaign_updates.setdefault(customer_id, {})

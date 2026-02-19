@@ -169,7 +169,7 @@ class AccelerationPayload(BaseModel):
 
 
 class AccelerationMonthPayload(BaseModel):
-    accountCode: str | list[str]
+    accountCodes: list[str]
     scopeLevel: str
     scopeValue: str = Field(alias="scope_value")
     multiplier: float
@@ -183,7 +183,7 @@ class AccelerationMonthPayload(BaseModel):
         json_schema_extra={
             "examples": [
                 {
-                    "accountCode": ["TAAA", "LACS"],
+                    "accountCodes": [],
                     "scopeLevel": "AD_TYPE",
                     "scope_value": "SEM",
                     "multiplier": 120.0,
@@ -267,6 +267,20 @@ def _resolve_account_codes(
             year=year,
             as_of=as_of,
         )
+        if not resolved_accounts:
+            # Fallback when active-period data is empty/unavailable for the period:
+            # use non-zzz Google Ads accounts so bulk routes remain operable.
+            resolved_accounts = [
+                row
+                for row in validate_account_codes(
+                    None,
+                    include_all=True,
+                    month=month,
+                    year=year,
+                    as_of=as_of,
+                )
+                if not bool(row.get("inactiveByName"))
+            ]
         return [
             str(a.get("code", "")).strip().upper()
             for a in resolved_accounts
@@ -287,7 +301,10 @@ def _resolve_account_codes(
 
 
 def _normalize_and_validate_rows(
-    rows: list[dict], *, enforce_multiplier_min: bool = True
+    rows: list[dict],
+    *,
+    enforce_multiplier_min: bool = True,
+    validate_account_codes_rows: bool = True,
 ) -> list[dict]:
     if not rows:
         raise HTTPException(status_code=400, detail="No accelerations provided")
@@ -381,20 +398,21 @@ def _normalize_and_validate_rows(
     if errors:
         raise HTTPException(status_code=400, detail={"error": "Invalid payload", "items": errors})
 
-    deduped_codes = _normalize_codes(
-        [
-            r.get("accountCode")
-            for r in rows
-            if isinstance(r.get("accountCode"), str)
+    if validate_account_codes_rows:
+        deduped_codes = _normalize_codes(
+            [
+                r.get("accountCode")
+                for r in rows
+                if isinstance(r.get("accountCode"), str)
+            ]
+        )
+        start_dates = [
+            row.get("startDate")
+            for row in rows
+            if isinstance(row.get("startDate"), date)
         ]
-    )
-    start_dates = [
-        row.get("startDate")
-        for row in rows
-        if isinstance(row.get("startDate"), date)
-    ]
-    validation_as_of = min(start_dates) if start_dates else None
-    validate_account_codes(deduped_codes, as_of=validation_as_of)
+        validation_as_of = min(start_dates) if start_dates else None
+        validate_account_codes(deduped_codes, as_of=validation_as_of)
 
     return rows
 
@@ -654,8 +672,10 @@ def delete_accelerations_by_ids(request_payload: AccelerationIdsPayload):
     summary="Create accelerations by month (bulk)",
     description=(
         "Bulk insert accelerations using month/year/dayFront to compute start/end dates. "
-        "accountCode may be a string or a list of strings. "
-        "startDate is always the first day of the month; endDate is startDate + dayFront."
+        "accountCodes may be provided as a list; when accountCodes is an empty list, "
+        "the route resolves all eligible account codes for the month/year. "
+        "startDate is always the first day of the month; endDate counts dayFront "
+        "inclusively from startDate."
     ),
 )
 def create_accelerations_by_month(request_payload: list[AccelerationMonthPayload]):
@@ -664,7 +684,21 @@ def create_accelerations_by_month(request_payload: list[AccelerationMonthPayload
         POST /api/spendsphere/v1/accelerations/by-month
         [
           {
-            "accountCode": ["TAAA", "LACS"],
+            "accountCodes": ["TAAA", "LACS"],
+            "scopeLevel": "AD_TYPE",
+            "scope_value": "SEM",
+            "multiplier": 120.0,
+            "month": 1,
+            "year": 2026,
+            "dayFront": 15
+          }
+        ]
+
+    Example request (resolve all eligible accounts):
+        POST /api/spendsphere/v1/accelerations/by-month
+        [
+          {
+            "accountCodes": [],
             "scopeLevel": "AD_TYPE",
             "scope_value": "SEM",
             "multiplier": 120.0,
@@ -683,7 +717,7 @@ def create_accelerations_by_month(request_payload: list[AccelerationMonthPayload
               "scopeLevel": "AD_TYPE",
               "scopeValue": "SEM",
               "startDate": "2026-01-01",
-              "endDate": "2026-01-16",
+              "endDate": "2026-01-15",
               "multiplier": 120.0
             },
             {
@@ -691,7 +725,7 @@ def create_accelerations_by_month(request_payload: list[AccelerationMonthPayload
               "scopeLevel": "AD_TYPE",
               "scopeValue": "SEM",
               "startDate": "2026-01-01",
-              "endDate": "2026-01-16",
+              "endDate": "2026-01-15",
               "multiplier": 120.0
             }
           ]
@@ -708,26 +742,24 @@ def create_accelerations_by_month(request_payload: list[AccelerationMonthPayload
         year = data.get("year")
         day_front = data.get("dayFront")
         multiplier = data.get("multiplier")
-        raw_account_code = data.get("accountCode")
-        if isinstance(raw_account_code, list):
-            account_codes = [
-                code.strip().upper()
-                for code in raw_account_code
-                if isinstance(code, str) and code.strip()
-            ]
-        elif isinstance(raw_account_code, str):
-            account_codes = [raw_account_code.strip().upper()] if raw_account_code.strip() else []
-        else:
-            account_codes = []
+        raw_account_codes = data.get("accountCodes") or []
+        use_all_accounts = len(raw_account_codes) == 0
+        account_field = "accountCodes"
+        account_input = raw_account_codes
+        account_codes = [
+            code.strip().upper()
+            for code in raw_account_codes
+            if isinstance(code, str) and code.strip()
+        ]
         account_codes = _normalize_codes(account_codes)
 
-        if not account_codes:
+        if not account_codes and not use_all_accounts:
             errors.append(
                 {
                     "index": idx,
-                    "field": "accountCode",
-                    "value": raw_account_code,
-                    "message": "accountCode must be a non-empty string or list of strings",
+                    "field": "accountCodes",
+                    "value": account_input,
+                    "message": "accountCodes must contain non-empty strings",
                 }
             )
             continue
@@ -781,7 +813,37 @@ def create_accelerations_by_month(request_payload: list[AccelerationMonthPayload
             )
             continue
 
-        end_date = start_date + timedelta(days=day_front)
+        try:
+            account_codes = _resolve_account_codes(
+                [] if use_all_accounts else account_codes,
+                month=month,
+                year=year,
+                as_of=start_date,
+            )
+        except HTTPException as exc:
+            errors.append(
+                {
+                    "index": idx,
+                    "field": account_field,
+                    "value": account_input,
+                    "message": "Invalid accountCodes",
+                    "detail": exc.detail,
+                }
+            )
+            continue
+        if not account_codes:
+            errors.append(
+                {
+                    "index": idx,
+                    "field": account_field,
+                    "value": account_input,
+                    "message": "No accountCodes resolved for acceleration creation",
+                }
+            )
+            continue
+
+        end_offset_days = max(day_front - 1, 0)
+        end_date = start_date + timedelta(days=end_offset_days)
 
         scope_type = data.get("scopeLevel")
         scope_value = data.get("scopeValue")
@@ -803,7 +865,7 @@ def create_accelerations_by_month(request_payload: list[AccelerationMonthPayload
     if errors:
         raise HTTPException(status_code=400, detail={"error": "Invalid payload", "items": errors})
 
-    rows = _normalize_and_validate_rows(rows)
+    rows = _normalize_and_validate_rows(rows, validate_account_codes_rows=False)
     _validate_budget_scope_values(rows)
     inserted = insert_accelerations(rows)
     return {
@@ -907,7 +969,7 @@ def create_accelerations_by_month_accounts(
             row["scopeValue"] = code
         rows.append(row)
 
-    rows = _normalize_and_validate_rows(rows)
+    rows = _normalize_and_validate_rows(rows, validate_account_codes_rows=False)
     _validate_budget_scope_values(rows)
     inserted = insert_accelerations(rows)
     return {"inserted": inserted}

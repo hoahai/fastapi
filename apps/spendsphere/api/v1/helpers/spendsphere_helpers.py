@@ -9,6 +9,10 @@ from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 
+from apps.spendsphere.api.v1.helpers.config import (
+    get_google_ads_inactive_prefixes,
+    is_google_ads_inactive_name,
+)
 from shared.file_cache import FileCache, normalize_tenant_key
 from shared.tenant import get_env, get_tenant_id, get_timezone
 from shared.utils import get_current_period
@@ -32,6 +36,16 @@ _ACCOUNT_CODES_SCOPE_ACTIVE = "active"
 _ACCOUNT_CODES_SCOPE_ALL = "all"
 _CACHE_STORES: dict[str, FileCache] = {}
 _CACHE_STORES_LOCK = Lock()
+
+
+def _is_zzz_name(
+    name: str | None,
+    inactive_prefixes: tuple[str, ...] | None = None,
+) -> bool:
+    return is_google_ads_inactive_name(
+        name,
+        inactive_prefixes=inactive_prefixes,
+    )
 
 
 def _normalize_account_codes(account_codes: str | list[str] | None) -> list[str]:
@@ -805,7 +819,12 @@ def _is_google_ads_account_cache(accounts: dict[str, dict]) -> bool:
     return True
 
 
-def _normalize_cached_account_entry(code: str, account: dict) -> dict:
+def _normalize_cached_account_entry(
+    code: str,
+    account: dict,
+    *,
+    inactive_prefixes: tuple[str, ...] | None = None,
+) -> dict:
     normalized_code = str(
         account.get("code") or account.get("accountCode") or code
     ).strip().upper()
@@ -818,7 +837,10 @@ def _normalize_cached_account_entry(code: str, account: dict) -> dict:
     ).strip()
     inactive_by_name = bool(account.get("inactiveByName"))
     if not inactive_by_name and descriptive_name:
-        inactive_by_name = descriptive_name.lower().startswith("zzz.")
+        inactive_by_name = _is_zzz_name(
+            descriptive_name,
+            inactive_prefixes=inactive_prefixes,
+        )
 
     normalized = dict(account)
     normalized["code"] = normalized_code
@@ -906,7 +928,7 @@ def validate_account_codes(
 
     Rules:
     - Codes must be parseable from Google Ads account naming.
-    - `zzz.` account names are treated as inactive.
+    - Names with configured GOOGLE_ADS_NAMING.inactivePrefixes are treated as inactive.
     - Active period sheet determines timeline activity by date.
     """
     requested_codes = _normalize_account_codes(account_codes)
@@ -958,6 +980,7 @@ def validate_account_codes(
         source_accounts = tenant_accounts_all
 
     normalized_source_accounts: dict[str, dict] = {}
+    inactive_prefixes = get_google_ads_inactive_prefixes()
     for code, account in source_accounts.items():
         if not isinstance(account, dict):
             continue
@@ -967,6 +990,7 @@ def validate_account_codes(
         normalized_source_accounts[normalized_code] = _normalize_cached_account_entry(
             normalized_code,
             account,
+            inactive_prefixes=inactive_prefixes,
         )
 
     explicit_request = bool(requested_codes)
@@ -1012,7 +1036,9 @@ def validate_account_codes(
             as_of=as_of_date,
         )
         inactive_by_period = [
-            code for code in period_candidates if not statuses.get(code, False)
+            code
+            for code in period_candidates
+            if code in statuses and not bool(statuses.get(code))
         ]
 
     if explicit_request and (missing or inactive_by_name or inactive_by_period):

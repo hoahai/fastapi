@@ -20,6 +20,8 @@ _REQUIRED_DB_TABLE_KEYS = {
     "ACCELERATIONS",
 }
 _GOOGLE_ADS_NAMING_SECTIONS = ("account", "campaign")
+_GOOGLE_ADS_ACCOUNT_OVERRIDE_SCOPES = ("byId", "byName")
+_DEFAULT_GOOGLE_ADS_INACTIVE_PREFIXES = ("zzz.",)
 
 
 def _require_env_value(key: str) -> str:
@@ -135,6 +137,47 @@ def _validate_google_ads_naming(parsed: dict, key: str = "GOOGLE_ADS_NAMING") ->
             if not isinstance(token_pattern, str) or not token_pattern.strip():
                 invalid.append(token_key)
 
+    inactive_prefixes = parsed.get("inactivePrefixes")
+    if inactive_prefixes is not None and not isinstance(inactive_prefixes, list):
+        invalid.append(f"{key}.inactivePrefixes")
+    elif isinstance(inactive_prefixes, list):
+        for idx, prefix in enumerate(inactive_prefixes):
+            prefix_key = f"{key}.inactivePrefixes[{idx}]"
+            if not isinstance(prefix, str) or not prefix.strip():
+                invalid.append(prefix_key)
+
+    account_overrides = parsed.get("accountOverrides")
+    if account_overrides is not None and not isinstance(account_overrides, dict):
+        invalid.append(f"{key}.accountOverrides")
+    elif isinstance(account_overrides, dict):
+        for scope in _GOOGLE_ADS_ACCOUNT_OVERRIDE_SCOPES:
+            scoped_overrides = account_overrides.get(scope)
+            if scoped_overrides is None:
+                continue
+            if not isinstance(scoped_overrides, dict):
+                invalid.append(f"{key}.accountOverrides.{scope}")
+                continue
+
+            for matcher, override in scoped_overrides.items():
+                matcher_value = str(matcher).strip()
+                matcher_key = f"{key}.accountOverrides.{scope}.{matcher}"
+                if not matcher_value:
+                    invalid.append(matcher_key)
+                    continue
+                if not isinstance(override, dict):
+                    invalid.append(matcher_key)
+                    continue
+
+                account_code = override.get("accountCode")
+                if not isinstance(account_code, str) or not account_code.strip():
+                    missing.append(f"{matcher_key}.accountCode")
+
+                account_name = override.get("accountName")
+                if account_name is not None and (
+                    not isinstance(account_name, str) or not account_name.strip()
+                ):
+                    invalid.append(f"{matcher_key}.accountName")
+
     if missing or invalid:
         raise TenantConfigValidationError(
             app_name=APP_NAME,
@@ -148,6 +191,40 @@ def _validate_google_ads_naming(parsed: dict, key: str = "GOOGLE_ADS_NAMING") ->
 def get_google_ads_naming() -> dict:
     parsed = _parse_env_value("GOOGLE_ADS_NAMING", dict)
     return _validate_google_ads_naming(parsed)
+
+
+def get_google_ads_inactive_prefixes(
+    naming: dict | None = None,
+) -> tuple[str, ...]:
+    naming = naming if isinstance(naming, dict) else get_google_ads_naming()
+    raw_prefixes = naming.get("inactivePrefixes")
+    if not isinstance(raw_prefixes, list):
+        return _DEFAULT_GOOGLE_ADS_INACTIVE_PREFIXES
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for raw_prefix in raw_prefixes:
+        if not isinstance(raw_prefix, str):
+            continue
+        prefix = raw_prefix.strip().lower()
+        if not prefix or prefix in seen:
+            continue
+        seen.add(prefix)
+        normalized.append(prefix)
+
+    return tuple(normalized) if normalized else _DEFAULT_GOOGLE_ADS_INACTIVE_PREFIXES
+
+
+def is_google_ads_inactive_name(
+    name: str | None,
+    *,
+    inactive_prefixes: tuple[str, ...] | None = None,
+) -> bool:
+    if not name:
+        return False
+    normalized_name = str(name).strip().lower()
+    prefixes = inactive_prefixes or get_google_ads_inactive_prefixes()
+    return any(normalized_name.startswith(prefix) for prefix in prefixes)
 
 
 def get_acceleration_scope_types() -> list[str]:

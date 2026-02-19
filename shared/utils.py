@@ -425,18 +425,70 @@ def load_env() -> None:
             return
 
 
-def resolve_secret_path(env_var: str, filename: str) -> str:
-    env_value = get_env(env_var)
-    if env_value and Path(env_value).is_file():
-        return env_value
+def _resolve_secret_candidate(raw_path: str) -> str | None:
+    candidate = Path(raw_path)
+    if candidate.is_file():
+        return str(candidate)
+
+    if candidate.is_absolute():
+        return None
+
+    candidate_str = str(candidate)
+    for base in (LOCAL_ETC_DIR.parent, LOCAL_ETC_DIR, LOCAL_SECRETS_DIR):
+        alt = base / candidate_str
+        if alt.is_file():
+            return str(alt)
+
+    if candidate_str.startswith("etc/"):
+        stripped = candidate_str[len("etc/") :]
+        alt = LOCAL_ETC_DIR / stripped
+        if alt.is_file():
+            return str(alt)
+    if candidate_str.startswith("secrets/"):
+        alt = LOCAL_ETC_DIR / candidate_str
+        if alt.is_file():
+            return str(alt)
+
+    abs_candidate = Path("/") / candidate
+    if abs_candidate.is_file():
+        return str(abs_candidate)
+
+    for base in (Path("/etc/secrets"), LOCAL_SECRETS_DIR):
+        alt = base / candidate_str
+        if alt.is_file():
+            return str(alt)
+
+    return None
+
+
+def resolve_secret_path(
+    env_var: str,
+    filename: str,
+    *,
+    fallback_env_vars: tuple[str, ...] = (),
+) -> str:
+    checked_env: list[tuple[str, str]] = []
+    for key in (env_var, *fallback_env_vars):
+        env_value = get_env(key)
+        if not env_value:
+            continue
+        checked_env.append((key, str(env_value)))
+        resolved = _resolve_secret_candidate(str(env_value))
+        if resolved:
+            return resolved
 
     for base in (Path("/etc/secrets"), LOCAL_SECRETS_DIR):
         candidate = base / filename
         if candidate.is_file():
             return str(candidate)
 
-    if env_value:
-        return env_value
+    if checked_env:
+        tried = ", ".join(f"{k}={v}" for k, v in checked_env)
+        raise RuntimeError(
+            f"Secret file not found for {env_var}. "
+            f"Checked env values: {tried}. "
+            f"Tried {filename} in /etc/secrets and etc/secrets."
+        )
 
     raise RuntimeError(
         f"Secret file not found for {env_var}. "

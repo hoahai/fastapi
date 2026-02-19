@@ -25,7 +25,12 @@ from shared.constants import (
     GGADS_ALLOWED_CAMPAIGN_STATUSES,
 )
 from shared.logger import get_logger
-from apps.spendsphere.api.v1.helpers.config import get_adtypes, get_google_ads_naming
+from apps.spendsphere.api.v1.helpers.config import (
+    get_adtypes,
+    get_google_ads_inactive_prefixes,
+    get_google_ads_naming,
+    is_google_ads_inactive_name,
+)
 from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
     get_google_ads_budgets_cache_entries,
     get_google_ads_campaigns_cache_entries,
@@ -46,8 +51,14 @@ def _chunked(items: list[dict], size: int):
         yield items[i : i + size]
 
 
-def _is_zzz_name(name: str | None) -> bool:
-    return bool(name) and str(name).strip().lower().startswith("zzz.")
+def _is_zzz_name(
+    name: str | None,
+    inactive_prefixes: tuple[str, ...] | None = None,
+) -> bool:
+    return is_google_ads_inactive_name(
+        name,
+        inactive_prefixes=inactive_prefixes,
+    )
 
 
 _DEFAULT_NAMING_TOKEN_PATTERNS = {
@@ -346,6 +357,168 @@ def _normalize_account_code_token(value: object) -> str | None:
     return cleaned or None
 
 
+def _normalize_account_name_token(value: object) -> str | None:
+    cleaned = str(value).strip()
+    return cleaned or None
+
+
+def _get_google_ads_account_overrides() -> tuple[dict[str, dict], dict[str, dict]]:
+    naming = get_google_ads_naming()
+    raw_overrides = naming.get("accountOverrides")
+    if not isinstance(raw_overrides, dict):
+        return {}, {}
+
+    def _normalize_override_entry(raw_entry: object) -> dict | None:
+        if not isinstance(raw_entry, dict):
+            return None
+
+        account_code = _normalize_account_code_token(raw_entry.get("accountCode"))
+        if not account_code:
+            return None
+
+        normalized: dict[str, str] = {"accountCode": account_code}
+        account_name = _normalize_account_name_token(raw_entry.get("accountName"))
+        if account_name:
+            normalized["accountName"] = account_name
+        return normalized
+
+    by_id: dict[str, dict] = {}
+    raw_by_id = raw_overrides.get("byId")
+    if isinstance(raw_by_id, dict):
+        for raw_key, raw_entry in raw_by_id.items():
+            key = str(raw_key).strip()
+            normalized_entry = _normalize_override_entry(raw_entry)
+            if key and normalized_entry:
+                by_id[key] = normalized_entry
+
+    by_name: dict[str, dict] = {}
+    raw_by_name = raw_overrides.get("byName")
+    if isinstance(raw_by_name, dict):
+        for raw_key, raw_entry in raw_by_name.items():
+            key = str(raw_key).strip().casefold()
+            normalized_entry = _normalize_override_entry(raw_entry)
+            if key and normalized_entry:
+                by_name[key] = normalized_entry
+
+    return by_id, by_name
+
+
+def _resolve_account_override(
+    *,
+    account_id: object,
+    descriptive_name: str,
+    by_id: dict[str, dict],
+    by_name: dict[str, dict],
+) -> dict | None:
+    account_id_key = str(account_id).strip()
+    if account_id_key:
+        matched_by_id = by_id.get(account_id_key)
+        if isinstance(matched_by_id, dict):
+            return matched_by_id
+
+    if descriptive_name:
+        matched_by_name = by_name.get(descriptive_name.casefold())
+        if isinstance(matched_by_name, dict):
+            return matched_by_name
+
+    return None
+
+
+def _parse_single_google_ads_account(
+    *,
+    account: dict,
+    account_name_pattern: re.Pattern,
+    overrides_by_id: dict[str, dict],
+    overrides_by_name: dict[str, dict],
+    inactive_prefixes: tuple[str, ...],
+) -> tuple[dict | None, dict | None]:
+    descriptive_name = str(account.get("name", "")).strip()
+    account_id = account.get("id")
+    if not descriptive_name:
+        return None, {
+            "id": account_id,
+            "descriptiveName": account.get("name"),
+            "reason": "missing_descriptive_name",
+        }
+
+    override = _resolve_account_override(
+        account_id=account_id,
+        descriptive_name=descriptive_name,
+        by_id=overrides_by_id,
+        by_name=overrides_by_name,
+    )
+    if override is not None:
+        account_code = _normalize_account_code_token(override.get("accountCode"))
+        if not account_code:
+            return None, {
+                "id": account_id,
+                "descriptiveName": descriptive_name,
+                "reason": "account_override_code_not_extractable",
+                "accountCode": override.get("accountCode"),
+            }
+
+        account_name = (
+            _normalize_account_name_token(override.get("accountName")) or descriptive_name
+        )
+        inactive_by_name = _is_zzz_name(
+            descriptive_name,
+            inactive_prefixes=inactive_prefixes,
+        )
+        normalized_name = account_name or account_code
+
+        return {
+            "id": account_id,
+            "descriptiveName": descriptive_name,
+            "accountCode": account_code,
+            "accountName": normalized_name,
+            "code": account_code,
+            "name": normalized_name,
+            "inactiveByName": inactive_by_name,
+            "source": "google_ads_override",
+        }, None
+
+    match = account_name_pattern.match(descriptive_name)
+    if not match:
+        return None, {
+            "id": account_id,
+            "descriptiveName": descriptive_name,
+            "reason": "invalid_name_format",
+        }
+
+    groups = _normalize_named_groups(match)
+    raw_account_code = groups.get("accountCode")
+    account_code = _normalize_account_code_token(raw_account_code)
+    if not account_code:
+        return None, {
+            "id": account_id,
+            "descriptiveName": descriptive_name,
+            "reason": "account_code_not_extractable",
+            "accountCode": raw_account_code,
+        }
+
+    account_name = (
+        groups.get("accountName")
+        or groups.get("campaignName")
+        or descriptive_name
+    )
+    inactive_by_name = _is_zzz_name(
+        descriptive_name,
+        inactive_prefixes=inactive_prefixes,
+    )
+    normalized_name = str(account_name).strip() or account_code
+
+    return {
+        "id": account_id,
+        "descriptiveName": descriptive_name,
+        "accountCode": account_code,
+        "accountName": normalized_name,
+        "code": account_code,
+        "name": normalized_name,
+        "inactiveByName": inactive_by_name,
+        "source": "google_ads",
+    }, None
+
+
 def _dedupe_accounts_by_code(accounts: list[dict]) -> list[dict]:
     deduped: dict[str, dict] = {}
     order: list[str] = []
@@ -361,7 +534,7 @@ def _dedupe_accounts_by_code(accounts: list[dict]) -> list[dict]:
             order.append(code)
             continue
 
-        # Prefer active-by-name entries over zzz.-prefixed entries.
+        # Prefer active-by-name entries over configured inactive-prefix entries.
         if bool(existing.get("inactiveByName")) and not bool(
             account.get("inactiveByName")
         ):
@@ -372,41 +545,22 @@ def _dedupe_accounts_by_code(accounts: list[dict]) -> list[dict]:
 
 def _parse_named_google_ads_accounts(raw_accounts: list[dict]) -> list[dict]:
     account_name_pattern = _compile_naming_pattern("account", get_adtypes())
+    overrides_by_id, overrides_by_name = _get_google_ads_account_overrides()
+    inactive_prefixes = get_google_ads_inactive_prefixes()
     parsed: list[dict] = []
 
     for acc in raw_accounts:
-        descriptive_name = str(acc.get("name", "")).strip()
-        if not descriptive_name:
-            continue
-
-        match = account_name_pattern.match(descriptive_name)
-        if not match:
-            continue
-
-        groups = _normalize_named_groups(match)
-        account_code = _normalize_account_code_token(groups.get("accountCode"))
-        if not account_code:
-            continue
-
-        account_name = (
-            groups.get("accountName")
-            or groups.get("campaignName")
-            or descriptive_name
+        parsed_entry, _ = _parse_single_google_ads_account(
+            account=acc,
+            account_name_pattern=account_name_pattern,
+            overrides_by_id=overrides_by_id,
+            overrides_by_name=overrides_by_name,
+            inactive_prefixes=inactive_prefixes,
         )
-        inactive_by_name = _is_zzz_name(descriptive_name)
+        if parsed_entry is None:
+            continue
 
-        parsed.append(
-            {
-                "id": acc.get("id"),
-                "descriptiveName": descriptive_name,
-                "accountCode": account_code,
-                "accountName": str(account_name).strip() or account_code,
-                "code": account_code,
-                "name": str(account_name).strip() or account_code,
-                "inactiveByName": inactive_by_name,
-                "source": "google_ads",
-            }
-        )
+        parsed.append(parsed_entry)
 
     return _dedupe_accounts_by_code(parsed)
 
@@ -415,67 +569,24 @@ def _parse_named_google_ads_accounts_with_failures(
     raw_accounts: list[dict],
 ) -> tuple[list[dict], list[dict]]:
     account_name_pattern = _compile_naming_pattern("account", get_adtypes())
+    overrides_by_id, overrides_by_name = _get_google_ads_account_overrides()
+    inactive_prefixes = get_google_ads_inactive_prefixes()
     parsed: list[dict] = []
     failed: list[dict] = []
 
     for acc in raw_accounts:
-        descriptive_name = str(acc.get("name", "")).strip()
-        account_id = acc.get("id")
-        if not descriptive_name:
-            failed.append(
-                {
-                    "id": account_id,
-                    "descriptiveName": acc.get("name"),
-                    "reason": "missing_descriptive_name",
-                }
-            )
-            continue
-
-        match = account_name_pattern.match(descriptive_name)
-        if not match:
-            failed.append(
-                {
-                    "id": account_id,
-                    "descriptiveName": descriptive_name,
-                    "reason": "invalid_name_format",
-                }
-            )
-            continue
-
-        groups = _normalize_named_groups(match)
-        raw_account_code = groups.get("accountCode")
-        account_code = _normalize_account_code_token(raw_account_code)
-        if not account_code:
-            failed.append(
-                {
-                    "id": account_id,
-                    "descriptiveName": descriptive_name,
-                    "reason": "account_code_not_extractable",
-                    "accountCode": raw_account_code,
-                }
-            )
-            continue
-
-        account_name = (
-            groups.get("accountName")
-            or groups.get("campaignName")
-            or descriptive_name
+        parsed_entry, failure_entry = _parse_single_google_ads_account(
+            account=acc,
+            account_name_pattern=account_name_pattern,
+            overrides_by_id=overrides_by_id,
+            overrides_by_name=overrides_by_name,
+            inactive_prefixes=inactive_prefixes,
         )
-        inactive_by_name = _is_zzz_name(descriptive_name)
-        normalized_name = str(account_name).strip() or account_code
-
-        parsed.append(
-            {
-                "id": account_id,
-                "descriptiveName": descriptive_name,
-                "accountCode": account_code,
-                "accountName": normalized_name,
-                "code": account_code,
-                "name": normalized_name,
-                "inactiveByName": inactive_by_name,
-                "source": "google_ads",
-            }
-        )
+        if parsed_entry is not None:
+            parsed.append(parsed_entry)
+            continue
+        if failure_entry is not None:
+            failed.append(failure_entry)
 
     return _dedupe_accounts_by_code(parsed), failed
 
@@ -724,6 +835,7 @@ def get_ggad_campaigns(
     allowed_adtypes.add(_UNKNOWN_ADTYPE_CODE)
     campaign_name_pattern = _compile_naming_pattern("campaign", adtypes)
     channel_to_adtype = _build_channel_type_to_adtype_map(adtypes)
+    inactive_prefixes = get_google_ads_inactive_prefixes()
 
     def per_account_func(account: dict) -> list[dict]:
         campaigns = get_ggad_campaign(account["id"])
@@ -739,7 +851,7 @@ def get_ggad_campaigns(
             if not match:
                 continue
 
-            if _is_zzz_name(name):
+            if _is_zzz_name(name, inactive_prefixes=inactive_prefixes):
                 continue
 
             groups = _normalize_named_groups(match)
@@ -936,10 +1048,14 @@ def validate_updates(
     if mode == "campaign_status":
         seen_ids = set()
         paused_count = 0
+        inactive_prefixes = get_google_ads_inactive_prefixes()
 
         for r in updates:
             try:
-                if _is_zzz_name(r.get("campaignName")):
+                if _is_zzz_name(
+                    r.get("campaignName"),
+                    inactive_prefixes=inactive_prefixes,
+                ):
                     continue
                 if "campaignId" not in r:
                     raise ValueError("Missing campaignId")
@@ -1192,10 +1308,14 @@ def update_campaign_statuses(
             { campaignId, status }
         ]
     """
+    inactive_prefixes = get_google_ads_inactive_prefixes()
     filtered_updates = [
         u
         for u in updates
-        if not _is_zzz_name(u.get("campaignName"))
+        if not _is_zzz_name(
+            u.get("campaignName"),
+            inactive_prefixes=inactive_prefixes,
+        )
     ]
     if not filtered_updates:
         account_code = next(

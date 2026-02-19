@@ -200,8 +200,8 @@ Documentation rules:
 -   A valid accountCode must satisfy:
     1.  Parsed from Google Ads `descriptive_name` via
         `GOOGLE_ADS_NAMING.account` format/regex.
-    2.  Account name must not be `zzz.`-prefixed (those are inactive by
-        name).
+    2.  Account name must not start with any
+        `GOOGLE_ADS_NAMING.inactivePrefixes` value (defaults to `zzz.`).
     3.  `get_active_period` must mark the account active for the target
         date.
 -   Active-period behavior:
@@ -238,11 +238,13 @@ Documentation rules:
     -   `expected_status` is `PAUSED` when account is inactive.
     -   `expected_status` is `ENABLED` when active and `dailyBudget >=
         0.01`; otherwise `PAUSED`.
-    -   Campaigns with names prefixed by `zzz.` are never status-updated.
+    -   Campaigns with names prefixed by any
+        `GOOGLE_ADS_NAMING.inactivePrefixes` value are never status-updated.
     -   Campaign is updated only when current status differs from
         `expected_status`.
 -   Budget amount update rule (stricter than campaign status):
-    -   Skip if all campaigns under that budget are `zzz.`.
+    -   Skip if all campaigns under that budget match
+        `GOOGLE_ADS_NAMING.inactivePrefixes`.
     -   Skip if `dailyBudget` is missing.
     -   Skip if current Google budget amount is missing.
     -   Compute target amount:

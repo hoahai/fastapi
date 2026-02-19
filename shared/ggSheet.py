@@ -23,6 +23,7 @@ def _get_sheets_service():
     cred_path = resolve_secret_path(
         "GOOGLE_APPLICATION_CREDENTIALS",
         "service-account.json",
+        fallback_env_vars=("json_key_file_path",),
     )
 
     credentials = service_account.Credentials.from_service_account_file(
