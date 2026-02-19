@@ -411,6 +411,75 @@ def _parse_named_google_ads_accounts(raw_accounts: list[dict]) -> list[dict]:
     return _dedupe_accounts_by_code(parsed)
 
 
+def _parse_named_google_ads_accounts_with_failures(
+    raw_accounts: list[dict],
+) -> tuple[list[dict], list[dict]]:
+    account_name_pattern = _compile_naming_pattern("account", get_adtypes())
+    parsed: list[dict] = []
+    failed: list[dict] = []
+
+    for acc in raw_accounts:
+        descriptive_name = str(acc.get("name", "")).strip()
+        account_id = acc.get("id")
+        if not descriptive_name:
+            failed.append(
+                {
+                    "id": account_id,
+                    "descriptiveName": acc.get("name"),
+                    "reason": "missing_descriptive_name",
+                }
+            )
+            continue
+
+        match = account_name_pattern.match(descriptive_name)
+        if not match:
+            failed.append(
+                {
+                    "id": account_id,
+                    "descriptiveName": descriptive_name,
+                    "reason": "invalid_name_format",
+                }
+            )
+            continue
+
+        groups = _normalize_named_groups(match)
+        raw_account_code = groups.get("accountCode")
+        account_code = _normalize_account_code_token(raw_account_code)
+        if not account_code:
+            failed.append(
+                {
+                    "id": account_id,
+                    "descriptiveName": descriptive_name,
+                    "reason": "account_code_not_extractable",
+                    "accountCode": raw_account_code,
+                }
+            )
+            continue
+
+        account_name = (
+            groups.get("accountName")
+            or groups.get("campaignName")
+            or descriptive_name
+        )
+        inactive_by_name = _is_zzz_name(descriptive_name)
+        normalized_name = str(account_name).strip() or account_code
+
+        parsed.append(
+            {
+                "id": account_id,
+                "descriptiveName": descriptive_name,
+                "accountCode": account_code,
+                "accountName": normalized_name,
+                "code": account_code,
+                "name": normalized_name,
+                "inactiveByName": inactive_by_name,
+                "source": "google_ads",
+            }
+        )
+
+    return _dedupe_accounts_by_code(parsed), failed
+
+
 def get_ggad_accounts_for_validation(*, refresh_cache: bool = False) -> list[dict]:
     del refresh_cache  # Reserved for parity with other cacheable helpers.
     raw_accounts = get_mcc_accounts()
@@ -446,6 +515,47 @@ def get_ggad_accounts(*, refresh_cache: bool = False) -> list[dict]:
 
     set_google_ads_clients_cache(results)
     return results
+
+
+def get_ggad_accounts_with_summary(*, refresh_cache: bool = False) -> dict:
+    del refresh_cache  # Summary needs live evaluation to include failed accounts.
+    raw_accounts = get_mcc_accounts()
+    if not raw_accounts:
+        set_google_ads_clients_cache([])
+        return {
+            "summary": {
+                "total": 0,
+                "valid": 0,
+                "invalid": 0,
+            },
+            "validAccounts": [],
+            "invalidAccounts": [],
+        }
+
+    parsed_accounts, failed_accounts = _parse_named_google_ads_accounts_with_failures(
+        raw_accounts
+    )
+    clients = [
+        {
+            "id": account.get("id"),
+            "descriptiveName": account.get("descriptiveName"),
+            "accountCode": account.get("accountCode"),
+            "accountName": account.get("accountName"),
+        }
+        for account in parsed_accounts
+        if not bool(account.get("inactiveByName"))
+    ]
+    set_google_ads_clients_cache(clients)
+
+    return {
+        "summary": {
+            "total": len(raw_accounts),
+            "valid": len(clients),
+            "invalid": len(failed_accounts),
+        },
+        "validAccounts": clients,
+        "invalidAccounts": failed_accounts,
+    }
 
 
 # =====================

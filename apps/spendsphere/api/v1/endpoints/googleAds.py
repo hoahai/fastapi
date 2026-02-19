@@ -1,6 +1,9 @@
 from fastapi import APIRouter, Query
 
-from apps.spendsphere.api.v1.helpers.ggAd import get_ggad_accounts
+from apps.spendsphere.api.v1.helpers.ggAd import (
+    get_ggad_accounts,
+    get_ggad_accounts_with_summary,
+)
 
 router = APIRouter()
 
@@ -30,16 +33,36 @@ def get_google_ads_clients_route(
         Header: X-Tenant-Id: acme
 
     Example response:
-        [
-          {
-            "id": "6563107233",
-            "descriptiveName": "AUC_Autocity Credit",
-            "accountCode": "AUC",
-            "accountName": "Autocity Credit"
-          }
-        ]
+        {
+          "summary": {
+            "total": 3,
+            "valid": 1,
+            "invalid": 2
+          },
+          "validAccounts": [
+            {
+              "id": "6563107233",
+              "descriptiveName": "AUC_Autocity Credit",
+              "accountCode": "AUC",
+              "accountName": "Autocity Credit"
+            }
+          ],
+          "invalidAccounts": [
+            {
+              "id": "1234567890",
+              "descriptiveName": "Legacy Account",
+              "reason": "invalid_name_format"
+            },
+            {
+              "id": "9999999999",
+              "descriptiveName": "NoCode_Account",
+              "reason": "account_code_not_extractable",
+              "accountCode": null
+            }
+          ]
+        }
     """
-    return get_ggad_accounts(refresh_cache=refresh_cache)
+    return get_ggad_accounts_with_summary(refresh_cache=refresh_cache)
 
 
 @router.post(

@@ -1,0 +1,539 @@
+# AGENTS.md
+
+## Overview
+
+-   This repo is a multi-tenant FastAPI service with two apps:
+    **SpendSphere** and **Shiftzy**.
+-   The root app mounts both under `/api` and applies shared middleware
+    (auth, tenant, logging).
+-   The system is strictly tenant-isolated and must maintain
+    architectural consistency across apps.
+
+------------------------------------------------------------------------
+
+## Architecture
+
+### Entrypoints
+
+-   `main.py` is the root FastAPI app and mounts app-specific sub-apps.
+-   `apps/spendsphere/api/main.py` bootstraps SpendSphere (v1 + v2).
+-   `apps/shiftzy/api/main.py` bootstraps Shiftzy (v1).
+
+### Example Full Routes
+
+-   SpendSphere v1: `/api/spendsphere/v1/...`
+-   SpendSphere v2: `/api/spendsphere/v2/...`
+-   Shiftzy v1: `/api/shiftzy/v1/...`
+
+------------------------------------------------------------------------
+
+## Middleware
+
+### Middleware Order (Root App)
+
+1.  `tenant_context_middleware`
+2.  `request_response_logger_middleware`
+3.  `api_key_auth_middleware`
+4.  `timing_middleware`
+
+-   App-level `response_envelope_middleware` runs inside each sub-app
+    stack (SpendSphere/Shiftzy).
+
+### Response Envelope Format
+
+Successful response:
+
+``` json
+{
+  "meta": { "...": "..." },
+  "data": { "...": "..." }
+}
+```
+
+Error response:
+
+``` json
+{
+  "meta": { "...": "..." },
+  "error": {
+    "message": "...",
+    "detail": "...",
+    "code": "OPTIONAL"
+  }
+}
+```
+
+All endpoints must respect this structure.
+
+------------------------------------------------------------------------
+
+## Environment
+
+-   `shared/utils.load_env` loads `/etc/.env` first, then `etc/.env`.
+-   API key auth reads `API_KEY_REGISTRY` and accepts:
+    -   `X-API-Key`
+    -   `Authorization: Bearer ...`
+-   MySQL settings come from:
+    -   `DB_HOST`
+    -   `DB_PORT`
+    -   `DB_USER`
+    -   `DB_PASSWORD`
+    -   `DB_NAME`
+
+Do not introduce new environment loading mechanisms.
+
+------------------------------------------------------------------------
+
+## Tenancy
+
+-   Every API request must include `X-Tenant-Id`.
+-   Tenant configs live in:
+    -   `/etc/secrets/<tenant>.yaml`
+    -   `etc/secrets/<tenant>.yaml`
+-   Tenant configs may `include` other YAML files.
+-   The root app recognizes legacy prefixes like `/spendsphere/api` for
+    tenant validation and API key checks.
+
+### Tenant Config Requirements
+
+**SpendSphere requires:** - `SERVICE_BUDGETS` - `SERVICE_MAPPING` -
+`ADTYPES` - `DB_TABLES` - `SPREADSHEET` - `GOOGLE_ADS_NAMING`
+
+**Shiftzy requires:** - `START_WEEK_NO` - `START_DATE` (must be
+Monday) - `WEEK_BEFORE` - `WEEK_AFTER` - `POSITION_AREAS_ENUM` -
+`SCHEDULE_SECTIONS_ENUM` - `DB_TABLES` - `PDF` (optional)
+
+------------------------------------------------------------------------
+
+## Route Documentation Requirements (Mandatory)
+
+All API route functions must include a clear and structured docstring.
+
+Every route must include:
+
+1.  A short description (1--2 sentences)
+2.  Example request(s)
+3.  Example response
+4.  Requirements or notes (if applicable)
+
+Required format:
+
+``` python
+"""
+Short description of what this endpoint does.
+
+Example request:
+    GET /api/spendsphere/v1/allocations?accountCodes=TAAA&accountCodes=TBBB
+
+Example request (specific period):
+    GET /api/spendsphere/v1/allocations?accountCodes=TAAA&accountCodes=TBBB&month=1&year=2026
+
+Example response:
+    [
+      {
+        "id": 1,
+        "accountCode": "TAAA",
+        "ggBudgetId": "15264548297",
+        "allocation": 60.0
+      }
+    ]
+
+Requirements:
+    - Requires X-Tenant-Id header
+    - Requires valid API key
+    - month/year must be provided together
+    - Unknown query params are rejected (400)
+"""
+```
+
+Documentation rules:
+
+-   Examples must use realistic values.
+-   Responses must reflect the actual response shape.
+-   If the endpoint uses the standard response envelope, examples must
+    include it.
+-   If optional parameters exist, include at least one example using
+    them.
+-   If validation rules exist, document them under "Requirements".
+-   When modifying route behavior, update its docstring examples.
+-   Undocumented routes are not production-ready.
+
+------------------------------------------------------------------------
+
+## Multi-Tenant Safety Rules (Mandatory)
+
+-   Never cache data across tenants without scoping by tenant ID.
+-   Never access tenant config without validating `X-Tenant-Id`.
+-   All DB queries must be tenant-scoped (when applicable).
+-   Never store tenant-specific state in global variables.
+-   Never introduce cross-tenant shared caches without explicit tenant
+    keys.
+
+------------------------------------------------------------------------
+
+## App-Specific Notes
+
+### SpendSphere
+
+-   Routes live under:
+    -   `apps/spendsphere/api/v1/router.py`
+    -   `apps/spendsphere/api/v2/router.py`
+-   Cache file `caches.json` holds SpendSphere cache data.
+-   TTL and refresh rules are documented in `CACHE.md`.
+-   File-based caching may not be safe for multi-instance deployments
+    unless shared storage is mounted.
+
+### SpendSphere AccountCode Validation (Current)
+
+-   Shared validator location:
+    -   `apps/spendsphere/api/v1/helpers/spendsphere_helpers.py`
+    -   `validate_account_codes(...)`
+    -   `require_account_code(...)`
+    -   `normalize_account_codes(...)`
+-   Source of truth is **Google Ads accounts/clients**, not DB
+    `accounts` table.
+-   Validation uses tenant-scoped cache in `caches.json` first
+    (`account_codes` key), then refreshes from Google Ads when:
+    -   cache is missing/stale
+    -   requested code is not present
+    -   legacy/non-Google-Ads cache format is detected
+-   A valid accountCode must satisfy:
+    1.  Parsed from Google Ads `descriptive_name` via
+        `GOOGLE_ADS_NAMING.account` format/regex.
+    2.  Account name must not be `zzz.`-prefixed (those are inactive by
+        name).
+    3.  `get_active_period` must mark the account active for the target
+        date.
+-   Active-period behavior:
+    -   default: evaluate with today in tenant timezone
+    -   when `month` and `year` are supplied: evaluate using
+        period-aware `as_of` date logic
+    -   optional explicit `as_of` may be passed by callers
+-   `include_all=False` (default):
+    -   explicit inactive/invalid requested codes return 400 with detail
+        (`invalid_codes`, `inactive_by_name`, `inactive_by_period`,
+        `valid_codes`, `active_codes`)
+    -   when no codes are explicitly requested, returns active accounts
+        only
+-   `include_all=True` allows inactive-by-name/period entries to pass
+    validation lookup (for inspection-style endpoints).
+-   `refresh_account_codes_cache(include_all=False)` now stores accounts
+    active by both naming and active-period rules; `include_all=True`
+    stores all parsed Google Ads accounts.
+-   `DB_TABLES.ACCOUNTS` is optional for SpendSphere account-code
+    validation and update flows.
+-   `/allocations/duplicate` must not rely on DB `accounts.active`; it
+    filters by Google Ads + active-period account activity for the
+    target period.
+
+### SpendSphere Google Ads Update Rules (Current)
+
+-   Applies to:
+    -   `POST /api/spendsphere/v1/updates/budget`
+    -   `POST /api/spendsphere/v1/updates/budgetAsync`
+-   Pipeline builds update rows from:
+    -   master budgets + campaigns + Google budgets + spend costs +
+        allocations + rollovers + active period + accelerations.
+-   Campaign status update rule:
+    -   `expected_status` is `PAUSED` when account is inactive.
+    -   `expected_status` is `ENABLED` when active and `dailyBudget >=
+        0.01`; otherwise `PAUSED`.
+    -   Campaigns with names prefixed by `zzz.` are never status-updated.
+    -   Campaign is updated only when current status differs from
+        `expected_status`.
+-   Budget amount update rule (stricter than campaign status):
+    -   Skip if all campaigns under that budget are `zzz.`.
+    -   Skip if `dailyBudget` is missing.
+    -   Skip if current Google budget amount is missing.
+    -   Compute target amount:
+        -   `0.01` when `dailyBudget <= 0`
+        -   otherwise `dailyBudget`
+    -   Skip small changes when absolute delta is `<=
+        GGADS_MIN_BUDGET_DELTA` (except target `0`/`0.01` flow).
+    -   Skip when target amount equals current amount.
+-   Allocation/active interaction:
+    -   If `allocation` is missing and account is active, row is skipped.
+    -   If `allocation` is missing and account is inactive, campaign
+        status can still be forced to `PAUSED`, but budget amount update
+        is skipped.
+-   Execution mode:
+    -   `dryRun=true`: no Google Ads mutations; returns simulated
+        mutation result structure.
+    -   `dryRun=false`: executes budget and campaign mutations in
+        parallel.
+
+### Shiftzy
+
+-   Routes live under `/api/shiftzy/v1`.
+-   PDF generation uses `fpdf2`.
+-   Assets live in `apps/shiftzy/api/assets`.
+
+------------------------------------------------------------------------
+
+## External Services
+
+-   Google Sheets/Ads use a service account resolved by:
+    -   `shared/utils.resolve_secret_path`
+    -   `GOOGLE_APPLICATION_CREDENTIALS`
+-   `shared/ggSheet.py` is **not thread-safe**.
+    -   Do not use it inside thread pools or background threads.
+
+------------------------------------------------------------------------
+
+## Versioning Notes
+
+-   SpendSphere v2 follows an inheritance model:
+    -   Only changes are implemented in v2.
+    -   Unchanged behavior must rely on v1 logic.
+    -   Do not duplicate v1 logic into v2.
+-   Avoid modifying older versions unless fixing bugs.
+
+------------------------------------------------------------------------
+
+# Code Quality & Reuse Rules (Strict)
+
+The agent must prioritize clean architecture and minimal duplication.
+
+## 1. Shared Folder Enforcement (Critical)
+
+-   The `shared/` folder is the single source of truth for reusable
+    logic.
+-   Before creating any new function, search the repository for existing
+    implementations.
+-   If similar logic exists in `shared/`, reuse it instead of
+    duplicating.
+-   If a new function appears generic or reusable across multiple apps,
+    it MUST be created inside `shared/`.
+-   Do not duplicate shared logic inside `apps/spendsphere` or
+    `apps/shiftzy`.
+-   Shared functions must not depend on app-specific modules.
+-   If duplicated logic is discovered, refactor it into `shared/`.
+
+This rule is mandatory and takes precedence over convenience.
+
+## 2. Prefer Reuse Over Duplication
+
+-   Search the repository for similar logic before adding new code.
+-   Reuse existing utilities from `shared/` whenever possible.
+-   Do not duplicate logic across apps.
+-   Shared logic must live in `shared/`.
+
+## 3. Delete Unused Code
+
+-   Remove unused functions, imports, variables, and dead branches.
+-   Do not leave commented-out legacy code.
+
+## 4. Keep Functions Focused
+
+-   Functions should do one thing.
+-   Prefer small composable helpers.
+
+## 5. Avoid Introducing New Patterns Lightly
+
+-   Follow existing architectural patterns.
+-   Do not introduce new DB or middleware patterns.
+
+------------------------------------------------------------------------
+
+## Code Section Structure (Mandatory -- Clean Vision Standard)
+
+All Python source files must use clear visual section separators for
+readability and consistency.
+
+### Required Section Header Format
+
+``` python
+# ============================================================
+# SECTION NAME
+# ============================================================
+```
+
+Example:
+
+``` python
+# ============================================================
+# IMPORTS
+# ============================================================
+
+# ============================================================
+# CONSTANTS
+# ============================================================
+
+# ============================================================
+# VALIDATION HELPERS
+# ============================================================
+
+# ============================================================
+# BUSINESS LOGIC
+# ============================================================
+
+# ============================================================
+# ROUTES
+# ============================================================
+```
+
+### Section Rules
+
+-   Section headers must be UPPERCASE.
+-   Keep header width consistent.
+-   Add a blank line after each section header.
+-   Large files must be broken into logical sections.
+-   Do not introduce new functions outside a defined section.
+-   If a file grows too large, consider splitting it.
+
+### Recommended Section Order (Routes Files)
+
+1.  IMPORTS\
+2.  CONSTANTS\
+3.  REQUEST/RESPONSE MODELS\
+4.  VALIDATION HELPERS\
+5.  BUSINESS LOGIC\
+6.  ROUTES
+
+### Recommended Section Order (Helper/Service Files)
+
+1.  IMPORTS\
+2.  CONSTANTS\
+3.  INTERNAL UTILITIES\
+4.  PUBLIC FUNCTIONS
+
+Clean visual structure is mandatory for maintainability.
+
+------------------------------------------------------------------------
+
+## Logging
+
+-   JSON logs are emitted by `shared/logger.py`.
+-   Optional Axiom export via `AXIOM_*` environment variables.
+-   Request and tenant context must be included when available.
+
+## Logging Policy (Mandatory)
+
+-   All routes must be logged through
+    `request_response_logger_middleware`.
+-   Do not add ad-hoc logging inside route handlers unless logging
+    domain-specific business events.
+-   Axiom export must be handled centrally via `shared/logger.py`.
+-   Route-level logging must not bypass middleware.
+-   Logging must include:
+    -   method
+    -   path
+    -   status_code
+    -   duration
+    -   tenant_id
+    -   request_id (if available)
+
+------------------------------------------------------------------------
+
+## Conventions
+
+-   Add endpoints under `apps/<app>/api/vX/endpoints`.
+-   Wire them in the matching router.
+-   Reuse `shared/` helpers instead of duplicating logic.
+-   If adding a new app:
+    -   Include tenant validation.
+    -   Include response envelope middleware.
+    -   Follow existing structure patterns.
+
+------------------------------------------------------------------------
+
+## Deployment Notes
+
+-   The code reads `/etc/.env` first, then `etc/.env`.
+-   Production deployments should mount secrets to `/etc/.env`.
+-   Tenant configs are read from `/etc/secrets/<tenant>.yaml` or
+    `etc/secrets/<tenant>.yaml`.
+-   The app import path is `main:app`.
+
+------------------------------------------------------------------------
+
+## Local Setup Checklist
+
+-   Create a virtualenv:
+
+    ``` bash
+    python -m venv .venv
+    pip install -r requirements.txt
+    ```
+
+-   Create `etc/.env` with:
+
+    -   `API_KEY_REGISTRY`
+    -   MySQL credentials
+
+-   Add `etc/secrets/<tenant>.yaml`.
+
+-   Use `etc/secrets/tenant.template.yaml` as a starting point.
+
+-   Configure `GOOGLE_APPLICATION_CREDENTIALS`.
+
+-   Run:
+
+    ``` bash
+    uvicorn main:app --reload --port 8000
+    ```
+
+------------------------------------------------------------------------
+
+## Tests
+
+-   No test runner is currently configured.
+
+-   Prefer `pytest`.
+
+-   Place tests under `tests/`.
+
+-   Suggested command:
+
+    ``` bash
+    pytest -q
+    ```
+
+------------------------------------------------------------------------
+
+## Common Commands
+
+Before working:
+
+``` bash
+git pull
+```
+
+After working:
+
+``` bash
+git add .
+git commit -m "Describe what you changed"
+git push
+```
+
+Reset to remote main (destructive):
+
+``` bash
+git fetch origin
+git checkout main
+git reset --hard origin/main
+git clean -fd
+```
+
+Remove last commit and force push (destructive):
+
+``` bash
+git reset --soft HEAD~1
+git push --force
+```
+
+Recreate virtualenv:
+
+``` bash
+rm -rf .venv
+python3.11 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+Run server:
+
+``` bash
+uvicorn main:app --reload
+```
