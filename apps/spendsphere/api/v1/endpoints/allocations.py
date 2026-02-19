@@ -5,7 +5,14 @@ from apps.spendsphere.api.v1.helpers.db_queries import (
     duplicate_allocations,
     get_allocations,
 )
+from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
+    normalize_account_codes,
+    validate_account_codes,
+)
+from shared.logger import get_logger
+
 router = APIRouter()
+_API_LOGGER = get_logger("SpendSphere API")
 
 
 # ============================================================
@@ -36,23 +43,7 @@ def get_allocations_route(
           }
         ]
     """
-    def _normalize_codes(values: list[str] | None) -> list[str]:
-        if not values:
-            return []
-        normalized: list[str] = []
-        seen: set[str] = set()
-        for value in values:
-            if not isinstance(value, str):
-                continue
-            for chunk in value.split(","):
-                code = chunk.strip().upper()
-                if not code or code in seen:
-                    continue
-                seen.add(code)
-                normalized.append(code)
-        return normalized
-
-    requested_codes = _normalize_codes(account_codes)
+    requested_codes = normalize_account_codes(account_codes)
     if not requested_codes:
         raise HTTPException(
             status_code=400,
@@ -74,6 +65,12 @@ def get_allocations_route(
             status_code=400,
             detail="year must be between 2000 and 2100",
         )
+
+    validate_account_codes(
+        requested_codes,
+        month=month,
+        year=year,
+    )
 
     data = get_allocations(requested_codes, month, year)
     if not data:
@@ -125,20 +122,15 @@ def duplicate_allocations_route(request_payload: AllocationDuplicateRequest):
     if request_payload.toYear < 2000 or request_payload.toYear > 2100:
         raise HTTPException(status_code=400, detail="toYear must be 2000-2100")
 
-    normalized_codes: list[str] = []
-    seen: set[str] = set()
-    if request_payload.accountCodes:
-        for value in request_payload.accountCodes:
-            if not isinstance(value, str):
-                continue
-            for chunk in value.split(","):
-                code = chunk.strip().upper()
-                if not code or code in seen:
-                    continue
-                seen.add(code)
-                normalized_codes.append(code)
+    normalized_codes = normalize_account_codes(request_payload.accountCodes)
     if not normalized_codes:
         raise HTTPException(status_code=400, detail="accountCodes is required")
+
+    validate_account_codes(
+        normalized_codes,
+        month=request_payload.toMonth,
+        year=request_payload.toYear,
+    )
 
     inserted = duplicate_allocations(
         from_month=request_payload.fromMonth,
@@ -148,4 +140,15 @@ def duplicate_allocations_route(request_payload: AllocationDuplicateRequest):
         account_codes=normalized_codes,
         overwrite=request_payload.overwrite,
     )
+
+    _API_LOGGER.info(
+        "duplicate allocations route result",
+        extra={
+            "extra_fields": {
+                "event": "duplicate_allocations_route_result",
+                "inserted": inserted,
+            }
+        },
+    )
+
     return {"inserted": inserted}

@@ -1341,9 +1341,16 @@ def update_ui_allocations_rollbreaks(
             detail={"error": "Invalid payload", "errors": exc.errors()},
         ) from exc
 
-    account_code = require_account_code(request_payload.accountCode)
-
     errors: list[dict[str, object]] = []
+    account_code_raw = _normalize_optional_str(request_payload.accountCode)
+    if not account_code_raw:
+        errors.append(
+            {
+                "field": "accountCode",
+                "value": request_payload.accountCode,
+                "message": "accountCode is required",
+            }
+        )
 
     if not 1 <= request_payload.month <= 12:
         errors.append(
@@ -1361,6 +1368,15 @@ def update_ui_allocations_rollbreaks(
                 "message": "year must be between 2000 and 2100",
             }
         )
+
+    if errors:
+        raise HTTPException(status_code=400, detail={"error": "Invalid payload", "errors": errors})
+
+    account_code = require_account_code(
+        account_code_raw or "",
+        month=request_payload.month,
+        year=request_payload.year,
+    )
 
     allowed_adtypes = {
         str(key).strip().upper()
@@ -1639,8 +1655,6 @@ def upsert_ui_acceleration(
                 "message": "accountCode is required",
             }
         )
-    else:
-        account_code = require_account_code(account_code_raw)
 
     if not 1 <= month_value <= 12:
         errors.append(
@@ -1665,6 +1679,13 @@ def upsert_ui_acceleration(
                 "value": request_payload.newAccelerations,
                 "message": "newAccelerations must contain at least one item",
             }
+        )
+
+    if not errors and account_code_raw:
+        account_code = require_account_code(
+            account_code_raw,
+            month=month_value,
+            year=year_value,
         )
 
     allowed_scopes = {s.upper() for s in get_acceleration_scope_types()}

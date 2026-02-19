@@ -13,7 +13,6 @@ from apps.spendsphere.api.v1.helpers.config import (
     get_adtypes,
 )
 from apps.spendsphere.api.v1.helpers.db_queries import (
-    get_accounts,
     get_accelerations,
     get_existing_acceleration_keys,
     insert_accelerations,
@@ -24,7 +23,10 @@ from apps.spendsphere.api.v1.helpers.ggAd import (
     get_ggad_accounts,
     get_ggad_budgets,
 )
-from apps.spendsphere.api.v1.helpers.spendsphere_helpers import validate_account_codes
+from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
+    normalize_account_codes,
+    validate_account_codes,
+)
 
 router = APIRouter()
 
@@ -82,25 +84,9 @@ def get_accelerations_route(
           }
         ]
     """
-    def _normalize_codes(values: list[str] | None) -> list[str]:
-        if not values:
-            return []
-        normalized: list[str] = []
-        seen: set[str] = set()
-        for value in values:
-            if not isinstance(value, str):
-                continue
-            for chunk in value.split(","):
-                code = chunk.strip().upper()
-                if not code or code in seen:
-                    continue
-                seen.add(code)
-                normalized.append(code)
-        return normalized
-
-    requested_codes = _normalize_codes(account_codes)
+    requested_codes = normalize_account_codes(account_codes)
     if not requested_codes and isinstance(account_code, str) and account_code.strip():
-        requested_codes = _normalize_codes([account_code])
+        requested_codes = normalize_account_codes([account_code])
     if not requested_codes:
         raise HTTPException(
             status_code=400,
@@ -123,6 +109,13 @@ def get_accelerations_route(
     else:
         start_date = None
         end_date = None
+
+    validate_account_codes(
+        requested_codes,
+        include_all=include_all,
+        month=month,
+        year=year,
+    )
 
     data = get_accelerations(
         requested_codes,
@@ -260,20 +253,37 @@ def _normalize_codes(values: list[str]) -> list[str]:
     return normalized
 
 
-def _resolve_account_codes(account_codes: list[str]) -> list[str]:
+def _resolve_account_codes(
+    account_codes: list[str],
+    *,
+    month: int | None = None,
+    year: int | None = None,
+    as_of: date | None = None,
+) -> list[str]:
     if not account_codes:
-        accounts = get_accounts(None, include_all=False)
-        gg_accounts = get_ggad_accounts()
-        gg_codes = {str(a.get("accountCode", "")).strip().upper() for a in gg_accounts}
-        resolved = [
+        resolved_accounts = validate_account_codes(
+            None,
+            month=month,
+            year=year,
+            as_of=as_of,
+        )
+        return [
             str(a.get("code", "")).strip().upper()
-            for a in accounts
-            if str(a.get("code", "")).strip().upper() in gg_codes
+            for a in resolved_accounts
+            if str(a.get("code", "")).strip()
         ]
-        return [c for c in resolved if c]
 
-    validate_account_codes(account_codes)
-    return _normalize_codes(account_codes)
+    validated = validate_account_codes(
+        account_codes,
+        month=month,
+        year=year,
+        as_of=as_of,
+    )
+    return [
+        str(a.get("code", "")).strip().upper()
+        for a in validated
+        if str(a.get("code", "")).strip()
+    ]
 
 
 def _normalize_and_validate_rows(
@@ -378,7 +388,13 @@ def _normalize_and_validate_rows(
             if isinstance(r.get("accountCode"), str)
         ]
     )
-    validate_account_codes(deduped_codes)
+    start_dates = [
+        row.get("startDate")
+        for row in rows
+        if isinstance(row.get("startDate"), date)
+    ]
+    validation_as_of = min(start_dates) if start_dates else None
+    validate_account_codes(deduped_codes, as_of=validation_as_of)
 
     return rows
 
@@ -836,13 +852,6 @@ def create_accelerations_by_month_accounts(
           "data": {"inserted": 5}
         }
     """
-    account_codes = _resolve_account_codes(request_payload.accountCodes)
-    if not account_codes:
-        raise HTTPException(
-            status_code=400,
-            detail="No accountCodes resolved for acceleration creation",
-        )
-
     start_date = request_payload.startDate
     end_date = request_payload.endDate
 
@@ -867,6 +876,18 @@ def create_accelerations_by_month_accounts(
             raise HTTPException(status_code=400, detail="year must be 2000-2100")
         start_date = date(year, month, 1)
         end_date = date(year, month, calendar.monthrange(year, month)[1])
+
+    account_codes = _resolve_account_codes(
+        request_payload.accountCodes,
+        month=start_date.month,
+        year=start_date.year,
+        as_of=start_date,
+    )
+    if not account_codes:
+        raise HTTPException(
+            status_code=400,
+            detail="No accountCodes resolved for acceleration creation",
+        )
 
     rows: list[dict] = []
     scope_type = request_payload.scopeLevel

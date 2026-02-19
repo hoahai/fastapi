@@ -1,4 +1,5 @@
-from datetime import datetime
+import calendar
+from datetime import date, datetime
 import ast
 import json
 import os
@@ -8,9 +9,9 @@ from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 
-from apps.spendsphere.api.v1.helpers.db_queries import get_accounts
 from shared.file_cache import FileCache, normalize_tenant_key
 from shared.tenant import get_env, get_tenant_id, get_timezone
+from shared.utils import get_current_period
 
 _CACHE_BASE_PATH = Path(
     os.getenv(
@@ -48,12 +49,17 @@ def _normalize_account_codes(account_codes: str | list[str] | None) -> list[str]
     for candidate in candidates:
         if not isinstance(candidate, str):
             continue
-        code = candidate.strip().upper()
-        if not code or code in seen:
-            continue
-        seen.add(code)
-        normalized.append(code)
+        for chunk in candidate.split(","):
+            code = chunk.strip().upper()
+            if not code or code in seen:
+                continue
+            seen.add(code)
+            normalized.append(code)
     return normalized
+
+
+def normalize_account_codes(account_codes: str | list[str] | None) -> list[str]:
+    return _normalize_account_codes(account_codes)
 
 
 def _get_cache_path(include_all: bool) -> Path:
@@ -745,8 +751,34 @@ def refresh_account_codes_cache(
     include_all: bool,
     tenant_id: str | None = None,
 ) -> list[dict]:
-    accounts = get_accounts(None, include_all=include_all)
-    accounts_map = {a["code"].upper(): a for a in accounts}
+    from apps.spendsphere.api.v1.helpers.ggAd import get_ggad_accounts_for_validation
+
+    all_accounts = get_ggad_accounts_for_validation(refresh_cache=True)
+    if include_all:
+        accounts = all_accounts
+    else:
+        active_by_name = [a for a in all_accounts if not bool(a.get("inactiveByName"))]
+        as_of = datetime.now(ZoneInfo(get_timezone())).date()
+        statuses = _get_active_period_statuses(
+            [
+                str(a.get("code", "")).strip().upper()
+                for a in active_by_name
+                if str(a.get("code", "")).strip()
+            ],
+            month=None,
+            year=None,
+            as_of=as_of,
+        )
+        accounts = [
+            a
+            for a in active_by_name
+            if statuses.get(str(a.get("code", "")).strip().upper(), False)
+        ]
+    accounts_map = {
+        str(a.get("code", "")).strip().upper(): a
+        for a in accounts
+        if str(a.get("code", "")).strip()
+    }
     cache_path = _get_cache_path(include_all)
     tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
     cache_store = _get_cache_store(cache_path)
@@ -762,29 +794,124 @@ def refresh_account_codes_cache(
     return accounts
 
 
+def _is_google_ads_account_cache(accounts: dict[str, dict]) -> bool:
+    if not accounts:
+        return True
+    for account in accounts.values():
+        if not isinstance(account, dict):
+            return False
+        if account.get("source") != "google_ads":
+            return False
+    return True
+
+
+def _normalize_cached_account_entry(code: str, account: dict) -> dict:
+    normalized_code = str(
+        account.get("code") or account.get("accountCode") or code
+    ).strip().upper()
+    descriptive_name = str(account.get("descriptiveName", "")).strip()
+    account_name = str(
+        account.get("name")
+        or account.get("accountName")
+        or descriptive_name
+        or normalized_code
+    ).strip()
+    inactive_by_name = bool(account.get("inactiveByName"))
+    if not inactive_by_name and descriptive_name:
+        inactive_by_name = descriptive_name.lower().startswith("zzz.")
+
+    normalized = dict(account)
+    normalized["code"] = normalized_code
+    normalized["name"] = account_name or normalized_code
+    normalized["accountCode"] = normalized_code
+    normalized["accountName"] = account_name or normalized_code
+    normalized["inactiveByName"] = inactive_by_name
+    return normalized
+
+
+def _resolve_validation_as_of(
+    month: int | None,
+    year: int | None,
+) -> date:
+    now = datetime.now(ZoneInfo(get_timezone())).date()
+    if month is None and year is None:
+        return now
+
+    if month is None or year is None:
+        raise HTTPException(
+            status_code=400,
+            detail="month and year must be provided together",
+        )
+    if not 1 <= month <= 12:
+        raise HTTPException(status_code=400, detail="month must be between 1 and 12")
+    if not 2000 <= year <= 2100:
+        raise HTTPException(status_code=400, detail="year must be between 2000 and 2100")
+
+    current_period = get_current_period()
+    current_key = (current_period["year"], current_period["month"])
+    target_key = (year, month)
+    if target_key == current_key:
+        return now
+    if target_key < current_key:
+        return date(year, month, calendar.monthrange(year, month)[1])
+    return date(year, month, 1)
+
+
+def _get_active_period_statuses(
+    account_codes: list[str],
+    *,
+    month: int | None,
+    year: int | None,
+    as_of: date,
+) -> dict[str, bool]:
+    if not account_codes:
+        return {}
+
+    from apps.spendsphere.api.v1.helpers.ggSheet import get_active_period
+
+    try:
+        rows = get_active_period(
+            account_codes,
+            month,
+            year,
+            as_of=as_of,
+        )
+    except ValueError as exc:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Overlapping active periods", "message": str(exc)},
+        ) from exc
+
+    statuses: dict[str, bool] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        code = str(row.get("accountCode", "")).strip().upper()
+        if not code:
+            continue
+        statuses[code] = bool(row.get("isActive"))
+    return statuses
+
+
 def validate_account_codes(
     account_codes: str | list[str] | None,
     *,
     include_all: bool = False,
+    month: int | None = None,
+    year: int | None = None,
+    as_of: date | datetime | None = None,
 ) -> list[dict]:
     """
-    Validate accountCodes against DB.
+    Validate account codes against Google Ads accounts/clients.
 
     Rules:
-    - None / ""     -> all accounts
-    - "TAAA"        -> single account
-    - ["TAAA","X"]  -> multiple accounts
+    - Codes must be parseable from Google Ads account naming.
+    - `zzz.` account names are treated as inactive.
+    - Active period sheet determines timeline activity by date.
     """
-
-    if not account_codes:
-        return get_accounts(account_codes, include_all=include_all)
-
     requested_codes = _normalize_account_codes(account_codes)
-    if not requested_codes:
-        return get_accounts(account_codes, include_all=include_all)
-
     requested_set = set(requested_codes)
-    cache_path = _get_cache_path(include_all)
+    cache_path = _get_cache_path(include_all=True)
     tenant_key = _normalize_tenant_cache_key(get_tenant_id())
     cache_store = _get_cache_store(cache_path)
 
@@ -798,9 +925,9 @@ def validate_account_codes(
     if not isinstance(tenant_cache, dict):
         tenant_cache = {}
 
-    tenant_accounts, tenant_updated_at = _get_account_cache_entry(
+    tenant_accounts_all, tenant_updated_at = _get_account_cache_entry(
         tenant_cache,
-        include_all=include_all,
+        include_all=True,
     )
 
     ttl_seconds = get_account_codes_cache_ttl_seconds()
@@ -814,58 +941,139 @@ def validate_account_codes(
             age_seconds = (now - updated_at).total_seconds()
             is_stale = age_seconds > ttl_seconds
 
-    cached_accounts = {
-        code: tenant_accounts[code]
-        for code in requested_set
-        if code in tenant_accounts
-    }
-    missing_codes = requested_set - set(cached_accounts.keys())
+    if not _is_google_ads_account_cache(tenant_accounts_all):
+        is_stale = True
 
-    source_accounts: dict[str, dict]
-    if missing_codes or is_stale:
-        db_accounts = refresh_account_codes_cache(
-            include_all=include_all,
+    if is_stale or (requested_set and not requested_set.issubset(tenant_accounts_all.keys())):
+        refreshed_accounts = refresh_account_codes_cache(
+            include_all=True,
             tenant_id=tenant_key,
         )
-        source_accounts = {a["code"].upper(): a for a in db_accounts}
+        source_accounts = {
+            str(a.get("code", "")).strip().upper(): a
+            for a in refreshed_accounts
+            if str(a.get("code", "")).strip()
+        }
     else:
-        source_accounts = tenant_accounts
+        source_accounts = tenant_accounts_all
 
-    found_codes = set(source_accounts.keys())
-    missing = sorted(requested_set - found_codes)
+    normalized_source_accounts: dict[str, dict] = {}
+    for code, account in source_accounts.items():
+        if not isinstance(account, dict):
+            continue
+        normalized_code = str(code).strip().upper()
+        if not normalized_code:
+            continue
+        normalized_source_accounts[normalized_code] = _normalize_cached_account_entry(
+            normalized_code,
+            account,
+        )
 
-    if missing:
+    explicit_request = bool(requested_codes)
+
+    if explicit_request:
+        requested_order = requested_codes
+    else:
+        requested_order = sorted(normalized_source_accounts.keys())
+
+    missing = [
+        code for code in requested_order if code not in normalized_source_accounts
+    ]
+
+    inactive_by_name: list[str] = []
+    inactive_by_period: list[str] = []
+    eligible_codes = [
+        code for code in requested_order if code in normalized_source_accounts
+    ]
+
+    if not include_all:
+        inactive_by_name = [
+            code
+            for code in eligible_codes
+            if bool(normalized_source_accounts[code].get("inactiveByName"))
+        ]
+        period_candidates = [
+            code for code in eligible_codes if code not in inactive_by_name
+        ]
+
+        if as_of is None:
+            as_of_date = _resolve_validation_as_of(month, year)
+        elif isinstance(as_of, datetime):
+            as_of_date = as_of.date()
+        elif isinstance(as_of, date):
+            as_of_date = as_of
+        else:
+            raise HTTPException(status_code=400, detail="Invalid as_of date")
+
+        statuses = _get_active_period_statuses(
+            period_candidates,
+            month=month,
+            year=year,
+            as_of=as_of_date,
+        )
+        inactive_by_period = [
+            code for code in period_candidates if not statuses.get(code, False)
+        ]
+
+    if explicit_request and (missing or inactive_by_name or inactive_by_period):
+        valid_codes = sorted(normalized_source_accounts.keys())
+        active_codes = sorted(
+            code
+            for code, account in normalized_source_accounts.items()
+            if not bool(account.get("inactiveByName"))
+            and code not in set(inactive_by_period)
+        )
         raise HTTPException(
             status_code=400,
             detail={
                 "error": "Invalid accountCodes",
                 "invalid_codes": missing,
-                "valid_codes": sorted(found_codes),
+                "inactive_by_name": sorted(set(inactive_by_name)),
+                "inactive_by_period": sorted(set(inactive_by_period)),
+                "valid_codes": valid_codes,
+                "active_codes": active_codes,
             },
         )
 
-    # Preserve a deterministic order based on the input list.
+    blocked_codes = set()
+    if not include_all:
+        blocked_codes.update(inactive_by_name)
+        blocked_codes.update(inactive_by_period)
+
     ordered_accounts: list[dict] = []
-    for code in requested_codes:
-        account = source_accounts.get(code)
+    for code in requested_order:
+        if code in blocked_codes:
+            continue
+        account = normalized_source_accounts.get(code)
         if account:
             ordered_accounts.append(account)
 
     return ordered_accounts
 
 
-def require_account_code(account_code: str) -> str:
+def require_account_code(
+    account_code: str,
+    *,
+    include_all: bool = False,
+    month: int | None = None,
+    year: int | None = None,
+    as_of: date | datetime | None = None,
+) -> str:
     if not account_code or not account_code.strip():
         raise HTTPException(status_code=400, detail="account_code is required")
-    return account_code.strip().upper()
+    code = account_code.strip().upper()
+    validate_account_codes(
+        [code],
+        include_all=include_all,
+        month=month,
+        year=year,
+        as_of=as_of,
+    )
+    return code
 
 
 def should_validate_account_codes(account_codes: str | list[str] | None) -> bool:
-    if account_codes is None:
-        return False
-    if isinstance(account_codes, str) and not account_codes.strip():
-        return False
-    return not (isinstance(account_codes, list) and len(account_codes) == 0)
+    return len(_normalize_account_codes(account_codes)) > 0
 
 
 def normalize_query_params(params: object) -> dict[str, object] | None:

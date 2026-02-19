@@ -46,12 +46,44 @@ def update_google_ads(request_payload: GoogleAdsUpdateRequest):
           "include_all": false
         }
 
-    Example response:
+    Example response (dryRun=true):
         {
-          "summary": {
-            "budget_updates": 1,
-            "campaign_updates": 0
-          }
+          "dry_run": true,
+          "account_codes": ["TAAA"],
+          "overall_summary": {
+            "total": 3,
+            "succeeded": 3,
+            "failed": 0,
+            "warnings": 0
+          },
+          "mutation_results": [
+            {
+              "customerId": "6563107233",
+              "accountCode": "TAAA",
+              "operation": "update_budgets",
+              "summary": {
+                "total": 2,
+                "succeeded": 2,
+                "failed": 0
+              },
+              "successes": [],
+              "failures": []
+            }
+          ]
+        }
+
+    Example response (includeTransformResults=true):
+        {
+          "dry_run": false,
+          "account_codes": "ALL",
+          "overall_summary": {
+            "total": 12,
+            "succeeded": 12,
+            "failed": 0,
+            "warnings": 1
+          },
+          "mutation_results": [],
+          "transform_results": []
         }
     """
     if should_validate_account_codes(request_payload.accountCodes):
@@ -116,11 +148,15 @@ def update_google_ads_async(
           "include_all": false
         }
 
-    Example response:
+    Example response (immediate accept):
         {
           "request_id": "c13d30fd-1966-4c04-b47d-23f6c2d3b9b1",
           "status": "accepted"
         }
+
+    Background behavior:
+        - Returns immediately after queuing the job.
+        - Full pipeline result is produced by the background task and logged.
     """
     if should_validate_account_codes(request_payload.accountCodes):
         validate_account_codes(

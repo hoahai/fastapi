@@ -341,6 +341,84 @@ def get_mcc_accounts() -> list[dict]:
     return results
 
 
+def _normalize_account_code_token(value: object) -> str | None:
+    cleaned = str(value).strip().upper()
+    return cleaned or None
+
+
+def _dedupe_accounts_by_code(accounts: list[dict]) -> list[dict]:
+    deduped: dict[str, dict] = {}
+    order: list[str] = []
+
+    for account in accounts:
+        code = _normalize_account_code_token(account.get("accountCode"))
+        if not code:
+            continue
+
+        existing = deduped.get(code)
+        if existing is None:
+            deduped[code] = account
+            order.append(code)
+            continue
+
+        # Prefer active-by-name entries over zzz.-prefixed entries.
+        if bool(existing.get("inactiveByName")) and not bool(
+            account.get("inactiveByName")
+        ):
+            deduped[code] = account
+
+    return [deduped[code] for code in order]
+
+
+def _parse_named_google_ads_accounts(raw_accounts: list[dict]) -> list[dict]:
+    account_name_pattern = _compile_naming_pattern("account", get_adtypes())
+    parsed: list[dict] = []
+
+    for acc in raw_accounts:
+        descriptive_name = str(acc.get("name", "")).strip()
+        if not descriptive_name:
+            continue
+
+        match = account_name_pattern.match(descriptive_name)
+        if not match:
+            continue
+
+        groups = _normalize_named_groups(match)
+        account_code = _normalize_account_code_token(groups.get("accountCode"))
+        if not account_code:
+            continue
+
+        account_name = (
+            groups.get("accountName")
+            or groups.get("campaignName")
+            or descriptive_name
+        )
+        inactive_by_name = _is_zzz_name(descriptive_name)
+
+        parsed.append(
+            {
+                "id": acc.get("id"),
+                "descriptiveName": descriptive_name,
+                "accountCode": account_code,
+                "accountName": str(account_name).strip() or account_code,
+                "code": account_code,
+                "name": str(account_name).strip() or account_code,
+                "inactiveByName": inactive_by_name,
+                "source": "google_ads",
+            }
+        )
+
+    return _dedupe_accounts_by_code(parsed)
+
+
+def get_ggad_accounts_for_validation(*, refresh_cache: bool = False) -> list[dict]:
+    del refresh_cache  # Reserved for parity with other cacheable helpers.
+    raw_accounts = get_mcc_accounts()
+    if not raw_accounts:
+        return []
+    return _parse_named_google_ads_accounts(raw_accounts)
+
+
 def get_ggad_accounts(*, refresh_cache: bool = False) -> list[dict]:
     """
     Return normalized Google Ads accounts based on tenant naming config.
@@ -350,44 +428,21 @@ def get_ggad_accounts(*, refresh_cache: bool = False) -> list[dict]:
         if cached is not None and not is_stale:
             return cached
 
-    raw_accounts = get_mcc_accounts()
-    if not raw_accounts:
+    parsed_accounts = get_ggad_accounts_for_validation(refresh_cache=True)
+    if not parsed_accounts:
         set_google_ads_clients_cache([])
         return []
 
-    account_name_pattern = _compile_naming_pattern("account", get_adtypes())
-
-    results: list[dict] = []
-
-    for acc in raw_accounts:
-        descriptive_name = acc.get("name", "").strip()
-
-        match = account_name_pattern.match(descriptive_name)
-        if not match:
-            continue
-
-        if _is_zzz_name(descriptive_name):
-            continue
-
-        groups = _normalize_named_groups(match)
-        account_code = groups.get("accountCode")
-        if not account_code:
-            continue
-
-        account_name = (
-            groups.get("accountName")
-            or groups.get("campaignName")
-            or descriptive_name
-        )
-
-        results.append(
-            {
-                "id": acc.get("id"),
-                "descriptiveName": descriptive_name,
-                "accountCode": account_code,
-                "accountName": account_name,
-            }
-        )
+    results = [
+        {
+            "id": account.get("id"),
+            "descriptiveName": account.get("descriptiveName"),
+            "accountCode": account.get("accountCode"),
+            "accountName": account.get("accountName"),
+        }
+        for account in parsed_accounts
+        if not bool(account.get("inactiveByName"))
+    ]
 
     set_google_ads_clients_cache(results)
     return results

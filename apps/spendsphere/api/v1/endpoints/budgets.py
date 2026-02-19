@@ -1,6 +1,10 @@
 from fastapi import APIRouter, HTTPException, Query
 
 from apps.spendsphere.api.v1.helpers.db_queries import get_masterbudgets
+from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
+    normalize_account_codes,
+    validate_account_codes,
+)
 router = APIRouter()
 
 
@@ -35,23 +39,7 @@ def get_budgets(
           }
         ]
     """
-    def _normalize_codes(values: list[str] | None) -> list[str]:
-        if not values:
-            return []
-        normalized: list[str] = []
-        seen: set[str] = set()
-        for value in values:
-            if not isinstance(value, str):
-                continue
-            for chunk in value.split(","):
-                code = chunk.strip().upper()
-                if not code or code in seen:
-                    continue
-                seen.add(code)
-                normalized.append(code)
-        return normalized
-
-    requested_codes = _normalize_codes(account_codes)
+    requested_codes = normalize_account_codes(account_codes)
     if not requested_codes:
         raise HTTPException(
             status_code=400,
@@ -73,6 +61,12 @@ def get_budgets(
             status_code=400,
             detail="year must be between 2000 and 2100",
         )
+
+    validate_account_codes(
+        requested_codes,
+        month=month,
+        year=year,
+    )
 
     data = get_masterbudgets(requested_codes, month, year)
     if not data:

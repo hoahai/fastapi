@@ -201,7 +201,10 @@ def get_active_period_route(
           "isActive": true
         }
     """
-    account_code = require_account_code(account_code)
+    account_code = require_account_code(
+        account_code,
+        include_all=True,
+    )
     try:
         data = get_active_period([account_code])
     except ValueError as exc:
@@ -243,8 +246,13 @@ def get_active_period_month_route(
           "endDate": "2025-12-15"
         }
     """
-    account_code = require_account_code(account_code)
     month_value, year_value = _resolve_month_year(month, year)
+    account_code = require_account_code(
+        account_code,
+        include_all=True,
+        month=month_value,
+        year=year_value,
+    )
 
     month_start = date(year_value, month_value, 1)
     last_day = calendar.monthrange(year_value, month_value)[1]

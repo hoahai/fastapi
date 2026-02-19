@@ -7,10 +7,6 @@ from shared.tenant import get_timezone
 from apps.spendsphere.api.v1.helpers.config import get_db_tables, get_service_budgets
 
 
-# ============================================================
-# ACCOUNTS
-# ============================================================
-
 def _resolve_period(
     month: int | None,
     year: int | None,
@@ -19,62 +15,6 @@ def _resolve_period(
         return month, year
     period = get_current_period()
     return period["month"], period["year"]
-
-
-def get_accounts(
-    account_codes: str | list[str] | None = None,
-    *,
-    include_all: bool = False,
-) -> list[dict]:
-    """
-    Fetch accounts from DB.
-
-    - account_codes is None or empty -> return all active accounts (or all when include_all=True)
-    - account_codes is str -> return that account if exists
-    - account_codes is list[str] -> return matching accounts
-    """
-
-    # -----------------------------------------
-    # Normalize input
-    # -----------------------------------------
-    if account_codes is None:
-        codes = None
-    elif isinstance(account_codes, str):
-        code = account_codes.strip()
-        codes = [code.upper()] if code else None
-    elif isinstance(account_codes, list):
-        codes = [
-            c.strip().upper() for c in account_codes if isinstance(c, str) and c.strip()
-        ]
-        codes = codes or None
-    else:
-        raise TypeError("account_codes must be None, str, or list[str]")
-
-    # -----------------------------------------
-    # Build query
-    # -----------------------------------------
-    tables = get_db_tables()
-    accounts_table = tables["ACCOUNTS"]
-    if not codes:
-        query = f"""
-            SELECT code, name
-            FROM {accounts_table}
-        """
-        if not include_all:
-            query += " WHERE active = 1"
-        params = ()
-    else:
-        placeholders = ",".join(["%s"] * len(codes))
-        query = f"""
-            SELECT code, name
-            FROM {accounts_table}
-            WHERE UPPER(code) IN ({placeholders})
-        """
-        if not include_all:
-            query += " AND active = 1"
-        params = tuple(codes)
-
-    return fetch_all(query, params)
 
 
 # ============================================================
@@ -184,20 +124,44 @@ def duplicate_allocations(
     overwrite: bool = False,
 ) -> int:
     """
-    Duplicate allocations from one month/year to another for active accounts only.
-    Skips rows that already exist in the target month/year.
-    Only duplicates rows for requested account codes and with non-zero allocation.
+    Duplicate allocations from one month/year to another.
+    - Duplicates only for accounts active in the target period.
+    - Skips rows that already exist in the target month/year unless overwrite=True.
+    - Never duplicates rows with zero allocation.
     """
+    from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
+        validate_account_codes,
+    )
+
     tables = get_db_tables()
     allocations_table = tables["ALLOCATIONS"]
-    accounts_table = tables["ACCOUNTS"]
+    normalized_codes = [
+        str(code).strip().upper()
+        for code in account_codes
+        if isinstance(code, str) and str(code).strip()
+    ]
+    if not normalized_codes:
+        return 0
+
+    active_accounts = validate_account_codes(
+        None,
+        month=to_month,
+        year=to_year,
+    )
+    active_codes = {
+        str(account.get("code", "")).strip().upper()
+        for account in active_accounts
+        if isinstance(account, dict) and str(account.get("code", "")).strip()
+    }
+    eligible_codes = [code for code in normalized_codes if code in active_codes]
+    if not eligible_codes:
+        return 0
 
     query = (
         f"INSERT INTO {allocations_table} "
         "(id, accountCode, ggBudgetId, allocation, month, year) "
         "SELECT UUID(), a.accountCode, a.ggBudgetId, a.allocation, %s, %s "
         f"FROM {allocations_table} AS a "
-        f"JOIN {accounts_table} AS acc ON acc.code = a.accountCode "
         f"LEFT JOIN {allocations_table} AS t "
         "ON t.accountCode = a.accountCode "
         "AND t.ggBudgetId = a.ggBudgetId "
@@ -205,15 +169,14 @@ def duplicate_allocations(
         "AND t.year = %s "
         "WHERE a.month = %s "
         "AND a.year = %s "
-        "AND acc.active = 1 "
     )
 
     params: list = [to_month, to_year, to_month, to_year, from_month, from_year]
 
-    if account_codes:
-        placeholders = ", ".join(["%s"] * len(account_codes))
+    if eligible_codes:
+        placeholders = ", ".join(["%s"] * len(eligible_codes))
         query += f"AND a.accountCode IN ({placeholders}) "
-        params.extend(account_codes)
+        params.extend(eligible_codes)
 
     query += "AND a.allocation <> 0 "
 
