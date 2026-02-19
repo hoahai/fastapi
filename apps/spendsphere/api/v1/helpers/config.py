@@ -2,6 +2,7 @@ import ast
 import json
 import re
 import threading
+from decimal import Decimal, InvalidOperation
 
 from shared.tenant import (
     TenantConfigValidationError,
@@ -235,6 +236,27 @@ def get_acceleration_scope_types() -> list[str]:
     return [str(v).strip().upper() for v in parsed if str(v).strip()]
 
 
+def get_budget_warning_threshold() -> Decimal | None:
+    raw = get_env("BUDGET_WARNING_THRESHOLD")
+    if raw is None or str(raw).strip() == "":
+        return None
+
+    try:
+        threshold = Decimal(str(raw).strip())
+    except (InvalidOperation, ValueError) as exc:
+        raise TenantConfigValidationError(
+            app_name=APP_NAME,
+            invalid=["BUDGET_WARNING_THRESHOLD"],
+        ) from exc
+
+    if threshold < 0:
+        raise TenantConfigValidationError(
+            app_name=APP_NAME,
+            invalid=["BUDGET_WARNING_THRESHOLD"],
+        )
+    return threshold
+
+
 def get_db_tables() -> dict[str, str]:
     raw = _get_db_tables_raw()
     if raw is None or str(raw).strip() == "":
@@ -397,12 +419,25 @@ def validate_tenant_config(tenant_id: str | None = None) -> None:
                 missing.extend(exc.missing)
                 invalid.extend(exc.invalid)
 
+        def _check_budget_warning_threshold() -> None:
+            raw = get_env("BUDGET_WARNING_THRESHOLD")
+            if raw is None or str(raw).strip() == "":
+                return
+            try:
+                threshold = Decimal(str(raw).strip())
+            except (InvalidOperation, ValueError):
+                invalid.append("BUDGET_WARNING_THRESHOLD")
+                return
+            if threshold < 0:
+                invalid.append("BUDGET_WARNING_THRESHOLD")
+
         _check_json("SERVICE_BUDGETS", list)
         _check_json("SERVICE_MAPPING", dict)
         _check_json("ADTYPES", dict)
         _check_db_tables()
         _check_spreadsheet()
         _check_google_ads_naming()
+        _check_budget_warning_threshold()
 
         if missing or invalid:
             raise TenantConfigValidationError(

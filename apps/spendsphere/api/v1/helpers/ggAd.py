@@ -846,12 +846,16 @@ def get_ggad_campaigns(
 
         for c in campaigns:
             name = str(c.get("campaignName", "")).strip()
+            status = str(c.get("status", "")).strip().upper()
             match = campaign_name_pattern.match(name)
 
             if not match:
                 continue
 
-            if _is_zzz_name(name, inactive_prefixes=inactive_prefixes):
+            if _is_zzz_name(
+                name,
+                inactive_prefixes=inactive_prefixes,
+            ) and status != "ENABLED":
                 continue
 
             groups = _normalize_named_groups(match)

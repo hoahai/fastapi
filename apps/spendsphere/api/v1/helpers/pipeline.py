@@ -1,8 +1,11 @@
 from __future__ import annotations
 
+from decimal import Decimal
+
 from apps.spendsphere.api.v1.helpers.dataTransform import (
     build_update_payloads_from_inputs,
 )
+from apps.spendsphere.api.v1.helpers.config import get_budget_warning_threshold
 from apps.spendsphere.api.v1.helpers.email import build_google_ads_alert_email
 from apps.spendsphere.api.v1.helpers.db_queries import (
     get_allocations,
@@ -66,6 +69,97 @@ def _run_campaign_update(customer_id: str, updates: list[dict]) -> dict:
         customer_id=customer_id,
         updates=updates,
     )
+
+
+def _collect_budget_threshold_warnings(
+    *,
+    budget_payloads: list[dict],
+    threshold: Decimal,
+) -> dict[str, list[dict]]:
+    warnings_by_customer: dict[str, list[dict]] = {}
+    threshold_display = f"${float(threshold):,.2f}"
+    message = (
+        "New budget amount exceeds configured threshold "
+        f"({threshold_display})."
+    )
+
+    for payload in budget_payloads:
+        customer_id = str(payload.get("customer_id", "")).strip()
+        if not customer_id:
+            continue
+        for update in payload.get("updates", []) or []:
+            try:
+                new_amount = Decimal(str(update.get("newAmount")))
+            except Exception:
+                continue
+            if new_amount <= threshold:
+                continue
+
+            warnings_by_customer.setdefault(customer_id, []).append(
+                {
+                    "budgetId": update.get("budgetId"),
+                    "accountCode": update.get("accountCode"),
+                    "campaignNames": update.get("campaignNames", []),
+                    "currentAmount": update.get("currentAmount"),
+                    "newAmount": update.get("newAmount"),
+                    "threshold": float(threshold),
+                    "warningCode": "BUDGET_AMOUNT_THRESHOLD_EXCEEDED",
+                    "error": message,
+                }
+            )
+
+    return warnings_by_customer
+
+
+def _inject_budget_threshold_warnings(
+    *,
+    mutation_results: list[dict],
+    warnings_by_customer: dict[str, list[dict]],
+) -> int:
+    if not warnings_by_customer:
+        return 0
+
+    total_warnings = 0
+    for result in mutation_results:
+        if result.get("operation") != "update_budgets":
+            continue
+        customer_id = str(result.get("customerId", "")).strip()
+        if not customer_id:
+            continue
+        extra_warnings = warnings_by_customer.pop(customer_id, [])
+        if not extra_warnings:
+            continue
+        result.setdefault("warnings", []).extend(extra_warnings)
+        summary = result.setdefault("summary", {})
+        summary["warnings"] = int(summary.get("warnings", 0) or 0) + len(extra_warnings)
+        total_warnings += len(extra_warnings)
+
+    for customer_id, extra_warnings in warnings_by_customer.items():
+        if not extra_warnings:
+            continue
+        account_code = next(
+            (w.get("accountCode") for w in extra_warnings if w.get("accountCode")),
+            None,
+        )
+        mutation_results.append(
+            {
+                "customerId": customer_id,
+                "accountCode": account_code,
+                "operation": "update_budgets",
+                "summary": {
+                    "total": 0,
+                    "succeeded": 0,
+                    "failed": 0,
+                    "warnings": len(extra_warnings),
+                },
+                "successes": [],
+                "failures": [],
+                "warnings": extra_warnings,
+            }
+        )
+        total_warnings += len(extra_warnings)
+
+    return total_warnings
 
 
 # =========================================================
@@ -247,6 +341,28 @@ def run_google_ads_budget_pipeline(
             tasks=tasks,
             api_name="google_ads_mutation",
         )
+
+    budget_warning_threshold = get_budget_warning_threshold()
+    threshold_warning_count = 0
+    if budget_warning_threshold is not None:
+        threshold_warnings_by_customer = _collect_budget_threshold_warnings(
+            budget_payloads=budget_payloads,
+            threshold=budget_warning_threshold,
+        )
+        threshold_warning_count = _inject_budget_threshold_warnings(
+            mutation_results=mutation_results,
+            warnings_by_customer=threshold_warnings_by_customer,
+        )
+        if threshold_warning_count > 0:
+            logger.warning(
+                "Google Ads budget threshold warnings",
+                extra={
+                    "extra_fields": {
+                        "threshold": float(budget_warning_threshold),
+                        "warning_count": threshold_warning_count,
+                    }
+                },
+            )
 
     # =====================================================
     # 5. Aggregate results

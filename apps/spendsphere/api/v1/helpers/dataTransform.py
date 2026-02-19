@@ -149,20 +149,40 @@ def group_campaigns_by_budget(
     campaigns: list[dict],
     budgets: list[dict],
     costs: list[dict],
+    allocations: list[dict],
     *,
     include_transform_results: bool,
 ) -> list[dict]:
     cost_lookup: dict[tuple[str | None, str | None], Decimal] = defaultdict(
         lambda: Decimal("0")
     )
+    budget_cost_lookup: dict[tuple[str | None, str | None], Decimal] = defaultdict(
+        lambda: Decimal("0")
+    )
     for c in costs:
         key = (c.get("customerId"), c.get("campaignId"))
         cost_lookup[key] += Decimal(str(c.get("cost", 0)))
+        budget_key = (c.get("customerId"), c.get("budgetId"))
+        budget_cost_lookup[budget_key] += Decimal(str(c.get("cost", 0)))
 
     budget_lookup = {b.get("budgetId"): b for b in budgets}
     master_lookup = {
         (mb.get("accountCode"), mb.get("adTypeCode")): mb
         for mb in master_budget_data
+    }
+    accounts_with_master = {
+        str(mb.get("accountCode", "")).strip().upper()
+        for mb in master_budget_data
+        if str(mb.get("accountCode", "")).strip()
+    }
+    allocation_lookup = {
+        (
+            str(a.get("accountCode", "")).strip().upper(),
+            str(a.get("ggBudgetId", "")).strip(),
+        )
+        for a in allocations
+        if str(a.get("accountCode", "")).strip()
+        and str(a.get("ggBudgetId", "")).strip()
     }
 
     grouped: dict[tuple[str, str], dict] = {}
@@ -230,6 +250,41 @@ def group_campaigns_by_budget(
             grouped[group_key]["_campaign_names"].append(campaign_name)
 
     # finalize campaignNames
+    for budget in budgets:
+        customer_id = budget.get("customerId")
+        budget_id = str(budget.get("budgetId", "")).strip()
+        if not customer_id or not budget_id:
+            continue
+
+        group_key = (customer_id, budget_id)
+        if group_key in grouped:
+            continue
+
+        account_code = str(budget.get("accountCode", "")).strip().upper()
+        has_allocation = (account_code, budget_id) in allocation_lookup
+        has_masterbudget = account_code in accounts_with_master
+        if not has_allocation and not has_masterbudget:
+            continue
+
+        fallback_group = {
+            "ggAccountId": customer_id,
+            "accountCode": budget.get("accountCode"),
+            "accountName": budget.get("accountName"),
+            "adTypeCode": None,
+            "netAmount": Decimal("0"),
+            "budgetId": budget_id,
+            "budgetName": budget.get("budgetName"),
+            "budgetStatus": budget.get("status"),
+            "budgetAmount": Decimal(str(budget.get("amount", 0))),
+            "campaigns": [],
+            "totalCost": budget_cost_lookup.get(group_key, Decimal("0")),
+        }
+        if include_transform_results:
+            fallback_group["services"] = []
+            fallback_group["campaignNames"] = ""
+            fallback_group["_campaign_names"] = []
+        grouped[group_key] = fallback_group
+
     if include_transform_results:
         for b in grouped.values():
             names = b.pop("_campaign_names", [])
@@ -586,7 +641,7 @@ def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
         # -------------------------
         # Budget updates (stricter rules)
         # -------------------------
-        if all_campaigns_zzz:
+        if not campaigns or all_campaigns_zzz:
             continue
         if daily_budget is None:
             continue
@@ -680,6 +735,7 @@ def _build_budget_rows(
         campaigns,
         budgets,
         costs,
+        allocations,
         include_transform_results=include_transform_results,
     )
     step3 = budget_allocation_join(step2, allocations)
