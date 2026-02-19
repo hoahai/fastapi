@@ -8,7 +8,6 @@ load_env()
 from fastapi import Depends, FastAPI
 
 from apps.spendsphere.api.v1.router import router as v1_router
-from apps.spendsphere.api.v2.router import router as v2_router
 
 from shared.exception_handlers import register_exception_handlers
 from shared.logger import log_run_start
@@ -30,7 +29,6 @@ app = FastAPI(
 app.middleware("http")(timing_middleware)
 app.middleware("http")(response_envelope_middleware)
 app.include_router(v1_router)
-app.include_router(v2_router)
 
 register_exception_handlers(app, logger_name="SpendSphere API")
 
