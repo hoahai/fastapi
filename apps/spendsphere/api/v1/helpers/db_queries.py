@@ -49,6 +49,7 @@ def get_masterbudgets(
 
     query = (
         "SELECT "
+        "b.id, "
         "b.accountCode, "
         "b.serviceId, "
         "s.name AS serviceName, "
@@ -71,6 +72,65 @@ def get_masterbudgets(
         params.extend(account_codes)
 
     return fetch_all(query, tuple(params))
+
+
+def upsert_masterbudgets(
+    rows: list[dict],
+    *,
+    month: int,
+    year: int,
+) -> dict[str, int]:
+    if not rows:
+        return {"updated": 0, "inserted": 0}
+
+    tables = get_db_tables()
+    budgets_table = tables["BUDGETS"]
+
+    update_rows = [r for r in rows if r.get("id")]
+    insert_rows = [r for r in rows if not r.get("id")]
+
+    updated = 0
+    inserted = 0
+
+    if update_rows:
+        update_query = (
+            f"UPDATE {budgets_table} "
+            "SET netAmount = %s "
+            "WHERE id = %s AND accountCode = %s AND month = %s AND year = %s"
+        )
+        update_params = [
+            (
+                row.get("netAmount"),
+                row.get("id"),
+                row.get("accountCode"),
+                month,
+                year,
+            )
+            for row in update_rows
+        ]
+        updated = execute_many(update_query, update_params)
+
+    if insert_rows:
+        insert_query = (
+            f"INSERT INTO {budgets_table} "
+            "(id, accountCode, serviceId, subService, netAmount, month, year) "
+            "VALUES (UUID(), %s, %s, %s, %s, %s, %s) "
+            "ON DUPLICATE KEY UPDATE netAmount = VALUES(netAmount)"
+        )
+        insert_params = [
+            (
+                row.get("accountCode"),
+                row.get("serviceId"),
+                row.get("subService"),
+                row.get("netAmount"),
+                month,
+                year,
+            )
+            for row in insert_rows
+        ]
+        inserted = execute_many(insert_query, insert_params)
+
+    return {"updated": updated, "inserted": inserted}
 
 
 # ============================================================

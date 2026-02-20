@@ -7,6 +7,7 @@ from apps.spendsphere.api.v1.helpers.ggAd import (
 )
 from apps.spendsphere.api.v1.helpers.ggSheet import refresh_google_sheet_cache
 from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
+    clear_google_ads_warning_cache,
     refresh_account_codes_cache,
 )
 
@@ -25,6 +26,9 @@ _CACHE_ALIASES = {
     "google_ads_campaigns": "google_ads_campaigns",
     "google_ads_campaign": "google_ads_campaigns",
     "googleadscampaigns": "google_ads_campaigns",
+    "google_ads_warnings": "google_ads_warnings",
+    "google_ads_warning": "google_ads_warnings",
+    "googleadswarnings": "google_ads_warnings",
     "google_sheets": "google_sheets",
     "googlesheets": "google_sheets",
 }
@@ -37,6 +41,7 @@ def _normalize_cache_requests(values: list[str] | None) -> list[str]:
             "google_ads_clients",
             "google_ads_budgets",
             "google_ads_campaigns",
+            "google_ads_warnings",
             "google_sheets",
         ]
 
@@ -62,6 +67,7 @@ def _normalize_cache_requests(values: list[str] | None) -> list[str]:
             "google_ads_clients",
             "google_ads_budgets",
             "google_ads_campaigns",
+            "google_ads_warnings",
             "google_sheets",
         ]
 
@@ -73,7 +79,7 @@ def _normalize_cache_requests(values: list[str] | None) -> list[str]:
     summary="Refresh SpendSphere caches",
     description=(
         "Refreshes account code, Google Ads clients, budgets, campaigns, and "
-        "Google Sheets caches for the current tenant."
+        "warning + Google Sheets caches for the current tenant."
     ),
 )
 def refresh_cache_route(
@@ -82,7 +88,8 @@ def refresh_cache_route(
         description=(
             "Optional cache list. Valid values: account_codes, "
             "google_ads_clients, google_ads_budgets, google_ads_campaigns, "
-            "google_sheets. Can be repeated or comma-separated."
+            "google_ads_warnings, google_sheets. Can be repeated or "
+            "comma-separated."
         ),
     ),
 ):
@@ -99,6 +106,7 @@ def refresh_cache_route(
         google_ads_clients
         google_ads_budgets
         google_ads_campaigns
+        google_ads_warnings
         google_sheets
 
     Example response:
@@ -110,6 +118,7 @@ def refresh_cache_route(
           "googleAdsClients": 12,
           "googleAdsBudgets": 120,
           "googleAdsCampaigns": 240,
+          "googleAdsWarnings": 25,
           "googleSheets": {
             "rollovers": 120,
             "activePeriod": 55
@@ -145,6 +154,9 @@ def refresh_cache_route(
     if "google_ads_campaigns" in requested:
         campaigns = get_ggad_campaigns(accounts or [], refresh_cache=True)
         response["googleAdsCampaigns"] = len(campaigns)
+
+    if "google_ads_warnings" in requested:
+        response["googleAdsWarnings"] = clear_google_ads_warning_cache()
 
     if "google_sheets" in requested:
         rollovers = refresh_google_sheet_cache("rollovers")

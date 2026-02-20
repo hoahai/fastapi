@@ -33,6 +33,7 @@ from apps.spendsphere.api.v1.helpers.db_queries import (
     soft_delete_accelerations_by_ids,
     update_acceleration_by_id,
     upsert_allocations,
+    upsert_masterbudgets,
     upsert_rollbreakdowns,
 )
 from apps.spendsphere.api.v1.helpers.ggAd import (
@@ -411,6 +412,7 @@ def _build_master_budgets(master_budgets: list[dict]) -> dict:
         )
         entry["budgets"].append(
             {
+                "id": mb.get("id"),
                 "serviceName": mb.get("serviceName") or mapping.get("serviceName"),
                 "subService": mb.get("subService") or "",
                 "netAmount": _to_float(net_amount),
@@ -814,6 +816,7 @@ def _get_ui_context_with_mutations(
 
     return {
         "account": account,
+        "masterBudgets": master_budgets,
         "rows": rows,
         "budgets": budgets,
         "allocations": allocations,
@@ -873,6 +876,16 @@ class UiRollBreakUpdate(BaseModel):
     newAmount: float | None = None
 
 
+class UiMasterBudgetUpdate(BaseModel):
+    model_config = ConfigDict(populate_by_name=True)
+    id: str | None = None
+    accountCode: str | None = None
+    serviceId: str | None = None
+    subService: str | None = None
+    currentNetAmount: float | None = None
+    newNetAmount: float | None = None
+
+
 class UiAllocationRollBreakUpdateRequest(BaseModel):
     model_config = ConfigDict(populate_by_name=True)
     accountCode: str
@@ -883,6 +896,7 @@ class UiAllocationRollBreakUpdateRequest(BaseModel):
         default_factory=list, alias="updatedRollBreaks"
     )
     updatedAllocations: list[UiAllocationUpdate] = Field(default_factory=list)
+    updatedMasterBudgets: list[UiMasterBudgetUpdate] = Field(default_factory=list)
 
 
 class UiAccelerationDate(BaseModel):
@@ -1066,6 +1080,7 @@ def load_ui_route(
             "PM": {
               "budgets": [
                 {
+                  "id": "0dhcb44-35f2-4fb6-9f1f-19527ab193e3",
                   "serviceName": "Vehicle Listing Ads",
                   "subService": "",
                   "netAmount": 680,
@@ -1270,10 +1285,10 @@ def load_ui_route(
 
 @router.post(
     "/uis/update",
-    summary="Update UI allocations and roll breakdowns",
+    summary="Update UI allocations, master budgets, and roll breakdowns",
     description=(
-        "Upsert allocations (budget level) and roll breakdowns (ad type) "
-        "for a single account."
+        "Upsert allocations (Google budget level), master budgets (service level), "
+        "and roll breakdowns (ad type) for a single account."
     ),
 )
 def update_ui_allocations_rollbreaks(
@@ -1295,6 +1310,15 @@ def update_ui_allocations_rollbreaks(
               "newAmount": 100
             }
           ],
+          "updatedMasterBudgets": [
+            {
+              "id": "0dhcb44-35f2-4fb6-9f1f-19527ab193e3",
+              "serviceId": "c6ac34bc-0fc0-46a6-9723-e83780ebb938",
+              "subService": "",
+              "currentNetAmount": 680,
+              "newNetAmount": 720
+            }
+          ],
           "updatedAllocations": [
             {
               "id": "7d963d35-ae9c-4c33-9ce3-375d0a8e1287",
@@ -1311,6 +1335,7 @@ def update_ui_allocations_rollbreaks(
     Example response:
         {
           "updatedAllocations": {"updated": 1, "inserted": 0},
+          "updatedMasterBudgets": {"updated": 1, "inserted": 0},
           "updatedRollBreakdowns": {"updated": 1, "inserted": 0},
           "googleAdsUpdates": {
             "overallSummary": {
@@ -1369,13 +1394,34 @@ def update_ui_allocations_rollbreaks(
             }
         )
 
+    if (
+        not request_payload.updatedAllocations
+        and not request_payload.updatedMasterBudgets
+        and not request_payload.updatedRollBreakdowns
+    ):
+        errors.append(
+            {
+                "field": "updates",
+                "message": (
+                    "At least one item is required in updatedAllocations, "
+                    "updatedMasterBudgets, or updatedRollBreakdowns"
+                ),
+            }
+        )
+
     if errors:
-        raise HTTPException(status_code=400, detail={"error": "Invalid payload", "errors": errors})
+        raise HTTPException(
+            status_code=400,
+            detail=_build_validation_error_detail(errors),
+        )
 
     account_code = require_account_code(
         account_code_raw or "",
         month=request_payload.month,
         year=request_payload.year,
+    )
+    month_value, year_value = _resolve_period(
+        request_payload.month, request_payload.year
     )
 
     allowed_adtypes = {
@@ -1383,6 +1429,21 @@ def update_ui_allocations_rollbreaks(
         for key in get_adtypes().keys()
         if str(key).strip()
     }
+    allowed_service_ids = {
+        str(service_id).strip()
+        for service_id in get_service_mapping().keys()
+        if str(service_id).strip()
+    }
+    existing_master_budget_ids: set[str] = set()
+    if request_payload.updatedMasterBudgets:
+        existing_master_budget_ids = {
+            budget_id
+            for budget_id in (
+                _normalize_optional_str(row.get("id"))
+                for row in get_masterbudgets([account_code], month_value, year_value)
+            )
+            if budget_id
+        }
 
     allocation_rows: list[dict] = []
     for idx, item in enumerate(request_payload.updatedAllocations):
@@ -1416,6 +1477,74 @@ def update_ui_allocations_rollbreaks(
                     "accountCode": account_code,
                     "ggBudgetId": budget_id,
                     "allocation": allocation_value,
+                }
+            )
+
+    master_budget_rows: list[dict] = []
+    for idx, item in enumerate(request_payload.updatedMasterBudgets):
+        row_id = _normalize_optional_str(item.id)
+        item_account = _normalize_optional_str(item.accountCode)
+        service_id = _normalize_optional_str(item.serviceId)
+        sub_service = _normalize_optional_str(item.subService)
+        net_amount_value = _to_float(item.newNetAmount)
+
+        if item_account and item_account.upper() != account_code:
+            errors.append(
+                {
+                    "index": idx,
+                    "field": "updatedMasterBudgets.accountCode",
+                    "value": item.accountCode,
+                    "message": "accountCode must match payload.accountCode",
+                }
+            )
+
+        if row_id and row_id not in existing_master_budget_ids:
+            errors.append(
+                {
+                    "index": idx,
+                    "field": "updatedMasterBudgets.id",
+                    "value": item.id,
+                    "message": "id was not found for accountCode/month/year",
+                }
+            )
+
+        if not row_id and not service_id:
+            errors.append(
+                {
+                    "index": idx,
+                    "field": "updatedMasterBudgets.serviceId",
+                    "value": item.serviceId,
+                    "message": "serviceId is required when id is null",
+                }
+            )
+        elif service_id and allowed_service_ids and service_id not in allowed_service_ids:
+            errors.append(
+                {
+                    "index": idx,
+                    "field": "updatedMasterBudgets.serviceId",
+                    "value": service_id,
+                    "allowed": sorted(allowed_service_ids),
+                }
+            )
+
+        if net_amount_value is None:
+            errors.append(
+                {
+                    "index": idx,
+                    "field": "updatedMasterBudgets.newNetAmount",
+                    "value": item.newNetAmount,
+                    "message": "newNetAmount is required and must be numeric",
+                }
+            )
+
+        if net_amount_value is not None and (row_id or service_id):
+            master_budget_rows.append(
+                {
+                    "id": row_id,
+                    "accountCode": account_code,
+                    "serviceId": service_id,
+                    "subService": sub_service or "",
+                    "netAmount": net_amount_value,
                 }
             )
 
@@ -1478,14 +1607,18 @@ def update_ui_allocations_rollbreaks(
             )
 
     if errors:
-        raise HTTPException(status_code=400, detail={"error": "Invalid payload", "errors": errors})
-
-    month_value, year_value = _resolve_period(
-        request_payload.month, request_payload.year
-    )
+        raise HTTPException(
+            status_code=400,
+            detail=_build_validation_error_detail(errors),
+        )
 
     allocations_result = upsert_allocations(
         allocation_rows,
+        month=month_value,
+        year=year_value,
+    )
+    master_budgets_result = upsert_masterbudgets(
+        master_budget_rows,
         month=month_value,
         year=year_value,
     )
@@ -1519,6 +1652,7 @@ def update_ui_allocations_rollbreaks(
             api_name_prefix="spendsphere_v1_ui_update",
         )
         rows = ui_context["rows"]
+        master_budgets = ui_context["masterBudgets"]
         budgets = ui_context["budgets"]
         allocations = ui_context["allocations"]
         accelerations = ui_context["accelerations"]
@@ -1531,6 +1665,7 @@ def update_ui_allocations_rollbreaks(
 
     response: dict[str, object] = {
         "updatedAllocations": allocations_result,
+        "updatedMasterBudgets": master_budgets_result,
         "updatedRollBreakdowns": rollbreaks_result,
         "googleAdsUpdates": {
             "overallSummary": overall_summary,
@@ -1539,6 +1674,7 @@ def update_ui_allocations_rollbreaks(
     }
 
     if request_payload.returnNewData:
+        master_budgets_payload = _build_master_budgets(master_budgets)
         roll_breakdown_payload = _build_roll_breakdown(rollbreakdowns)
         table_data = _build_table_data_payload(
             rows,
@@ -1551,6 +1687,7 @@ def update_ui_allocations_rollbreaks(
 
         response.update(
             {
+                "masterBudgets": master_budgets_payload,
                 "rollBreakdown": roll_breakdown_payload,
                 "tableData": table_data,
             }

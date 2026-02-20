@@ -575,6 +575,31 @@ def filter_cached_google_ads_warnings(
     return filtered
 
 
+def clear_google_ads_warning_cache(
+    *,
+    tenant_id: str | None = None,
+) -> int:
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+        warnings_cache = root.get(_GOOGLE_ADS_WARNINGS_KEY)
+        if not isinstance(warnings_cache, dict):
+            return 0
+
+        tenant_entry = warnings_cache.get(tenant_key)
+        removed = len(tenant_entry) if isinstance(tenant_entry, dict) else 0
+        if tenant_key not in warnings_cache:
+            return removed
+
+        warnings_cache.pop(tenant_key, None)
+        root[_GOOGLE_ADS_WARNINGS_KEY] = warnings_cache
+        _write_cache_root(cache_store, root)
+        return removed
+
+
 def _write_account_codes_cache(
     cache_path: Path,
     *,
