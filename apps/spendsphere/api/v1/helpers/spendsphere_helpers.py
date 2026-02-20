@@ -1,6 +1,7 @@
 import calendar
 from datetime import date, datetime
 import ast
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -27,6 +28,7 @@ _ACCOUNT_CODES_KEY = "account_codes"
 _GOOGLE_ADS_CLIENTS_KEY = "google_ads_clients"
 _GOOGLE_ADS_BUDGETS_KEY = "google_ads_budgets"
 _GOOGLE_ADS_CAMPAIGNS_KEY = "google_ads_campaigns"
+_GOOGLE_ADS_WARNINGS_KEY = "google_ads_warnings"
 _GOOGLE_SHEETS_KEY = "google_sheets"
 _GOOGLE_ADS_CLIENTS_CACHE_TTL_ENV = "SPENDSPHERE_GOOGLE_ADS_CLIENTS_CACHE_TTL_SECONDS"
 _GOOGLE_ADS_CLIENTS_CACHE_TTL_FALLBACK_ENV = "ttl_time"
@@ -194,6 +196,7 @@ def _load_cache_root(cache_store: FileCache) -> dict[str, object]:
     if (
         _ACCOUNT_CODES_KEY in data
         or _GOOGLE_ADS_CLIENTS_KEY in data
+        or _GOOGLE_ADS_WARNINGS_KEY in data
         or _GOOGLE_SHEETS_KEY in data
     ):
         root = data
@@ -215,6 +218,10 @@ def _load_cache_root(cache_store: FileCache) -> dict[str, object]:
     if not isinstance(google_ads_campaigns, dict):
         google_ads_campaigns = {}
 
+    google_ads_warnings = root.get(_GOOGLE_ADS_WARNINGS_KEY)
+    if not isinstance(google_ads_warnings, dict):
+        google_ads_warnings = {}
+
     google_sheets = root.get(_GOOGLE_SHEETS_KEY)
     if not isinstance(google_sheets, dict):
         google_sheets = {}
@@ -224,6 +231,7 @@ def _load_cache_root(cache_store: FileCache) -> dict[str, object]:
         _GOOGLE_ADS_CLIENTS_KEY: google_ads,
         _GOOGLE_ADS_BUDGETS_KEY: google_ads_budgets,
         _GOOGLE_ADS_CAMPAIGNS_KEY: google_ads_campaigns,
+        _GOOGLE_ADS_WARNINGS_KEY: google_ads_warnings,
         _GOOGLE_SHEETS_KEY: google_sheets,
     }
 
@@ -424,6 +432,147 @@ def get_google_ads_campaigns_cache_ttl_seconds() -> int:
     if value is None:
         return _DEFAULT_GOOGLE_ADS_RESOURCE_CACHE_TTL_SECONDS
     return value
+
+
+def get_google_ads_warning_cache_ttl_seconds() -> int:
+    value = _get_cache_override(
+        (
+            "google_ads_warnings_ttl_time",
+            "google_ads_warning_ttl_time",
+            "googleadswarnings_ttl_time",
+        )
+    )
+    if value is None:
+        return _DEFAULT_SPENDSPHERE_CACHE_TTL_SECONDS
+    return value
+
+
+def _normalize_campaign_names_for_warning_cache(raw: object) -> list[str]:
+    if not isinstance(raw, list):
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in raw:
+        name = str(value).strip()
+        if not name:
+            continue
+        key = name.lower()
+        if key in seen:
+            continue
+        seen.add(key)
+        normalized.append(name)
+    normalized.sort(key=lambda value: value.lower())
+    return normalized
+
+
+def _build_google_ads_warning_fingerprint(
+    *,
+    customer_id: str,
+    warning: dict,
+) -> str | None:
+    warning_code = str(warning.get("warningCode", "")).strip().upper()
+    budget_id = str(warning.get("budgetId", "")).strip()
+    account_code = str(warning.get("accountCode", "")).strip().upper()
+    campaign_id = str(warning.get("campaignId", "")).strip()
+    campaign_names = _normalize_campaign_names_for_warning_cache(
+        warning.get("campaignNames")
+    )
+    if not (warning_code or budget_id or campaign_id or account_code):
+        return None
+
+    payload = {
+        "customerId": customer_id,
+        "warningCode": warning_code,
+        "budgetId": budget_id,
+        "campaignId": campaign_id,
+        "accountCode": account_code,
+        "campaignNames": campaign_names,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+
+
+def filter_cached_google_ads_warnings(
+    warnings_by_customer: dict[str, list[dict]],
+    *,
+    tenant_id: str | None = None,
+) -> dict[str, list[dict]]:
+    if not warnings_by_customer:
+        return {}
+
+    ttl_seconds = get_google_ads_warning_cache_ttl_seconds()
+    if ttl_seconds <= 0:
+        return {
+            customer_id: [warning for warning in warnings if isinstance(warning, dict)]
+            for customer_id, warnings in warnings_by_customer.items()
+            if isinstance(customer_id, str)
+            and isinstance(warnings, list)
+            and warnings
+        }
+
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+    now = datetime.now(ZoneInfo(get_timezone()))
+    now_iso = now.isoformat()
+
+    filtered: dict[str, list[dict]] = {}
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+
+        warnings_cache = root.get(_GOOGLE_ADS_WARNINGS_KEY)
+        if not isinstance(warnings_cache, dict):
+            warnings_cache = {}
+
+        tenant_entry = warnings_cache.get(tenant_key)
+        if not isinstance(tenant_entry, dict):
+            tenant_entry = {}
+
+        active_fingerprints: dict[str, dict[str, str]] = {}
+        for fingerprint, entry in tenant_entry.items():
+            if not isinstance(fingerprint, str):
+                continue
+            if not isinstance(entry, dict):
+                continue
+            updated_at = _parse_cache_datetime(entry.get("updated_at"))
+            if updated_at is None:
+                continue
+            if (now - updated_at).total_seconds() > ttl_seconds:
+                continue
+            active_fingerprints[fingerprint] = {
+                "updated_at": updated_at.isoformat()
+            }
+
+        cache_changed = active_fingerprints != tenant_entry
+
+        for raw_customer_id, warnings in warnings_by_customer.items():
+            customer_id = str(raw_customer_id).strip()
+            if not customer_id or not isinstance(warnings, list):
+                continue
+            for warning in warnings:
+                if not isinstance(warning, dict):
+                    continue
+                fingerprint = _build_google_ads_warning_fingerprint(
+                    customer_id=customer_id,
+                    warning=warning,
+                )
+                if fingerprint and fingerprint in active_fingerprints:
+                    continue
+                filtered.setdefault(customer_id, []).append(warning)
+                if fingerprint:
+                    active_fingerprints[fingerprint] = {"updated_at": now_iso}
+                    cache_changed = True
+
+        if cache_changed:
+            if active_fingerprints:
+                warnings_cache[tenant_key] = active_fingerprints
+            else:
+                warnings_cache.pop(tenant_key, None)
+            root[_GOOGLE_ADS_WARNINGS_KEY] = warnings_cache
+            _write_cache_root(cache_store, root)
+
+    return filtered
 
 
 def _write_account_codes_cache(

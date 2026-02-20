@@ -5,7 +5,11 @@ from decimal import Decimal
 from apps.spendsphere.api.v1.helpers.dataTransform import (
     build_update_payloads_from_inputs,
 )
-from apps.spendsphere.api.v1.helpers.config import get_budget_warning_threshold
+from apps.spendsphere.api.v1.helpers.config import (
+    get_budget_warning_threshold,
+    get_google_ads_inactive_prefixes,
+    is_google_ads_inactive_name,
+)
 from apps.spendsphere.api.v1.helpers.email import build_google_ads_alert_email
 from apps.spendsphere.api.v1.helpers.db_queries import (
     get_allocations,
@@ -14,6 +18,9 @@ from apps.spendsphere.api.v1.helpers.db_queries import (
     get_rollbreakdowns,
 )
 from apps.spendsphere.api.v1.helpers.ggSheet import get_active_period
+from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
+    filter_cached_google_ads_warnings,
+)
 from shared.email import send_google_ads_result_email
 from shared.logger import get_logger
 from shared.utils import run_parallel
@@ -111,7 +118,7 @@ def _collect_budget_threshold_warnings(
     return warnings_by_customer
 
 
-def _inject_budget_threshold_warnings(
+def _inject_budget_warnings(
     *,
     mutation_results: list[dict],
     warnings_by_customer: dict[str, list[dict]],
@@ -160,6 +167,76 @@ def _inject_budget_threshold_warnings(
         total_warnings += len(extra_warnings)
 
     return total_warnings
+
+
+def _collect_spend_without_allocation_warnings(
+    *,
+    rows: list[dict],
+) -> dict[str, list[dict]]:
+    warnings_by_customer: dict[str, list[dict]] = {}
+    inactive_prefixes = get_google_ads_inactive_prefixes()
+
+    for row in rows:
+        if row.get("allocation") is not None:
+            continue
+
+        try:
+            spend = Decimal(str(row.get("totalCost", 0)))
+        except Exception:
+            continue
+        if spend <= 0:
+            continue
+
+        customer_id = str(row.get("ggAccountId", "")).strip()
+        if not customer_id:
+            continue
+
+        campaigns = row.get("campaigns", [])
+        all_campaigns_paused = bool(campaigns) and all(
+            str(c.get("status", "")).strip().upper() == "PAUSED"
+            for c in campaigns
+        )
+        all_campaigns_inactive_name = bool(campaigns) and all(
+            is_google_ads_inactive_name(
+                c.get("campaignName"),
+                inactive_prefixes=inactive_prefixes,
+            )
+            for c in campaigns
+        )
+        if all_campaigns_paused or all_campaigns_inactive_name:
+            continue
+
+        campaign_names = [
+            c.get("campaignName")
+            for c in campaigns
+            if c.get("campaignName")
+        ]
+        if not campaign_names:
+            # Skip budgets that are not linked to any campaigns.
+            continue
+        spend_display = f"${float(spend):,.2f}"
+
+        warnings_by_customer.setdefault(customer_id, []).append(
+            {
+                "budgetId": row.get("budgetId"),
+                "accountCode": row.get("accountCode"),
+                "campaignNames": campaign_names,
+                "currentAmount": (
+                    float(row.get("budgetAmount"))
+                    if row.get("budgetAmount") is not None
+                    else None
+                ),
+                "newAmount": None,
+                "spent": float(spend),
+                "warningCode": "SPEND_WITHOUT_ALLOCATION",
+                "error": (
+                    "Spend detected with missing allocation "
+                    f"({spend_display}); budget update skipped."
+                ),
+            }
+        )
+
+    return warnings_by_customer
 
 
 # =========================================================
@@ -349,7 +426,10 @@ def run_google_ads_budget_pipeline(
             budget_payloads=budget_payloads,
             threshold=budget_warning_threshold,
         )
-        threshold_warning_count = _inject_budget_threshold_warnings(
+        threshold_warnings_by_customer = filter_cached_google_ads_warnings(
+            threshold_warnings_by_customer
+        )
+        threshold_warning_count = _inject_budget_warnings(
             mutation_results=mutation_results,
             warnings_by_customer=threshold_warnings_by_customer,
         )
@@ -363,6 +443,26 @@ def run_google_ads_budget_pipeline(
                     }
                 },
             )
+
+    spend_no_allocation_warnings = _collect_spend_without_allocation_warnings(
+        rows=results,
+    )
+    spend_no_allocation_warnings = filter_cached_google_ads_warnings(
+        spend_no_allocation_warnings
+    )
+    spend_no_allocation_warning_count = _inject_budget_warnings(
+        mutation_results=mutation_results,
+        warnings_by_customer=spend_no_allocation_warnings,
+    )
+    if spend_no_allocation_warning_count > 0:
+        logger.warning(
+            "Google Ads spend without allocation warnings",
+            extra={
+                "extra_fields": {
+                    "warning_count": spend_no_allocation_warning_count,
+                }
+            },
+        )
 
     # =====================================================
     # 5. Aggregate results

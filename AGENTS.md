@@ -243,8 +243,7 @@ Documentation rules:
     -   Campaign is updated only when current status differs from
         `expected_status`.
 -   Budget amount update rule (stricter than campaign status):
-    -   Skip if all campaigns under that budget match
-        `GOOGLE_ADS_NAMING.inactivePrefixes`.
+    -   Skip if there are no campaigns under that budget.
     -   Skip if `dailyBudget` is missing.
     -   Skip if current Google budget amount is missing.
     -   Compute target amount:
@@ -258,6 +257,28 @@ Documentation rules:
     -   If `allocation` is missing and account is inactive, campaign
         status can still be forced to `PAUSED`, but budget amount update
         is skipped.
+-   Warning behavior:
+    -   `BUDGET_AMOUNT_THRESHOLD_EXCEEDED` warning:
+        -   Enabled only when tenant config `BUDGET_WARNING_THRESHOLD` is set.
+        -   Triggered when computed `newAmount` is greater than that threshold.
+        -   Does not block updates; warning is added to mutation result.
+    -   `SPEND_WITHOUT_ALLOCATION` warning:
+        -   Triggered when transformed row has `allocation = None` and
+            `totalCost > 0`.
+        -   Skipped when budget has no linked campaigns.
+        -   Skipped when all linked campaigns are `PAUSED`.
+        -   Skipped when all linked campaigns are prefixed by
+            `GOOGLE_ADS_NAMING.inactivePrefixes`.
+        -   Warning message states budget update is skipped for that row.
+    -   Warning dedupe cache:
+        -   Warning emission is tenant-scoped and cached in `caches.json`.
+        -   Duplicate warnings are suppressed by fingerprint
+            (`customerId` + `warningCode` + budget/campaign/account identity)
+            until TTL expires.
+        -   Default TTL is 24 hours (`86400` seconds).
+        -   Tenant override is under `CACHE` with
+            `google_ads_warnings_ttl_time` (or `google_ads_warning_ttl_time`).
+        -   TTL `<= 0` disables warning dedupe cache suppression.
 -   Execution mode:
     -   `dryRun=true`: no Google Ads mutations; returns simulated
         mutation result structure.

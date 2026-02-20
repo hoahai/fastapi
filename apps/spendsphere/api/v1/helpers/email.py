@@ -135,7 +135,10 @@ def build_google_ads_alert_email(
     else:
         alert_label = "Warnings"
 
-    subject = f"SpendSphere Alert: {alert_label} - {short_timestamp}"
+    tenant_id = get_tenant_id() or "Not Found"
+    subject = (
+        f"SpendSphere Alert [{tenant_id}]: {alert_label} - {short_timestamp}"
+    )
     app_label = "SpendSphere"
 
     mutation_results = full_report.get("mutation_results") or []
@@ -173,8 +176,6 @@ def build_google_ads_alert_email(
 
     request_id = get_request_id() or "Not Found"
     client_id = get_client_id() or "Not Found"
-    tenant_id = get_tenant_id() or "Not Found"
-
     text_lines = [
         f"{app_label} - Google Ads Alert",
         "=" * 60,

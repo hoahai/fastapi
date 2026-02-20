@@ -27,6 +27,11 @@ def _is_zzz_name(
         inactive_prefixes=inactive_prefixes,
     )
 
+
+def _normalize_account_code(value: object) -> str | None:
+    normalized = str(value or "").strip().upper()
+    return normalized or None
+
 # ============================================================
 # 1. MASTER BUDGET → AD TYPE MAPPING
 # ============================================================
@@ -51,7 +56,8 @@ def master_budget_ad_type_mapping(master_budgets: list[dict]) -> list[dict]:
         if not mapping:
             continue
 
-        key = (mb.get("accountCode"), mapping["adTypeCode"])
+        account_code = _normalize_account_code(mb.get("accountCode"))
+        key = (account_code, mapping["adTypeCode"])
         net_amount = Decimal(str(mb.get("netAmount", 0)))
 
         grouped[key]["netAmount"] += net_amount
@@ -89,13 +95,13 @@ def master_budget_campaigns_join(
     lookup = defaultdict(list)
 
     for c in campaigns:
-        key = (c.get("accountCode"), c.get("adTypeCode"))
+        key = (_normalize_account_code(c.get("accountCode")), c.get("adTypeCode"))
         lookup[key].append(c)
 
     rows: list[dict] = []
 
     for mb in master_budget_data:
-        key = (mb.get("accountCode"), mb.get("adTypeCode"))
+        key = (_normalize_account_code(mb.get("accountCode")), mb.get("adTypeCode"))
         for c in lookup.get(key, []):
             rows.append(
                 {
@@ -167,28 +173,28 @@ def group_campaigns_by_budget(
 
     budget_lookup = {b.get("budgetId"): b for b in budgets}
     master_lookup = {
-        (mb.get("accountCode"), mb.get("adTypeCode")): mb
+        (_normalize_account_code(mb.get("accountCode")), mb.get("adTypeCode")): mb
         for mb in master_budget_data
     }
     accounts_with_master = {
-        str(mb.get("accountCode", "")).strip().upper()
+        _normalize_account_code(mb.get("accountCode"))
         for mb in master_budget_data
-        if str(mb.get("accountCode", "")).strip()
+        if _normalize_account_code(mb.get("accountCode"))
     }
     allocation_lookup = {
         (
-            str(a.get("accountCode", "")).strip().upper(),
+            _normalize_account_code(a.get("accountCode")),
             str(a.get("ggBudgetId", "")).strip(),
         )
         for a in allocations
-        if str(a.get("accountCode", "")).strip()
+        if _normalize_account_code(a.get("accountCode"))
         and str(a.get("ggBudgetId", "")).strip()
     }
 
     grouped: dict[tuple[str, str], dict] = {}
 
     for c in campaigns:
-        account_code = c.get("accountCode")
+        account_code = _normalize_account_code(c.get("accountCode"))
         ad_type = c.get("adTypeCode")
         master = master_lookup.get((account_code, ad_type))
         if not master:
@@ -260,7 +266,7 @@ def group_campaigns_by_budget(
         if group_key in grouped:
             continue
 
-        account_code = str(budget.get("accountCode", "")).strip().upper()
+        account_code = _normalize_account_code(budget.get("accountCode"))
         has_allocation = (account_code, budget_id) in allocation_lookup
         has_masterbudget = account_code in accounts_with_master
         if not has_allocation and not has_masterbudget:
@@ -268,7 +274,7 @@ def group_campaigns_by_budget(
 
         fallback_group = {
             "ggAccountId": customer_id,
-            "accountCode": budget.get("accountCode"),
+            "accountCode": account_code or budget.get("accountCode"),
             "accountName": budget.get("accountName"),
             "adTypeCode": None,
             "netAmount": Decimal("0"),
@@ -303,14 +309,25 @@ def budget_allocation_join(
     allocations: list[dict],
 ) -> list[dict]:
     lookup = {
-        (a.get("accountCode"), a.get("ggBudgetId")): Decimal(
+        (
+            _normalize_account_code(a.get("accountCode")),
+            str(a.get("ggBudgetId", "")).strip(),
+        ): Decimal(
             str(a.get("allocation", 0))
         )
         for a in allocations
+        if _normalize_account_code(a.get("accountCode"))
+        and str(a.get("ggBudgetId", "")).strip()
     }
 
     for b in budgets:
-        b["allocation"] = lookup.get((b.get("accountCode"), b["budgetId"]), None)
+        b["allocation"] = lookup.get(
+            (
+                _normalize_account_code(b.get("accountCode")),
+                str(b.get("budgetId", "")).strip(),
+            ),
+            None,
+        )
 
     return budgets
 
@@ -320,15 +337,23 @@ def budget_rollover_join(
     rollovers: list[dict],
 ) -> list[dict]:
     lookup = {
-        (r.get("accountCode"), r.get("adTypeCode")): Decimal(
+        (
+            _normalize_account_code(r.get("accountCode")),
+            str(r.get("adTypeCode", "")).strip(),
+        ): Decimal(
             str(r.get("amount", 0))
         )
         for r in rollovers
+        if _normalize_account_code(r.get("accountCode"))
     }
 
     for b in budgets:
         b["rolloverAmount"] = lookup.get(
-            (b.get("accountCode"), b.get("adTypeCode")), Decimal("0")
+            (
+                _normalize_account_code(b.get("accountCode")),
+                str(b.get("adTypeCode", "")).strip(),
+            ),
+            Decimal("0"),
         )
 
     return budgets
@@ -389,13 +414,13 @@ def budget_activePeriod_join(
     lookup: dict[str, dict] = {}
 
     for ap in activePeriod or []:
-        account_code = ap.get("accountCode")
+        account_code = _normalize_account_code(ap.get("accountCode"))
         if not account_code:
             continue
-        lookup[str(account_code).upper()] = ap
+        lookup[account_code] = ap
 
     for b in budgets:
-        account_code = str(b.get("accountCode", "")).upper()
+        account_code = _normalize_account_code(b.get("accountCode")) or ""
         ap = lookup.get(account_code, {})
 
         start_date_raw = ap.get("startDate")
@@ -609,15 +634,6 @@ def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
             for c in campaigns
             if c.get("campaignName")
         ]
-        zzz_campaigns = [
-            c
-            for c in campaigns
-            if _is_zzz_name(
-                c.get("campaignName"),
-                inactive_prefixes=inactive_prefixes,
-            )
-        ]
-        all_campaigns_zzz = bool(campaigns) and len(zzz_campaigns) == len(campaigns)
 
         # -------------------------
         # Campaign status updates (independent)
@@ -641,7 +657,7 @@ def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
         # -------------------------
         # Budget updates (stricter rules)
         # -------------------------
-        if not campaigns or all_campaigns_zzz:
+        if not campaigns:
             continue
         if daily_budget is None:
             continue
@@ -803,7 +819,7 @@ def build_update_payloads_from_inputs(
     activePeriod: list[dict] | None = None,
     *,
     include_transform_results: bool = False,
-) -> tuple[list[dict], list[dict], list[dict] | None]:
+) -> tuple[list[dict], list[dict], list[dict]]:
     """
     Build update payloads directly from raw inputs, optionally returning
     the transformed rows for debugging/inspection.
@@ -820,6 +836,4 @@ def build_update_payloads_from_inputs(
         include_transform_results=include_transform_results,
     )
     budget_payloads, campaign_payloads = generate_update_payloads(rows)
-    if include_transform_results:
-        return budget_payloads, campaign_payloads, rows
-    return budget_payloads, campaign_payloads, None
+    return budget_payloads, campaign_payloads, rows
