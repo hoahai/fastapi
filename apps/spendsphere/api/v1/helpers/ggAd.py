@@ -918,6 +918,87 @@ def get_ggad_campaigns(
     return results
 
 
+def get_ggad_budget_adtype_candidates(
+    accounts: list[dict],
+) -> dict[tuple[str, str], str | None]:
+    """
+    Build first-seen adTypeCode candidates by (customerId, budgetId) from
+    raw Google Ads campaigns.
+
+    Unlike `get_ggad_campaigns`, this helper is intentionally permissive and is
+    used only as fallback adType inference for budget rows. It does not exclude
+    campaigns by inactive naming prefixes/status.
+    """
+    if not accounts:
+        return {}
+
+    adtypes = get_adtypes()
+    allowed_adtypes = {str(code).strip().upper() for code in adtypes.keys() if code}
+    allowed_adtypes.add(_UNKNOWN_ADTYPE_CODE)
+    campaign_name_pattern = _compile_naming_pattern("campaign", adtypes)
+    channel_to_adtype = _build_channel_type_to_adtype_map(adtypes)
+
+    def per_account_func(account: dict) -> list[dict]:
+        campaigns = get_ggad_campaign(account["id"])
+        rows: list[dict] = []
+
+        for c in campaigns:
+            budget_id = str(c.get("budgetId", "")).strip()
+            if not budget_id:
+                continue
+
+            ad_type: str | None = None
+            name = str(c.get("campaignName", "")).strip()
+            if name:
+                match = campaign_name_pattern.match(name)
+                if match:
+                    groups = _normalize_named_groups(match)
+                    parsed_ad_type = str(groups.get("adTypeCode", "")).strip().upper()
+                    if parsed_ad_type in allowed_adtypes:
+                        ad_type = parsed_ad_type
+
+            if not ad_type:
+                channel_type = str(c.get("channelType", "")).strip().upper()
+                channel_ad_type = channel_to_adtype.get(
+                    channel_type,
+                    _UNKNOWN_ADTYPE_CODE,
+                )
+                if channel_ad_type in allowed_adtypes:
+                    ad_type = channel_ad_type
+
+            if not ad_type:
+                continue
+
+            rows.append(
+                {
+                    "customerId": str(account.get("id", "")).strip(),
+                    "budgetId": budget_id,
+                    "adTypeCode": ad_type,
+                }
+            )
+
+        return rows
+
+    tasks = [(per_account_func, (account,)) for account in accounts]
+    candidate_rows = run_parallel_flatten(tasks=tasks, api_name="google_ads")
+
+    result: dict[tuple[str, str], str | None] = {}
+    for row in candidate_rows:
+        if not isinstance(row, dict):
+            continue
+        customer_id = str(row.get("customerId", "")).strip()
+        budget_id = str(row.get("budgetId", "")).strip()
+        if not customer_id or not budget_id:
+            continue
+        key = (customer_id, budget_id)
+        if key in result:
+            continue
+        ad_type = str(row.get("adTypeCode", "")).strip().upper()
+        result[key] = ad_type or None
+
+    return result
+
+
 # =====================
 # SPEND
 # =====================

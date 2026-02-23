@@ -38,6 +38,7 @@ from apps.spendsphere.api.v1.helpers.db_queries import (
 )
 from apps.spendsphere.api.v1.helpers.ggAd import (
     get_ggad_accounts,
+    get_ggad_budget_adtype_candidates,
     get_ggad_budgets,
     get_ggad_campaigns,
     get_ggad_spents,
@@ -470,6 +471,78 @@ def _format_campaign_names(campaigns: list[dict]) -> str:
     )
 
 
+def _has_warning_signal(value: object) -> bool:
+    if isinstance(value, dict):
+        for key, nested in value.items():
+            key_name = str(key).strip().lower()
+            if key_name in {"haswarning", "iswarning"}:
+                if bool(nested):
+                    return True
+            elif key_name in {"warning", "warnings", "warningcode", "error", "errors"}:
+                if nested not in (None, "", [], {}):
+                    return True
+            if _has_warning_signal(nested):
+                return True
+        return False
+
+    if isinstance(value, list):
+        return any(_has_warning_signal(item) for item in value)
+
+    return False
+
+
+def _is_zero_or_none(value: object) -> bool:
+    if value is None:
+        return True
+    return _to_decimal(value, fallback=Decimal("0")) == Decimal("0")
+
+
+def _is_inactive_campaign_name(name: object) -> bool:
+    cleaned = str(name or "").strip().lower()
+    if not cleaned:
+        return False
+    return cleaned.startswith("zzz_") or cleaned.startswith("zzz.")
+
+
+def _has_any_active_campaign(campaigns: object) -> bool:
+    if not isinstance(campaigns, list) or not campaigns:
+        return False
+
+    for campaign in campaigns:
+        if not isinstance(campaign, dict):
+            continue
+        raw_name = campaign.get("campaignName")
+        if raw_name is None:
+            # Unknown name: keep row rather than risk hiding valid data.
+            return True
+        campaign_name = str(raw_name).strip()
+        if not campaign_name:
+            return True
+        if not _is_inactive_campaign_name(campaign_name):
+            return True
+
+    return False
+
+
+def _should_filter_table_row(item: dict) -> bool:
+    if bool(item.get("_warningSignal")):
+        return False
+    if _has_warning_signal(item):
+        return False
+
+    allocation_raw = item.get("allocation")
+    if isinstance(allocation_raw, dict):
+        allocation_amount = allocation_raw.get("allocation")
+    else:
+        allocation_amount = allocation_raw
+
+    no_allocation = _is_zero_or_none(allocation_amount)
+    no_active_campaigns = not _has_any_active_campaign(item.get("campaigns"))
+    no_spent = _is_zero_or_none(item.get("spent"))
+
+    return no_allocation and no_active_campaigns and no_spent
+
+
 def _build_table_data(
     rows: list[dict],
     budgets: list[dict],
@@ -525,6 +598,7 @@ def _build_table_data(
                 },
                 "campaigns": normalized_campaigns,
                 "_campaignNames": campaign_names,
+                "_warningSignal": _has_warning_signal(row),
             }
         )
 
@@ -649,6 +723,7 @@ def _build_table_data_fallback(
                 "acceleration": acceleration_value,
                 "campaigns": [],
                 "_campaignNames": "",
+                "_warningSignal": _has_warning_signal(campaign) or _has_warning_signal(budget_meta),
             }
             grouped[key] = entry
 
@@ -673,6 +748,11 @@ def _build_table_data_fallback(
 
 
 def _finalize_table_data(table_data: list[dict]) -> list[dict]:
+    table_data = [
+        item for item in table_data
+        if not _should_filter_table_row(item)
+    ]
+
     def _sort_key(item: dict) -> tuple:
         allocation_value = item.get("allocation", {}) or {}
         allocation_amount = allocation_value.get("allocation")
@@ -695,6 +775,7 @@ def _finalize_table_data(table_data: list[dict]) -> list[dict]:
     for idx, item in enumerate(table_data):
         item["dataNo"] = idx
         item.pop("_campaignNames", None)
+        item.pop("_warningSignal", None)
 
     return table_data
 
@@ -741,11 +822,12 @@ def _get_ui_context_with_mutations(
     def _get_budgets(accounts: list[dict]) -> list[dict]:
         return get_ggad_budgets(accounts, refresh_cache=refresh_budgets)
 
-    campaigns, budgets, costs = run_parallel(
+    campaigns, budgets, costs, fallback_ad_types_by_budget = run_parallel(
         tasks=[
             (get_ggad_campaigns, ([account],)),
             (_get_budgets, ([account],)),
             (get_ggad_spents, ([account], month, year)),
+            (get_ggad_budget_adtype_candidates, ([account],)),
         ],
         api_name=f"{api_name_prefix}_google_ads",
     )
@@ -766,6 +848,7 @@ def _get_ui_context_with_mutations(
         rollovers=rollbreakdowns,
         accelerations=accelerations,
         activePeriod=active_period,
+        fallback_ad_types_by_budget=fallback_ad_types_by_budget,
         today=period_date,
         include_transform_results=True,
     )
@@ -1218,11 +1301,12 @@ def load_ui_route(
     )
     active_accelerations = _filter_accelerations_for_date(accelerations, period_date)
 
-    campaigns, budgets, costs = run_parallel(
+    campaigns, budgets, costs, fallback_ad_types_by_budget = run_parallel(
         tasks=[
             (get_ggad_campaigns, ([account],)),
             (get_ggad_budgets, ([account],)),
             (get_ggad_spents, ([account], month_value, year_value)),
+            (get_ggad_budget_adtype_candidates, ([account],)),
         ],
         api_name="spendsphere_v1_ui_load_google_ads",
     )
@@ -1249,6 +1333,7 @@ def load_ui_route(
         rollovers=rollbreakdowns,
         accelerations=active_accelerations,
         activePeriod=active_period,
+        fallback_ad_types_by_budget=fallback_ad_types_by_budget,
         today=period_date,
         include_transform_results=True,
     )

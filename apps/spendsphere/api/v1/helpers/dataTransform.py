@@ -22,6 +22,13 @@ def _is_zzz_name(
     name: str | None,
     inactive_prefixes: tuple[str, ...] | None = None,
 ) -> bool:
+    """
+    Return True when a name matches configured inactive prefixes.
+
+    Example:
+        _is_zzz_name("zzz. old campaign") -> True
+        _is_zzz_name("Brand Search") -> False
+    """
     return is_google_ads_inactive_name(
         name,
         inactive_prefixes=inactive_prefixes,
@@ -29,6 +36,13 @@ def _is_zzz_name(
 
 
 def _normalize_account_code(value: object) -> str | None:
+    """
+    Normalize account code values to uppercase trimmed tokens.
+
+    Example:
+        _normalize_account_code(" taaa ") -> "TAAA"
+        _normalize_account_code("") -> None
+    """
     normalized = str(value or "").strip().upper()
     return normalized or None
 
@@ -40,6 +54,22 @@ def _normalize_account_code(value: object) -> str | None:
 def master_budget_ad_type_mapping(master_budgets: list[dict]) -> list[dict]:
     """
     Aggregate master budgets by (accountCode, adTypeCode).
+
+    Example:
+        Input:
+            master_budgets = [
+                {"accountCode": "TAAA", "serviceId": "svc-1", "netAmount": 100},
+                {"accountCode": "TAAA", "serviceId": "svc-2", "netAmount": 50},
+            ]
+        Output:
+            [
+                {
+                    "accountCode": "TAAA",
+                    "adTypeCode": "...",
+                    "netAmount": Decimal("150"),
+                    "services": [...],
+                }
+            ]
     """
     grouped = defaultdict(
         lambda: {
@@ -91,6 +121,13 @@ def master_budget_campaigns_join(
 ) -> list[dict]:
     """
     Join master budget data with campaigns by (accountCode, adTypeCode).
+
+    Example:
+        Input:
+            master_budget_data = [{"accountCode": "TAAA", "adTypeCode": "SEM"}]
+            campaigns = [{"accountCode": "TAAA", "adTypeCode": "SEM", "campaignId": "1"}]
+        Output:
+            [{"accountCode": "TAAA", "adTypeCode": "SEM", "campaignId": "1", ...}]
     """
     lookup = defaultdict(list)
 
@@ -129,6 +166,13 @@ def master_budget_google_budgets_join(
 ) -> list[dict]:
     """
     Join Google Ads budget metadata by budgetId.
+
+    Example:
+        Input:
+            rows = [{"budgetId": "123"}]
+            budgets = [{"budgetId": "123", "budgetName": "Main", "amount": 200}]
+        Output:
+            [{"budgetId": "123", "budgetName": "Main", "budgetAmount": Decimal("200")}]
     """
     lookup = {b.get("budgetId"): b for b in budgets}
 
@@ -158,7 +202,94 @@ def group_campaigns_by_budget(
     allocations: list[dict],
     *,
     include_transform_results: bool,
+    fallback_ad_types_by_budget: dict[tuple[str, str], str | None] | None = None,
 ) -> list[dict]:
+    """
+    Build budget-centric rows from campaign-level records.
+
+    Behavior:
+    - Primary rows are produced by matching campaign records to master budget rows
+      using `(accountCode, adTypeCode)`.
+    - Campaign-level costs are aggregated into one budget-level `totalCost`.
+    - Budget metadata (`budgetName`, `budgetStatus`, `budgetAmount`) is filled
+      from `budgets` using `budgetId`.
+    - Fallback rows are also created for budgets with no matched campaigns when:
+      1) the budget has an allocation, or
+      2) its account exists in master budget data.
+    - When `include_transform_results=True`, each row includes extra debugging
+      fields (`services`, campaign-level `cost`, and joined `campaignNames` text).
+
+    Example (normal grouped row):
+        master_budget_data = [
+            {
+                "accountCode": "TAAA",
+                "adTypeCode": "SEM",
+                "netAmount": Decimal("1000"),
+                "services": [{"serviceId": "svc-sem", "serviceName": "SEM", "netAmount": Decimal("1000")}],
+            }
+        ]
+        campaigns = [
+            {
+                "customerId": "111",
+                "accountCode": "TAAA",
+                "adTypeCode": "SEM",
+                "campaignId": "C1",
+                "campaignName": "TAAA | SEM | Brand",
+                "budgetId": "B1",
+                "status": "ENABLED",
+            },
+            {
+                "customerId": "111",
+                "accountCode": "TAAA",
+                "adTypeCode": "SEM",
+                "campaignId": "C2",
+                "campaignName": "TAAA | SEM | NonBrand",
+                "budgetId": "B1",
+                "status": "PAUSED",
+            },
+        ]
+        budgets = [{"customerId": "111", "accountCode": "TAAA", "budgetId": "B1", "budgetName": "Main SEM", "status": "ENABLED", "amount": 80}]
+        costs = [
+            {"customerId": "111", "campaignId": "C1", "budgetId": "B1", "cost": 30},
+            {"customerId": "111", "campaignId": "C2", "budgetId": "B1", "cost": 20},
+        ]
+        allocations = [{"accountCode": "TAAA", "ggBudgetId": "B1", "allocation": 60}]
+
+        group_campaigns_by_budget(..., include_transform_results=True) returns a row like:
+            {
+                "ggAccountId": "111",
+                "accountCode": "TAAA",
+                "adTypeCode": "SEM",
+                "netAmount": Decimal("1000"),
+                "budgetId": "B1",
+                "budgetName": "Main SEM",
+                "budgetStatus": "ENABLED",
+                "budgetAmount": Decimal("80"),
+                "campaigns": [
+                    {"campaignId": "C1", "campaignName": "TAAA | SEM | Brand", "status": "ENABLED", "cost": Decimal("30")},
+                    {"campaignId": "C2", "campaignName": "TAAA | SEM | NonBrand", "status": "PAUSED", "cost": Decimal("20")},
+                ],
+                "totalCost": Decimal("50"),
+                "services": [...],
+                "campaignNames": "TAAA | SEM | Brand\\nTAAA | SEM | NonBrand",
+            }
+
+    Example (fallback row when no campaign matches):
+        Suppose Google Ads has budget `B2` for account `TAAA`, but no campaign in
+        `campaigns` matched `(accountCode="TAAA", adTypeCode=...)`.
+        This function still emits a row for `B2` when either condition is true:
+        1) Allocations contain the exact key `(accountCode="TAAA", ggBudgetId="B2")`
+        2) Account `TAAA` appears in `master_budget_data` for the period
+        This keeps important "orphan" budgets visible in downstream calculations.
+
+        The emitted fallback row has:
+        - `campaigns: []`
+        - `adTypeCode` inferred from the first campaign found for
+          `(customerId, budgetId)` when available (including optional
+          raw-campaign fallback map); otherwise `None`
+        - `netAmount: Decimal("0")`
+        - `totalCost` derived from `costs` by `(customerId, budgetId)` when present.
+    """
     cost_lookup: dict[tuple[str | None, str | None], Decimal] = defaultdict(
         lambda: Decimal("0")
     )
@@ -190,6 +321,34 @@ def group_campaigns_by_budget(
         if _normalize_account_code(a.get("accountCode"))
         and str(a.get("ggBudgetId", "")).strip()
     }
+    # Preserve the first adType seen per (customerId, budgetId) so fallback rows
+    # can still expose adTypeCode even when campaign rows are skipped later.
+    first_ad_type_by_budget: dict[tuple[str, str], str | None] = {}
+    for c in campaigns:
+        customer_id = str(c.get("customerId", "")).strip()
+        budget_id = str(c.get("budgetId", "")).strip()
+        if not customer_id or not budget_id:
+            continue
+        key = (customer_id, budget_id)
+        if key in first_ad_type_by_budget:
+            continue
+        ad_type = str(c.get("adTypeCode", "")).strip()
+        first_ad_type_by_budget[key] = ad_type or None
+    if fallback_ad_types_by_budget:
+        for raw_key, raw_ad_type in fallback_ad_types_by_budget.items():
+            try:
+                customer_id_raw, budget_id_raw = raw_key
+            except Exception:
+                continue
+            customer_id = str(customer_id_raw or "").strip()
+            budget_id = str(budget_id_raw or "").strip()
+            if not customer_id or not budget_id:
+                continue
+            key = (customer_id, budget_id)
+            if key in first_ad_type_by_budget:
+                continue
+            ad_type = str(raw_ad_type or "").strip()
+            first_ad_type_by_budget[key] = ad_type or None
 
     grouped: dict[tuple[str, str], dict] = {}
 
@@ -272,11 +431,12 @@ def group_campaigns_by_budget(
         if not has_allocation and not has_masterbudget:
             continue
 
+        inferred_ad_type = first_ad_type_by_budget.get(group_key)
         fallback_group = {
             "ggAccountId": customer_id,
             "accountCode": account_code or budget.get("accountCode"),
             "accountName": budget.get("accountName"),
-            "adTypeCode": None,
+            "adTypeCode": inferred_ad_type,
             "netAmount": Decimal("0"),
             "budgetId": budget_id,
             "budgetName": budget.get("budgetName"),
@@ -308,6 +468,14 @@ def budget_allocation_join(
     budgets: list[dict],
     allocations: list[dict],
 ) -> list[dict]:
+    """
+    Attach `allocation` percentage to each budget row.
+
+    Example:
+        budgets = [{"accountCode": "TAAA", "budgetId": "123"}]
+        allocations = [{"accountCode": "TAAA", "ggBudgetId": "123", "allocation": 60}]
+        -> [{"accountCode": "TAAA", "budgetId": "123", "allocation": Decimal("60")}]
+    """
     lookup = {
         (
             _normalize_account_code(a.get("accountCode")),
@@ -336,6 +504,14 @@ def budget_rollover_join(
     budgets: list[dict],
     rollovers: list[dict],
 ) -> list[dict]:
+    """
+    Attach rollover amount by `(accountCode, adTypeCode)` to budget rows.
+
+    Example:
+        budgets = [{"accountCode": "TAAA", "adTypeCode": "SEM"}]
+        rollovers = [{"accountCode": "TAAA", "adTypeCode": "SEM", "amount": 120}]
+        -> [{"accountCode": "TAAA", "adTypeCode": "SEM", "rolloverAmount": Decimal("120")}]
+    """
     lookup = {
         (
             _normalize_account_code(r.get("accountCode")),
@@ -365,6 +541,14 @@ def budget_rollover_join(
 
 
 def _coerce_date(value) -> date | None:
+    """
+    Parse supported date-like inputs into `date`.
+
+    Example:
+        _coerce_date("2026-02-01") -> date(2026, 2, 1)
+        _coerce_date("02/01/26") -> date(2026, 2, 1)
+        _coerce_date("bad") -> None
+    """
     if isinstance(value, date):
         return value
     if isinstance(value, datetime):
@@ -383,6 +567,13 @@ def _coerce_date(value) -> date | None:
 
 
 def _coerce_datetime(value) -> datetime | None:
+    """
+    Parse supported datetime-like inputs into `datetime`.
+
+    Example:
+        _coerce_datetime("2026-02-01 08:30:00") -> datetime(...)
+        _coerce_datetime(date(2026, 2, 1)) -> datetime(2026, 2, 1, 0, 0)
+    """
     if isinstance(value, datetime):
         return value
     if isinstance(value, date):
@@ -406,6 +597,14 @@ def budget_activePeriod_join(
     activePeriod: list[dict] | None,
     today: date | None = None,
 ) -> list[dict]:
+    """
+    Attach active-period fields (`startDate`, `endDate`, `isActive`) to budget rows.
+
+    Example:
+        activePeriod = [{"accountCode": "TAAA", "startDate": "2026-02-01", "endDate": "2026-02-28"}]
+        budgets = [{"accountCode": "TAAA", "budgetId": "123"}]
+        -> [{"accountCode": "TAAA", "budgetId": "123", "isActive": True, ...}]
+    """
     tz = pytz.timezone(get_timezone())
     now = datetime.now(tz)
     if not today:
@@ -462,7 +661,17 @@ def calculate_daily_budget(
     today: date | None = None,
 ) -> list[dict]:
     """
-    Calculate daily budget per budgetId.
+    Calculate budget math fields at budget level.
+
+    Adds/updates:
+    - `daysLeft`
+    - `allocatedBudgetBeforeAcceleration`
+    - `remainingBudget`
+    - `dailyBudget` (0 when inactive)
+
+    Example:
+        Input row has `netAmount=1000`, `rolloverAmount=100`, `allocation=50`, `totalCost=300`
+        Output row includes computed `dailyBudget` and `remainingBudget`.
     """
 
     if not today:
@@ -535,6 +744,18 @@ def apply_budget_accelerations(
     budgets: list[dict],
     accelerations: list[dict] | None = None,
 ) -> list[dict]:
+    """
+    Apply the best matching acceleration to each budget row.
+
+    Precedence:
+        BUDGET scope > AD_TYPE scope > ACCOUNT scope
+    Tie-break:
+        latest `dateUpdated/dateCreated`, then highest id
+
+    Example:
+        If account has ACCOUNT=120 and budget has BUDGET=150,
+        the row receives `accelerationMultiplier=Decimal("150")`.
+    """
     if not accelerations:
         return budgets
 
@@ -602,6 +823,19 @@ def apply_budget_accelerations(
 
 
 def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
+    """
+    Convert transformed rows into Google Ads mutation payloads.
+
+    Returns:
+    - budget_payloads: grouped by customer_id for budget amount updates
+    - campaign_payloads: grouped by customer_id for campaign status updates
+
+    Example:
+        Input:
+            [{"ggAccountId": "1", "budgetId": "B1", "dailyBudget": Decimal("25.00"), ...}]
+        Output:
+            ([{"customer_id": "1", "updates": [...]}], [{"customer_id": "1", "updates": [...]}])
+    """
     budget_updates: dict[str, list[dict]] = {}
     campaign_updates: dict[str, dict[str, dict]] = {}
     inactive_prefixes = get_google_ads_inactive_prefixes()
@@ -743,12 +977,32 @@ def _build_budget_rows(
     rollovers: list[dict],
     accelerations: list[dict] | None = None,
     activePeriod: list[dict] | None = None,
+    fallback_ad_types_by_budget: dict[tuple[str, str], str | None] | None = None,
     *,
     today: date | None = None,
     include_transform_results: bool = True,
 ) -> list[dict]:
     """
-    Full Google Ads budget pipeline (BUDGET-CENTRIC).
+    Run the full in-memory transformation pipeline and return budget rows.
+
+    Pipeline stages:
+    1. Master budget aggregation by ad type
+    2. Campaign grouping by budget
+    3. Allocation join
+    4. Rollover join
+    5. Active period join
+    6. Acceleration application
+    7. Daily budget calculation
+
+    Example:
+        rows = _build_budget_rows(
+            master_budgets=[...],
+            campaigns=[...],
+            budgets=[...],
+            costs=[...],
+            allocations=[...],
+            rollovers=[...],
+        )
     """
 
     step1 = master_budget_ad_type_mapping(master_budgets)
@@ -759,6 +1013,7 @@ def _build_budget_rows(
         costs,
         allocations,
         include_transform_results=include_transform_results,
+        fallback_ad_types_by_budget=fallback_ad_types_by_budget,
     )
     step3 = budget_allocation_join(step2, allocations)
     step4 = budget_rollover_join(step3, rollovers)
@@ -793,12 +1048,24 @@ def transform_google_ads_data(
     rollovers: list[dict],
     accelerations: list[dict] | None = None,
     activePeriod: list[dict] | None = None,
+    fallback_ad_types_by_budget: dict[tuple[str, str], str | None] | None = None,
     *,
     today: date | None = None,
     include_transform_results: bool = True,
 ) -> list[dict]:
     """
-    Full Google Ads budget pipeline (BUDGET-CENTRIC).
+    Public wrapper to produce transformed budget rows.
+
+    Example:
+        rows = transform_google_ads_data(
+            master_budgets=[...],
+            campaigns=[...],
+            budgets=[...],
+            costs=[...],
+            allocations=[...],
+            rollovers=[...],
+            activePeriod=[...],
+        )
     """
     return _build_budget_rows(
         master_budgets,
@@ -809,6 +1076,7 @@ def transform_google_ads_data(
         rollovers,
         accelerations=accelerations,
         activePeriod=activePeriod,
+        fallback_ad_types_by_budget=fallback_ad_types_by_budget,
         today=today,
         include_transform_results=include_transform_results,
     )
@@ -823,12 +1091,28 @@ def build_update_payloads_from_inputs(
     rollovers: list[dict],
     accelerations: list[dict] | None = None,
     activePeriod: list[dict] | None = None,
+    fallback_ad_types_by_budget: dict[tuple[str, str], str | None] | None = None,
     *,
     include_transform_results: bool = False,
 ) -> tuple[list[dict], list[dict], list[dict]]:
     """
-    Build update payloads directly from raw inputs, optionally returning
-    the transformed rows for debugging/inspection.
+    Build mutation payloads directly from raw input collections.
+
+    Returns:
+    - budget_payloads
+    - campaign_payloads
+    - rows (transformed rows; included always for downstream inspection)
+
+    Example:
+        budget_payloads, campaign_payloads, rows = build_update_payloads_from_inputs(
+            master_budgets=[...],
+            campaigns=[...],
+            budgets=[...],
+            costs=[...],
+            allocations=[...],
+            rollovers=[...],
+            include_transform_results=True,
+        )
     """
     rows = _build_budget_rows(
         master_budgets,
@@ -839,6 +1123,7 @@ def build_update_payloads_from_inputs(
         rollovers,
         accelerations=accelerations,
         activePeriod=activePeriod,
+        fallback_ad_types_by_budget=fallback_ad_types_by_budget,
         include_transform_results=include_transform_results,
     )
     budget_payloads, campaign_payloads = generate_update_payloads(rows)

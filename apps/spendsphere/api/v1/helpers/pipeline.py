@@ -313,6 +313,7 @@ def run_google_ads_budget_pipeline(
     """
     from apps.spendsphere.api.v1.helpers.ggAd import (
         get_ggad_accounts,
+        get_ggad_budget_adtype_candidates,
         get_ggad_campaigns,
         get_ggad_budgets,
         get_ggad_spents,
@@ -345,11 +346,12 @@ def run_google_ads_budget_pipeline(
             if acc.get("accountCode", "").upper() in account_code_filter
         ]
 
-    campaigns, budgets, costs = run_parallel(
+    campaigns, budgets, costs, fallback_ad_types_by_budget = run_parallel(
         tasks=[
             (get_ggad_campaigns, (accounts,)),
             (get_ggad_budgets, (accounts,)),
             (get_ggad_spents, (accounts,)),
+            (get_ggad_budget_adtype_candidates, (accounts,)),
         ],
         api_name="google_ads",
     )
@@ -372,6 +374,7 @@ def run_google_ads_budget_pipeline(
         rollovers=rollbreakdowns,
         accelerations=accelerations,
         activePeriod=active_period,
+        fallback_ad_types_by_budget=fallback_ad_types_by_budget,
         include_transform_results=include_transform_results,
     )
 
