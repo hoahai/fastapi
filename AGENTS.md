@@ -99,6 +99,10 @@ Do not introduce new environment loading mechanisms.
 **SpendSphere requires:** - `SERVICE_BUDGETS` - `SERVICE_MAPPING` -
 `ADTYPES` - `DB_TABLES` - `SPREADSHEET` - `GOOGLE_ADS_NAMING`
 
+**SpendSphere custom-route access control:** - `FEATURE_FLAGS` (object)
+- custom routes must be gated by feature flag keys (for example:
+`FEATURE_FLAGS.budget_managements: true`)
+
 **Shiftzy requires:** - `START_WEEK_NO` - `START_DATE` (must be
 Monday) - `WEEK_BEFORE` - `WEEK_AFTER` - `POSITION_AREAS_ENUM` -
 `SCHEDULE_SECTIONS_ENUM` - `DB_TABLES` - `PDF` (optional)
@@ -178,6 +182,17 @@ Documentation rules:
 -   Routes live under:
     -   `apps/spendsphere/api/v1/router.py`
     -   `apps/spendsphere/api/v2/router.py`
+-   SpendSphere v1 endpoint layout:
+    -   Core shared routes:
+        `apps/spendsphere/api/v1/endpoints/core`
+    -   Custom tenant-specific routes/helpers:
+        `apps/spendsphere/api/v1/endpoints/custom`
+-   Access policy for SpendSphere v1:
+    -   Core routes are shared and must not include tenant-specific
+        conditional logic.
+    -   Custom routes must be gated by `FEATURE_FLAGS` in tenant config.
+    -   Do not hardcode tenant IDs in route authorization logic for
+        custom features.
 -   Cache file `caches.json` holds SpendSphere cache data.
 -   TTL and refresh rules are documented in `CACHE.md`.
 -   File-based caching may not be safe for multi-instance deployments

@@ -24,7 +24,6 @@ _GOOGLE_ADS_NAMING_SECTIONS = ("account", "campaign")
 _GOOGLE_ADS_ACCOUNT_OVERRIDE_SCOPES = ("byId", "byName")
 _DEFAULT_GOOGLE_ADS_INACTIVE_PREFIXES = ("zzz.",)
 
-
 def _require_env_value(key: str) -> str:
     raw = get_env(key)
     if raw is None or str(raw).strip() == "":

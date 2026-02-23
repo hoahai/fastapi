@@ -133,6 +133,35 @@ def upsert_masterbudgets(
     return {"updated": updated, "inserted": inserted}
 
 
+def soft_delete_masterbudget(
+    *,
+    budget_id: str,
+    account_code: str,
+    month: int,
+    year: int,
+) -> int:
+    """
+    Soft delete budget row by setting netAmount to 0 for the target period.
+    """
+    tables = get_db_tables()
+    budgets_table = tables["BUDGETS"]
+
+    query = (
+        f"UPDATE {budgets_table} "
+        "SET netAmount = 0 "
+        "WHERE id = %s AND accountCode = %s AND month = %s AND year = %s"
+    )
+    return execute_write(
+        query,
+        (
+            budget_id,
+            account_code,
+            month,
+            year,
+        ),
+    )
+
+
 # ============================================================
 # ALLOCATIONS
 # ============================================================

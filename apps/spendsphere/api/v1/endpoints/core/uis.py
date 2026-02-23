@@ -8,7 +8,7 @@ import pytz
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from apps.spendsphere.api.v1.endpoints.periods import (
+from apps.spendsphere.api.v1.endpoints.core.periods import (
     build_periods_data,
     validate_month_offsets,
 )
