@@ -278,13 +278,27 @@ Documentation rules:
         -   Triggered when computed `newAmount` is greater than that threshold.
         -   Does not block updates; warning is added to mutation result.
     -   `SPEND_WITHOUT_ALLOCATION` warning:
-        -   Triggered when transformed row has `allocation = None` and
-            `totalCost > 0`.
+        -   Triggered when transformed row has `totalCost > 0` and
+            allocation is missing (`None`) or allocation equals `0`.
+        -   Warning message differentiates missing allocation vs zero allocation.
+        -   Does not block updates; warning is added to mutation result.
+    -   `BUDGET_LESS_THAN_SPEND` warning:
+        -   Triggered when transformed row has `totalCost > 0` and
+            allocated master budget is lower than spend:
+            `(netAmount + rollBreakdown) * (allocation / 100) < totalCost`.
+        -   The allocated-budget value is computed in transform as
+            `allocatedBudgetBeforeAcceleration` and reused by warning logic.
+        -   Uses allocated budget derived from master budget + roll
+            breakdown, before acceleration (not Google daily budget).
+        -   Does not block updates; warning is added to mutation result.
+    -   Shared row-level skip conditions for the two warnings above:
         -   Skipped when budget has no linked campaigns.
         -   Skipped when all linked campaigns are `PAUSED`.
         -   Skipped when all linked campaigns are prefixed by
             `GOOGLE_ADS_NAMING.inactivePrefixes`.
-        -   Warning message states budget update is skipped for that row.
+    -   Multiple warnings can be produced for the same row:
+        -   If both conditions match, both warning entries are added with
+            different `warningCode` values/messages.
     -   Warning dedupe cache:
         -   Warning emission is tenant-scoped and cached in `caches.json`.
         -   Duplicate warnings are suppressed by fingerprint
@@ -294,6 +308,10 @@ Documentation rules:
         -   Tenant override is under `CACHE` with
             `google_ads_warnings_ttl_time` (or `google_ads_warning_ttl_time`).
         -   TTL `<= 0` disables warning dedupe cache suppression.
+    -   Warning logging policy:
+        -   Row-detail warnings are logged in `Google Ads pipeline warnings`.
+        -   Separate summary log `Google Ads spend without allocation warnings`
+            is removed to avoid duplicate warning-count logs in Axiom.
 -   Execution mode:
     -   `dryRun=true`: no Google Ads mutations; returns simulated
         mutation result structure.
@@ -370,6 +388,146 @@ This rule is mandatory and takes precedence over convenience.
 
 -   Follow existing architectural patterns.
 -   Do not introduce new DB or middleware patterns.
+
+## 6. Resource Efficiency Rule (Critical – Free Server Constraint)
+
+This system runs on a resource-constrained environment (free-tier server).
+
+All code must be written with explicit consideration for:
+
+- Low RAM usage
+- Low CPU usage
+- Minimal disk I/O
+- Minimal network bandwidth usage
+- Minimal external API calls
+- Minimal thread/process overhead
+
+Efficiency is not optional. It is a core architectural requirement.
+
+## Mandatory Efficiency Principles
+
+### 1. Avoid Unnecessary Data Loading
+
+- Never load full datasets when filtering can be done in SQL.
+- Always select only required columns.
+- Avoid `SELECT *` in production logic.
+- Paginate large result sets when applicable.
+- Do not materialize large lists unless strictly necessary.
+
+### 2. Cache Carefully and Intentionally
+
+- Cache must always be tenant-scoped.
+- Avoid over-caching large objects.
+- Use TTL-based invalidation.
+- Avoid aggressive refresh strategies.
+- Do not introduce memory-heavy in-process caches.
+
+### 3. Minimize External API Calls
+
+- Batch Google Ads / Sheets requests when possible.
+- Avoid duplicate refresh calls inside loops.
+- Never call external APIs inside tight iteration loops.
+- Use cached account metadata when valid.
+
+### 4. Control Memory Usage
+
+- Avoid building large intermediate lists.
+- Prefer generators when possible.
+- Avoid deep copies of large objects.
+- Reuse computed values instead of recalculating.
+- Clean up temporary structures when no longer needed.
+
+### 5. Avoid Heavy Background or Async Overhead
+
+- Do not introduce background workers unless strictly required.
+- Avoid spawning threads for simple synchronous operations.
+- Prefer simple execution paths over complex concurrency patterns.
+
+### 6. Logging Discipline
+
+- Do not log full payloads for large responses.
+- Avoid excessive debug logging in production.
+- Log summaries instead of full datasets.
+
+### 7. Dependency Discipline
+
+- Do not introduce heavy libraries without strong justification.
+- Avoid large frameworks for small utilities.
+- Keep dependency footprint minimal.
+
+## Prohibited Patterns
+
+- In-memory cross-tenant data accumulation.
+- Full-table scans when indexed filters are available.
+- Recomputing full Google Ads state per request.
+- Re-fetching tenant config multiple times in one request.
+- Creating large nested dicts/lists for temporary transformations without need.
+
+## Design Mindset Requirement
+
+When implementing any new feature, the agent must explicitly consider:
+
+- Can this be done with less memory?
+- Can this be done with fewer queries?
+- Can this avoid extra API calls?
+- Can this reuse existing cached data?
+- Can this reduce object allocation?
+
+Performance and resource efficiency must be prioritized over convenience.
+
+
+------------------------------------------------------------------------
+
+# Documentation Consistency Rule (Critical)
+
+The AI agent MUST keep this `AGENTS.md` file synchronized with system behavior.
+
+This file is the single source of truth for architectural, configuration,
+and behavioral contracts across SpendSphere and Shiftzy.
+
+## Mandatory Update Requirement
+
+The agent MUST update `AGENTS.md` whenever any of the following change:
+
+- New configuration keys are introduced (tenant or global)
+- Existing configuration behavior changes
+- New environment variables are added
+- Cache structure, keys, TTLs, or scoping rules change
+- Naming rules or parsing logic change
+- API request/response contracts change
+- Validation rules change
+- Warning or alert behavior changes
+- Background job or async behavior changes
+- Google Ads update rules change
+- Budget calculation logic changes
+- Account validation logic changes
+- Middleware behavior changes
+- Feature flags are introduced or modified
+- Any new cross-tenant safety rules are added
+- Any mutation-safety rule changes
+
+## Required Actions When Behavior Changes
+
+When implementing behavior or config changes, the agent must:
+
+1. Update the relevant section inside `AGENTS.md`.
+2. Ensure documentation reflects the exact runtime behavior.
+3. Add or modify bullet rules under the correct domain section
+   (SpendSphere, Shiftzy, Middleware, Tenancy, etc.).
+4. Keep wording precise and implementation-aligned.
+5. Remove outdated documentation when logic changes.
+6. Never leave stale behavior documented.
+
+## Pull Request Standard
+
+A change affecting behavior is NOT complete unless:
+
+- `AGENTS.md` is updated accordingly, OR
+- The PR explicitly states:
+
+  "No AGENTS.md update required — no behavior/config changes."
+
+Failure to update documentation when required is considered a contract violation.
 
 ------------------------------------------------------------------------
 

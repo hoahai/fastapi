@@ -489,22 +489,28 @@ def calculate_daily_budget(
         rollover = Decimal(str(b.get("rolloverAmount", 0)))
         allocation = b.get("allocation")
 
-        b["totalCost"] = Decimal(str(total_cost)).quantize(Decimal("0.01"))
+        total_cost_decimal = Decimal(str(total_cost))
+        b["totalCost"] = total_cost_decimal.quantize(Decimal("0.01"))
 
         # 🔹 Handle missing allocation
         if allocation is None:
+            b["allocatedBudgetBeforeAcceleration"] = None
             b["remainingBudget"] = None
             b["dailyBudget"] = None
             continue
 
         allocation_pct = Decimal(str(allocation)) / Decimal("100")
-        remaining_base = (net + rollover) * allocation_pct - Decimal(str(total_cost))
+        allocated_budget_base_raw = (net + rollover) * allocation_pct
+        b["allocatedBudgetBeforeAcceleration"] = allocated_budget_base_raw.quantize(
+            Decimal("0.01")
+        )
+        remaining_base = allocated_budget_base_raw - total_cost_decimal
         daily_base = remaining_base / days_left if days_left > 0 else Decimal("0")
 
         accel_multiplier = Decimal(str(b.get("accelerationMultiplier", 100)))
-        allocation_pct_accel = allocation_pct * (accel_multiplier / Decimal("100"))
+        accel_ratio = accel_multiplier / Decimal("100")
 
-        remaining = (net + rollover) * allocation_pct_accel - Decimal(str(total_cost))
+        remaining = allocated_budget_base_raw * accel_ratio - total_cost_decimal
         daily = remaining / days_left if days_left > 0 else Decimal("0")
 
         b["remainingBudget"] = remaining.quantize(Decimal("0.01"))

@@ -169,7 +169,7 @@ def _inject_budget_warnings(
     return total_warnings
 
 
-def _collect_spend_without_allocation_warnings(
+def _collect_budget_allocation_and_spend_warnings(
     *,
     rows: list[dict],
 ) -> dict[str, list[dict]]:
@@ -177,14 +177,52 @@ def _collect_spend_without_allocation_warnings(
     inactive_prefixes = get_google_ads_inactive_prefixes()
 
     for row in rows:
-        if row.get("allocation") is not None:
-            continue
-
         try:
             spend = Decimal(str(row.get("totalCost", 0)))
         except Exception:
             continue
         if spend <= 0:
+            continue
+
+        allocation = row.get("allocation")
+        has_missing_or_zero_allocation = allocation is None
+        if not has_missing_or_zero_allocation:
+            try:
+                has_missing_or_zero_allocation = (
+                    Decimal(str(allocation)) == Decimal("0")
+                )
+            except Exception:
+                has_missing_or_zero_allocation = False
+
+        google_budget_amount: Decimal | None = None
+        if row.get("budgetAmount") is not None:
+            try:
+                google_budget_amount = Decimal(str(row.get("budgetAmount")))
+            except Exception:
+                google_budget_amount = None
+
+        allocated_budget_amount: Decimal | None = None
+        allocated_budget_before_accel = row.get("allocatedBudgetBeforeAcceleration")
+        if allocated_budget_before_accel is not None:
+            try:
+                allocated_budget_amount = Decimal(str(allocated_budget_before_accel))
+            except Exception:
+                allocated_budget_amount = None
+        elif allocation is not None:
+            try:
+                net_amount = Decimal(str(row.get("netAmount", 0)))
+                rollover_amount = Decimal(str(row.get("rolloverAmount", 0)))
+                allocation_pct = Decimal(str(allocation)) / Decimal("100")
+                allocated_budget_amount = (
+                    (net_amount + rollover_amount) * allocation_pct
+                ).quantize(Decimal("0.01"))
+            except Exception:
+                allocated_budget_amount = None
+
+        has_budget_less_than_spend = (
+            allocated_budget_amount is not None and allocated_budget_amount < spend
+        )
+        if not has_missing_or_zero_allocation and not has_budget_less_than_spend:
             continue
 
         customer_id = str(row.get("ggAccountId", "")).strip()
@@ -215,26 +253,46 @@ def _collect_spend_without_allocation_warnings(
             # Skip budgets that are not linked to any campaigns.
             continue
         spend_display = f"${float(spend):,.2f}"
-
-        warnings_by_customer.setdefault(customer_id, []).append(
-            {
-                "budgetId": row.get("budgetId"),
-                "accountCode": row.get("accountCode"),
-                "campaignNames": campaign_names,
-                "currentAmount": (
-                    float(row.get("budgetAmount"))
-                    if row.get("budgetAmount") is not None
-                    else None
-                ),
-                "newAmount": None,
-                "spent": float(spend),
-                "warningCode": "SPEND_WITHOUT_ALLOCATION",
-                "error": (
-                    "Spend detected with missing allocation "
-                    f"({spend_display}); budget update skipped."
-                ),
-            }
+        current_google_budget = (
+            float(google_budget_amount) if google_budget_amount is not None else None
         )
+
+        if has_missing_or_zero_allocation:
+            allocation_error = (
+                "Spend detected with missing allocation"
+                if allocation is None
+                else "Spend detected with 0 allocation"
+            )
+            warnings_by_customer.setdefault(customer_id, []).append(
+                {
+                    "budgetId": row.get("budgetId"),
+                    "accountCode": row.get("accountCode"),
+                    "campaignNames": campaign_names,
+                    "currentAmount": current_google_budget,
+                    "newAmount": None,
+                    "spent": float(spend),
+                    "warningCode": "SPEND_WITHOUT_ALLOCATION",
+                    "error": f"{allocation_error} ({spend_display}); budget update skipped.",
+                }
+            )
+
+        if has_budget_less_than_spend:
+            budget_display = f"${float(allocated_budget_amount):,.2f}"
+            warnings_by_customer.setdefault(customer_id, []).append(
+                {
+                    "budgetId": row.get("budgetId"),
+                    "accountCode": row.get("accountCode"),
+                    "campaignNames": campaign_names,
+                    "currentAmount": float(allocated_budget_amount),
+                    "newAmount": None,
+                    "spent": float(spend),
+                    "warningCode": "BUDGET_LESS_THAN_SPEND",
+                    "error": (
+                        "Allocated budget amount ((master budget + roll breakdown) x allocation, before acceleration) is lower than spend "
+                        f"({budget_display} < {spend_display})."
+                    ),
+                }
+            )
 
     return warnings_by_customer
 
@@ -444,25 +502,16 @@ def run_google_ads_budget_pipeline(
                 },
             )
 
-    spend_no_allocation_warnings = _collect_spend_without_allocation_warnings(
+    budget_warnings = _collect_budget_allocation_and_spend_warnings(
         rows=results,
     )
-    spend_no_allocation_warnings = filter_cached_google_ads_warnings(
-        spend_no_allocation_warnings
+    budget_warnings = filter_cached_google_ads_warnings(
+        budget_warnings
     )
-    spend_no_allocation_warning_count = _inject_budget_warnings(
+    _inject_budget_warnings(
         mutation_results=mutation_results,
-        warnings_by_customer=spend_no_allocation_warnings,
+        warnings_by_customer=budget_warnings,
     )
-    if spend_no_allocation_warning_count > 0:
-        logger.warning(
-            "Google Ads spend without allocation warnings",
-            extra={
-                "extra_fields": {
-                    "warning_count": spend_no_allocation_warning_count,
-                }
-            },
-        )
 
     # =====================================================
     # 5. Aggregate results
