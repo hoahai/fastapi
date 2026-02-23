@@ -1032,7 +1032,11 @@ def get_ui_selections_route(
         api_name="spendsphere_v1_ui_selections",
     )
     clients_sorted = sorted(
-        clients, key=lambda client: (client.get("accountName") or "").casefold()
+        clients,
+        key=lambda client: (
+            str(client.get("accountCode") or "").casefold(),
+            str(client.get("accountName") or "").casefold(),
+        ),
     )
     months_array = periods.get("monthsArray")
     if isinstance(months_array, list):
