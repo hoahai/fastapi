@@ -9,6 +9,7 @@ from apps.spendsphere.api.v1.helpers.ggSheet import refresh_google_sheet_cache
 from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
     clear_google_ads_warning_cache,
     refresh_account_codes_cache,
+    refresh_services_cache,
 )
 
 router = APIRouter()
@@ -31,6 +32,8 @@ _CACHE_ALIASES = {
     "googleadswarnings": "google_ads_warnings",
     "google_sheets": "google_sheets",
     "googlesheets": "google_sheets",
+    "service": "services",
+    "services": "services",
 }
 
 
@@ -43,6 +46,7 @@ def _normalize_cache_requests(values: list[str] | None) -> list[str]:
             "google_ads_campaigns",
             "google_ads_warnings",
             "google_sheets",
+            "services",
         ]
 
     requested: list[str] = []
@@ -69,6 +73,7 @@ def _normalize_cache_requests(values: list[str] | None) -> list[str]:
             "google_ads_campaigns",
             "google_ads_warnings",
             "google_sheets",
+            "services",
         ]
 
     return requested
@@ -79,7 +84,7 @@ def _normalize_cache_requests(values: list[str] | None) -> list[str]:
     summary="Refresh SpendSphere caches",
     description=(
         "Refreshes account code, Google Ads clients, budgets, campaigns, and "
-        "warning + Google Sheets caches for the current tenant."
+        "warning + Google Sheets + service caches for the current tenant."
     ),
 )
 def refresh_cache_route(
@@ -88,7 +93,7 @@ def refresh_cache_route(
         description=(
             "Optional cache list. Valid values: account_codes, "
             "google_ads_clients, google_ads_budgets, google_ads_campaigns, "
-            "google_ads_warnings, google_sheets. Can be repeated or "
+            "google_ads_warnings, google_sheets, services. Can be repeated or "
             "comma-separated."
         ),
     ),
@@ -108,6 +113,7 @@ def refresh_cache_route(
         google_ads_campaigns
         google_ads_warnings
         google_sheets
+        services
 
     Example response:
         {
@@ -122,7 +128,8 @@ def refresh_cache_route(
           "googleSheets": {
             "rollovers": 120,
             "activePeriod": 55
-          }
+          },
+          "services": 6
         }
     """
     requested = _normalize_cache_requests(caches)
@@ -165,5 +172,9 @@ def refresh_cache_route(
             "rollovers": len(rollovers),
             "activePeriod": len(active_period),
         }
+
+    if "services" in requested:
+        services = refresh_services_cache(department_code="DIGM")
+        response["services"] = len(services)
 
     return response

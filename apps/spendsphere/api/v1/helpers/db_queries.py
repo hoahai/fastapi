@@ -21,6 +21,38 @@ def _resolve_period(
 # BUDGETS
 # ============================================================
 
+def get_active_services_by_department(
+    department_code: str = "DIGM",
+) -> list[dict]:
+    """
+    Get active services for a department, limited to SERVICE_BUDGETS,
+    sorted by service name.
+    """
+    service_budgets = [
+        str(service_id).strip()
+        for service_id in get_service_budgets()
+        if str(service_id).strip()
+    ]
+    if not service_budgets:
+        return []
+
+    tables = get_db_tables()
+    services_table = tables["SERVICES"]
+    service_placeholders = ", ".join(["%s"] * len(service_budgets))
+
+    query = (
+        "SELECT "
+        "id, "
+        "name "
+        f"FROM {services_table} "
+        "WHERE active = 1 "
+        "AND departmentCode = %s "
+        f"AND id IN ({service_placeholders}) "
+        "ORDER BY name ASC"
+    )
+    return fetch_all(query, (department_code, *service_budgets))
+
+
 def get_masterbudgets(
     account_codes: list[str] | None = None,
     month: int | None = None,
@@ -54,9 +86,10 @@ def get_masterbudgets(
         "b.serviceId, "
         "s.name AS serviceName, "
         "b.subService, "
+        "b.note, "
         "b.month, "
         "b.year, "
-        "b.netAmount "
+        "b.grossAmount AS netAmount "
         f"FROM {budgets_table} AS b "
         f"JOIN {services_table} AS s ON s.id = b.serviceId "
         "WHERE b.month = %s "
@@ -95,12 +128,16 @@ def upsert_masterbudgets(
     if update_rows:
         update_query = (
             f"UPDATE {budgets_table} "
-            "SET netAmount = %s "
+            "SET grossAmount = COALESCE(%s, grossAmount), serviceId = COALESCE(%s, serviceId), "
+            "subService = COALESCE(%s, subService), note = COALESCE(%s, note) "
             "WHERE id = %s AND accountCode = %s AND month = %s AND year = %s"
         )
         update_params = [
             (
-                row.get("netAmount"),
+                row.get("grossAmount", row.get("netAmount")),
+                row.get("serviceId"),
+                row.get("subService"),
+                row.get("note"),
                 row.get("id"),
                 row.get("accountCode"),
                 month,
@@ -113,16 +150,21 @@ def upsert_masterbudgets(
     if insert_rows:
         insert_query = (
             f"INSERT INTO {budgets_table} "
-            "(id, accountCode, serviceId, subService, netAmount, month, year) "
-            "VALUES (UUID(), %s, %s, %s, %s, %s, %s) "
-            "ON DUPLICATE KEY UPDATE netAmount = VALUES(netAmount)"
+            "(id, accountCode, serviceId, subService, note, grossAmount, month, year) "
+            "VALUES (UUID(), %s, %s, %s, %s, %s, %s, %s) "
+            "ON DUPLICATE KEY UPDATE "
+            "grossAmount = VALUES(grossAmount), "
+            "serviceId = VALUES(serviceId), "
+            "subService = VALUES(subService), "
+            "note = VALUES(note)"
         )
         insert_params = [
             (
                 row.get("accountCode"),
                 row.get("serviceId"),
                 row.get("subService"),
-                row.get("netAmount"),
+                row.get("note"),
+                row.get("grossAmount", row.get("netAmount")),
                 month,
                 year,
             )
@@ -141,14 +183,14 @@ def soft_delete_masterbudget(
     year: int,
 ) -> int:
     """
-    Soft delete budget row by setting netAmount to 0 for the target period.
+    Soft delete budget row by setting grossAmount to 0 for the target period.
     """
     tables = get_db_tables()
     budgets_table = tables["BUDGETS"]
 
     query = (
         f"UPDATE {budgets_table} "
-        "SET netAmount = 0 "
+        "SET grossAmount = 0 "
         "WHERE id = %s AND accountCode = %s AND month = %s AND year = %s"
     )
     return execute_write(

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from decimal import InvalidOperation
 from decimal import Decimal
 
 from apps.spendsphere.api.v1.helpers.dataTransform import (
@@ -76,6 +77,37 @@ def _run_campaign_update(customer_id: str, updates: list[dict]) -> dict:
         customer_id=customer_id,
         updates=updates,
     )
+
+
+def _to_decimal(value: object) -> Decimal | None:
+    if value is None:
+        return None
+    if isinstance(value, Decimal):
+        return value
+    cleaned = str(value).strip()
+    if not cleaned:
+        return None
+    if cleaned.endswith("%"):
+        cleaned = cleaned[:-1].strip()
+    cleaned = cleaned.replace(",", "")
+    try:
+        return Decimal(cleaned)
+    except (InvalidOperation, TypeError, ValueError):
+        return None
+
+
+def _extract_percentage(row: dict, *keys: str) -> Decimal | None:
+    for key in keys:
+        if key not in row:
+            continue
+        parsed = _to_decimal(row.get(key))
+        if parsed is not None:
+            return parsed
+    return None
+
+
+def _format_percent(value: Decimal) -> str:
+    return f"{float(value):,.2f}%"
 
 
 def _collect_budget_threshold_warnings(
@@ -169,11 +201,106 @@ def _inject_budget_warnings(
     return total_warnings
 
 
-def _collect_budget_allocation_and_spend_warnings(
+def _inject_budget_failures(
+    *,
+    mutation_results: list[dict],
+    failures_by_customer: dict[str, list[dict]],
+) -> int:
+    if not failures_by_customer:
+        return 0
+
+    total_failures = 0
+    for result in mutation_results:
+        if result.get("operation") != "update_budgets":
+            continue
+        customer_id = str(result.get("customerId", "")).strip()
+        if not customer_id:
+            continue
+        extra_failures = failures_by_customer.pop(customer_id, [])
+        if not extra_failures:
+            continue
+        result.setdefault("failures", []).extend(extra_failures)
+        summary = result.setdefault("summary", {})
+        summary["failed"] = int(summary.get("failed", 0) or 0) + len(extra_failures)
+        summary["total"] = int(summary.get("total", 0) or 0) + len(extra_failures)
+        total_failures += len(extra_failures)
+
+    for customer_id, extra_failures in failures_by_customer.items():
+        if not extra_failures:
+            continue
+        account_code = next(
+            (f.get("accountCode") for f in extra_failures if f.get("accountCode")),
+            None,
+        )
+        mutation_results.append(
+            {
+                "customerId": customer_id,
+                "accountCode": account_code,
+                "operation": "update_budgets",
+                "summary": {
+                    "total": len(extra_failures),
+                    "succeeded": 0,
+                    "failed": len(extra_failures),
+                    "warnings": 0,
+                },
+                "successes": [],
+                "failures": extra_failures,
+                "warnings": [],
+            }
+        )
+        total_failures += len(extra_failures)
+
+    return total_failures
+
+
+def _filter_existing_mutation_warnings(
+    *,
+    mutation_results: list[dict],
+) -> int:
+    warnings_by_customer: dict[str, list[dict]] = {}
+    for result in mutation_results:
+        customer_id = str(result.get("customerId", "")).strip()
+        warnings = [
+            warning
+            for warning in (result.get("warnings") or [])
+            if isinstance(warning, dict)
+        ]
+        if not customer_id or not warnings:
+            continue
+        warnings_by_customer.setdefault(customer_id, []).extend(warnings)
+
+    if not warnings_by_customer:
+        return 0
+
+    filtered_by_customer = filter_cached_google_ads_warnings(warnings_by_customer)
+    total_warnings = 0
+
+    for result in mutation_results:
+        existing_warnings = [
+            warning
+            for warning in (result.get("warnings") or [])
+            if isinstance(warning, dict)
+        ]
+        if not existing_warnings:
+            continue
+        customer_id = str(result.get("customerId", "")).strip()
+        if not customer_id:
+            continue
+        warnings = filtered_by_customer.pop(customer_id, [])
+        result["warnings"] = warnings
+        summary = result.setdefault("summary", {})
+        summary["warnings"] = len(warnings)
+        total_warnings += summary["warnings"]
+
+    return total_warnings
+
+
+def _collect_budget_allocation_and_spend_issues(
     *,
     rows: list[dict],
-) -> dict[str, list[dict]]:
+) -> tuple[dict[str, list[dict]], dict[str, list[dict]]]:
     warnings_by_customer: dict[str, list[dict]] = {}
+    failures_by_customer: dict[str, list[dict]] = {}
     inactive_prefixes = get_google_ads_inactive_prefixes()
 
     for row in rows:
@@ -222,7 +349,62 @@ def _collect_budget_allocation_and_spend_warnings(
         has_budget_less_than_spend = (
             allocated_budget_amount is not None and allocated_budget_amount < spend
         )
-        if not has_missing_or_zero_allocation and not has_budget_less_than_spend:
+
+        acceleration_multiplier = _to_decimal(
+            row.get("accelerationMultiplier", Decimal("100"))
+        ) or Decimal("100")
+        accelerated_allocated_budget: Decimal | None = None
+        if allocated_budget_amount is not None:
+            accelerated_allocated_budget = (
+                allocated_budget_amount * (acceleration_multiplier / Decimal("100"))
+            ).quantize(Decimal("0.01"))
+
+        spend_percentage = _extract_percentage(
+            row,
+            "%Spend",
+            "spendPct",
+            "spendPercent",
+            "spendPercentage",
+            "percentSpend",
+            "pctSpend",
+        )
+        if (
+            spend_percentage is None
+            and allocated_budget_amount is not None
+            and allocated_budget_amount > 0
+        ):
+            spend_percentage = (
+                spend / allocated_budget_amount * Decimal("100")
+            ).quantize(Decimal("0.01"))
+
+        pacing_percentage = _extract_percentage(
+            row,
+            "pacing",
+            "pacingPct",
+            "pacingPercent",
+            "pace",
+        )
+        if (
+            pacing_percentage is None
+            and accelerated_allocated_budget is not None
+            and accelerated_allocated_budget > 0
+        ):
+            pacing_percentage = (
+                spend / accelerated_allocated_budget * Decimal("100")
+            ).quantize(Decimal("0.01"))
+
+        has_pacing_over_100 = (
+            pacing_percentage is not None and pacing_percentage > Decimal("100")
+        )
+        has_spend_pct_over_100 = (
+            spend_percentage is not None and spend_percentage > Decimal("100")
+        )
+        if (
+            not has_missing_or_zero_allocation
+            and not has_budget_less_than_spend
+            and not has_pacing_over_100
+            and not has_spend_pct_over_100
+        ):
             continue
 
         customer_id = str(row.get("ggAccountId", "")).strip()
@@ -263,18 +445,29 @@ def _collect_budget_allocation_and_spend_warnings(
                 if allocation is None
                 else "Spend detected with 0 allocation"
             )
-            warnings_by_customer.setdefault(customer_id, []).append(
-                {
-                    "budgetId": row.get("budgetId"),
-                    "accountCode": row.get("accountCode"),
-                    "campaignNames": campaign_names,
-                    "currentAmount": current_google_budget,
-                    "newAmount": None,
-                    "spent": float(spend),
-                    "warningCode": "SPEND_WITHOUT_ALLOCATION",
-                    "error": f"{allocation_error} ({spend_display}); budget update skipped.",
-                }
-            )
+            issue = {
+                "budgetId": row.get("budgetId"),
+                "accountCode": row.get("accountCode"),
+                "campaignNames": campaign_names,
+                "currentAmount": current_google_budget,
+                "newAmount": None,
+                "spent": float(spend),
+                "error": f"{allocation_error} ({spend_display}); budget update skipped.",
+            }
+            if allocation is None:
+                failures_by_customer.setdefault(customer_id, []).append(
+                    {
+                        **issue,
+                        "failureCode": "SPEND_WITH_MISSING_ALLOCATION",
+                    }
+                )
+            else:
+                warnings_by_customer.setdefault(customer_id, []).append(
+                    {
+                        **issue,
+                        "warningCode": "SPEND_WITHOUT_ALLOCATION",
+                    }
+                )
 
         if has_budget_less_than_spend:
             budget_display = f"${float(allocated_budget_amount):,.2f}"
@@ -294,7 +487,43 @@ def _collect_budget_allocation_and_spend_warnings(
                 }
             )
 
-    return warnings_by_customer
+        if has_pacing_over_100 and pacing_percentage is not None:
+            warnings_by_customer.setdefault(customer_id, []).append(
+                {
+                    "budgetId": row.get("budgetId"),
+                    "accountCode": row.get("accountCode"),
+                    "campaignNames": campaign_names,
+                    "currentAmount": current_google_budget,
+                    "newAmount": None,
+                    "spent": float(spend),
+                    "pacing": float(pacing_percentage),
+                    "warningCode": "PACING_OVER_100",
+                    "error": (
+                        "Pacing is more than 100% "
+                        f"({_format_percent(pacing_percentage)})."
+                    ),
+                }
+            )
+
+        if has_spend_pct_over_100 and spend_percentage is not None:
+            warnings_by_customer.setdefault(customer_id, []).append(
+                {
+                    "budgetId": row.get("budgetId"),
+                    "accountCode": row.get("accountCode"),
+                    "campaignNames": campaign_names,
+                    "currentAmount": current_google_budget,
+                    "newAmount": None,
+                    "spent": float(spend),
+                    "spendPercent": float(spend_percentage),
+                    "warningCode": "SPEND_PERCENT_OVER_100",
+                    "error": (
+                        "%Spend is more than 100% "
+                        f"({_format_percent(spend_percentage)})."
+                    ),
+                }
+            )
+
+    return warnings_by_customer, failures_by_customer
 
 
 # =========================================================
@@ -480,6 +709,10 @@ def run_google_ads_budget_pipeline(
             api_name="google_ads_mutation",
         )
 
+    _filter_existing_mutation_warnings(
+        mutation_results=mutation_results,
+    )
+
     budget_warning_threshold = get_budget_warning_threshold()
     threshold_warning_count = 0
     if budget_warning_threshold is not None:
@@ -505,7 +738,7 @@ def run_google_ads_budget_pipeline(
                 },
             )
 
-    budget_warnings = _collect_budget_allocation_and_spend_warnings(
+    budget_warnings, budget_failures = _collect_budget_allocation_and_spend_issues(
         rows=results,
     )
     budget_warnings = filter_cached_google_ads_warnings(
@@ -514,6 +747,10 @@ def run_google_ads_budget_pipeline(
     _inject_budget_warnings(
         mutation_results=mutation_results,
         warnings_by_customer=budget_warnings,
+    )
+    _inject_budget_failures(
+        mutation_results=mutation_results,
+        failures_by_customer=budget_failures,
     )
 
     # =====================================================

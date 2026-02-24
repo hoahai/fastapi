@@ -12,6 +12,7 @@ from fastapi import HTTPException
 
 from apps.spendsphere.api.v1.helpers.config import (
     get_google_ads_inactive_prefixes,
+    get_service_mapping,
     is_google_ads_inactive_name,
 )
 from shared.file_cache import FileCache, normalize_tenant_key
@@ -30,6 +31,7 @@ _GOOGLE_ADS_BUDGETS_KEY = "google_ads_budgets"
 _GOOGLE_ADS_CAMPAIGNS_KEY = "google_ads_campaigns"
 _GOOGLE_ADS_WARNINGS_KEY = "google_ads_warnings"
 _GOOGLE_SHEETS_KEY = "google_sheets"
+_SERVICES_KEY = "services"
 _GOOGLE_ADS_CLIENTS_CACHE_TTL_ENV = "SPENDSPHERE_GOOGLE_ADS_CLIENTS_CACHE_TTL_SECONDS"
 _GOOGLE_ADS_CLIENTS_CACHE_TTL_FALLBACK_ENV = "ttl_time"
 _DEFAULT_SPENDSPHERE_CACHE_TTL_SECONDS = 86400
@@ -198,6 +200,7 @@ def _load_cache_root(cache_store: FileCache) -> dict[str, object]:
         or _GOOGLE_ADS_CLIENTS_KEY in data
         or _GOOGLE_ADS_WARNINGS_KEY in data
         or _GOOGLE_SHEETS_KEY in data
+        or _SERVICES_KEY in data
     ):
         root = data
     else:
@@ -226,6 +229,10 @@ def _load_cache_root(cache_store: FileCache) -> dict[str, object]:
     if not isinstance(google_sheets, dict):
         google_sheets = {}
 
+    services = root.get(_SERVICES_KEY)
+    if not isinstance(services, dict):
+        services = {}
+
     return {
         _ACCOUNT_CODES_KEY: account_cache,
         _GOOGLE_ADS_CLIENTS_KEY: google_ads,
@@ -233,6 +240,7 @@ def _load_cache_root(cache_store: FileCache) -> dict[str, object]:
         _GOOGLE_ADS_CAMPAIGNS_KEY: google_ads_campaigns,
         _GOOGLE_ADS_WARNINGS_KEY: google_ads_warnings,
         _GOOGLE_SHEETS_KEY: google_sheets,
+        _SERVICES_KEY: services,
     }
 
 
@@ -474,10 +482,11 @@ def _build_google_ads_warning_fingerprint(
     budget_id = str(warning.get("budgetId", "")).strip()
     account_code = str(warning.get("accountCode", "")).strip().upper()
     campaign_id = str(warning.get("campaignId", "")).strip()
+    message = str(warning.get("error") or warning.get("message") or "").strip()
     campaign_names = _normalize_campaign_names_for_warning_cache(
         warning.get("campaignNames")
     )
-    if not (warning_code or budget_id or campaign_id or account_code):
+    if not (warning_code or budget_id or campaign_id or account_code or message):
         return None
 
     payload = {
@@ -487,6 +496,7 @@ def _build_google_ads_warning_fingerprint(
         "campaignId": campaign_id,
         "accountCode": account_code,
         "campaignNames": campaign_names,
+        "message": message,
     }
     encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
@@ -501,20 +511,13 @@ def filter_cached_google_ads_warnings(
         return {}
 
     ttl_seconds = get_google_ads_warning_cache_ttl_seconds()
-    if ttl_seconds <= 0:
-        return {
-            customer_id: [warning for warning in warnings if isinstance(warning, dict)]
-            for customer_id, warnings in warnings_by_customer.items()
-            if isinstance(customer_id, str)
-            and isinstance(warnings, list)
-            and warnings
-        }
 
     tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
     cache_path = _get_cache_path(include_all=False)
     cache_store = _get_cache_store(cache_path)
     now = datetime.now(ZoneInfo(get_timezone()))
     now_iso = now.isoformat()
+    today_key = now.date().isoformat()
 
     filtered: dict[str, list[dict]] = {}
 
@@ -538,10 +541,16 @@ def filter_cached_google_ads_warnings(
             updated_at = _parse_cache_datetime(entry.get("updated_at"))
             if updated_at is None:
                 continue
-            if (now - updated_at).total_seconds() > ttl_seconds:
+            cached_day = str(entry.get("date", "")).strip()
+            if not cached_day:
+                cached_day = updated_at.date().isoformat()
+            if cached_day != today_key:
+                continue
+            if ttl_seconds > 0 and (now - updated_at).total_seconds() > ttl_seconds:
                 continue
             active_fingerprints[fingerprint] = {
-                "updated_at": updated_at.isoformat()
+                "updated_at": updated_at.isoformat(),
+                "date": today_key,
             }
 
         cache_changed = active_fingerprints != tenant_entry
@@ -561,7 +570,10 @@ def filter_cached_google_ads_warnings(
                     continue
                 filtered.setdefault(customer_id, []).append(warning)
                 if fingerprint:
-                    active_fingerprints[fingerprint] = {"updated_at": now_iso}
+                    active_fingerprints[fingerprint] = {
+                        "updated_at": now_iso,
+                        "date": today_key,
+                    }
                     cache_changed = True
 
         if cache_changed:
@@ -932,6 +944,95 @@ def set_google_sheet_cache(
         google_sheets[tenant_key] = tenant_entry
         root[_GOOGLE_SHEETS_KEY] = google_sheets
         _write_cache_root(cache_store, root)
+
+
+def get_services_cache_entry(
+    *,
+    tenant_id: str | None = None,
+) -> list[dict] | None:
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+
+    services_cache = root.get(_SERVICES_KEY)
+    if not isinstance(services_cache, dict):
+        return None
+
+    tenant_entry = services_cache.get(tenant_key)
+    if not isinstance(tenant_entry, dict):
+        return None
+
+    rows = tenant_entry.get("rows")
+    if not isinstance(rows, list):
+        return None
+    return rows
+
+
+def set_services_cache(
+    rows: list[dict],
+    *,
+    tenant_id: str | None = None,
+) -> None:
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+        services_cache = root.get(_SERVICES_KEY)
+        if not isinstance(services_cache, dict):
+            services_cache = {}
+        services_cache[tenant_key] = {
+            "rows": rows,
+            "updated_at": datetime.now(ZoneInfo(get_timezone())).isoformat(),
+        }
+        root[_SERVICES_KEY] = services_cache
+        _write_cache_root(cache_store, root)
+
+
+def refresh_services_cache(
+    *,
+    department_code: str = "DIGM",
+    tenant_id: str | None = None,
+) -> list[dict]:
+    from apps.spendsphere.api.v1.helpers.db_queries import (
+        get_active_services_by_department,
+    )
+
+    services = get_active_services_by_department(department_code=department_code)
+    service_mapping = get_service_mapping()
+
+    payload: list[dict] = []
+    for service in services:
+        service_id = str(service.get("id", "")).strip()
+        mapping = (
+            service_mapping.get(service_id, {})
+            if isinstance(service_mapping, dict)
+            else {}
+        )
+        ad_type_code = str(mapping.get("adTypeCode", "")).strip()
+        if not ad_type_code:
+            continue
+        payload.append(
+            {
+                "id": service.get("id"),
+                "name": service.get("name"),
+                "adTypeCode": ad_type_code,
+            }
+        )
+
+    payload.sort(
+        key=lambda item: (
+            str(item.get("adTypeCode", "")).strip(),
+            str(item.get("name", "")).strip().lower(),
+        )
+    )
+
+    set_services_cache(payload, tenant_id=tenant_id)
+    return payload
 
 
 def refresh_account_codes_cache(

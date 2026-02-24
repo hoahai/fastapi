@@ -394,7 +394,11 @@ def _filter_accelerations_for_date(
     return filtered
 
 
-def _build_master_budgets(master_budgets: list[dict]) -> dict:
+def _build_master_budgets(
+    master_budgets: list[dict],
+    *,
+    amount_field: str = "netAmount",
+) -> dict:
     service_mapping = get_service_mapping()
     result: dict[str, object] = {}
     grand_total = Decimal("0")
@@ -414,9 +418,10 @@ def _build_master_budgets(master_budgets: list[dict]) -> dict:
         entry["budgets"].append(
             {
                 "id": mb.get("id"),
+                "serviceId": mb.get("serviceId"),
                 "serviceName": mb.get("serviceName") or mapping.get("serviceName"),
                 "subService": mb.get("subService") or "",
-                "netAmount": _to_float(net_amount),
+                amount_field: _to_float(net_amount),
                 "adTypeCode": ad_type,
             }
         )
@@ -965,8 +970,7 @@ class UiMasterBudgetUpdate(BaseModel):
     accountCode: str | None = None
     serviceId: str | None = None
     subService: str | None = None
-    currentNetAmount: float | None = None
-    newNetAmount: float | None = None
+    amount: float | None = None
 
 
 class UiAllocationRollBreakUpdateRequest(BaseModel):
@@ -1168,9 +1172,10 @@ def load_ui_route(
               "budgets": [
                 {
                   "id": "0dhcb44-35f2-4fb6-9f1f-19527ab193e3",
+                  "serviceId": "c6ac34bc-0fc0-46a6-9723-e83780ebb938",
                   "serviceName": "Vehicle Listing Ads",
                   "subService": "",
-                  "netAmount": 680,
+                  "amount": 680,
                   "adTypeCode": "PM"
                 }
               ],
@@ -1338,7 +1343,10 @@ def load_ui_route(
         include_transform_results=True,
     )
 
-    master_budgets_payload = _build_master_budgets(master_budgets)
+    master_budgets_payload = _build_master_budgets(
+        master_budgets,
+        amount_field="amount",
+    )
     roll_breakdown_payload = _build_roll_breakdown(rollbreakdowns)
     sanitized_accelerations = _sanitize_acceleration_rows(accelerations)
     table_data = _build_table_data_payload(
@@ -1403,9 +1411,8 @@ def update_ui_allocations_rollbreaks(
             {
               "id": "0dhcb44-35f2-4fb6-9f1f-19527ab193e3",
               "serviceId": "c6ac34bc-0fc0-46a6-9723-e83780ebb938",
-              "subService": "",
-              "currentNetAmount": 680,
-              "newNetAmount": 720
+              "subService": "New Vehicles",
+              "amount": 720
             }
           ],
           "updatedAllocations": [
@@ -1574,8 +1581,16 @@ def update_ui_allocations_rollbreaks(
         row_id = _normalize_optional_str(item.id)
         item_account = _normalize_optional_str(item.accountCode)
         service_id = _normalize_optional_str(item.serviceId)
-        sub_service = _normalize_optional_str(item.subService)
-        net_amount_value = _to_float(item.newNetAmount)
+        sub_service_provided = "subService" in item.model_fields_set
+        sub_service: str | None = None
+        if sub_service_provided:
+            raw_sub_service = item.subService
+            if raw_sub_service is None:
+                sub_service = None
+            else:
+                sub_service = str(raw_sub_service).strip()
+        amount_value = _to_float(item.amount)
+        amount_provided = "amount" in item.model_fields_set
 
         if item_account and item_account.upper() != account_code:
             errors.append(
@@ -1616,24 +1631,42 @@ def update_ui_allocations_rollbreaks(
                 }
             )
 
-        if net_amount_value is None:
+        if not row_id and amount_value is None:
             errors.append(
                 {
                     "index": idx,
-                    "field": "updatedMasterBudgets.newNetAmount",
-                    "value": item.newNetAmount,
-                    "message": "newNetAmount is required and must be numeric",
+                    "field": "updatedMasterBudgets.amount",
+                    "value": item.amount,
+                    "message": "amount is required and must be numeric when id is null",
+                }
+            )
+        elif row_id and amount_provided and amount_value is None:
+            errors.append(
+                {
+                    "index": idx,
+                    "field": "updatedMasterBudgets.amount",
+                    "value": item.amount,
+                    "message": "amount must be numeric when provided",
                 }
             )
 
-        if net_amount_value is not None and (row_id or service_id):
+        has_updatable_fields = (
+            amount_provided
+            or bool(service_id)
+            or sub_service_provided
+        )
+        if (row_id or service_id) and has_updatable_fields:
             master_budget_rows.append(
                 {
                     "id": row_id,
                     "accountCode": account_code,
                     "serviceId": service_id,
-                    "subService": sub_service or "",
-                    "netAmount": net_amount_value,
+                    "subService": (
+                        (sub_service if sub_service is not None else "")
+                        if not row_id
+                        else (sub_service if sub_service_provided else None)
+                    ),
+                    "grossAmount": amount_value,
                 }
             )
 

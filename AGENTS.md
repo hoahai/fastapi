@@ -291,6 +291,16 @@ Documentation rules:
         -   Uses allocated budget derived from master budget + roll
             breakdown, before acceleration (not Google daily budget).
         -   Does not block updates; warning is added to mutation result.
+    -   `PACING_OVER_100` warning:
+        -   Triggered when pacing is greater than `100%`.
+        -   Uses transformed pacing values when present; otherwise
+            computes pacing from spend vs accelerated allocated budget.
+        -   Does not block updates; warning is added to mutation result.
+    -   `SPEND_PERCENT_OVER_100` warning:
+        -   Triggered when `%Spend` is greater than `100%`.
+        -   Uses transformed `%Spend` values when present; otherwise
+            computes `%Spend` from spend vs allocated budget before acceleration.
+        -   Does not block updates; warning is added to mutation result.
     -   Shared row-level skip conditions for the two warnings above:
         -   Skipped when budget has no linked campaigns.
         -   Skipped when all linked campaigns are `PAUSED`.
@@ -303,11 +313,11 @@ Documentation rules:
         -   Warning emission is tenant-scoped and cached in `caches.json`.
         -   Duplicate warnings are suppressed by fingerprint
             (`customerId` + `warningCode` + budget/campaign/account identity)
-            until TTL expires.
+            until TTL expires, and always reset at the start of a new local day.
         -   Default TTL is 24 hours (`86400` seconds).
         -   Tenant override is under `CACHE` with
             `google_ads_warnings_ttl_time` (or `google_ads_warning_ttl_time`).
-        -   TTL `<= 0` disables warning dedupe cache suppression.
+        -   TTL `<= 0` keeps same-day dedupe and still resets on new day.
     -   Warning logging policy:
         -   Row-detail warnings are logged in `Google Ads pipeline warnings`.
         -   Separate summary log `Google Ads spend without allocation warnings`
