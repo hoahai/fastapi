@@ -243,6 +243,7 @@ def get_nucar_recommended_budget(
     if not normalized_account_code or not normalized_service_id:
         return {
             "accountCode": normalized_account_code,
+            "serviceId": normalized_service_id,
             "serviceName": normalized_service_id,
             "amount": None,
         }
@@ -286,6 +287,7 @@ def get_nucar_recommended_budget(
 
     return {
         "accountCode": normalized_account_code,
+        "serviceId": normalized_service_id,
         "serviceName": service_name,
         "amount": round(amount, 2) if found_amount else None,
     }

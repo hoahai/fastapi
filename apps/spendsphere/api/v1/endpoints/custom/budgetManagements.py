@@ -156,6 +156,7 @@ def get_recommended_budget_managements(
     Example response:
         {
           "accountCode": "ALAM",
+          "serviceId": "SEM",
           "serviceName": "Google Search",
           "amount": 800.0
         }
@@ -185,6 +186,7 @@ def get_recommended_budget_managements(
             return results[0]
         return {
             "accountCode": normalized_account_code,
+            "serviceId": service_id,
             "serviceName": service_id,
             "amount": None,
         }
