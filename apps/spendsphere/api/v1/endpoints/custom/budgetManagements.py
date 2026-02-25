@@ -8,6 +8,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from apps.spendsphere.api.v1.deps import require_feature
 from apps.spendsphere.api.v1.endpoints.custom.spreadsheetParser_nucar import (
     calculate_nucar_spreadsheet_budgets,
+    get_nucar_recommended_budget,
 )
 from apps.spendsphere.api.v1.helpers.db_queries import (
     get_masterbudgets,
@@ -21,9 +22,11 @@ from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
 from shared.tenant import get_tenant_id
 from shared.utils import get_current_period
 
+_budget_managements_feature_dependency = require_feature("budget_managements")
+
 router = APIRouter(
     dependencies=[
-        Depends(require_feature("budget_managements")),
+        Depends(_budget_managements_feature_dependency),
     ]
 )
 
@@ -73,6 +76,20 @@ def _resolve_spreadsheet_parser(
     return parsers.get(key)
 
 
+def _resolve_recommended_budget_parser(
+    tenant_id: str | None,
+) -> Callable[[str, str, int, int], dict[str, object]] | None:
+    parsers = {
+        "nucar": get_nucar_recommended_budget,
+    }
+    key = str(tenant_id or "").strip().lower()
+    return parsers.get(key)
+
+
+def ensure_budget_managements_access() -> None:
+    _budget_managements_feature_dependency()
+
+
 @router.get("/budgetManagements")
 def get_budget_managements(
     account_codes: list[str] | None = Query(None, alias="accountCodes"),
@@ -118,6 +135,48 @@ def get_budget_managements(
         payload["calculatedBudgets"] = parser(requested_codes, month, year)
 
     return payload
+
+
+@router.get("/budgetManagements/recommended")
+def get_recommended_budget_managements(
+    account_code: str = Query(..., alias="accountCode", min_length=1),
+    month: int = Query(..., description="Month (1-12)."),
+    year: int = Query(..., description="Year (e.g., 2026)."),
+    service_id: str = Query(..., alias="serviceId", min_length=1),
+):
+    """
+    Get recommended budgets from tenant-specific spreadsheet parser.
+
+    Example request:
+        GET /api/spendsphere/v1/budgetManagements/recommended?accountCode=ALAM&serviceId=SEM&month=2&year=2026
+
+    Example response:
+        {
+          "accountCode": "ALAM",
+          "serviceName": "Google Search",
+          "amount": 800.0
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - Requires FEATURE_FLAGS.budget_managements=true for this tenant
+    """
+    requested_codes = normalize_account_codes([account_code])
+    if len(requested_codes) != 1:
+        raise HTTPException(status_code=400, detail="accountCode must contain exactly one code")
+    normalized_account_code = requested_codes[0]
+
+    month, year = _resolve_period(month, year)
+    validate_account_codes([normalized_account_code], month=month, year=year)
+
+    parser = _resolve_recommended_budget_parser(get_tenant_id())
+    if parser is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Recommended budget parser not configured for this tenant",
+        )
+    return parser(normalized_account_code, service_id, month, year)
 
 
 @router.post("/budgetManagements")

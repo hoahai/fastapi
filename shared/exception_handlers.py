@@ -85,7 +85,7 @@ def register_exception_handlers(app: FastAPI, *, logger_name: str) -> None:
                 return str(loc)
             parts: list[str] = []
             for item in loc:
-                if item == "body":
+                if item in {"body", "query"}:
                     continue
                 if isinstance(item, int):
                     if parts:

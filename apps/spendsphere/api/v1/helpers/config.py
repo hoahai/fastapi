@@ -298,18 +298,30 @@ def get_spendsphere_sheets() -> dict[str, dict[str, str]]:
         normalized.get("activeperiodsheetname")
         or normalized.get("activepriodsheetname")
     )
+    budget_sheet_id = str(normalized.get("budgetsheetid", "")).strip()
 
     missing: list[str] = []
+    invalid: list[str] = []
     if not spreadsheet_id:
         missing.append("SPREADSHEET.id")
     if not rollovers_sheet_name:
         missing.append("SPREADSHEET.rollOverSheetName")
     if not active_sheet_name:
         missing.append("SPREADSHEET.activePriodSheetName")
-    if missing:
-        raise TenantConfigValidationError(app_name=APP_NAME, missing=missing)
+    budget_sheet_spreadsheet_id = budget_sheet_id
+    if budget_sheet_spreadsheet_id and not re.fullmatch(
+        r"[A-Za-z0-9_-]+",
+        budget_sheet_spreadsheet_id,
+    ):
+        invalid.append("SPREADSHEET.budgetSheetId")
+    if missing or invalid:
+        raise TenantConfigValidationError(
+            app_name=APP_NAME,
+            missing=missing,
+            invalid=invalid,
+        )
 
-    return {
+    sheets = {
         "rollovers": {
             "spreadsheet_id": spreadsheet_id,
             "range_name": rollovers_sheet_name,
@@ -319,6 +331,11 @@ def get_spendsphere_sheets() -> dict[str, dict[str, str]]:
             "range_name": active_sheet_name,
         },
     }
+    if budget_sheet_spreadsheet_id:
+        sheets["recommended_budget"] = {
+            "spreadsheet_id": budget_sheet_spreadsheet_id,
+        }
+    return sheets
 
 
 _VALIDATED_TENANTS: set[str] = set()
@@ -406,6 +423,9 @@ def validate_tenant_config(tenant_id: str | None = None) -> None:
                 or normalized.get("activepriodsheetname")
             ):
                 missing.append("SPREADSHEET.activePriodSheetName")
+            budget_sheet_id = str(normalized.get("budgetsheetid", "")).strip()
+            if budget_sheet_id and not re.fullmatch(r"[A-Za-z0-9_-]+", budget_sheet_id):
+                invalid.append("SPREADSHEET.budgetSheetId")
 
         def _check_google_ads_naming() -> None:
             raw = _check_required("GOOGLE_ADS_NAMING")

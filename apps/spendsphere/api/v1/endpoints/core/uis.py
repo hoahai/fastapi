@@ -12,6 +12,9 @@ from apps.spendsphere.api.v1.endpoints.core.periods import (
     build_periods_data,
     validate_month_offsets,
 )
+from apps.spendsphere.api.v1.endpoints.custom.budgetManagements import (
+    ensure_budget_managements_access,
+)
 from apps.spendsphere.api.v1.helpers.config import (
     get_acceleration_scope_types,
     get_adtypes,
@@ -1519,6 +1522,9 @@ def update_ui_allocations_rollbreaks(
     month_value, year_value = _resolve_period(
         request_payload.month, request_payload.year
     )
+
+    if request_payload.updatedMasterBudgets:
+        ensure_budget_managements_access()
 
     allowed_adtypes = {
         str(key).strip().upper()
