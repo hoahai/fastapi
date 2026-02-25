@@ -89,7 +89,7 @@ def get_masterbudgets(
         "b.note, "
         "b.month, "
         "b.year, "
-        "b.grossAmount AS netAmount "
+        "b.netAmount "
         f"FROM {budgets_table} AS b "
         f"JOIN {services_table} AS s ON s.id = b.serviceId "
         "WHERE b.month = %s "
