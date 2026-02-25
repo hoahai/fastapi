@@ -6,6 +6,7 @@ from datetime import date
 from googleapiclient.errors import HttpError
 
 from apps.spendsphere.api.v1.helpers.config import (
+    get_service_budgets,
     get_service_mapping,
     get_spendsphere_sheets,
 )
@@ -288,3 +289,40 @@ def get_nucar_recommended_budget(
         "serviceName": service_name,
         "amount": round(amount, 2) if found_amount else None,
     }
+
+
+def _resolve_requested_service_ids(service_id: str | None) -> list[str]:
+    if service_id is not None:
+        cleaned = str(service_id).strip()
+        return [cleaned] if cleaned else []
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in get_service_budgets():
+        cleaned = str(value).strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        normalized.append(cleaned)
+    return normalized
+
+
+def get_nucar_recommended_budgets(
+    account_code: str,
+    service_id: str | None,
+    month: int,
+    year: int,
+) -> list[dict[str, object]]:
+    service_ids = _resolve_requested_service_ids(service_id)
+    if not service_ids:
+        return []
+
+    return [
+        get_nucar_recommended_budget(
+            account_code=account_code,
+            service_id=value,
+            month=month,
+            year=year,
+        )
+        for value in service_ids
+    ]
