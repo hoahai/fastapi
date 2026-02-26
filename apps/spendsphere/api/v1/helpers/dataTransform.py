@@ -8,6 +8,12 @@ import pytz
 
 from shared.constants import GGADS_MIN_BUDGET_DELTA
 from shared.logger import get_logger
+from apps.spendsphere.api.v1.helpers.campaign_rules import (
+    TOUCHABLE_CAMPAIGN_STATUSES,
+    get_campaign_status,
+    has_any_active_campaign,
+    should_filter_row,
+)
 from apps.spendsphere.api.v1.helpers.config import (
     get_google_ads_inactive_prefixes,
     get_service_mapping,
@@ -45,6 +51,36 @@ def _normalize_account_code(value: object) -> str | None:
     """
     normalized = str(value or "").strip().upper()
     return normalized or None
+
+
+def _is_zero_spent_for_mutation(value: object) -> bool:
+    if value is None:
+        return True
+    try:
+        return Decimal(str(value)) == Decimal("0")
+    except Exception:
+        return False
+
+
+def _should_filter_row_before_mutation(
+    row: dict,
+    *,
+    inactive_prefixes: tuple[str, ...],
+) -> bool:
+    # Backend-only semantics:
+    # - "no allocation" means allocation is None (allocation=0 must still update)
+    # - active campaign follows UI active-campaign rules
+    no_allocation = row.get("allocation") is None
+    no_active_campaigns = not has_any_active_campaign(
+        row.get("campaigns"),
+        inactive_prefixes=inactive_prefixes,
+    )
+    no_spent = _is_zero_spent_for_mutation(row.get("totalCost"))
+    return should_filter_row(
+        no_allocation=no_allocation,
+        no_active_campaigns=no_active_campaigns,
+        no_spent=no_spent,
+    )
 
 # ============================================================
 # 1. MASTER BUDGET → AD TYPE MAPPING
@@ -274,16 +310,18 @@ def group_campaigns_by_budget(
                 "campaignNames": "TAAA | SEM | Brand\\nTAAA | SEM | NonBrand",
             }
 
-    Example (fallback row when no campaign matches):
+    Example (fallback row when no campaign matches master mapping):
         Suppose Google Ads has budget `B2` for account `TAAA`, but no campaign in
-        `campaigns` matched `(accountCode="TAAA", adTypeCode=...)`.
+        `campaigns` matched `(accountCode="TAAA", adTypeCode=...)` against master
+        budget service mapping.
         This function still emits a row for `B2` when either condition is true:
         1) Allocations contain the exact key `(accountCode="TAAA", ggBudgetId="B2")`
         2) Account `TAAA` appears in `master_budget_data` for the period
         This keeps important "orphan" budgets visible in downstream calculations.
 
         The emitted fallback row has:
-        - `campaigns: []`
+        - `campaigns` populated from raw campaign rows that share
+          `(customerId, budgetId)` when available; otherwise `[]`
         - `adTypeCode` inferred from the first campaign found for
           `(customerId, budgetId)` when available (including optional
           raw-campaign fallback map); otherwise `None`
@@ -321,9 +359,10 @@ def group_campaigns_by_budget(
         if _normalize_account_code(a.get("accountCode"))
         and str(a.get("ggBudgetId", "")).strip()
     }
-    # Preserve the first adType seen per (customerId, budgetId) so fallback rows
-    # can still expose adTypeCode even when campaign rows are skipped later.
+    # Preserve first adType and campaign rows per (customerId, budgetId) so fallback
+    # rows can keep campaign context even when master mapping does not match.
     first_ad_type_by_budget: dict[tuple[str, str], str | None] = {}
+    campaigns_by_budget: dict[tuple[str, str], list[dict]] = defaultdict(list)
     for c in campaigns:
         customer_id = str(c.get("customerId", "")).strip()
         budget_id = str(c.get("budgetId", "")).strip()
@@ -331,9 +370,22 @@ def group_campaigns_by_budget(
             continue
         key = (customer_id, budget_id)
         if key in first_ad_type_by_budget:
-            continue
-        ad_type = str(c.get("adTypeCode", "")).strip()
-        first_ad_type_by_budget[key] = ad_type or None
+            pass
+        else:
+            ad_type = str(c.get("adTypeCode", "")).strip()
+            first_ad_type_by_budget[key] = ad_type or None
+
+        campaign_entry = {
+            "campaignId": c.get("campaignId"),
+            "campaignName": c.get("campaignName"),
+            "status": c.get("status"),
+        }
+        if include_transform_results:
+            campaign_entry["cost"] = cost_lookup.get(
+                (c.get("customerId"), c.get("campaignId")),
+                Decimal("0"),
+            )
+        campaigns_by_budget[key].append(campaign_entry)
     if fallback_ad_types_by_budget:
         for raw_key, raw_ad_type in fallback_ad_types_by_budget.items():
             try:
@@ -431,7 +483,11 @@ def group_campaigns_by_budget(
         if not has_allocation and not has_masterbudget:
             continue
 
-        inferred_ad_type = first_ad_type_by_budget.get(group_key)
+        customer_key = str(customer_id).strip()
+        inferred_ad_type = first_ad_type_by_budget.get((customer_key, budget_id))
+        fallback_campaigns = list(
+            campaigns_by_budget.get((customer_key, budget_id), [])
+        )
         fallback_group = {
             "ggAccountId": customer_id,
             "accountCode": account_code or budget.get("accountCode"),
@@ -442,13 +498,17 @@ def group_campaigns_by_budget(
             "budgetName": budget.get("budgetName"),
             "budgetStatus": budget.get("status"),
             "budgetAmount": Decimal(str(budget.get("amount", 0))),
-            "campaigns": [],
+            "campaigns": fallback_campaigns,
             "totalCost": budget_cost_lookup.get(group_key, Decimal("0")),
         }
         if include_transform_results:
             fallback_group["services"] = []
             fallback_group["campaignNames"] = ""
-            fallback_group["_campaign_names"] = []
+            fallback_group["_campaign_names"] = [
+                str(campaign.get("campaignName", "")).strip()
+                for campaign in fallback_campaigns
+                if str(campaign.get("campaignName", "")).strip()
+            ]
         grouped[group_key] = fallback_group
 
     if include_transform_results:
@@ -841,6 +901,12 @@ def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
     inactive_prefixes = get_google_ads_inactive_prefixes()
 
     for row in data:
+        if _should_filter_row_before_mutation(
+            row,
+            inactive_prefixes=inactive_prefixes,
+        ):
+            continue
+
         customer_id = row["ggAccountId"]
         allocation = row.get("allocation")
         daily_budget_raw = row.get("dailyBudget")
@@ -879,17 +945,20 @@ def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
         # Campaign status updates (independent)
         # -------------------------
         for campaign in campaigns:
+            campaign_status = get_campaign_status(campaign)
+            if campaign_status not in TOUCHABLE_CAMPAIGN_STATUSES:
+                continue
             if _is_zzz_name(
                 campaign.get("campaignName"),
                 inactive_prefixes=inactive_prefixes,
             ):
                 continue
-            if campaign["status"] != expected_status:
+            if campaign_status != expected_status:
                 customer_updates = campaign_updates.setdefault(customer_id, {})
                 customer_updates[str(campaign["campaignId"])] = {
                     "campaignId": campaign["campaignId"],
                     "campaignName": campaign.get("campaignName"),
-                    "oldStatus": campaign["status"],
+                    "oldStatus": campaign_status,
                     "newStatus": expected_status,
                     "accountCode": row.get("accountCode"),
                 }

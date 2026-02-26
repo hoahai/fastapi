@@ -20,6 +20,12 @@ from apps.spendsphere.api.v1.helpers.config import (
     get_adtypes,
     get_service_mapping,
 )
+from apps.spendsphere.api.v1.helpers.campaign_rules import (
+    get_campaign_status,
+    has_any_active_campaign,
+    should_filter_row,
+    should_include_campaign_in_row,
+)
 from apps.spendsphere.api.v1.helpers.dataTransform import (
     generate_update_payloads,
     transform_google_ads_data,
@@ -505,31 +511,14 @@ def _is_zero_or_none(value: object) -> bool:
     return _to_decimal(value, fallback=Decimal("0")) == Decimal("0")
 
 
-def _is_inactive_campaign_name(name: object) -> bool:
-    cleaned = str(name or "").strip().lower()
-    if not cleaned:
-        return False
-    return cleaned.startswith("zzz_") or cleaned.startswith("zzz.")
+_UI_INACTIVE_PREFIXES = ("zzz.", "zzz_")
 
 
 def _has_any_active_campaign(campaigns: object) -> bool:
-    if not isinstance(campaigns, list) or not campaigns:
-        return False
-
-    for campaign in campaigns:
-        if not isinstance(campaign, dict):
-            continue
-        raw_name = campaign.get("campaignName")
-        if raw_name is None:
-            # Unknown name: keep row rather than risk hiding valid data.
-            return True
-        campaign_name = str(raw_name).strip()
-        if not campaign_name:
-            return True
-        if not _is_inactive_campaign_name(campaign_name):
-            return True
-
-    return False
+    return has_any_active_campaign(
+        campaigns,
+        inactive_prefixes=_UI_INACTIVE_PREFIXES,
+    )
 
 
 def _should_filter_table_row(item: dict) -> bool:
@@ -548,7 +537,11 @@ def _should_filter_table_row(item: dict) -> bool:
     no_active_campaigns = not _has_any_active_campaign(item.get("campaigns"))
     no_spent = _is_zero_or_none(item.get("spent"))
 
-    return no_allocation and no_active_campaigns and no_spent
+    return should_filter_row(
+        no_allocation=no_allocation,
+        no_active_campaigns=no_active_campaigns,
+        no_spent=no_spent,
+    )
 
 
 def _build_table_data(
@@ -573,14 +566,16 @@ def _build_table_data(
             (row.get("accountCode"), budget_id)
         )
 
-        normalized_campaigns = [
-            {
+        normalized_campaigns = []
+        for c in campaigns:
+            campaign_status = get_campaign_status(c) or None
+            normalized = {
                 "campaignId": c.get("campaignId"),
                 "campaignName": c.get("campaignName"),
-                "campaignStatus": c.get("status"),
+                "campaignStatus": campaign_status,
             }
-            for c in campaigns
-        ]
+            if should_include_campaign_in_row(normalized):
+                normalized_campaigns.append(normalized)
         campaign_names = _format_campaign_names(normalized_campaigns)
 
         current_budget = budget_meta.get("amount")
@@ -686,6 +681,9 @@ def _build_table_data_fallback(
 
     grouped: dict[tuple[str | None, str | None], dict] = {}
     for campaign in campaigns:
+        if not should_include_campaign_in_row(campaign):
+            continue
+
         customer_id = campaign.get("customerId")
         budget_id = campaign.get("budgetId")
         if not customer_id or not budget_id:
@@ -1490,21 +1488,6 @@ def update_ui_allocations_rollbreaks(
                 "field": "year",
                 "value": request_payload.year,
                 "message": "year must be between 2000 and 2100",
-            }
-        )
-
-    if (
-        not request_payload.updatedAllocations
-        and not request_payload.updatedMasterBudgets
-        and not request_payload.updatedRollBreakdowns
-    ):
-        errors.append(
-            {
-                "field": "updates",
-                "message": (
-                    "At least one item is required in updatedAllocations, "
-                    "updatedMasterBudgets, or updatedRollBreakdowns"
-                ),
             }
         )
 
