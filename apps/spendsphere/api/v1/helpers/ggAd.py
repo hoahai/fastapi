@@ -25,6 +25,7 @@ from shared.constants import (
     GGADS_ALLOWED_CAMPAIGN_STATUSES,
 )
 from shared.logger import get_logger
+from apps.spendsphere.api.v1.helpers.account_codes import standardize_account_code
 from apps.spendsphere.api.v1.helpers.config import (
     get_adtypes,
     get_google_ads_inactive_prefixes,
@@ -353,8 +354,7 @@ def get_mcc_accounts() -> list[dict]:
 
 
 def _normalize_account_code_token(value: object) -> str | None:
-    cleaned = str(value).strip().upper()
-    return cleaned or None
+    return standardize_account_code(value)
 
 
 def _normalize_account_name_token(value: object) -> str | None:
@@ -617,7 +617,7 @@ def get_ggad_accounts(*, refresh_cache: bool = False) -> list[dict]:
         {
             "id": account.get("id"),
             "descriptiveName": account.get("descriptiveName"),
-            "accountCode": account.get("accountCode"),
+            "accountCode": standardize_account_code(account.get("accountCode")),
             "accountName": account.get("accountName"),
         }
         for account in parsed_accounts
@@ -650,7 +650,7 @@ def get_ggad_accounts_with_summary(*, refresh_cache: bool = False) -> dict:
         {
             "id": account.get("id"),
             "descriptiveName": account.get("descriptiveName"),
-            "accountCode": account.get("accountCode"),
+            "accountCode": standardize_account_code(account.get("accountCode")),
             "accountName": account.get("accountName"),
         }
         for account in parsed_accounts
@@ -729,7 +729,7 @@ def get_ggad_budgets(
         return [
             {
                 "customerId": account["id"],
-                "accountCode": account.get("accountCode"),
+                "accountCode": standardize_account_code(account.get("accountCode")),
                 "accountName": account.get("accountName"),
                 **b,
             }
@@ -742,7 +742,7 @@ def get_ggad_budgets(
     account_map: dict[str, dict] = {}
     account_codes: list[str] = []
     for account in accounts:
-        code = str(account.get("accountCode", "")).strip().upper()
+        code = standardize_account_code(account.get("accountCode"))
         if not code or code in account_map:
             continue
         account_map[code] = account
@@ -839,8 +839,7 @@ def get_ggad_campaigns(
 
     def per_account_func(account: dict) -> list[dict]:
         campaigns = get_ggad_campaign(account["id"])
-        account_code = str(account.get("accountCode", "")).strip()
-        account_code_upper = account_code.upper()
+        account_code = standardize_account_code(account.get("accountCode")) or ""
 
         filtered: list[dict] = []
 
@@ -859,8 +858,8 @@ def get_ggad_campaigns(
                 continue
 
             groups = _normalize_named_groups(match)
-            parsed_account_code = str(groups.get("accountCode", "")).strip().upper()
-            if parsed_account_code and parsed_account_code != account_code_upper:
+            parsed_account_code = standardize_account_code(groups.get("accountCode")) or ""
+            if parsed_account_code and parsed_account_code != account_code:
                 continue
 
             ad_type = str(groups.get("adTypeCode", "")).strip().upper()
@@ -889,7 +888,7 @@ def get_ggad_campaigns(
     account_map: dict[str, dict] = {}
     account_codes: list[str] = []
     for account in accounts:
-        code = str(account.get("accountCode", "")).strip().upper()
+        code = standardize_account_code(account.get("accountCode"))
         if not code or code in account_map:
             continue
         account_map[code] = account
@@ -1092,7 +1091,7 @@ def get_ggad_spents(
         return [
             {
                 "customerId": account["id"],
-                "accountCode": account.get("accountCode"),
+                "accountCode": standardize_account_code(account.get("accountCode")),
                 "accountName": account.get("accountName"),
                 **s,
             }
@@ -1252,7 +1251,12 @@ def update_budgets(
         mode="budget",
     )
     account_code = next(
-        (r.get("accountCode") for r in updates if r.get("accountCode")), None
+        (
+            standardize_account_code(r.get("accountCode"))
+            for r in updates
+            if standardize_account_code(r.get("accountCode"))
+        ),
+        None,
     )
 
     if not valid:
@@ -1342,7 +1346,9 @@ def update_budgets(
                 warnings.append(
                     {
                         "budgetId": chunk[i].get("budgetId"),
-                        "accountCode": chunk[i].get("accountCode"),
+                        "accountCode": standardize_account_code(
+                            chunk[i].get("accountCode")
+                        ),
                         "campaignNames": chunk[i].get("campaignNames", []),
                         "currentAmount": chunk[i].get("currentAmount"),
                         "newAmount": chunk[i].get("newAmount"),
@@ -1404,7 +1410,12 @@ def update_campaign_statuses(
     ]
     if not filtered_updates:
         account_code = next(
-            (r.get("accountCode") for r in updates if r.get("accountCode")), None
+            (
+                standardize_account_code(r.get("accountCode"))
+                for r in updates
+                if standardize_account_code(r.get("accountCode"))
+            ),
+            None,
         )
         return {
             "customerId": customer_id,
@@ -1425,7 +1436,11 @@ def update_campaign_statuses(
         mode="campaign_status",
     )
     account_code = next(
-        (r.get("accountCode") for r in filtered_updates if r.get("accountCode")),
+        (
+            standardize_account_code(r.get("accountCode"))
+            for r in filtered_updates
+            if standardize_account_code(r.get("accountCode"))
+        ),
         None,
     )
 

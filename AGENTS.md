@@ -485,6 +485,121 @@ When implementing any new feature, the agent must explicitly consider:
 
 Performance and resource efficiency must be prioritized over convenience.
 
+------------------------------------------------------------------------
+
+## Commit Message Standard
+
+All generated commit messages **must** follow this exact command format
+and Conventional Commits specification.
+
+## Required Command Format
+
+``` bash
+git add .
+git commit -m "<type>(<scope>): <short summary>" \
+  -m "- bullet point 1" \
+  -m "- bullet point 2" \
+  -m "- bullet point 3"
+git push
+```
+
+------------------------------------------------------------------------
+
+## Conventional Commit Rules
+
+### 1. Format
+
+    <type>(<scope>): <summary>
+
+-   `<type>` = required
+-   `<scope>` = required (e.g., spendsphere, ui, backend, api)
+-   `<summary>` = short, imperative, lowercase (no trailing period)
+
+Example:
+
+    feat(spendsphere): add services cache and recommended budget flow
+
+------------------------------------------------------------------------
+
+### 2. Allowed Types
+
+Only use one of the following:
+
+-   `feat` -- new feature
+-   `fix` -- bug fix
+-   `refactor` -- code restructuring without behavior change
+-   `perf` -- performance improvement
+-   `docs` -- documentation only
+-   `test` -- test changes
+-   `chore` -- maintenance/config changes
+-   `build` -- build system/dependency changes
+-   `ci` -- CI/CD changes
+
+Do not invent new types.
+
+------------------------------------------------------------------------
+
+### 3. Bullet Point Rules
+
+-   Each change must be in its own `-m` flag.
+-   Each bullet must begin with `-`.
+-   Use concise, action-oriented phrasing.
+-   No trailing periods.
+-   Escape internal double quotes if needed.
+-   Do not combine multiple changes into a single bullet.
+
+Correct:
+
+``` bash
+git commit -m "refactor(spendsphere): unify campaign activity rules" \
+  -m "- add shared campaign_rules helper" \
+  -m "- align UI and backend row filtering logic"
+```
+
+Incorrect:
+
+``` bash
+git commit -m "updated stuff"
+```
+
+------------------------------------------------------------------------
+
+### 4. Additional Requirements
+
+-   Always include `git add .` before the commit.
+-   Always include `git push` after the commit.
+-   Do not wrap the command in explanation text unless explicitly
+    requested.
+-   Do not collapse bullets into a single paragraph.
+-   Do not use a single `-m` flag for multi-line commits.
+
+------------------------------------------------------------------------
+
+### 5. Imperative Style Guide
+
+Use verbs like:
+
+-   add
+-   update
+-   remove
+-   refactor
+-   unify
+-   enforce
+-   restrict
+-   align
+-   implement
+-   improve
+
+Avoid:
+
+-   added
+-   adding
+-   fixed
+-   fixing
+-   changes
+-   misc updates
+
+This format is mandatory for all generated commit messages.
 
 ------------------------------------------------------------------------
 

@@ -8,6 +8,7 @@ import pytz
 
 from shared.constants import GGADS_MIN_BUDGET_DELTA
 from shared.logger import get_logger
+from apps.spendsphere.api.v1.helpers.account_codes import standardize_account_code
 from apps.spendsphere.api.v1.helpers.campaign_rules import (
     TOUCHABLE_CAMPAIGN_STATUSES,
     get_campaign_status,
@@ -49,8 +50,7 @@ def _normalize_account_code(value: object) -> str | None:
         _normalize_account_code(" taaa ") -> "TAAA"
         _normalize_account_code("") -> None
     """
-    normalized = str(value or "").strip().upper()
-    return normalized or None
+    return standardize_account_code(value)
 
 
 def _is_zero_spent_for_mutation(value: object) -> bool:
@@ -824,7 +824,7 @@ def apply_budget_accelerations(
     budget_accels: dict[tuple[str, str], list[dict]] = defaultdict(list)
 
     for accel in accelerations:
-        account_code = str(accel.get("accountCode", "")).upper()
+        account_code = _normalize_account_code(accel.get("accountCode")) or ""
         scope_type = str(accel.get("scopeLevel", "")).upper()
         scope_value = str(accel.get("scopeValue", "")).strip()
 
@@ -852,7 +852,7 @@ def apply_budget_accelerations(
         return max(accels, key=_accel_sort_key)
 
     for b in budgets:
-        account_code = str(b.get("accountCode", "")).upper()
+        account_code = _normalize_account_code(b.get("accountCode")) or ""
         budget_id = str(b.get("budgetId", "")).strip()
         ad_type = str(b.get("adTypeCode", "")).strip()
 

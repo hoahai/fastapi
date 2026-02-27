@@ -10,6 +10,10 @@ from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 
+from apps.spendsphere.api.v1.helpers.account_codes import (
+    standardize_account_code,
+    standardize_account_codes,
+)
 from apps.spendsphere.api.v1.helpers.config import (
     get_google_ads_inactive_prefixes,
     get_service_mapping,
@@ -53,27 +57,7 @@ def _is_zzz_name(
 
 
 def _normalize_account_codes(account_codes: str | list[str] | None) -> list[str]:
-    if account_codes is None:
-        return []
-    if isinstance(account_codes, str):
-        candidates = [account_codes]
-    elif isinstance(account_codes, list):
-        candidates = account_codes
-    else:
-        return []
-
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for candidate in candidates:
-        if not isinstance(candidate, str):
-            continue
-        for chunk in candidate.split(","):
-            code = chunk.strip().upper()
-            if not code or code in seen:
-                continue
-            seen.add(code)
-            normalized.append(code)
-    return normalized
+    return standardize_account_codes(account_codes)
 
 
 def normalize_account_codes(account_codes: str | list[str] | None) -> list[str]:
@@ -99,9 +83,10 @@ def _normalize_account_map(raw: object) -> dict[str, dict]:
         return {}
     normalized: dict[str, dict] = {}
     for code, account in raw.items():
-        if not isinstance(code, str) or not isinstance(account, dict):
+        normalized_code = standardize_account_code(code)
+        if not normalized_code or not isinstance(account, dict):
             continue
-        normalized[code.strip().upper()] = account
+        normalized[normalized_code] = account
     return normalized
 
 
@@ -480,7 +465,7 @@ def _build_google_ads_warning_fingerprint(
 ) -> str | None:
     warning_code = str(warning.get("warningCode", "")).strip().upper()
     budget_id = str(warning.get("budgetId", "")).strip()
-    account_code = str(warning.get("accountCode", "")).strip().upper()
+    account_code = standardize_account_code(warning.get("accountCode")) or ""
     campaign_id = str(warning.get("campaignId", "")).strip()
     message = str(warning.get("error") or warning.get("message") or "").strip()
     campaign_names = _normalize_campaign_names_for_warning_cache(
@@ -757,9 +742,7 @@ def set_google_ads_budgets_cache(
     *,
     tenant_id: str | None = None,
 ) -> None:
-    if not account_code or not isinstance(account_code, str):
-        return
-    code = account_code.strip().upper()
+    code = standardize_account_code(account_code)
     if not code:
         return
 
@@ -845,9 +828,7 @@ def set_google_ads_campaigns_cache(
     *,
     tenant_id: str | None = None,
 ) -> None:
-    if not account_code or not isinstance(account_code, str):
-        return
-    code = account_code.strip().upper()
+    code = standardize_account_code(account_code)
     if not code:
         return
 
@@ -1050,9 +1031,11 @@ def refresh_account_codes_cache(
         as_of = datetime.now(ZoneInfo(get_timezone())).date()
         statuses = _get_active_period_statuses(
             [
-                str(a.get("code", "")).strip().upper()
-                for a in active_by_name
-                if str(a.get("code", "")).strip()
+                code
+                for code in (
+                    standardize_account_code(a.get("code")) for a in active_by_name
+                )
+                if code
             ],
             month=None,
             year=None,
@@ -1061,12 +1044,13 @@ def refresh_account_codes_cache(
         accounts = [
             a
             for a in active_by_name
-            if statuses.get(str(a.get("code", "")).strip().upper(), False)
+            if statuses.get(standardize_account_code(a.get("code")) or "", False)
         ]
     accounts_map = {
-        str(a.get("code", "")).strip().upper(): a
+        code: a
         for a in accounts
-        if str(a.get("code", "")).strip()
+        for code in [standardize_account_code(a.get("code"))]
+        if code
     }
     cache_path = _get_cache_path(include_all)
     tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
@@ -1100,9 +1084,9 @@ def _normalize_cached_account_entry(
     *,
     inactive_prefixes: tuple[str, ...] | None = None,
 ) -> dict:
-    normalized_code = str(
+    normalized_code = standardize_account_code(
         account.get("code") or account.get("accountCode") or code
-    ).strip().upper()
+    ) or ""
     descriptive_name = str(account.get("descriptiveName", "")).strip()
     account_name = str(
         account.get("name")
@@ -1183,7 +1167,7 @@ def _get_active_period_statuses(
     for row in rows:
         if not isinstance(row, dict):
             continue
-        code = str(row.get("accountCode", "")).strip().upper()
+        code = standardize_account_code(row.get("accountCode"))
         if not code:
             continue
         statuses[code] = bool(row.get("isActive"))
@@ -1247,9 +1231,10 @@ def validate_account_codes(
             tenant_id=tenant_key,
         )
         source_accounts = {
-            str(a.get("code", "")).strip().upper(): a
+            code: a
             for a in refreshed_accounts
-            if str(a.get("code", "")).strip()
+            for code in [standardize_account_code(a.get("code"))]
+            if code
         }
     else:
         source_accounts = tenant_accounts_all
@@ -1259,7 +1244,7 @@ def validate_account_codes(
     for code, account in source_accounts.items():
         if not isinstance(account, dict):
             continue
-        normalized_code = str(code).strip().upper()
+        normalized_code = standardize_account_code(code)
         if not normalized_code:
             continue
         normalized_source_accounts[normalized_code] = _normalize_cached_account_entry(
@@ -1362,7 +1347,9 @@ def require_account_code(
 ) -> str:
     if not account_code or not account_code.strip():
         raise HTTPException(status_code=400, detail="account_code is required")
-    code = account_code.strip().upper()
+    code = standardize_account_code(account_code)
+    if not code:
+        raise HTTPException(status_code=400, detail="account_code is required")
     validate_account_codes(
         [code],
         include_all=include_all,

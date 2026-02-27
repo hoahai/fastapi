@@ -6,6 +6,10 @@ import pytz
 from shared.ggSheet import _read_sheet_raw
 from shared.utils import get_current_period
 from shared.tenant import get_timezone
+from apps.spendsphere.api.v1.helpers.account_codes import (
+    standardize_account_code,
+    standardize_account_codes,
+)
 from apps.spendsphere.api.v1.helpers.config import get_spendsphere_sheets
 from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
     get_google_sheet_cache_entry,
@@ -121,7 +125,7 @@ def get_rollovers(
         year = period["year"]
 
     normalized_accounts = (
-        {c.strip().upper() for c in account_codes}
+        set(standardize_account_codes(account_codes))
         if account_codes
         else None
     )
@@ -135,9 +139,8 @@ def get_rollovers(
         rollable_value = _normalize_rollable_value(row.get("rollable"))
         if not include_unrollable and rollable_value == 0:
             continue
-        if normalized_accounts is not None and (
-            row.get("accountCode", "").strip().upper() not in normalized_accounts
-        ):
+        row_account_code = standardize_account_code(row.get("accountCode"))
+        if normalized_accounts is not None and row_account_code not in normalized_accounts:
             continue
         results.append({**row, "rollable": rollable_value})
     return results
@@ -165,7 +168,7 @@ def get_active_period(
         account_codes = [account_codes]
 
     normalized_accounts = (
-        {c.strip().upper() for c in account_codes}
+        set(standardize_account_codes(account_codes))
         if account_codes
         else None
     )
@@ -185,7 +188,7 @@ def get_active_period(
         next_start_by_account: dict[str, date] = {}
 
         for idx, row in enumerate(data):
-            account_code = row.get("accountCode", "").strip().upper()
+            account_code = standardize_account_code(row.get("accountCode")) or ""
             if not account_code:
                 continue
             if normalized_accounts is not None and account_code not in normalized_accounts:
@@ -210,7 +213,7 @@ def get_active_period(
         for rows in rows_by_account.values():
             rows.sort(key=lambda item: (item[0], item[1]))
 
-            account_code = rows[0][2].get("accountCode", "").strip().upper()
+            account_code = standardize_account_code(rows[0][2].get("accountCode")) or ""
             active_rows = active_rows_by_account.get(account_code, [])
             if len(active_rows) > 1:
                 raise ValueError(
@@ -264,7 +267,7 @@ def get_active_period(
     last_index: dict[str, int] = {}
 
     for idx, row in enumerate(data):
-        account_code = row.get("accountCode", "").strip().upper()
+        account_code = standardize_account_code(row.get("accountCode")) or ""
         if not account_code:
             continue
         if normalized_accounts is not None and account_code not in normalized_accounts:

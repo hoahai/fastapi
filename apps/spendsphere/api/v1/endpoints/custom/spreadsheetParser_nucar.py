@@ -5,6 +5,7 @@ from datetime import date
 
 from googleapiclient.errors import HttpError
 
+from apps.spendsphere.api.v1.helpers.account_codes import standardize_account_code
 from apps.spendsphere.api.v1.helpers.config import (
     get_service_budgets,
     get_service_mapping,
@@ -153,7 +154,7 @@ def calculate_nucar_spreadsheet_budgets(
 
     aggregated: dict[str, dict[str, object]] = {}
     for row in rows:
-        account_code = str(row.get("accountCode", "")).strip().upper()
+        account_code = standardize_account_code(row.get("accountCode")) or ""
         if not account_code:
             continue
 
@@ -238,7 +239,7 @@ def get_nucar_recommended_budget(
     Parse NuCar monthly budget sheet and return recommended amount for one
     account + service.
     """
-    normalized_account_code = str(account_code).strip().upper()
+    normalized_account_code = standardize_account_code(account_code) or ""
     normalized_service_id = str(service_id).strip()
     if not normalized_account_code or not normalized_service_id:
         return {

@@ -8,6 +8,10 @@ from collections import defaultdict
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict, Field
 
+from apps.spendsphere.api.v1.helpers.account_codes import (
+    standardize_account_code,
+    standardize_account_codes,
+)
 from apps.spendsphere.api.v1.helpers.config import (
     get_acceleration_scope_types,
     get_adtypes,
@@ -240,17 +244,7 @@ class AccelerationIdsPayload(BaseModel):
 
 
 def _normalize_codes(values: list[str]) -> list[str]:
-    normalized: list[str] = []
-    seen: set[str] = set()
-    for value in values:
-        if not isinstance(value, str):
-            continue
-        code = value.strip().upper()
-        if not code or code in seen:
-            continue
-        seen.add(code)
-        normalized.append(code)
-    return normalized
+    return standardize_account_codes(values)
 
 
 def _resolve_account_codes(
@@ -282,9 +276,11 @@ def _resolve_account_codes(
                 if not bool(row.get("inactiveByName"))
             ]
         return [
-            str(a.get("code", "")).strip().upper()
-            for a in resolved_accounts
-            if str(a.get("code", "")).strip()
+            code
+            for code in (
+                standardize_account_code(a.get("code")) for a in resolved_accounts
+            )
+            if code
         ]
 
     validated = validate_account_codes(
@@ -294,9 +290,11 @@ def _resolve_account_codes(
         as_of=as_of,
     )
     return [
-        str(a.get("code", "")).strip().upper()
-        for a in validated
-        if str(a.get("code", "")).strip()
+        code
+        for code in (
+            standardize_account_code(a.get("code")) for a in validated
+        )
+        if code
     ]
 
 
@@ -315,7 +313,7 @@ def _normalize_and_validate_rows(
     errors: list[dict] = []
 
     for idx, data in enumerate(rows):
-        account_code = str(data.get("accountCode", "")).strip().upper()
+        account_code = standardize_account_code(data.get("accountCode")) or ""
         scope_type = str(data.get("scopeLevel", "")).strip().upper()
         scope_value = str(data.get("scopeValue", "")).strip()
         multiplier = data.get("multiplier")
@@ -380,7 +378,9 @@ def _normalize_and_validate_rows(
                     }
                 )
         elif scope_type == "ACCOUNT":
-            if account_code and scope_value and scope_value.upper() != account_code:
+            if account_code and scope_value and (
+                standardize_account_code(scope_value) or ""
+            ) != account_code:
                 errors.append(
                     {
                         "index": idx,
@@ -428,17 +428,17 @@ def _validate_budget_scope_values(rows: list[dict]) -> None:
 
     account_codes = sorted(
         {
-            str(row.get("accountCode", "")).strip().upper()
+            standardize_account_code(row.get("accountCode")) or ""
             for _, row in budget_rows
-            if str(row.get("accountCode", "")).strip()
+            if standardize_account_code(row.get("accountCode"))
         }
     )
     errors: list[dict] = []
     gg_accounts = get_ggad_accounts()
     gg_by_code = {
-        str(a.get("accountCode", "")).strip().upper(): a
+        (standardize_account_code(a.get("accountCode")) or ""): a
         for a in gg_accounts
-        if str(a.get("accountCode", "")).strip()
+        if standardize_account_code(a.get("accountCode"))
     }
 
     missing_accounts = [code for code in account_codes if code not in gg_by_code]
@@ -451,20 +451,20 @@ def _validate_budget_scope_values(rows: list[dict]) -> None:
                 "message": "No Google Ads account found for accountCode",
             }
             for idx, row in budget_rows
-            if str(row.get("accountCode", "")).strip().upper() in missing_accounts
+            if (standardize_account_code(row.get("accountCode")) or "") in missing_accounts
         )
 
     accounts = [gg_by_code[code] for code in account_codes if code in gg_by_code]
     budgets = get_ggad_budgets(accounts) if accounts else []
     budget_ids_by_account: dict[str, set[str]] = defaultdict(set)
     for budget in budgets:
-        account_code = str(budget.get("accountCode", "")).strip().upper()
+        account_code = standardize_account_code(budget.get("accountCode")) or ""
         budget_id = str(budget.get("budgetId", "")).strip()
         if account_code and budget_id:
             budget_ids_by_account[account_code].add(budget_id)
 
     for idx, row in budget_rows:
-        account_code = str(row.get("accountCode", "")).strip().upper()
+        account_code = standardize_account_code(row.get("accountCode")) or ""
         scope_value = str(row.get("scopeValue", "")).strip()
         if account_code in missing_accounts:
             continue

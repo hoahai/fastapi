@@ -3,6 +3,10 @@ from __future__ import annotations
 from decimal import InvalidOperation
 from decimal import Decimal
 
+from apps.spendsphere.api.v1.helpers.account_codes import (
+    standardize_account_code,
+    standardize_account_code_set,
+)
 from apps.spendsphere.api.v1.helpers.dataTransform import (
     build_update_payloads_from_inputs,
 )
@@ -46,16 +50,8 @@ def normalize_account_codes(account_code):
     if account_code is None:
         return None
 
-    if isinstance(account_code, str):
-        code = account_code.strip()
-        return {code.upper()} if code else None
-
-    if isinstance(account_code, list):
-        cleaned = {
-            code.strip().upper()
-            for code in account_code
-            if isinstance(code, str) and code.strip()
-        }
+    if isinstance(account_code, (str, list)):
+        cleaned = standardize_account_code_set(account_code)
         return cleaned if cleaned else None
 
     raise TypeError("account_codes must be None, str, or list[str]")
@@ -572,7 +568,8 @@ def run_google_ads_budget_pipeline(
         accounts = [
             acc
             for acc in accounts
-            if acc.get("accountCode", "").upper() in account_code_filter
+            if (standardize_account_code(acc.get("accountCode")) or "")
+            in account_code_filter
         ]
 
     campaigns, budgets, costs, fallback_ad_types_by_budget = run_parallel(

@@ -15,6 +15,7 @@ from apps.spendsphere.api.v1.endpoints.core.periods import (
 from apps.spendsphere.api.v1.endpoints.custom.budgetManagements import (
     ensure_budget_managements_access,
 )
+from apps.spendsphere.api.v1.helpers.account_codes import standardize_account_code
 from apps.spendsphere.api.v1.helpers.config import (
     get_acceleration_scope_types,
     get_adtypes,
@@ -180,6 +181,13 @@ def _normalize_optional_str(value: object | None) -> str | None:
         return None
     cleaned = str(value).strip()
     return cleaned or None
+
+
+def _normalize_optional_id(value: object | None) -> str | None:
+    normalized = _normalize_optional_str(value)
+    if normalized == "0":
+        return None
+    return normalized
 
 
 def _normalize_string_list(values: object) -> list[str]:
@@ -549,21 +557,34 @@ def _build_table_data(
     budgets: list[dict],
     allocations: list[dict],
 ) -> list[dict]:
-    budget_lookup = {b.get("budgetId"): b for b in budgets}
-    allocation_lookup: dict[tuple[str | None, str | None], dict] = {}
+    budget_lookup: dict[str, dict] = {}
+    for budget in budgets:
+        budget_id = str(budget.get("budgetId", "")).strip()
+        if not budget_id:
+            continue
+        budget_lookup[budget_id] = budget
+
+    allocation_lookup: dict[tuple[str, str], dict] = {}
     for a in allocations:
-        allocation_lookup[(a.get("accountCode"), a.get("ggBudgetId"))] = {
+        account_code = standardize_account_code(a.get("accountCode")) or ""
+        budget_id = str(a.get("ggBudgetId", "")).strip()
+        if not account_code or not budget_id:
+            continue
+        allocation_lookup[(account_code, budget_id)] = {
             "id": a.get("id"),
             "allocation": _to_float(a.get("allocation")),
         }
 
     table_data: list[dict] = []
     for row in rows:
-        budget_id = row.get("budgetId")
+        budget_id = str(row.get("budgetId", "")).strip()
         budget_meta = budget_lookup.get(budget_id, {})
         campaigns = row.get("campaigns", [])
-        allocation = allocation_lookup.get(
-            (row.get("accountCode"), budget_id)
+        row_account_code = standardize_account_code(row.get("accountCode")) or ""
+        allocation = (
+            allocation_lookup.get((row_account_code, budget_id))
+            if row_account_code and budget_id
+            else None
         )
 
         normalized_campaigns = []
@@ -586,7 +607,7 @@ def _build_table_data(
             {
                 "accountId": row.get("ggAccountId"),
                 "name": row.get("budgetName"),
-                "budgetId": budget_id,
+                "budgetId": budget_id or row.get("budgetId"),
                 "explicitlyShared": budget_meta.get("explicitlyShared"),
                 "status": budget_meta.get("status") or row.get("budgetStatus"),
                 "currentBudget": _to_float(current_budget),
@@ -621,7 +642,7 @@ def _build_table_data_fallback(
 
     allocation_lookup: dict[tuple[str, str], dict] = {}
     for allocation in allocations or []:
-        account_code = str(allocation.get("accountCode", "")).strip().upper()
+        account_code = standardize_account_code(allocation.get("accountCode")) or ""
         budget_id = str(allocation.get("ggBudgetId", "")).strip()
         if not account_code or not budget_id:
             continue
@@ -650,7 +671,7 @@ def _build_table_data_fallback(
     budget_accels: dict[tuple[str, str], dict] = {}
 
     for accel in accelerations or []:
-        account_code = str(accel.get("accountCode", "")).strip().upper()
+        account_code = standardize_account_code(accel.get("accountCode")) or ""
         scope_type = str(accel.get("scopeLevel", "")).strip().upper()
         scope_value = str(accel.get("scopeValue", "")).strip()
 
@@ -690,9 +711,12 @@ def _build_table_data_fallback(
             continue
 
         budget_meta = budget_lookup.get((customer_id, budget_id), {})
-        account_code = str(
-            budget_meta.get("accountCode") or campaign.get("accountCode") or ""
-        ).strip().upper()
+        account_code = (
+            standardize_account_code(
+                budget_meta.get("accountCode") or campaign.get("accountCode")
+            )
+            or ""
+        )
 
         key = (customer_id, budget_id)
         entry = grouped.get(key)
@@ -803,7 +827,7 @@ def _get_ui_context_with_mutations(
         (
             acc
             for acc in accounts
-            if str(acc.get("accountCode", "")).strip().upper() == account_code
+            if (standardize_account_code(acc.get("accountCode")) or "") == account_code
         ),
         None,
     )
@@ -1000,7 +1024,7 @@ class UiAccelerationUpsertItem(BaseModel):
     date: UiAccelerationDate
     multiplier: float
     note: str | None = Field(default=None, max_length=2048)
-    id: str | None = None
+    id: str | int | None = None
 
 
 class UiAccelerationUpsertRequest(BaseModel):
@@ -1581,7 +1605,7 @@ def update_ui_allocations_rollbreaks(
         amount_value = _to_float(item.amount)
         amount_provided = "amount" in item.model_fields_set
 
-        if item_account and item_account.upper() != account_code:
+        if item_account and (standardize_account_code(item_account) or "") != account_code:
             errors.append(
                 {
                     "index": idx,
@@ -1668,7 +1692,7 @@ def update_ui_allocations_rollbreaks(
             ad_type = ad_type.upper()
         amount_value = _to_float(item.newAmount)
 
-        if item_account and item_account.upper() != account_code:
+        if item_account and (standardize_account_code(item_account) or "") != account_code:
             errors.append(
                 {
                     "index": idx,
@@ -1945,7 +1969,7 @@ def upsert_ui_acceleration(
 
     update_ids: list[str] = []
     for item in request_payload.newAccelerations:
-        item_id = _normalize_optional_str(item.id)
+        item_id = _normalize_optional_id(item.id)
         if item_id:
             update_ids.append(item_id)
 
@@ -1963,7 +1987,7 @@ def upsert_ui_acceleration(
 
     for idx, item in enumerate(request_payload.newAccelerations):
         prefix = f"newAccelerations[{idx}]"
-        acceleration_id = _normalize_optional_str(item.id)
+        acceleration_id = _normalize_optional_id(item.id)
         is_create = not acceleration_id
         note_provided = "note" in item.model_fields_set
         error_count_before = len(errors)
@@ -2053,7 +2077,7 @@ def upsert_ui_acceleration(
                     existing_row.get("accountCode")
                 )
                 if existing_account:
-                    existing_account = existing_account.upper()
+                    existing_account = standardize_account_code(existing_account)
                 if existing_account and account_code and existing_account != account_code:
                     errors.append(
                         {
@@ -2094,7 +2118,9 @@ def upsert_ui_acceleration(
                         "message": "scopeValue must contain exactly one value for ACCOUNT scope",
                     }
                 )
-            elif scope_values and scope_values[0].upper() != account_code:
+            elif scope_values and (
+                standardize_account_code(scope_values[0]) or ""
+            ) != account_code:
                 errors.append(
                     {
                         "field": f"{prefix}.scopeValue",
@@ -2118,7 +2144,7 @@ def upsert_ui_acceleration(
                     (
                         acc
                         for acc in gg_accounts
-                        if str(acc.get("accountCode", "")).strip().upper()
+                        if (standardize_account_code(acc.get("accountCode")) or "")
                         == account_code
                     ),
                     None,
@@ -2303,9 +2329,9 @@ def delete_ui_accelerations(
         )
 
     account_codes = {
-        str(row.get("accountCode", "")).strip().upper()
+        standardize_account_code(row.get("accountCode")) or ""
         for row in rows
-        if isinstance(row, dict) and str(row.get("accountCode", "")).strip()
+        if isinstance(row, dict) and standardize_account_code(row.get("accountCode"))
     }
     if len(account_codes) != 1:
         errors.append(

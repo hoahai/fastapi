@@ -4,6 +4,10 @@ import pytz
 from shared.db import execute_many, execute_write, fetch_all
 from shared.utils import get_current_period
 from shared.tenant import get_timezone
+from apps.spendsphere.api.v1.helpers.account_codes import (
+    standardize_account_code,
+    standardize_account_codes,
+)
 from apps.spendsphere.api.v1.helpers.config import get_db_tables, get_service_budgets
 
 
@@ -266,11 +270,7 @@ def duplicate_allocations(
 
     tables = get_db_tables()
     allocations_table = tables["ALLOCATIONS"]
-    normalized_codes = [
-        str(code).strip().upper()
-        for code in account_codes
-        if isinstance(code, str) and str(code).strip()
-    ]
+    normalized_codes = standardize_account_codes(account_codes)
     if not normalized_codes:
         return 0
 
@@ -280,9 +280,9 @@ def duplicate_allocations(
         year=to_year,
     )
     active_codes = {
-        str(account.get("code", "")).strip().upper()
+        standardize_account_code(account.get("code")) or ""
         for account in active_accounts
-        if isinstance(account, dict) and str(account.get("code", "")).strip()
+        if isinstance(account, dict) and standardize_account_code(account.get("code"))
     }
     eligible_codes = [code for code in normalized_codes if code in active_codes]
     if not eligible_codes:
