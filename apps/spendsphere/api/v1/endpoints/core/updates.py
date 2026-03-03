@@ -32,6 +32,7 @@ class GoogleAdsUpdateRequest(BaseModel):
     dryRun: bool = False
     includeTransformResults: bool = False
     includeAll: bool = Field(default=False, alias="include_all")
+    refreshGoogleAdsCaches: bool = Field(default=False, alias="refresh_google_ads_caches")
 
 
 @router.post("/updates/budget")
@@ -43,7 +44,8 @@ def update_google_ads(request_payload: GoogleAdsUpdateRequest):
           "accountCodes": ["TAAA"],
           "dryRun": true,
           "includeTransformResults": false,
-          "include_all": false
+          "include_all": false,
+          "refresh_google_ads_caches": false
         }
 
     Example response (dryRun=true):
@@ -96,6 +98,7 @@ def update_google_ads(request_payload: GoogleAdsUpdateRequest):
         account_codes=request_payload.accountCodes,
         dry_run=request_payload.dryRun,
         include_transform_results=request_payload.includeTransformResults,
+        refresh_google_ads_caches=request_payload.refreshGoogleAdsCaches,
     )
 
     return result
@@ -118,6 +121,7 @@ def _run_update_job(
             account_codes=request_payload.accountCodes,
             dry_run=request_payload.dryRun,
             include_transform_results=request_payload.includeTransformResults,
+            refresh_google_ads_caches=request_payload.refreshGoogleAdsCaches,
         )
         _log_async_update_response(
             request_id=request_id,
@@ -145,7 +149,8 @@ def update_google_ads_async(
           "accountCodes": ["TAAA"],
           "dryRun": true,
           "includeTransformResults": true,
-          "include_all": false
+          "include_all": false,
+          "refresh_google_ads_caches": true
         }
 
     Example response (immediate accept):

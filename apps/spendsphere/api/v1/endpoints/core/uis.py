@@ -1172,7 +1172,14 @@ def get_ui_selections_route(
     ),
 )
 def load_ui_route(
-    googleId: str = Query(..., description="Google Ads account ID."),
+    googleId: str | None = Query(
+        None,
+        description="Google Ads account ID. Optional when accountCode is provided.",
+    ),
+    accountCode: str | None = Query(
+        None,
+        description="SpendSphere account code. Optional when googleId is provided.",
+    ),
     month: str | None = Query(
         None, description="Optional month (1-12)."
     ),
@@ -1183,6 +1190,10 @@ def load_ui_route(
     """
     Example request:
         GET /api/spendsphere/v1/uis/load?googleId=6563107233&month=1&year=2026
+        Header: X-Tenant-Id: acme
+
+    Example request (by account code):
+        GET /api/spendsphere/v1/uis/load?accountCode=AUC&month=1&year=2026
         Header: X-Tenant-Id: acme
 
     Example request (current period):
@@ -1269,10 +1280,21 @@ def load_ui_route(
         }
     """
     google_id = googleId.strip() if isinstance(googleId, str) else ""
-    if not google_id:
+    account_code_raw = accountCode.strip() if isinstance(accountCode, str) else ""
+    account_code_query = (
+        standardize_account_code(account_code_raw) if account_code_raw else ""
+    )
+
+    if account_code_raw and not account_code_query:
         raise HTTPException(
             status_code=400,
-            detail={"error": "googleId is required"},
+            detail={"error": "Invalid accountCode", "value": accountCode},
+        )
+
+    if not google_id and not account_code_query:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Either googleId or accountCode is required"},
         )
 
     month_value = _parse_optional_int(month, "month")
@@ -1301,21 +1323,57 @@ def load_ui_route(
         year_value = period_date.year
 
     accounts = get_ggad_accounts()
-    account = next(
-        (acc for acc in accounts if str(acc.get("id")) == google_id),
-        None,
-    )
+    account: dict | None = None
+
+    if google_id:
+        account = next(
+            (acc for acc in accounts if str(acc.get("id")) == google_id),
+            None,
+        )
+        if not account:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"No Google Ads account found for {google_id}"},
+            )
+
+    if account_code_query:
+        account_by_code = next(
+            (
+                acc
+                for acc in accounts
+                if (standardize_account_code(acc.get("accountCode")) or "")
+                == account_code_query
+            ),
+            None,
+        )
+        if not account_by_code:
+            raise HTTPException(
+                status_code=404,
+                detail={"error": f"No Google Ads account found for {account_code_query}"},
+            )
+
+        if account and str(account.get("id")) != str(account_by_code.get("id")):
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "error": "googleId and accountCode refer to different accounts"
+                },
+            )
+        if account is None:
+            account = account_by_code
+
     if not account:
         raise HTTPException(
             status_code=404,
-            detail={"error": f"No Google Ads account found for {google_id}"},
+            detail={"error": "No Google Ads account found"},
         )
 
-    account_code = account.get("accountCode")
+    account_code = standardize_account_code(account.get("accountCode"))
     if not account_code:
+        account_identifier = google_id or account_code_query
         raise HTTPException(
             status_code=404,
-            detail={"error": f"No account code found for {google_id}"},
+            detail={"error": f"No account code found for {account_identifier}"},
         )
 
     account_codes = [account_code]

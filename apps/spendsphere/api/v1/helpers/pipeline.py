@@ -252,6 +252,7 @@ def _inject_budget_failures(
 def _filter_existing_mutation_warnings(
     *,
     mutation_results: list[dict],
+    use_cache: bool = True,
 ) -> int:
     warnings_by_customer: dict[str, list[dict]] = {}
     for result in mutation_results:
@@ -268,7 +269,10 @@ def _filter_existing_mutation_warnings(
     if not warnings_by_customer:
         return 0
 
-    filtered_by_customer = filter_cached_google_ads_warnings(warnings_by_customer)
+    if use_cache:
+        filtered_by_customer = filter_cached_google_ads_warnings(warnings_by_customer)
+    else:
+        filtered_by_customer = warnings_by_customer
     total_warnings = 0
 
     for result in mutation_results:
@@ -289,6 +293,18 @@ def _filter_existing_mutation_warnings(
         total_warnings += summary["warnings"]
 
     return total_warnings
+
+
+def _maybe_filter_google_ads_warnings(
+    warnings_by_customer: dict[str, list[dict]],
+    *,
+    use_cache: bool,
+) -> dict[str, list[dict]]:
+    if not warnings_by_customer:
+        return {}
+    if use_cache:
+        return filter_cached_google_ads_warnings(warnings_by_customer)
+    return warnings_by_customer
 
 
 def _collect_budget_allocation_and_spend_issues(
@@ -532,6 +548,7 @@ def run_google_ads_budget_pipeline(
     account_codes: list[str] | str | None = None,
     dry_run: bool = False,
     include_transform_results: bool = False,
+    refresh_google_ads_caches: bool = False,
 ) -> dict:
     """
     Full Google Ads budget + campaign update pipeline.
@@ -572,10 +589,22 @@ def run_google_ads_budget_pipeline(
             in account_code_filter
         ]
 
+    def _get_campaigns(rows: list[dict]) -> list[dict]:
+        return get_ggad_campaigns(
+            rows,
+            refresh_cache=refresh_google_ads_caches,
+        )
+
+    def _get_budgets(rows: list[dict]) -> list[dict]:
+        return get_ggad_budgets(
+            rows,
+            refresh_cache=refresh_google_ads_caches,
+        )
+
     campaigns, budgets, costs, fallback_ad_types_by_budget = run_parallel(
         tasks=[
-            (get_ggad_campaigns, (accounts,)),
-            (get_ggad_budgets, (accounts,)),
+            (_get_campaigns, (accounts,)),
+            (_get_budgets, (accounts,)),
             (get_ggad_spents, (accounts,)),
             (get_ggad_budget_adtype_candidates, (accounts,)),
         ],
@@ -708,6 +737,7 @@ def run_google_ads_budget_pipeline(
 
     _filter_existing_mutation_warnings(
         mutation_results=mutation_results,
+        use_cache=not refresh_google_ads_caches,
     )
 
     budget_warning_threshold = get_budget_warning_threshold()
@@ -717,8 +747,9 @@ def run_google_ads_budget_pipeline(
             budget_payloads=budget_payloads,
             threshold=budget_warning_threshold,
         )
-        threshold_warnings_by_customer = filter_cached_google_ads_warnings(
-            threshold_warnings_by_customer
+        threshold_warnings_by_customer = _maybe_filter_google_ads_warnings(
+            threshold_warnings_by_customer,
+            use_cache=not refresh_google_ads_caches,
         )
         threshold_warning_count = _inject_budget_warnings(
             mutation_results=mutation_results,
@@ -738,8 +769,9 @@ def run_google_ads_budget_pipeline(
     budget_warnings, budget_failures = _collect_budget_allocation_and_spend_issues(
         rows=results,
     )
-    budget_warnings = filter_cached_google_ads_warnings(
-        budget_warnings
+    budget_warnings = _maybe_filter_google_ads_warnings(
+        budget_warnings,
+        use_cache=not refresh_google_ads_caches,
     )
     _inject_budget_warnings(
         mutation_results=mutation_results,

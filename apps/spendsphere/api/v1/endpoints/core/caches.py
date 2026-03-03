@@ -1,4 +1,4 @@
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from apps.spendsphere.api.v1.helpers.ggAd import (
     get_ggad_accounts,
@@ -36,45 +36,92 @@ _CACHE_ALIASES = {
     "services": "services",
 }
 
+_DEFAULT_CACHES = [
+    "account_codes",
+    "google_ads_clients",
+    "google_ads_budgets",
+    "google_ads_campaigns",
+    "google_ads_warnings",
+    "google_sheets",
+    "services",
+]
 
-def _normalize_cache_requests(values: list[str] | None) -> list[str]:
-    if not values:
-        return [
-            "account_codes",
-            "google_ads_clients",
-            "google_ads_budgets",
-            "google_ads_campaigns",
-            "google_ads_warnings",
-            "google_sheets",
-            "services",
-        ]
+_CACHE_FLAG_TRUE = {"", "1", "true", "t", "yes", "y", "on"}
+_CACHE_FLAG_FALSE = {"0", "false", "f", "no", "n", "off"}
 
+
+def _normalize_cache_key(value: str) -> str:
+    return value.replace("-", "_").replace(" ", "").lower()
+
+
+def _parse_cache_flag(value: str | None, *, field: str) -> bool:
+    cleaned = str(value or "").strip().lower()
+    if cleaned in _CACHE_FLAG_TRUE:
+        return True
+    if cleaned in _CACHE_FLAG_FALSE:
+        return False
+    raise HTTPException(
+        status_code=400,
+        detail=(
+            f"Invalid value for {field}: {value}. "
+            "Use true/false (or 1/0), or provide no value to enable."
+        ),
+    )
+
+
+def _normalize_cache_requests(
+    values: list[str] | None,
+    *,
+    request: Request | None = None,
+) -> list[str]:
     requested: list[str] = []
-    for value in values:
-        if not isinstance(value, str):
-            continue
-        chunks = [v.strip() for v in value.split(",") if v.strip()]
-        for chunk in chunks:
-            key = chunk.replace("-", "_").replace(" ", "").lower()
-            alias = _CACHE_ALIASES.get(key)
-            if alias and alias not in requested:
-                requested.append(alias)
-            elif not alias:
+
+    if values:
+        for value in values:
+            if not isinstance(value, str):
+                continue
+            chunks = [v.strip() for v in value.split(",") if v.strip()]
+            for chunk in chunks:
+                key = _normalize_cache_key(chunk)
+                alias = _CACHE_ALIASES.get(key)
+                if alias and alias not in requested:
+                    requested.append(alias)
+                elif not alias:
+                    raise HTTPException(
+                        status_code=400,
+                        detail=f"Unknown cache name: {chunk}",
+                    )
+
+    saw_cache_flag = False
+    if request is not None:
+        for raw_key in request.query_params.keys():
+            if _normalize_cache_key(raw_key) == "caches":
+                continue
+
+            alias = _CACHE_ALIASES.get(_normalize_cache_key(raw_key))
+            if not alias:
                 raise HTTPException(
                     status_code=400,
-                    detail=f"Unknown cache name: {chunk}",
+                    detail=f"Unknown cache flag: {raw_key}",
                 )
 
+            saw_cache_flag = True
+            raw_values = request.query_params.getlist(raw_key)
+            enabled = _parse_cache_flag(
+                raw_values[-1] if raw_values else "",
+                field=raw_key,
+            )
+
+            if enabled and alias not in requested:
+                requested.append(alias)
+            if not enabled and alias in requested:
+                requested.remove(alias)
+
+    if saw_cache_flag:
+        return requested
+
     if not requested:
-        return [
-            "account_codes",
-            "google_ads_clients",
-            "google_ads_budgets",
-            "google_ads_campaigns",
-            "google_ads_warnings",
-            "google_sheets",
-            "services",
-        ]
+        return list(_DEFAULT_CACHES)
 
     return requested
 
@@ -88,13 +135,15 @@ def _normalize_cache_requests(values: list[str] | None) -> list[str]:
     ),
 )
 def refresh_cache_route(
+    request: Request,
     caches: list[str] | None = Query(
         None,
         description=(
-            "Optional cache list. Valid values: account_codes, "
+            "Optional cache list (legacy). Valid values: account_codes, "
             "google_ads_clients, google_ads_budgets, google_ads_campaigns, "
             "google_ads_warnings, google_sheets, services. Can be repeated or "
-            "comma-separated."
+            "comma-separated. Prefer using query flags such as "
+            "?account_codes&google_ads_clients=false."
         ),
     ),
 ):
@@ -105,6 +154,12 @@ def refresh_cache_route(
 
     Example request (partial):
         POST /api/spendsphere/v1/cache/refresh?caches=google_ads_clients
+
+    Example request (query-flag style):
+        POST /api/spendsphere/v1/cache/refresh?account_codes&google_ads_clients
+
+    Example request (explicit disable):
+        POST /api/spendsphere/v1/cache/refresh?account_codes=true&google_ads_clients=false
 
     Valid cache values:
         account_codes
@@ -132,7 +187,7 @@ def refresh_cache_route(
           "services": 6
         }
     """
-    requested = _normalize_cache_requests(caches)
+    requested = _normalize_cache_requests(caches, request=request)
     response: dict[str, object] = {}
 
     if "account_codes" in requested:

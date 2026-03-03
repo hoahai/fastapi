@@ -174,6 +174,19 @@ def build_google_ads_alert_email(
             lines.append(f"  - {detail}")
         return lines
 
+    def _issue_lines_grouped_by_account(issues: list[dict]) -> list[str]:
+        lines: list[str] = []
+        for account_code, account_issues in _group_issues_by_account(issues):
+            lines.append(f"- Account: {account_code}")
+            for issue in account_issues:
+                title = _format_issue_title(issue, include_account=False)
+                detail_lines = _format_issue_detail_text(issue).splitlines() or ["Unknown"]
+                lines.append(f"  - {title}")
+                lines.append(f"    - {detail_lines[0]}")
+                for detail_line in detail_lines[1:]:
+                    lines.append(f"      {detail_line}")
+        return lines
+
     request_id = get_request_id() or "Not Found"
     client_id = get_client_id() or "Not Found"
     text_lines = [
@@ -195,12 +208,12 @@ def build_google_ads_alert_email(
 
     if budget_warnings:
         text_lines.append("")
-        text_lines.append("Warnings:")
-        text_lines.extend(_issue_lines(budget_warnings))
+        text_lines.append("Warnings (grouped by account):")
+        text_lines.extend(_issue_lines_grouped_by_account(budget_warnings))
     if budget_failures:
         text_lines.append("")
-        text_lines.append("Failures:")
-        text_lines.extend(_issue_lines(budget_failures))
+        text_lines.append("Failures (grouped by account):")
+        text_lines.extend(_issue_lines_grouped_by_account(budget_failures))
 
     text_lines.append("")
     text_lines.append("=" * 60)
@@ -224,6 +237,31 @@ def build_google_ads_alert_email(
                 "</div>"
             )
         return "".join(items_html)
+
+    def _html_issue_list_grouped_by_account(issues: list[dict]) -> str:
+        if not issues:
+            return "<p style=\"margin:0;color:#6b7280;\">None</p>"
+
+        account_sections = []
+        for account_code, account_issues in _group_issues_by_account(issues):
+            issue_cards = []
+            for issue in account_issues:
+                header = esc(_format_issue_title(issue, include_account=False))
+                detail = _format_issue_detail_html(issue)
+                issue_cards.append(
+                    "<div style=\"padding:12px;border:1px solid #e5e7eb;border-radius:12px;margin-bottom:10px;\">"
+                    f"<div style=\"font-weight:600;margin-bottom:6px;\">{header}</div>"
+                    f"<div style=\"font-size:13px;color:#374151;\">{detail}</div>"
+                    "</div>"
+                )
+            account_sections.append(
+                "<div style=\"padding:14px;border:1px solid #fed7aa;border-radius:12px;background:#fff7ed;margin-bottom:12px;\">"
+                f"<div style=\"font-size:13px;font-weight:700;letter-spacing:0.02em;text-transform:uppercase;color:#9a3412;margin-bottom:10px;\">Account: {esc(account_code)}</div>"
+                f"{''.join(issue_cards)}"
+                "</div>"
+            )
+
+        return "".join(account_sections)
 
     stats_html = (
         _html_stat_card("Total", total_count, "#0f172a", "#e2e8f0")
@@ -251,8 +289,8 @@ def build_google_ads_alert_email(
             "dry_run": esc(dry_run),
             "campaign_status_summary": esc(campaign_status_summary),
             "stats_html": stats_html,
-            "failures_html": _html_issue_list(budget_failures),
-            "warnings_html": _html_issue_list(budget_warnings),
+            "failures_html": _html_issue_list_grouped_by_account(budget_failures),
+            "warnings_html": _html_issue_list_grouped_by_account(budget_warnings),
         }
     )
 
@@ -309,7 +347,7 @@ def _normalize_budget_issue(issue: object, fallback_account: str | None) -> dict
     }
 
 
-def _format_issue_title(issue: dict) -> str:
+def _format_issue_title(issue: dict, *, include_account: bool = True) -> str:
     account_code = issue.get("account_code") or "Unknown"
     campaign_names = issue.get("campaign_names") or ["Unknown Campaign"]
     if isinstance(campaign_names, list):
@@ -317,7 +355,9 @@ def _format_issue_title(issue: dict) -> str:
     else:
         campaigns = str(campaign_names)
     budget_id = issue.get("budget_id") or "Unknown"
-    return f"{account_code} - {campaigns} ({budget_id})"
+    if include_account:
+        return f"{account_code} - {campaigns} ({budget_id})"
+    return f"{campaigns} ({budget_id})"
 
 
 def _format_issue_detail_text(issue: dict) -> str:
@@ -351,6 +391,14 @@ def _format_amount(value: object) -> str:
         return str(value)
 
 
+def _group_issues_by_account(issues: list[dict]) -> list[tuple[str, list[dict]]]:
+    grouped: dict[str, list[dict]] = {}
+    for issue in issues:
+        account_code = str(issue.get("account_code") or "Unknown")
+        grouped.setdefault(account_code, []).append(issue)
+    return sorted(grouped.items(), key=lambda row: row[0].lower())
+
+
 _ALERT_TEMPLATE_CACHE: dict[str, str] = {}
 
 
@@ -375,8 +423,8 @@ def _load_alert_template(template_path: Path) -> str:
             "<p>Operation: $campaign_status_summary</p>"
             "<p>Dry run: $dry_run</p>"
             "<div>$stats_html</div>"
-            "<h3>Warnings</h3>$warnings_html"
-            "<h3>Failures</h3>$failures_html"
+            "<h3>Warnings (Grouped by Account)</h3>$warnings_html"
+            "<h3>Failures (Grouped by Account)</h3>$failures_html"
             "</body></html>"
         )
 
