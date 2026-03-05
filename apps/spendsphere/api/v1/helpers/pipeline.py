@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import calendar
+from datetime import date, datetime
 from decimal import InvalidOperation
 from decimal import Decimal
+
+import pytz
 
 from apps.spendsphere.api.v1.helpers.account_codes import (
     standardize_account_code,
@@ -9,6 +13,7 @@ from apps.spendsphere.api.v1.helpers.account_codes import (
 )
 from apps.spendsphere.api.v1.helpers.dataTransform import (
     build_update_payloads_from_inputs,
+    transform_google_ads_data,
 )
 from apps.spendsphere.api.v1.helpers.config import (
     get_budget_warning_threshold,
@@ -26,10 +31,14 @@ from apps.spendsphere.api.v1.helpers.ggSheet import get_active_period
 from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
     filter_cached_google_ads_failures,
     filter_cached_google_ads_warnings,
+    get_google_ads_budgets_cache_entries,
+    get_google_ads_campaigns_cache_entries,
+    get_google_ads_clients_cache_entry,
 )
 from shared.email import send_google_ads_result_email
 from shared.logger import get_logger
-from shared.utils import run_parallel
+from shared.tenant import get_timezone
+from shared.utils import get_current_period, run_parallel
 
 # =========================================================
 # LOGGER
@@ -588,6 +597,273 @@ def _collect_budget_allocation_and_spend_issues(
             )
 
     return warnings_by_customer, failures_by_customer
+
+
+# =========================================================
+# TRANSFORM BUILDER
+# =========================================================
+
+
+def _resolve_period(month: int | None, year: int | None) -> tuple[int, int]:
+    if month is not None and year is not None:
+        return month, year
+    current = get_current_period()
+    return current["month"], current["year"]
+
+
+def _resolve_period_date(month: int, year: int) -> date:
+    tz = pytz.timezone(get_timezone())
+    today = datetime.now(tz).date()
+    current = get_current_period()
+    current_key = (current["year"], current["month"])
+    target_key = (year, month)
+    if target_key == current_key:
+        return today
+    if target_key < current_key:
+        return date(year, month, calendar.monthrange(year, month)[1])
+    return date(year, month, 1)
+
+
+def _filter_accelerations_for_date(
+    accelerations: list[dict],
+    period_date: date,
+) -> list[dict]:
+    if not accelerations:
+        return []
+
+    filtered: list[dict] = []
+    for row in accelerations:
+        if not isinstance(row, dict):
+            continue
+        start_date = row.get("startDate")
+        end_date = row.get("endDate")
+        try:
+            parsed_start = (
+                datetime.fromisoformat(str(start_date)).date()
+                if start_date
+                else None
+            )
+        except ValueError:
+            parsed_start = None
+        try:
+            parsed_end = datetime.fromisoformat(str(end_date)).date() if end_date else None
+        except ValueError:
+            parsed_end = None
+
+        if parsed_start and period_date < parsed_start:
+            continue
+        if parsed_end and period_date > parsed_end:
+            continue
+        filtered.append(row)
+    return filtered
+
+
+def _build_fallback_ad_types_by_budget(
+    campaigns: list[dict],
+) -> dict[tuple[str, str], str | None]:
+    result: dict[tuple[str, str], str | None] = {}
+    for row in campaigns:
+        if not isinstance(row, dict):
+            continue
+        customer_id = str(row.get("customerId", "")).strip()
+        budget_id = str(row.get("budgetId", "")).strip()
+        if not customer_id or not budget_id:
+            continue
+        key = (customer_id, budget_id)
+        if key in result:
+            continue
+        ad_type = str(row.get("adTypeCode", "")).strip().upper()
+        result[key] = ad_type or None
+    return result
+
+
+def _get_cached_or_fetch_accounts(
+    *,
+    refresh_google_ads_caches: bool,
+    get_ggad_accounts,
+) -> list[dict]:
+    if refresh_google_ads_caches:
+        return get_ggad_accounts(refresh_cache=True)
+
+    cached, _ = get_google_ads_clients_cache_entry()
+    if isinstance(cached, list) and cached:
+        return cached
+    return get_ggad_accounts(refresh_cache=False)
+
+
+def _get_cached_or_fetch_campaigns_and_budgets(
+    accounts: list[dict],
+    *,
+    refresh_google_ads_caches: bool,
+    get_ggad_campaigns,
+    get_ggad_budgets,
+) -> tuple[list[dict], list[dict]]:
+    if not accounts:
+        return [], []
+
+    if refresh_google_ads_caches:
+        campaigns = get_ggad_campaigns(accounts, refresh_cache=True)
+        budgets = get_ggad_budgets(accounts, refresh_cache=True)
+        return campaigns, budgets
+
+    account_by_code: dict[str, dict] = {}
+    account_codes: list[str] = []
+    for account in accounts:
+        account_code = standardize_account_code(account.get("accountCode")) or ""
+        if not account_code or account_code in account_by_code:
+            continue
+        account_by_code[account_code] = account
+        account_codes.append(account_code)
+
+    cached_campaigns, missing_campaign_codes = get_google_ads_campaigns_cache_entries(
+        account_codes
+    )
+    cached_budgets, missing_budget_codes = get_google_ads_budgets_cache_entries(
+        account_codes
+    )
+
+    campaigns: list[dict] = []
+    budgets: list[dict] = []
+    for account_code in account_codes:
+        campaigns.extend(cached_campaigns.get(account_code, []))
+        budgets.extend(cached_budgets.get(account_code, []))
+
+    if missing_campaign_codes:
+        missing_accounts = [
+            account_by_code[code]
+            for code in account_codes
+            if code in missing_campaign_codes and code in account_by_code
+        ]
+        if missing_accounts:
+            campaigns.extend(get_ggad_campaigns(missing_accounts, refresh_cache=False))
+
+    if missing_budget_codes:
+        missing_accounts = [
+            account_by_code[code]
+            for code in account_codes
+            if code in missing_budget_codes and code in account_by_code
+        ]
+        if missing_accounts:
+            budgets.extend(get_ggad_budgets(missing_accounts, refresh_cache=False))
+
+    return campaigns, budgets
+
+
+def build_transform_rows_for_period(
+    *,
+    account_codes: list[str] | str | None = None,
+    month: int | None = None,
+    year: int | None = None,
+    refresh_google_ads_caches: bool = False,
+    cache_first: bool = False,
+    include_costs: bool = True,
+) -> dict[str, object]:
+    """
+    Build transformed rows using the same core transform rules with period control.
+    """
+    from apps.spendsphere.api.v1.helpers.ggAd import (
+        get_ggad_accounts,
+        get_ggad_budgets,
+        get_ggad_campaigns,
+        get_ggad_spents,
+    )
+
+    account_code_filter = normalize_account_codes(account_codes)
+    resolved_month, resolved_year = _resolve_period(month, year)
+    period_date = _resolve_period_date(resolved_month, resolved_year)
+    month_start = date(resolved_year, resolved_month, 1)
+    month_end = date(
+        resolved_year,
+        resolved_month,
+        calendar.monthrange(resolved_year, resolved_month)[1],
+    )
+
+    def _get_accelerations_for_month(rows: list[str] | None) -> list[dict]:
+        return get_accelerations(
+            rows,
+            start_date=month_start,
+            end_date=month_end,
+        )
+
+    master_budgets, allocations, rollbreakdowns, accelerations = run_parallel(
+        tasks=[
+            (get_masterbudgets, (account_code_filter, resolved_month, resolved_year)),
+            (get_allocations, (account_code_filter, resolved_month, resolved_year)),
+            (get_rollbreakdowns, (account_code_filter, resolved_month, resolved_year)),
+            (_get_accelerations_for_month, (account_code_filter,)),
+        ],
+        api_name="spendsphere_transform_db",
+    )
+    active_accelerations = _filter_accelerations_for_date(accelerations, period_date)
+
+    if cache_first:
+        accounts = _get_cached_or_fetch_accounts(
+            refresh_google_ads_caches=refresh_google_ads_caches,
+            get_ggad_accounts=get_ggad_accounts,
+        )
+    else:
+        accounts = get_ggad_accounts(refresh_cache=refresh_google_ads_caches)
+
+    if account_code_filter:
+        allowed = set(account_code_filter)
+        accounts = [
+            account
+            for account in accounts
+            if (standardize_account_code(account.get("accountCode")) or "") in allowed
+        ]
+
+    if cache_first:
+        campaigns, budgets = _get_cached_or_fetch_campaigns_and_budgets(
+            accounts,
+            refresh_google_ads_caches=refresh_google_ads_caches,
+            get_ggad_campaigns=get_ggad_campaigns,
+            get_ggad_budgets=get_ggad_budgets,
+        )
+    else:
+        campaigns = get_ggad_campaigns(
+            accounts,
+            refresh_cache=refresh_google_ads_caches,
+        )
+        budgets = get_ggad_budgets(
+            accounts,
+            refresh_cache=refresh_google_ads_caches,
+        )
+
+    costs = (
+        get_ggad_spents(accounts, resolved_month, resolved_year)
+        if include_costs
+        else []
+    )
+    fallback_ad_types_by_budget = _build_fallback_ad_types_by_budget(campaigns)
+    active_period = get_active_period(
+        account_code_filter,
+        resolved_month,
+        resolved_year,
+        as_of=period_date,
+    )
+
+    rows = transform_google_ads_data(
+        master_budgets=master_budgets,
+        campaigns=campaigns,
+        budgets=budgets,
+        costs=costs,
+        allocations=allocations,
+        rollovers=rollbreakdowns,
+        accelerations=active_accelerations,
+        activePeriod=active_period,
+        fallback_ad_types_by_budget=fallback_ad_types_by_budget,
+        today=period_date,
+        include_transform_results=True,
+    )
+
+    return {
+        "period": {
+            "month": resolved_month,
+            "year": resolved_year,
+        },
+        "rows": rows,
+        "allocations": allocations,
+    }
 
 
 # =========================================================

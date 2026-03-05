@@ -7,13 +7,17 @@ from shared.utils import resolve_secret_path
 # CONFIG
 # =====================================================
 
-SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+READONLY_SCOPES = ["https://www.googleapis.com/auth/spreadsheets.readonly"]
+READWRITE_SCOPES = ["https://www.googleapis.com/auth/spreadsheets"]
 
 # =====================================================
 # INTERNAL CLIENT (DO NOT USE THREADS)
 # =====================================================
 
-def _get_sheets_service():
+def _get_sheets_service(
+    *,
+    scopes: list[str] | None = None,
+):
     """
     Create Google Sheets service.
 
@@ -28,7 +32,7 @@ def _get_sheets_service():
 
     credentials = service_account.Credentials.from_service_account_file(
         cred_path,
-        scopes=SCOPES,
+        scopes=scopes or READONLY_SCOPES,
     )
 
     return build(
@@ -67,3 +71,47 @@ def _read_sheet_raw(
     data_rows = rows[1:]
 
     return [dict(zip(headers, row)) for row in data_rows]
+
+
+def _clear_sheet_values(
+    spreadsheet_id: str,
+    range_name: str,
+) -> dict:
+    """
+    Clear values in the target range.
+    """
+    service = _get_sheets_service(scopes=READWRITE_SCOPES)
+    return (
+        service.spreadsheets()
+        .values()
+        .clear(
+            spreadsheetId=spreadsheet_id,
+            range=range_name,
+            body={},
+        )
+        .execute()
+    )
+
+
+def _write_sheet_values(
+    spreadsheet_id: str,
+    range_name: str,
+    values: list[list[object]],
+    *,
+    value_input_option: str = "USER_ENTERED",
+) -> dict:
+    """
+    Write values to the target range.
+    """
+    service = _get_sheets_service(scopes=READWRITE_SCOPES)
+    return (
+        service.spreadsheets()
+        .values()
+        .update(
+            spreadsheetId=spreadsheet_id,
+            range=range_name,
+            valueInputOption=value_input_option,
+            body={"values": values},
+        )
+        .execute()
+    )

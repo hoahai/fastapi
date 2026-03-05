@@ -65,8 +65,22 @@ def _get_db_tables_raw() -> str | None:
     return get_env("DB_TABLES") or get_env("db_tables")
 
 
-def _get_spreadsheet_raw() -> str | None:
-    return get_env("SPREADSHEET") or get_env("spreadsheet")
+def _get_spreadsheets_raw() -> str | None:
+    return get_env("SPREADSHEETS") or get_env("spreadsheets")
+
+
+def _to_bool(value: object) -> bool | None:
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, (int, float)):
+        return bool(value)
+    if isinstance(value, str):
+        normalized = value.strip().lower()
+        if normalized in {"true", "1", "yes", "y", "on"}:
+            return True
+        if normalized in {"false", "0", "no", "n", "off"}:
+            return False
+    return None
 
 
 def get_service_budgets() -> list[str]:
@@ -284,36 +298,145 @@ def get_db_tables() -> dict[str, str]:
     return tables
 
 
-def get_spendsphere_sheets() -> dict[str, dict[str, str]]:
-    raw = _get_spreadsheet_raw()
+def _is_valid_spreadsheet_id(value: object) -> bool:
+    return bool(re.fullmatch(r"[A-Za-z0-9_-]+", str(value or "").strip()))
+
+
+def _normalize_spreadsheet_entry(
+    value: object,
+    *,
+    key_name: str,
+    invalid: list[str],
+) -> dict[str, object]:
+    if value is None:
+        return {}
+    if isinstance(value, str):
+        return {"id": value}
+    if isinstance(value, dict):
+        return {str(k).strip().lower(): v for k, v in value.items()}
+    invalid.append(key_name)
+    return {}
+
+
+def _should_require_custom_spreadsheets() -> bool:
+    raw = get_env("FEATURE_FLAGS")
     if raw is None or str(raw).strip() == "":
-        raise TenantConfigValidationError(app_name=APP_NAME, missing=["SPREADSHEET"])
+        return False
+    try:
+        parsed = _parse_raw_value(str(raw), "FEATURE_FLAGS", dict)
+    except TenantConfigValidationError:
+        return False
 
-    parsed = _parse_raw_value(raw, "SPREADSHEET", dict)
     normalized = {str(k).strip().lower(): v for k, v in parsed.items()}
+    return _to_bool(normalized.get("budget_managements")) is True
 
-    spreadsheet_id = normalized.get("id")
-    rollovers_sheet_name = normalized.get("rolloversheetname")
-    active_sheet_name = (
-        normalized.get("activeperiodsheetname")
-        or normalized.get("activepriodsheetname")
-    )
-    budget_sheet_id = str(normalized.get("budgetsheetid", "")).strip()
 
+def _parse_spendsphere_sheets(
+    parsed: dict,
+    *,
+    key_prefix: str,
+    require_custom_sheets: bool,
+) -> tuple[dict[str, dict[str, str]], list[str], list[str]]:
     missing: list[str] = []
     invalid: list[str] = []
-    if not spreadsheet_id:
-        missing.append("SPREADSHEET.id")
-    if not rollovers_sheet_name:
-        missing.append("SPREADSHEET.rollOverSheetName")
-    if not active_sheet_name:
-        missing.append("SPREADSHEET.activePriodSheetName")
-    budget_sheet_spreadsheet_id = budget_sheet_id
-    if budget_sheet_spreadsheet_id and not re.fullmatch(
-        r"[A-Za-z0-9_-]+",
-        budget_sheet_spreadsheet_id,
-    ):
-        invalid.append("SPREADSHEET.budgetSheetId")
+
+    normalized = {str(k).strip().lower(): v for k, v in parsed.items()}
+
+    spend_sphere_entry = _normalize_spreadsheet_entry(
+        normalized.get("spendsphere"),
+        key_name=f"{key_prefix}.spendSphere",
+        invalid=invalid,
+    )
+    digital_ad_center_entry = _normalize_spreadsheet_entry(
+        normalized.get("digitaladvertisingcenter"),
+        key_name=f"{key_prefix}.digitalAdvertisingCenter",
+        invalid=invalid,
+    ) if "digitaladvertisingcenter" in normalized else {}
+    budget_tool_entry = _normalize_spreadsheet_entry(
+        normalized.get("budgettool"),
+        key_name=f"{key_prefix}.budgetTool",
+        invalid=invalid,
+    ) if "budgettool" in normalized else {}
+
+    if not spend_sphere_entry:
+        missing.append(f"{key_prefix}.spendSphere")
+
+    spend_sphere_id = str(spend_sphere_entry.get("id", "")).strip()
+    spend_sphere_rollover_name = str(spend_sphere_entry.get("rolloversheetname", "")).strip()
+    spend_sphere_active_name = str(
+        spend_sphere_entry.get("activeperiodsheetname")
+        or spend_sphere_entry.get("activepriodsheetname")
+        or ""
+    ).strip()
+
+    if not spend_sphere_id:
+        missing.append(f"{key_prefix}.spendSphere.id")
+    elif not _is_valid_spreadsheet_id(spend_sphere_id):
+        invalid.append(f"{key_prefix}.spendSphere.id")
+
+    if not spend_sphere_rollover_name:
+        missing.append(f"{key_prefix}.spendSphere.rollOverSheetName")
+    if not spend_sphere_active_name:
+        missing.append(f"{key_prefix}.spendSphere.activePriodSheetName")
+
+    if require_custom_sheets and not digital_ad_center_entry:
+        missing.append(f"{key_prefix}.digitalAdvertisingCenter")
+    if require_custom_sheets and not budget_tool_entry:
+        missing.append(f"{key_prefix}.budgetTool")
+
+    digital_ad_center_id = str(digital_ad_center_entry.get("id", "")).strip()
+    if digital_ad_center_entry and not digital_ad_center_id:
+        missing.append(f"{key_prefix}.digitalAdvertisingCenter.id")
+    elif digital_ad_center_id and not _is_valid_spreadsheet_id(digital_ad_center_id):
+        invalid.append(f"{key_prefix}.digitalAdvertisingCenter.id")
+
+    budget_tool_id = str(budget_tool_entry.get("id", "")).strip()
+    budget_tool_master_budget_sheet_name = str(
+        budget_tool_entry.get("masterbudgetsheetname", "")
+    ).strip()
+    if budget_tool_entry and not budget_tool_id:
+        missing.append(f"{key_prefix}.budgetTool.id")
+    elif budget_tool_id and not _is_valid_spreadsheet_id(budget_tool_id):
+        invalid.append(f"{key_prefix}.budgetTool.id")
+    if budget_tool_entry and not budget_tool_master_budget_sheet_name:
+        missing.append(f"{key_prefix}.budgetTool.masterBudgetSheetName")
+
+    sheets: dict[str, dict[str, str]] = {}
+    if spend_sphere_id and spend_sphere_rollover_name and spend_sphere_active_name:
+        sheets["rollovers"] = {
+            "spreadsheet_id": spend_sphere_id,
+            "range_name": spend_sphere_rollover_name,
+        }
+        sheets["active_period"] = {
+            "spreadsheet_id": spend_sphere_id,
+            "range_name": spend_sphere_active_name,
+        }
+
+    if digital_ad_center_id:
+        sheets["recommended_budget"] = {
+            "spreadsheet_id": digital_ad_center_id,
+        }
+
+    if budget_tool_id and budget_tool_master_budget_sheet_name:
+        sheets["budget_tool"] = {
+            "spreadsheet_id": budget_tool_id,
+            "range_name": budget_tool_master_budget_sheet_name,
+        }
+
+    return sheets, missing, invalid
+
+
+def get_spendsphere_sheets() -> dict[str, dict[str, str]]:
+    raw = _get_spreadsheets_raw()
+    if raw is None or str(raw).strip() == "":
+        raise TenantConfigValidationError(app_name=APP_NAME, missing=["SPREADSHEETS"])
+
+    parsed = _parse_raw_value(raw, "SPREADSHEETS", dict)
+    sheets, missing, invalid = _parse_spendsphere_sheets(
+        parsed,
+        key_prefix="SPREADSHEETS",
+        require_custom_sheets=_should_require_custom_spreadsheets(),
+    )
     if missing or invalid:
         raise TenantConfigValidationError(
             app_name=APP_NAME,
@@ -321,20 +444,6 @@ def get_spendsphere_sheets() -> dict[str, dict[str, str]]:
             invalid=invalid,
         )
 
-    sheets = {
-        "rollovers": {
-            "spreadsheet_id": spreadsheet_id,
-            "range_name": rollovers_sheet_name,
-        },
-        "active_period": {
-            "spreadsheet_id": spreadsheet_id,
-            "range_name": active_sheet_name,
-        },
-    }
-    if budget_sheet_spreadsheet_id:
-        sheets["recommended_budget"] = {
-            "spreadsheet_id": budget_sheet_spreadsheet_id,
-        }
     return sheets
 
 
@@ -402,30 +511,24 @@ def validate_tenant_config(tenant_id: str | None = None) -> None:
             for key in sorted(missing_keys):
                 missing.append(f"DB_TABLES.{key}")
 
-        def _check_spreadsheet() -> None:
-            raw = _get_spreadsheet_raw()
+        def _check_spreadsheets(require_custom_sheets: bool) -> None:
+            raw = _get_spreadsheets_raw()
             if raw is None or str(raw).strip() == "":
-                missing.append("SPREADSHEET")
+                missing.append("SPREADSHEETS")
                 return
             try:
-                parsed = _parse_raw_value(raw, "SPREADSHEET", dict)
+                parsed = _parse_raw_value(raw, "SPREADSHEETS", dict)
             except TenantConfigValidationError:
-                invalid.append("SPREADSHEET")
+                invalid.append("SPREADSHEETS")
                 return
 
-            normalized = {str(k).strip().lower(): v for k, v in parsed.items()}
-            if not normalized.get("id"):
-                missing.append("SPREADSHEET.id")
-            if not normalized.get("rolloversheetname"):
-                missing.append("SPREADSHEET.rollOverSheetName")
-            if not (
-                normalized.get("activeperiodsheetname")
-                or normalized.get("activepriodsheetname")
-            ):
-                missing.append("SPREADSHEET.activePriodSheetName")
-            budget_sheet_id = str(normalized.get("budgetsheetid", "")).strip()
-            if budget_sheet_id and not re.fullmatch(r"[A-Za-z0-9_-]+", budget_sheet_id):
-                invalid.append("SPREADSHEET.budgetSheetId")
+            _, sheets_missing, sheets_invalid = _parse_spendsphere_sheets(
+                parsed,
+                key_prefix="SPREADSHEETS",
+                require_custom_sheets=require_custom_sheets,
+            )
+            missing.extend(sheets_missing)
+            invalid.extend(sheets_invalid)
 
         def _check_google_ads_naming() -> None:
             raw = _check_required("GOOGLE_ADS_NAMING")
@@ -450,11 +553,13 @@ def validate_tenant_config(tenant_id: str | None = None) -> None:
             if threshold < 0:
                 invalid.append("BUDGET_WARNING_THRESHOLD")
 
+        require_custom_sheets = _should_require_custom_spreadsheets()
+
         _check_json("SERVICE_BUDGETS", list)
         _check_json("SERVICE_MAPPING", dict)
         _check_json("ADTYPES", dict)
         _check_db_tables()
-        _check_spreadsheet()
+        _check_spreadsheets(require_custom_sheets=require_custom_sheets)
         _check_google_ads_naming()
         _check_budget_warning_threshold()
 

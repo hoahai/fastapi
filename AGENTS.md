@@ -97,11 +97,25 @@ Do not introduce new environment loading mechanisms.
 ### Tenant Config Requirements
 
 **SpendSphere requires:** - `SERVICE_BUDGETS` - `SERVICE_MAPPING` -
-`ADTYPES` - `DB_TABLES` - `SPREADSHEET` - `GOOGLE_ADS_NAMING`
+`ADTYPES` - `DB_TABLES` - `SPREADSHEETS` - `GOOGLE_ADS_NAMING`
+
+**SPREADSHEETS structure (SpendSphere):**
+- `SPREADSHEETS.spendSphere.id`
+- `SPREADSHEETS.spendSphere.rollOverSheetName`
+- `SPREADSHEETS.spendSphere.activePriodSheetName`
+
+**Custom sheet requirements (tenant-specific custom feature):**
+- when `FEATURE_FLAGS.budget_managements = true`, tenant config must
+  include:
+  - `SPREADSHEETS.digitalAdvertisingCenter.id`
+  - `SPREADSHEETS.budgetTool.id`
+  - `SPREADSHEETS.budgetTool.masterBudgetSheetName`
 
 **SpendSphere custom-route access control:** - `FEATURE_FLAGS` (object)
 - custom routes must be gated by feature flag keys (for example:
 `FEATURE_FLAGS.budget_managements: true`)
+- `/budgetManagements/masterBudgetDataSync` uses a tenant-scoped
+  custom handler (currently implemented for `nucar`)
 
 **Shiftzy requires:** - `START_WEEK_NO` - `START_DATE` (must be
 Monday) - `WEEK_BEFORE` - `WEEK_AFTER` - `POSITION_AREAS_ENUM` -
@@ -193,6 +207,21 @@ Documentation rules:
     -   Custom routes must be gated by `FEATURE_FLAGS` in tenant config.
     -   Do not hardcode tenant IDs in route authorization logic for
         custom features.
+-   NuCar master budget sync route:
+    -   `POST /api/spendsphere/v1/budgetManagements/masterBudgetDataSync`
+    -   Reuses shared pipeline transform builder to inherit core
+        transform rules
+    -   Builds month/year pivot rows for all accounts with:
+        `budgetId`, `amount` (allocated budget after acceleration),
+        `scheduleStatus`
+    -   Uses cache-first Google Ads reads for clients/campaigns/budgets
+        and only fetches missing account caches when needed
+    -   Does not call Google Ads spend read for this sync flow
+    -   Returns/syncs only budget ids that have allocation rows
+    -   Defaults to current tenant month/year when `month/year` are not
+        provided
+    -   Clears sheet tab `'2.3 Master Budget Data'` range `A9:C` before
+        writing new rows starting at row `9`
 -   Cache file `caches.json` holds SpendSphere cache data.
 -   TTL and refresh rules are documented in `CACHE.md`.
 -   File-based caching may not be safe for multi-instance deployments
@@ -355,6 +384,9 @@ Documentation rules:
     -   `GOOGLE_APPLICATION_CREDENTIALS`
 -   `shared/ggSheet.py` is **not thread-safe**.
     -   Do not use it inside thread pools or background threads.
+-   `shared/ggSheet.py` also provides explicit write helpers:
+    `_clear_sheet_values` and `_write_sheet_values` for controlled
+    Google Sheets update flows.
 
 ------------------------------------------------------------------------
 

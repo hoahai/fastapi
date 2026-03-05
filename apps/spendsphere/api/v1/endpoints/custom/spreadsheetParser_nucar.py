@@ -13,11 +13,12 @@ from apps.spendsphere.api.v1.helpers.config import (
 )
 from apps.spendsphere.api.v1.helpers.db_queries import get_active_services_by_department
 from apps.spendsphere.api.v1.helpers.ggSheet import get_rollovers
+from apps.spendsphere.api.v1.helpers.pipeline import build_transform_rows_for_period
 from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
     get_google_sheet_cache_entry,
     set_google_sheet_cache,
 )
-from shared.ggSheet import _read_sheet_raw
+from shared.ggSheet import _clear_sheet_values, _read_sheet_raw, _write_sheet_values
 
 _NUMERIC_KEYS = (
     "calculatedBudget",
@@ -28,6 +29,7 @@ _NUMERIC_KEYS = (
 )
 _MONTHLY_BUDGET_SHEET_CACHE_KEY_PREFIX = "nucar_recommended_budget"
 _CODE_COLUMN_KEYS = ("code", "accountcode")
+_MASTER_BUDGET_START_ROW = 9
 
 
 def _to_float(value: object) -> float | None:
@@ -67,7 +69,7 @@ def _get_budget_sheet_spreadsheet_id() -> str:
     spreadsheet_id = str(recommended.get("spreadsheet_id", "")).strip()
     if spreadsheet_id:
         return spreadsheet_id
-    return sheets["rollovers"]["spreadsheet_id"]
+    raise ValueError("SPREADSHEETS.digitalAdvertisingCenter.id is missing")
 
 
 def _get_monthly_budget_sheet_rows(
@@ -329,3 +331,149 @@ def get_nucar_recommended_budgets(
         )
         for value in service_ids
     ]
+
+
+def _resolve_master_budget_sheet_spreadsheet_id() -> str:
+    sheets = get_spendsphere_sheets()
+    budget_tool = sheets.get("budget_tool", {})
+    spreadsheet_id = str(budget_tool.get("spreadsheet_id", "")).strip()
+    if not spreadsheet_id:
+        raise ValueError("SPREADSHEETS.budgetTool.id is missing")
+    return spreadsheet_id
+
+
+def _resolve_master_budget_sheet_name() -> str:
+    sheets = get_spendsphere_sheets()
+    budget_tool = sheets.get("budget_tool", {})
+    sheet_name = str(budget_tool.get("range_name", "")).strip()
+    if not sheet_name:
+        raise ValueError("SPREADSHEETS.budgetTool.masterBudgetSheetName is missing")
+    return sheet_name
+
+
+def _build_adjusted_budget_amount(row: dict[str, object]) -> float | None:
+    allocated_budget = _to_float(row.get("allocatedBudgetBeforeAcceleration"))
+    if allocated_budget is None:
+        return None
+
+    multiplier = _to_float(row.get("accelerationMultiplier"))
+    if multiplier is None:
+        multiplier = 100.0
+
+    return round(allocated_budget * multiplier / 100.0, 2)
+
+
+def _build_schedule_status(row: dict[str, object]) -> str:
+    raw = str(row.get("scheduleStatus", "")).strip()
+    return raw if raw else "-"
+
+
+def _build_sheet_values(rows: list[dict[str, object]]) -> list[list[object]]:
+    values: list[list[object]] = []
+    for row in rows:
+        amount = row.get("amount")
+        values.append(
+            [
+                str(row.get("budgetId", "")).strip(),
+                round(float(amount), 2) if amount is not None else "",
+                str(row.get("scheduleStatus", "-") or "-"),
+            ]
+        )
+    return values
+
+
+def get_nucar_master_budget_rows(
+    month: int,
+    year: int,
+    *,
+    refresh_google_ads_caches: bool = False,
+) -> list[dict[str, object]]:
+    transform_payload = build_transform_rows_for_period(
+        account_codes=None,
+        month=month,
+        year=year,
+        refresh_google_ads_caches=refresh_google_ads_caches,
+        cache_first=True,
+        include_costs=False,
+    )
+    rows = transform_payload.get("rows", [])
+    allocations = transform_payload.get("allocations", [])
+    if not isinstance(rows, list) or not isinstance(allocations, list):
+        return []
+
+    by_budget_id: dict[str, dict[str, object]] = {}
+    allocated_budget_ids = {
+        str(item.get("ggBudgetId", "")).strip()
+        for item in allocations
+        if isinstance(item, dict) and str(item.get("ggBudgetId", "")).strip()
+    }
+    for row in rows:
+        budget_id = str(row.get("budgetId", "")).strip()
+        if not budget_id:
+            continue
+        if budget_id not in allocated_budget_ids:
+            continue
+
+        amount = _build_adjusted_budget_amount(row)
+        status = _build_schedule_status(row)
+        current = by_budget_id.get(budget_id)
+        if current is None:
+            by_budget_id[budget_id] = {
+                "budgetId": budget_id,
+                "amount": amount,
+                "scheduleStatus": status,
+            }
+            continue
+
+        existing_amount = current.get("amount")
+        if amount is not None:
+            if existing_amount is None:
+                current["amount"] = amount
+            else:
+                current["amount"] = round(float(existing_amount) + amount, 2)
+
+        existing_status = str(current.get("scheduleStatus", "")).strip()
+        if (not existing_status or existing_status == "-") and status and status != "-":
+            current["scheduleStatus"] = status
+
+    return sorted(by_budget_id.values(), key=lambda item: str(item.get("budgetId", "")))
+
+
+def sync_nucar_master_budget_sheet(
+    month: int,
+    year: int,
+    *,
+    refresh_google_ads_caches: bool = False,
+) -> dict[str, object]:
+    rows = get_nucar_master_budget_rows(
+        month,
+        year,
+        refresh_google_ads_caches=refresh_google_ads_caches,
+    )
+
+    spreadsheet_id = _resolve_master_budget_sheet_spreadsheet_id()
+    sheet_name = _resolve_master_budget_sheet_name()
+    clear_range = f"'{sheet_name}'!A{_MASTER_BUDGET_START_ROW}:C"
+    _clear_sheet_values(
+        spreadsheet_id=spreadsheet_id,
+        range_name=clear_range,
+    )
+
+    if rows:
+        values = _build_sheet_values(rows)
+        end_row = _MASTER_BUDGET_START_ROW + len(values) - 1
+        write_range = f"'{sheet_name}'!A{_MASTER_BUDGET_START_ROW}:C{end_row}"
+        _write_sheet_values(
+            spreadsheet_id=spreadsheet_id,
+            range_name=write_range,
+            values=values,
+            value_input_option="USER_ENTERED",
+        )
+
+    return {
+        "spreadsheetId": spreadsheet_id,
+        "sheetName": sheet_name,
+        "startRow": _MASTER_BUDGET_START_ROW,
+        "rowCount": len(rows),
+        "rows": rows,
+    }

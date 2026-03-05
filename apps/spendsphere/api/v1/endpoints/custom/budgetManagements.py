@@ -9,6 +9,7 @@ from apps.spendsphere.api.v1.deps import require_feature
 from apps.spendsphere.api.v1.endpoints.custom.spreadsheetParser_nucar import (
     calculate_nucar_spreadsheet_budgets,
     get_nucar_recommended_budgets,
+    sync_nucar_master_budget_sheet,
 )
 from apps.spendsphere.api.v1.helpers.db_queries import (
     get_masterbudgets,
@@ -81,6 +82,16 @@ def _resolve_recommended_budget_parser(
 ) -> Callable[[str, str | None, int, int], list[dict[str, object]]] | None:
     parsers = {
         "nucar": get_nucar_recommended_budgets,
+    }
+    key = str(tenant_id or "").strip().lower()
+    return parsers.get(key)
+
+
+def _resolve_master_budget_sheet_syncer(
+    tenant_id: str | None,
+) -> Callable[..., dict[str, object]] | None:
+    parsers = {
+        "nucar": sync_nucar_master_budget_sheet,
     }
     key = str(tenant_id or "").strip().lower()
     return parsers.get(key)
@@ -180,7 +191,10 @@ def get_recommended_budget_managements(
             status_code=404,
             detail="Recommended budget parser not configured for this tenant",
         )
-    results = parser(normalized_account_code, service_id, month, year)
+    try:
+        results = parser(normalized_account_code, service_id, month, year)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
     if service_id is not None:
         if results:
             return results[0]
@@ -191,6 +205,77 @@ def get_recommended_budget_managements(
             "amount": None,
         }
     return results
+
+
+@router.post("/budgetManagements/masterBudgetDataSync")
+def sync_budget_management_master_budget_sheet(
+    month: int | None = Query(None, description="Month (1-12)."),
+    year: int | None = Query(None, description="Year (e.g., 2026)."),
+    refresh_google_ads_caches: bool = Query(
+        False,
+        description=(
+            "When true, refreshes cached Google Ads clients/campaigns/budgets "
+            "before rebuilding pivot rows."
+        ),
+    ),
+):
+    """
+    Build NuCar master-budget pivot rows and refresh the target Google Sheet tab.
+
+    Example request:
+        POST /api/spendsphere/v1/budgetManagements/masterBudgetDataSync?month=3&year=2026
+
+    Example request (default current month/year):
+        POST /api/spendsphere/v1/budgetManagements/masterBudgetDataSync
+
+    Example response:
+        {
+          "period": {"month": 3, "year": 2026},
+          "spreadsheetId": "1heDhjHoLYjsoM9fOazW3KQisaCYOG6zPZs-_X3PUCs8",
+          "sheetName": "2.3 Master Budget Data",
+          "startRow": 9,
+          "rowCount": 2,
+          "rows": [
+            {
+              "budgetId": "14644368953",
+              "amount": 1794.0,
+              "scheduleStatus": "-"
+            },
+            {
+              "budgetId": "14650372785",
+              "amount": 1121.25,
+              "scheduleStatus": "-"
+            }
+          ]
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - Requires FEATURE_FLAGS.budget_managements=true for this tenant
+        - month/year are optional and default to current tenant period
+        - month/year must be provided together when specified
+        - Route is available only for tenants with a configured sync handler
+    """
+    month, year = _resolve_period(month, year)
+
+    sync_handler = _resolve_master_budget_sheet_syncer(get_tenant_id())
+    if sync_handler is None:
+        raise HTTPException(
+            status_code=404,
+            detail="Master budget sheet sync is not configured for this tenant",
+        )
+
+    try:
+        result = sync_handler(
+            month,
+            year,
+            refresh_google_ads_caches=refresh_google_ads_caches,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    return {"period": {"month": month, "year": year}, **result}
 
 
 @router.post("/budgetManagements")
