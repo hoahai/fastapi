@@ -328,6 +328,18 @@ Documentation rules:
     -   `dryRun=false`: executes budget and campaign mutations in
         parallel.
 
+### SpendSphere UI Load Cache Refresh (Current)
+
+-   Applies to:
+    -   `GET /api/spendsphere/v1/uis/load`
+-   Query parameter:
+    -   `refresh_google_ads_caches` (default `false`)
+-   Behavior:
+    -   When `true`, the route refreshes Google Ads clients, campaign,
+        and budget caches before assembling UI load data.
+    -   When `false`, the route uses normal cache-first behavior with
+        TTL/staleness checks.
+
 ### Shiftzy
 
 -   Routes live under `/api/shiftzy/v1`.
@@ -811,6 +823,34 @@ Clean visual structure is mandatory for maintainability.
     ```
 
 ------------------------------------------------------------------------
+
+# Commit Command Rule
+
+When the user asks to **compose**, **process**, or **format** a commit
+message, always return the commit in executable git command format.
+
+## Format
+
+``` bash
+git add .
+git commit -m "<type>(<scope>): <summary>" \
+  -m "- change 1" \
+  -m "- change 2" \
+  -m "- change 3"
+git push
+```
+------------------------------------------------------------------------
+
+## Rules
+
+-   Use Conventional Commits: `<type>(<scope>): <summary>`
+-   Allowed types: feat, fix, refactor, perf, docs, test, chore, build,
+    ci
+-   Each change must be its own `-m` bullet
+-   Use imperative verbs (add, update, remove, refactor, improve)
+-   Do not add explanations
+-   Return **only the command block**
+
 
 ## Common Commands
 

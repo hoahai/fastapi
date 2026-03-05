@@ -172,6 +172,9 @@ def update_google_ads_async(
     request_id = ensure_request_id(request)
     tenant_id = getattr(request.state, "tenant_id", None)
     client_id = getattr(request.state, "client_id", None)
+    user_name = request.headers.get("x-user-name")
+    if user_name is not None:
+        user_name = user_name.strip() or None
 
     request_host = request.headers.get("x-forwarded-host") or request.headers.get(
         "host"
@@ -186,6 +189,7 @@ def update_google_ads_async(
         request_payload=request_payload,
         log_context={
             "client_id": client_id,
+            "user_name": user_name,
             "request_host": request_host,
             "request_scheme": request_scheme,
             "request_path": request_path,
@@ -202,6 +206,7 @@ def _log_async_update_response(
     request_id: str,
     tenant_id: str | None,
     client_id: str | None,
+    user_name: str | None,
     request_host: str | None,
     request_scheme: str | None,
     request_path: str,
@@ -234,6 +239,7 @@ def _log_async_update_response(
                 "duration_ms": int(duration_s * 1000),
                 "client_id": client_id,
                 "tenant_id": tenant_id,
+                "user_name": user_name,
                 "request_host": request_host,
                 "request_scheme": request_scheme,
                 "request_body": request_body,

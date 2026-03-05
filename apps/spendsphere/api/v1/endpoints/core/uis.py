@@ -1186,6 +1186,13 @@ def load_ui_route(
     year: str | None = Query(
         None, description="Optional year (e.g., 2026)."
     ),
+    refresh_google_ads_caches: bool = Query(
+        False,
+        description=(
+            "When true, refreshes cached Google Ads clients, campaigns, and budgets "
+            "before loading UI data."
+        ),
+    ),
 ):
     """
     Example request:
@@ -1198,6 +1205,10 @@ def load_ui_route(
 
     Example request (current period):
         GET /api/spendsphere/v1/uis/load?googleId=6563107233
+        Header: X-Tenant-Id: acme
+
+    Example request (force Google Ads cache refresh):
+        GET /api/spendsphere/v1/uis/load?accountCode=AUC&month=1&year=2026&refresh_google_ads_caches=true
         Header: X-Tenant-Id: acme
 
     Example response:
@@ -1322,7 +1333,7 @@ def load_ui_route(
     if year_value is None:
         year_value = period_date.year
 
-    accounts = get_ggad_accounts()
+    accounts = get_ggad_accounts(refresh_cache=refresh_google_ads_caches)
     account: dict | None = None
 
     if google_id:
@@ -1389,10 +1400,22 @@ def load_ui_route(
     )
     active_accelerations = _filter_accelerations_for_date(accelerations, period_date)
 
+    def _get_campaigns(accounts: list[dict]) -> list[dict]:
+        return get_ggad_campaigns(
+            accounts,
+            refresh_cache=refresh_google_ads_caches,
+        )
+
+    def _get_budgets(accounts: list[dict]) -> list[dict]:
+        return get_ggad_budgets(
+            accounts,
+            refresh_cache=refresh_google_ads_caches,
+        )
+
     campaigns, budgets, costs, fallback_ad_types_by_budget = run_parallel(
         tasks=[
-            (get_ggad_campaigns, ([account],)),
-            (get_ggad_budgets, ([account],)),
+            (_get_campaigns, ([account],)),
+            (_get_budgets, ([account],)),
             (get_ggad_spents, ([account], month_value, year_value)),
             (get_ggad_budget_adtype_candidates, ([account],)),
         ],

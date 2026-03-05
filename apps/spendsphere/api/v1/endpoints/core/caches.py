@@ -30,6 +30,11 @@ _CACHE_ALIASES = {
     "google_ads_warnings": "google_ads_warnings",
     "google_ads_warning": "google_ads_warnings",
     "googleadswarnings": "google_ads_warnings",
+    "google_ads_failures": "google_ads_warnings",
+    "google_ads_failure": "google_ads_warnings",
+    "googleadsfailures": "google_ads_warnings",
+    "google_ads_issues": "google_ads_warnings",
+    "googleadsissues": "google_ads_warnings",
     "google_sheets": "google_sheets",
     "googlesheets": "google_sheets",
     "service": "services",
@@ -131,7 +136,7 @@ def _normalize_cache_requests(
     summary="Refresh SpendSphere caches",
     description=(
         "Refreshes account code, Google Ads clients, budgets, campaigns, and "
-        "warning + Google Sheets + service caches for the current tenant."
+        "warning/failure + Google Sheets + service caches for the current tenant."
     ),
 )
 def refresh_cache_route(
@@ -141,7 +146,8 @@ def refresh_cache_route(
         description=(
             "Optional cache list (legacy). Valid values: account_codes, "
             "google_ads_clients, google_ads_budgets, google_ads_campaigns, "
-            "google_ads_warnings, google_sheets, services. Can be repeated or "
+            "google_ads_warnings (or google_ads_failures / google_ads_issues), "
+            "google_sheets, services. Can be repeated or "
             "comma-separated. Prefer using query flags such as "
             "?account_codes&google_ads_clients=false."
         ),
@@ -166,7 +172,7 @@ def refresh_cache_route(
         google_ads_clients
         google_ads_budgets
         google_ads_campaigns
-        google_ads_warnings
+        google_ads_warnings (also clears deduped failures)
         google_sheets
         services
 

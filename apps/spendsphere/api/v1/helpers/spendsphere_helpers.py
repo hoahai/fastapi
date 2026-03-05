@@ -39,6 +39,7 @@ _SERVICES_KEY = "services"
 _GOOGLE_ADS_CLIENTS_CACHE_TTL_ENV = "SPENDSPHERE_GOOGLE_ADS_CLIENTS_CACHE_TTL_SECONDS"
 _GOOGLE_ADS_CLIENTS_CACHE_TTL_FALLBACK_ENV = "ttl_time"
 _DEFAULT_SPENDSPHERE_CACHE_TTL_SECONDS = 86400
+_DEFAULT_GOOGLE_ADS_ISSUE_CACHE_TTL_SECONDS = 28800
 _DEFAULT_GOOGLE_ADS_RESOURCE_CACHE_TTL_SECONDS = 300
 _ACCOUNT_CODES_SCOPE_ACTIVE = "active"
 _ACCOUNT_CODES_SCOPE_ALL = "all"
@@ -436,11 +437,11 @@ def get_google_ads_warning_cache_ttl_seconds() -> int:
         )
     )
     if value is None:
-        return _DEFAULT_SPENDSPHERE_CACHE_TTL_SECONDS
+        return _DEFAULT_GOOGLE_ADS_ISSUE_CACHE_TTL_SECONDS
     return value
 
 
-def _normalize_campaign_names_for_warning_cache(raw: object) -> list[str]:
+def _normalize_campaign_names_for_issue_cache(raw: object) -> list[str]:
     if not isinstance(raw, list):
         return []
     normalized: list[str] = []
@@ -458,25 +459,37 @@ def _normalize_campaign_names_for_warning_cache(raw: object) -> list[str]:
     return normalized
 
 
-def _build_google_ads_warning_fingerprint(
+def _build_google_ads_issue_fingerprint(
     *,
     customer_id: str,
-    warning: dict,
+    issue: dict,
+    issue_kind: str,
 ) -> str | None:
-    warning_code = str(warning.get("warningCode", "")).strip().upper()
-    budget_id = str(warning.get("budgetId", "")).strip()
-    account_code = standardize_account_code(warning.get("accountCode")) or ""
-    campaign_id = str(warning.get("campaignId", "")).strip()
-    message = str(warning.get("error") or warning.get("message") or "").strip()
-    campaign_names = _normalize_campaign_names_for_warning_cache(
-        warning.get("campaignNames")
+    issue_type = str(issue_kind).strip().upper() or "ISSUE"
+    warning_code = str(issue.get("warningCode", "")).strip().upper()
+    failure_code = str(issue.get("failureCode", "")).strip().upper()
+    budget_id = str(issue.get("budgetId", "")).strip()
+    account_code = standardize_account_code(issue.get("accountCode")) or ""
+    campaign_id = str(issue.get("campaignId", "")).strip()
+    message = str(issue.get("error") or issue.get("message") or "").strip()
+    campaign_names = _normalize_campaign_names_for_issue_cache(
+        issue.get("campaignNames")
     )
-    if not (warning_code or budget_id or campaign_id or account_code or message):
+    if not (
+        warning_code
+        or failure_code
+        or budget_id
+        or campaign_id
+        or account_code
+        or message
+    ):
         return None
 
     payload = {
+        "issueType": issue_type,
         "customerId": customer_id,
         "warningCode": warning_code,
+        "failureCode": failure_code,
         "budgetId": budget_id,
         "campaignId": campaign_id,
         "accountCode": account_code,
@@ -487,12 +500,13 @@ def _build_google_ads_warning_fingerprint(
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
-def filter_cached_google_ads_warnings(
-    warnings_by_customer: dict[str, list[dict]],
+def _filter_cached_google_ads_issues(
+    issues_by_customer: dict[str, list[dict]],
     *,
     tenant_id: str | None = None,
+    issue_kind: str,
 ) -> dict[str, list[dict]]:
-    if not warnings_by_customer:
+    if not issues_by_customer:
         return {}
 
     ttl_seconds = get_google_ads_warning_cache_ttl_seconds()
@@ -540,20 +554,21 @@ def filter_cached_google_ads_warnings(
 
         cache_changed = active_fingerprints != tenant_entry
 
-        for raw_customer_id, warnings in warnings_by_customer.items():
+        for raw_customer_id, issues in issues_by_customer.items():
             customer_id = str(raw_customer_id).strip()
-            if not customer_id or not isinstance(warnings, list):
+            if not customer_id or not isinstance(issues, list):
                 continue
-            for warning in warnings:
-                if not isinstance(warning, dict):
+            for issue in issues:
+                if not isinstance(issue, dict):
                     continue
-                fingerprint = _build_google_ads_warning_fingerprint(
+                fingerprint = _build_google_ads_issue_fingerprint(
                     customer_id=customer_id,
-                    warning=warning,
+                    issue=issue,
+                    issue_kind=issue_kind,
                 )
                 if fingerprint and fingerprint in active_fingerprints:
                     continue
-                filtered.setdefault(customer_id, []).append(warning)
+                filtered.setdefault(customer_id, []).append(issue)
                 if fingerprint:
                     active_fingerprints[fingerprint] = {
                         "updated_at": now_iso,
@@ -570,6 +585,30 @@ def filter_cached_google_ads_warnings(
             _write_cache_root(cache_store, root)
 
     return filtered
+
+
+def filter_cached_google_ads_warnings(
+    warnings_by_customer: dict[str, list[dict]],
+    *,
+    tenant_id: str | None = None,
+) -> dict[str, list[dict]]:
+    return _filter_cached_google_ads_issues(
+        warnings_by_customer,
+        tenant_id=tenant_id,
+        issue_kind="WARNING",
+    )
+
+
+def filter_cached_google_ads_failures(
+    failures_by_customer: dict[str, list[dict]],
+    *,
+    tenant_id: str | None = None,
+) -> dict[str, list[dict]]:
+    return _filter_cached_google_ads_issues(
+        failures_by_customer,
+        tenant_id=tenant_id,
+        issue_kind="FAILURE",
+    )
 
 
 def clear_google_ads_warning_cache(

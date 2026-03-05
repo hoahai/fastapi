@@ -24,6 +24,7 @@ from apps.spendsphere.api.v1.helpers.db_queries import (
 )
 from apps.spendsphere.api.v1.helpers.ggSheet import get_active_period
 from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
+    filter_cached_google_ads_failures,
     filter_cached_google_ads_warnings,
 )
 from shared.email import send_google_ads_result_email
@@ -295,6 +296,45 @@ def _filter_existing_mutation_warnings(
     return total_warnings
 
 
+def _filter_existing_mutation_failures(
+    *,
+    mutation_results: list[dict],
+    use_cache: bool = True,
+) -> int:
+    total_failures = 0
+
+    for result in mutation_results:
+        existing_failures = [
+            failure
+            for failure in (result.get("failures") or [])
+            if isinstance(failure, dict)
+        ]
+        if not existing_failures:
+            continue
+
+        customer_id = str(result.get("customerId", "")).strip()
+        if not customer_id:
+            continue
+
+        if use_cache:
+            filtered_by_customer = filter_cached_google_ads_failures(
+                {customer_id: existing_failures}
+            )
+            failures = filtered_by_customer.get(customer_id, [])
+        else:
+            failures = existing_failures
+
+        result["failures"] = failures
+        summary = result.setdefault("summary", {})
+        succeeded = int(summary.get("succeeded", 0) or 0)
+        warnings_count = int(summary.get("warnings", 0) or 0)
+        summary["failed"] = len(failures)
+        summary["total"] = succeeded + len(failures) + warnings_count
+        total_failures += summary["failed"]
+
+    return total_failures
+
+
 def _maybe_filter_google_ads_warnings(
     warnings_by_customer: dict[str, list[dict]],
     *,
@@ -305,6 +345,18 @@ def _maybe_filter_google_ads_warnings(
     if use_cache:
         return filter_cached_google_ads_warnings(warnings_by_customer)
     return warnings_by_customer
+
+
+def _maybe_filter_google_ads_failures(
+    failures_by_customer: dict[str, list[dict]],
+    *,
+    use_cache: bool,
+) -> dict[str, list[dict]]:
+    if not failures_by_customer:
+        return {}
+    if use_cache:
+        return filter_cached_google_ads_failures(failures_by_customer)
+    return failures_by_customer
 
 
 def _collect_budget_allocation_and_spend_issues(
@@ -739,6 +791,10 @@ def run_google_ads_budget_pipeline(
         mutation_results=mutation_results,
         use_cache=not refresh_google_ads_caches,
     )
+    _filter_existing_mutation_failures(
+        mutation_results=mutation_results,
+        use_cache=not refresh_google_ads_caches,
+    )
 
     budget_warning_threshold = get_budget_warning_threshold()
     threshold_warning_count = 0
@@ -771,6 +827,10 @@ def run_google_ads_budget_pipeline(
     )
     budget_warnings = _maybe_filter_google_ads_warnings(
         budget_warnings,
+        use_cache=not refresh_google_ads_caches,
+    )
+    budget_failures = _maybe_filter_google_ads_failures(
+        budget_failures,
         use_cache=not refresh_google_ads_caches,
     )
     _inject_budget_warnings(
