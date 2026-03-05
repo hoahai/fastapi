@@ -62,6 +62,26 @@ def _is_zzz_name(
     )
 
 
+def _strip_inactive_prefix_for_matching(
+    name: str | None,
+    *,
+    inactive_prefixes: tuple[str, ...],
+) -> str:
+    cleaned = str(name or "").strip()
+    if not cleaned:
+        return ""
+
+    normalized = cleaned.lower()
+    for prefix in inactive_prefixes:
+        normalized_prefix = str(prefix or "").strip().lower()
+        if not normalized_prefix:
+            continue
+        if normalized.startswith(normalized_prefix):
+            return cleaned[len(normalized_prefix) :].lstrip(" _-|")
+
+    return cleaned
+
+
 _DEFAULT_NAMING_TOKEN_PATTERNS = {
     "accountCode": r"[A-Za-z0-9]+",
     "adTypeCode": r"[A-Za-z0-9]+",
@@ -845,16 +865,13 @@ def get_ggad_campaigns(
 
         for c in campaigns:
             name = str(c.get("campaignName", "")).strip()
-            status = str(c.get("status", "")).strip().upper()
-            match = campaign_name_pattern.match(name)
-
-            if not match:
-                continue
-
-            if _is_zzz_name(
+            match_name = _strip_inactive_prefix_for_matching(
                 name,
                 inactive_prefixes=inactive_prefixes,
-            ) and status != "ENABLED":
+            )
+            match = campaign_name_pattern.match(match_name)
+
+            if not match:
                 continue
 
             groups = _normalize_named_groups(match)
