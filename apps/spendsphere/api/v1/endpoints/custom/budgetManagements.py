@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from typing import Callable
 
-from fastapi import APIRouter, Depends, HTTPException, Path, Query
+from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from apps.spendsphere.api.v1.deps import require_feature
@@ -24,12 +24,6 @@ from shared.tenant import get_tenant_id
 from shared.utils import get_current_period
 
 _budget_managements_feature_dependency = require_feature("budget_managements")
-
-router = APIRouter(
-    dependencies=[
-        Depends(_budget_managements_feature_dependency),
-    ]
-)
 
 
 class BudgetManagementUpsertItem(BaseModel):
@@ -101,17 +95,16 @@ def ensure_budget_managements_access() -> None:
     _budget_managements_feature_dependency()
 
 
-@router.get("/budgetManagements")
 def get_budget_managements(
-    account_codes: list[str] | None = Query(None, alias="accountCodes"),
-    month: int | None = Query(None, description="Month (1-12)."),
-    year: int | None = Query(None, description="Year (e.g., 2026)."),
+    account_codes: list[str] | None = None,
+    month: int | None = None,
+    year: int | None = None,
 ):
     """
     Get budgets and optional tenant-calculated spreadsheet budgets.
 
     Example request:
-        GET /api/spendsphere/v1/budgetManagements?accountCodes=NUCAR&month=1&year=2026
+        GET /api/spendsphere/v1/uis/budgetManagament?accountCodes=NUCAR&month=1&year=2026
 
     Example response:
         {
@@ -148,21 +141,20 @@ def get_budget_managements(
     return payload
 
 
-@router.get("/budgetManagements/recommended")
 def get_recommended_budget_managements(
-    account_code: str = Query(..., alias="accountCode", min_length=1),
-    month: int = Query(..., description="Month (1-12)."),
-    year: int = Query(..., description="Year (e.g., 2026)."),
-    service_id: str | None = Query(None, alias="serviceId", min_length=1),
+    account_code: str,
+    month: int,
+    year: int,
+    service_id: str | None = None,
 ):
     """
     Get recommended budgets from tenant-specific spreadsheet parser.
 
     Example request:
-        GET /api/spendsphere/v1/budgetManagements/recommended?accountCode=ALAM&serviceId=SEM&month=2&year=2026
+        GET /api/spendsphere/v1/uis/budgetManagament/recommended?accountCode=ALAM&serviceId=SEM&month=2&year=2026
 
     Example request (all SERVICE_BUDGETS):
-        GET /api/spendsphere/v1/budgetManagements/recommended?accountCode=ALAM&month=2&year=2026
+        GET /api/spendsphere/v1/uis/budgetManagament/recommended?accountCode=ALAM&month=2&year=2026
 
     Example response:
         {
@@ -207,26 +199,19 @@ def get_recommended_budget_managements(
     return results
 
 
-@router.post("/budgetManagements/masterBudgetDataSync")
 def sync_budget_management_master_budget_sheet(
-    month: int | None = Query(None, description="Month (1-12)."),
-    year: int | None = Query(None, description="Year (e.g., 2026)."),
-    refresh_google_ads_caches: bool = Query(
-        False,
-        description=(
-            "When true, refreshes cached Google Ads clients/campaigns/budgets "
-            "before rebuilding pivot rows."
-        ),
-    ),
+    month: int | None = None,
+    year: int | None = None,
+    refresh_google_ads_caches: bool = False,
 ):
     """
     Build NuCar master-budget pivot rows and refresh the target Google Sheet tab.
 
     Example request:
-        POST /api/spendsphere/v1/budgetManagements/masterBudgetDataSync?month=3&year=2026
+        POST /api/spendsphere/v1/uis/budgetManagament/masterBudgetDataSync?month=3&year=2026
 
     Example request (default current month/year):
-        POST /api/spendsphere/v1/budgetManagements/masterBudgetDataSync
+        POST /api/spendsphere/v1/uis/budgetManagament/masterBudgetDataSync
 
     Example response:
         {
@@ -278,13 +263,12 @@ def sync_budget_management_master_budget_sheet(
     return {"period": {"month": month, "year": year}, **result}
 
 
-@router.post("/budgetManagements")
 def create_budget_managements(payload: BudgetManagementUpsertRequest):
     """
     Create budget rows for a period.
 
     Example request:
-        POST /api/spendsphere/v1/budgetManagements
+        POST /api/spendsphere/v1/uis/budgetManagament
         {
           "month": 1,
           "year": 2026,
@@ -323,13 +307,12 @@ def create_budget_managements(payload: BudgetManagementUpsertRequest):
     return {"period": {"month": month, "year": year}, **result}
 
 
-@router.put("/budgetManagements")
 def update_budget_managements(payload: BudgetManagementUpsertRequest):
     """
     Update budget rows for a period.
 
     Example request:
-        PUT /api/spendsphere/v1/budgetManagements
+        PUT /api/spendsphere/v1/uis/budgetManagament
         {
           "month": 1,
           "year": 2026,
@@ -369,18 +352,17 @@ def update_budget_managements(payload: BudgetManagementUpsertRequest):
     return {"period": {"month": month, "year": year}, **result}
 
 
-@router.delete("/budgetManagements/{budget_id}")
 def soft_delete_budget_management(
-    budget_id: str = Path(..., min_length=1),
-    account_code: str = Query(..., alias="accountCode"),
-    month: int | None = Query(None),
-    year: int | None = Query(None),
+    budget_id: str,
+    account_code: str,
+    month: int | None = None,
+    year: int | None = None,
 ):
     """
     Soft delete a budget by setting `netAmount` to 0.
 
     Example request:
-        DELETE /api/spendsphere/v1/budgetManagements/65c8d225-9f8f-4d13-8558-d6698f239a45?accountCode=NUCAR&month=1&year=2026
+        DELETE /api/spendsphere/v1/uis/budgetManagament/65c8d225-9f8f-4d13-8558-d6698f239a45?accountCode=NUCAR&month=1&year=2026
 
     Example response:
         {
