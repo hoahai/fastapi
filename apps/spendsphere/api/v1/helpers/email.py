@@ -317,6 +317,15 @@ def _normalize_budget_issue(issue: object, fallback_account: str | None) -> dict
             "current_amount": None,
             "new_amount": None,
             "message": str(issue),
+            "error_code": None,
+            "error_type": None,
+            "error_enum": None,
+            "trigger": None,
+            "field_path": None,
+            "retryable": None,
+            "attempt": None,
+            "max_attempts": None,
+            "error_details": None,
         }
 
     account_code = issue.get("accountCode") or fallback_account or "Unknown"
@@ -336,6 +345,17 @@ def _normalize_budget_issue(issue: object, fallback_account: str | None) -> dict
         current_amount = issue.get("oldAmount")
     new_amount = issue.get("newAmount")
     message = issue.get("error") or issue.get("message") or "Unknown"
+    error_code = issue.get("errorCode")
+    error_type = issue.get("errorType")
+    error_enum = issue.get("errorEnum")
+    trigger = issue.get("trigger")
+    field_path = issue.get("fieldPath")
+    retryable = issue.get("retryable")
+    attempt = issue.get("attempt")
+    max_attempts = issue.get("maxAttempts")
+    error_details = issue.get("errorDetails")
+    if not isinstance(error_details, list):
+        error_details = None
 
     return {
         "account_code": str(account_code),
@@ -344,6 +364,15 @@ def _normalize_budget_issue(issue: object, fallback_account: str | None) -> dict
         "current_amount": current_amount,
         "new_amount": new_amount,
         "message": str(message),
+        "error_code": str(error_code).strip() if error_code is not None else None,
+        "error_type": str(error_type).strip() if error_type is not None else None,
+        "error_enum": str(error_enum).strip() if error_enum is not None else None,
+        "trigger": str(trigger).strip() if trigger is not None else None,
+        "field_path": str(field_path).strip() if field_path is not None else None,
+        "retryable": retryable if isinstance(retryable, bool) else None,
+        "attempt": attempt,
+        "max_attempts": max_attempts,
+        "error_details": error_details,
     }
 
 
@@ -364,22 +393,74 @@ def _format_issue_detail_text(issue: dict) -> str:
     current_amount = _format_amount(issue.get("current_amount"))
     new_amount = _format_amount(issue.get("new_amount"))
     message = issue.get("message") or "Unknown"
-    return (
-        f"Current budget: {current_amount} | "
-        f"New Budget: {new_amount}\n"
-        f"{message}"
-    )
+    lines = [
+        f"Current budget: {current_amount} | New Budget: {new_amount}",
+        str(message),
+    ]
+    lines.extend(_format_issue_meta_lines(issue))
+    return "\n".join(lines)
 
 
 def _format_issue_detail_html(issue: dict) -> str:
     current_amount = html_lib.escape(_format_amount(issue.get("current_amount")))
     new_amount = html_lib.escape(_format_amount(issue.get("new_amount")))
     message = html_lib.escape(str(issue.get("message") or "Unknown"))
-    return (
-        f"Current budget: {current_amount} | "
-        f"New Budget: {new_amount}<br>"
-        f"{message}"
+    parts = [
+        f"Current budget: {current_amount} | New Budget: {new_amount}",
+        message,
+    ]
+    parts.extend(html_lib.escape(line) for line in _format_issue_meta_lines(issue))
+    return "<br>".join(parts)
+
+
+def _format_issue_meta_lines(issue: dict) -> list[str]:
+    metadata_parts: list[str] = []
+
+    error_code = str(issue.get("error_code") or "").strip()
+    if not error_code:
+        error_type = str(issue.get("error_type") or "").strip()
+        error_enum = str(issue.get("error_enum") or "").strip()
+        if error_type and error_enum:
+            error_code = f"{error_type}.{error_enum}"
+    if error_code:
+        metadata_parts.append(f"code {error_code}")
+
+    trigger = str(issue.get("trigger") or "").strip()
+    if trigger:
+        metadata_parts.append(f"trigger '{trigger}'")
+
+    field_path = str(issue.get("field_path") or "").strip()
+    if field_path:
+        metadata_parts.append(f"field path {field_path}")
+
+    retryable = issue.get("retryable")
+    if isinstance(retryable, bool):
+        metadata_parts.append(f"retryable {'yes' if retryable else 'no'}")
+
+    lines: list[str] = []
+    if metadata_parts:
+        lines.append("Google Ads metadata: " + "; ".join(metadata_parts) + ".")
+
+    attempt = issue.get("attempt")
+    max_attempts = issue.get("max_attempts")
+    attempt_label = None
+    if isinstance(attempt, int) and isinstance(max_attempts, int) and max_attempts > 0:
+        attempt_label = f"{attempt}/{max_attempts}"
+
+    error_details = issue.get("error_details")
+    extra_details = (
+        len(error_details) if isinstance(error_details, list) and len(error_details) > 1 else 0
     )
+
+    if attempt_label or extra_details:
+        sentence_parts: list[str] = []
+        if attempt_label:
+            sentence_parts.append(f"attempt {attempt_label}")
+        if extra_details:
+            sentence_parts.append(f"{extra_details} detailed error entries")
+        lines.append("Retry summary: " + "; ".join(sentence_parts) + ".")
+
+    return lines
 
 
 def _format_amount(value: object) -> str:

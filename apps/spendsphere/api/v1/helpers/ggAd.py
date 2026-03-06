@@ -2,6 +2,7 @@
 
 import re
 import calendar
+import time
 from datetime import date
 from decimal import Decimal, ROUND_HALF_UP
 from google.ads.googleads.client import GoogleAdsClient
@@ -23,6 +24,9 @@ from shared.constants import (
     GGADS_MIN_BUDGET,
     GGADS_MAX_BUDGET_MULTIPLIER,
     GGADS_ALLOWED_CAMPAIGN_STATUSES,
+    GGADS_MUTATION_MAX_ATTEMPTS,
+    GGADS_MUTATION_RETRY_INITIAL_BACKOFF_SECONDS,
+    GGADS_MUTATION_RETRY_MAX_BACKOFF_SECONDS,
 )
 from shared.logger import get_logger
 from apps.spendsphere.api.v1.helpers.account_codes import standardize_account_code
@@ -43,6 +47,11 @@ from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
 
 logger = get_logger("Google Ads")
 
+_RETRYABLE_GOOGLE_ADS_ERROR_CODES: set[tuple[str, str]] = {
+    ("internal_error", "INTERNAL_ERROR"),
+    ("internal_error", "TRANSIENT_ERROR"),
+}
+
 
 def _chunked(items: list[dict], size: int):
     if size <= 0:
@@ -50,6 +59,185 @@ def _chunked(items: list[dict], size: int):
         return
     for i in range(0, len(items), size):
         yield items[i : i + size]
+
+
+def _resolve_google_ads_enum_name(
+    *,
+    error_code_obj,
+    field_name: str,
+    raw_value: object,
+) -> str | None:
+    direct_name = str(getattr(raw_value, "name", "")).strip()
+    if direct_name and not direct_name.isdigit():
+        return direct_name
+
+    raw_text = str(raw_value).strip()
+    if raw_text and not raw_text.isdigit():
+        return raw_text
+
+    try:
+        enum_number = int(raw_text)
+    except (TypeError, ValueError):
+        return None
+
+    try:
+        descriptor = error_code_obj.DESCRIPTOR.fields_by_name.get(field_name)
+        enum_value = (
+            descriptor.enum_type.values_by_number.get(enum_number)
+            if descriptor and descriptor.enum_type
+            else None
+        )
+    except Exception:
+        return None
+
+    return enum_value.name if enum_value else None
+
+
+def _extract_google_ads_error_metadata(err) -> dict[str, object]:
+    error_type: str | None = None
+    error_enum: str | None = None
+    error_code: str | None = None
+
+    error_code_obj = getattr(err, "error_code", None)
+    if error_code_obj is not None:
+        raw_type = error_code_obj.WhichOneof("error_code")
+        if raw_type:
+            error_type = str(raw_type).strip()
+            raw_value = getattr(error_code_obj, error_type, None)
+            if raw_value is not None:
+                error_enum = _resolve_google_ads_enum_name(
+                    error_code_obj=error_code_obj,
+                    field_name=error_type,
+                    raw_value=raw_value,
+                )
+            if error_type and error_enum:
+                error_code = f"{error_type}.{error_enum}"
+
+    trigger = str(getattr(getattr(err, "trigger", None), "string_value", "")).strip() or None
+
+    index: int | None = None
+    field_path_parts: list[str] = []
+    location = getattr(err, "location", None)
+    if location is not None:
+        elements = list(getattr(location, "field_path_elements", []) or [])
+        for position, element in enumerate(elements):
+            field_name = str(getattr(element, "field_name", "")).strip()
+            element_index = getattr(element, "index", None)
+            has_index = isinstance(element_index, int)
+            if has_index and index is None:
+                if field_name == "operations" or position == 0:
+                    index = element_index
+
+            if field_name and has_index:
+                field_path_parts.append(f"{field_name}[{element_index}]")
+            elif field_name:
+                field_path_parts.append(field_name)
+            elif has_index:
+                field_path_parts.append(f"[{element_index}]")
+
+    field_path = ".".join(field_path_parts) if field_path_parts else None
+
+    is_retryable = bool(
+        error_type
+        and error_enum
+        and (error_type.lower(), error_enum.upper()) in _RETRYABLE_GOOGLE_ADS_ERROR_CODES
+    )
+
+    message = str(getattr(err, "message", "")).strip() or "Unknown Google Ads error."
+
+    return {
+        "index": index,
+        "message": message,
+        "errorType": error_type,
+        "errorEnum": error_enum,
+        "errorCode": error_code,
+        "trigger": trigger,
+        "fieldPath": field_path,
+        "retryable": is_retryable,
+    }
+
+
+def _extract_partial_failure_issues(partial_failure_error) -> list[dict[str, object]]:
+    failure_pb_cls = GoogleAdsFailure.pb()
+    issues: list[dict[str, object]] = []
+
+    for detail in partial_failure_error.details:
+        if not detail.Is(failure_pb_cls.DESCRIPTOR):
+            continue
+        failure_pb = failure_pb_cls()
+        detail.Unpack(failure_pb)
+        for err in failure_pb.errors:
+            issues.append(_extract_google_ads_error_metadata(err))
+
+    return issues
+
+
+def _extract_google_ads_exception_issues(exception: GoogleAdsException) -> list[dict[str, object]]:
+    errors = list(getattr(getattr(exception, "failure", None), "errors", []) or [])
+    if not errors:
+        return [
+            {
+                "index": None,
+                "message": str(exception),
+                "errorType": None,
+                "errorEnum": None,
+                "errorCode": None,
+                "trigger": None,
+                "fieldPath": None,
+                "retryable": False,
+            }
+        ]
+    return [_extract_google_ads_error_metadata(err) for err in errors]
+
+
+def _build_budget_failure_entry(
+    *,
+    row: dict,
+    issues: list[dict[str, object]],
+    attempt: int,
+    max_attempts: int,
+) -> dict:
+    primary = issues[0] if issues else {}
+    failure = {
+        "budgetId": row.get("budgetId"),
+        "oldAmount": row.get("currentAmount"),
+        "newAmount": row.get("newAmount"),
+        "error": primary.get("message", "Unknown Google Ads error."),
+        "attempt": attempt,
+        "maxAttempts": max_attempts,
+    }
+
+    for key in ("errorCode", "errorType", "errorEnum", "trigger", "fieldPath"):
+        value = primary.get(key)
+        if value:
+            failure[key] = value
+
+    if primary.get("retryable") is not None:
+        failure["retryable"] = bool(primary.get("retryable"))
+
+    if len(issues) > 1:
+        details: list[dict] = []
+        for issue in issues:
+            detail = {
+                "error": issue.get("message"),
+                "errorCode": issue.get("errorCode"),
+                "errorType": issue.get("errorType"),
+                "errorEnum": issue.get("errorEnum"),
+                "trigger": issue.get("trigger"),
+                "fieldPath": issue.get("fieldPath"),
+                "retryable": bool(issue.get("retryable")),
+            }
+            details.append({k: v for k, v in detail.items() if v is not None})
+        failure["errorDetails"] = details
+
+    return failure
+
+
+def _mutation_retry_backoff_seconds(attempt: int) -> float:
+    return min(
+        GGADS_MUTATION_RETRY_INITIAL_BACKOFF_SECONDS * (2 ** max(0, attempt - 1)),
+        GGADS_MUTATION_RETRY_MAX_BACKOFF_SECONDS,
+    )
 
 
 def _is_zzz_name(
@@ -1297,91 +1485,191 @@ def update_budgets(
     failures = invalid.copy()
     warnings: list[dict] = []
 
+    max_attempts = max(1, int(GGADS_MUTATION_MAX_ATTEMPTS))
+
     for chunk in _chunked(valid, GGADS_MAX_UPDATES_PER_REQUEST):
-        operations = []
+        pending = list(chunk)
+        attempt = 1
 
-        for r in chunk:
-            new_amount = r["newAmount"]
-            if new_amount <= 0:
-                new_amount = GGADS_MIN_BUDGET
+        while pending:
+            operations = []
 
-            op = client.get_type("CampaignBudgetOperation")
-            budget = op.update
+            for row in pending:
+                new_amount = row["newAmount"]
+                if new_amount <= 0:
+                    new_amount = GGADS_MIN_BUDGET
 
-            budget.resource_name = service.campaign_budget_path(
-                customer_id,
-                r["budgetId"],
-            )
-            # Quantize to cents to match Google Ads minimum money unit and avoid float drift.
-            quantized_amount = Decimal(str(new_amount)).quantize(
-                Decimal("0.01"), rounding=ROUND_HALF_UP
-            )
-            budget.amount_micros = int(
-                (quantized_amount * Decimal("1000000")).to_integral_value(
-                    rounding=ROUND_HALF_UP
+                op = client.get_type("CampaignBudgetOperation")
+                budget = op.update
+
+                budget.resource_name = service.campaign_budget_path(
+                    customer_id,
+                    row["budgetId"],
                 )
-            )
+                # Quantize to cents to match Google Ads minimum money unit and avoid float drift.
+                quantized_amount = Decimal(str(new_amount)).quantize(
+                    Decimal("0.01"), rounding=ROUND_HALF_UP
+                )
+                budget.amount_micros = int(
+                    (quantized_amount * Decimal("1000000")).to_integral_value(
+                        rounding=ROUND_HALF_UP
+                    )
+                )
 
-            op.update_mask.CopyFrom(FieldMask(paths=["amount_micros"]))
+                op.update_mask.CopyFrom(FieldMask(paths=["amount_micros"]))
+                operations.append(op)
 
-            operations.append(op)
+            request = client.get_type("MutateCampaignBudgetsRequest")
+            request.customer_id = customer_id
+            request.operations.extend(operations)
+            request.partial_failure = True
 
-        # -------- v22 request object --------
-        request = client.get_type("MutateCampaignBudgetsRequest")
-        request.customer_id = customer_id
-        request.operations.extend(operations)
-        request.partial_failure = True
+            try:
+                response = service.mutate_campaign_budgets(request=request)
+                issues = (
+                    _extract_partial_failure_issues(response.partial_failure_error)
+                    if response.partial_failure_error
+                    else []
+                )
+            except GoogleAdsException as ex:
+                issues = _extract_google_ads_exception_issues(ex)
+                all_retryable = all(bool(issue.get("retryable")) for issue in issues)
+                if all_retryable and attempt < max_attempts:
+                    backoff_seconds = _mutation_retry_backoff_seconds(attempt)
+                    logger.warning(
+                        "Retrying Google Ads budget updates after request-level transient error",
+                        extra={
+                            "extra_fields": {
+                                "customerId": customer_id,
+                                "attempt": attempt + 1,
+                                "maxAttempts": max_attempts,
+                                "retryBudgetIds": [
+                                    str(row.get("budgetId"))
+                                    for row in pending
+                                    if row.get("budgetId") is not None
+                                ],
+                                "retryErrorCodes": sorted(
+                                    {
+                                        code
+                                        for code in (
+                                            str(
+                                                issue.get("errorCode")
+                                                or issue.get("errorType")
+                                                or issue.get("message")
+                                            )
+                                            for issue in issues
+                                        )
+                                        if code and code != "None"
+                                    }
+                                ),
+                                "backoffSeconds": backoff_seconds,
+                            }
+                        },
+                    )
+                    time.sleep(backoff_seconds)
+                    attempt += 1
+                    continue
 
-        response = service.mutate_campaign_budgets(request=request)
+                for row in pending:
+                    failures.append(
+                        _build_budget_failure_entry(
+                            row=row,
+                            issues=issues,
+                            attempt=attempt,
+                            max_attempts=max_attempts,
+                        )
+                    )
+                break
 
-        successful_indices = set(range(len(chunk)))
+            issues_by_index: dict[int, list[dict[str, object]]] = {}
+            unscoped_issues: list[dict[str, object]] = []
+            for issue in issues:
+                idx = issue.get("index")
+                if isinstance(idx, int) and 0 <= idx < len(pending):
+                    issues_by_index.setdefault(idx, []).append(issue)
+                else:
+                    unscoped_issues.append(issue)
 
-        # -------- parse partial failure (v22-safe) --------
-        if response.partial_failure_error:
-            failure_pb_cls = GoogleAdsFailure.pb()
-            failure_pb = failure_pb_cls()
+            retry_rows: list[dict] = []
+            retry_budget_ids: list[str] = []
+            retry_error_codes: set[str] = set()
 
-            for detail in response.partial_failure_error.details:
-                if detail.Is(failure_pb_cls.DESCRIPTOR):
-                    detail.Unpack(failure_pb)
+            for idx, row in enumerate(pending):
+                row_issues = list(issues_by_index.get(idx, []))
+                if unscoped_issues:
+                    row_issues.extend(unscoped_issues)
 
-            for err in failure_pb.errors:
-                idx = err.location.field_path_elements[0].index
-                successful_indices.discard(idx)
+                if not row_issues:
+                    warning = row.get("validationWarning")
+                    if warning:
+                        warnings.append(
+                            {
+                                "budgetId": row.get("budgetId"),
+                                "accountCode": standardize_account_code(
+                                    row.get("accountCode")
+                                ),
+                                "campaignNames": row.get("campaignNames", []),
+                                "currentAmount": row.get("currentAmount"),
+                                "newAmount": row.get("newAmount"),
+                                "expectedDaily": row.get("expectedDaily"),
+                                "error": warning,
+                            }
+                        )
+                    else:
+                        successes.append(
+                            {
+                                "budgetId": row["budgetId"],
+                                "campaignNames": row.get("campaignNames", []),
+                                "oldAmount": row.get("currentAmount"),
+                                "newAmount": max(row["newAmount"], GGADS_MIN_BUDGET),
+                            }
+                        )
+                    continue
+
+                row_retryable = all(bool(issue.get("retryable")) for issue in row_issues)
+                if row_retryable and attempt < max_attempts:
+                    retry_rows.append(row)
+                    if row.get("budgetId") is not None:
+                        retry_budget_ids.append(str(row.get("budgetId")))
+                    for issue in row_issues:
+                        code = str(
+                            issue.get("errorCode")
+                            or issue.get("errorType")
+                            or issue.get("message")
+                        )
+                        if code and code != "None":
+                            retry_error_codes.add(code)
+                    continue
+
                 failures.append(
-                    {
-                        "budgetId": chunk[idx]["budgetId"],
-                        "oldAmount": chunk[idx].get("currentAmount"),
-                        "newAmount": chunk[idx].get("newAmount"),
-                        "error": err.message,
-                    }
+                    _build_budget_failure_entry(
+                        row=row,
+                        issues=row_issues,
+                        attempt=attempt,
+                        max_attempts=max_attempts,
+                    )
                 )
 
-        for i in successful_indices:
-            warning = chunk[i].get("validationWarning")
-            if warning:
-                warnings.append(
-                    {
-                        "budgetId": chunk[i].get("budgetId"),
-                        "accountCode": standardize_account_code(
-                            chunk[i].get("accountCode")
-                        ),
-                        "campaignNames": chunk[i].get("campaignNames", []),
-                        "currentAmount": chunk[i].get("currentAmount"),
-                        "newAmount": chunk[i].get("newAmount"),
-                        "expectedDaily": chunk[i].get("expectedDaily"),
-                        "error": warning,
+            if not retry_rows:
+                break
+
+            backoff_seconds = _mutation_retry_backoff_seconds(attempt)
+            logger.warning(
+                "Retrying Google Ads budget updates after transient partial-failure error",
+                extra={
+                    "extra_fields": {
+                        "customerId": customer_id,
+                        "attempt": attempt + 1,
+                        "maxAttempts": max_attempts,
+                        "retryBudgetIds": retry_budget_ids,
+                        "retryErrorCodes": sorted(retry_error_codes),
+                        "backoffSeconds": backoff_seconds,
                     }
-                )
-            else:
-                successes.append(
-                    {
-                        "budgetId": chunk[i]["budgetId"],
-                        "campaignNames": chunk[i].get("campaignNames", []),
-                        "oldAmount": chunk[i].get("currentAmount"),
-                        "newAmount": max(chunk[i]["newAmount"], GGADS_MIN_BUDGET),
-                    }
-                )
+                },
+            )
+            time.sleep(backoff_seconds)
+            pending = retry_rows
+            attempt += 1
 
     return {
         "customerId": customer_id,
@@ -1521,15 +1809,40 @@ def update_campaign_statuses(
             )
 
         except GoogleAdsException as ex:
-            failures.extend(
-                {
-                    "campaignId": r["campaignId"],
-                    "oldStatus": r.get("oldStatus"),
-                    "newStatus": r.get("newStatus", r.get("status")),
-                    "error": str(ex),
+            issues = _extract_google_ads_exception_issues(ex)
+            primary = issues[0] if issues else {}
+            detail_payload: list[dict] | None = None
+
+            if len(issues) > 1:
+                detail_payload = []
+                for issue in issues:
+                    detail = {
+                        "error": issue.get("message"),
+                        "errorCode": issue.get("errorCode"),
+                        "errorType": issue.get("errorType"),
+                        "errorEnum": issue.get("errorEnum"),
+                        "trigger": issue.get("trigger"),
+                        "fieldPath": issue.get("fieldPath"),
+                        "retryable": bool(issue.get("retryable")),
+                    }
+                    detail_payload.append({k: v for k, v in detail.items() if v is not None})
+
+            for row in chunk:
+                failure = {
+                    "campaignId": row["campaignId"],
+                    "oldStatus": row.get("oldStatus"),
+                    "newStatus": row.get("newStatus", row.get("status")),
+                    "error": primary.get("message", str(ex)),
                 }
-                for r in chunk
-            )
+                for key in ("errorCode", "errorType", "errorEnum", "trigger", "fieldPath"):
+                    value = primary.get(key)
+                    if value:
+                        failure[key] = value
+                if primary.get("retryable") is not None:
+                    failure["retryable"] = bool(primary.get("retryable"))
+                if detail_payload:
+                    failure["errorDetails"] = detail_payload
+                failures.append(failure)
 
     return {
         "customerId": customer_id,

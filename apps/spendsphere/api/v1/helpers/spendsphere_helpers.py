@@ -898,43 +898,73 @@ def get_google_sheet_cache_entry(
     config_hash: str | None = None,
     tenant_id: str | None = None,
 ) -> tuple[list[dict] | None, bool]:
+    def _delete_entry(root: dict[str, object]) -> None:
+        google_sheets = root.get(_GOOGLE_SHEETS_KEY)
+        if not isinstance(google_sheets, dict):
+            return
+        tenant_entry = google_sheets.get(tenant_key)
+        if not isinstance(tenant_entry, dict):
+            return
+        if sheet_key not in tenant_entry:
+            return
+        tenant_entry.pop(sheet_key, None)
+        if tenant_entry:
+            google_sheets[tenant_key] = tenant_entry
+        else:
+            google_sheets.pop(tenant_key, None)
+        root[_GOOGLE_SHEETS_KEY] = google_sheets
+        _write_cache_root(cache_store, root)
+
     tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
     cache_path = _get_cache_path(include_all=False)
     cache_store = _get_cache_store(cache_path)
 
     with cache_store.lock():
         root = _load_cache_root(cache_store)
+        google_sheets = root.get(_GOOGLE_SHEETS_KEY)
+        if not isinstance(google_sheets, dict):
+            return None, False
 
-    google_sheets = root.get(_GOOGLE_SHEETS_KEY)
-    if not isinstance(google_sheets, dict):
-        return None, False
+        tenant_entry = google_sheets.get(tenant_key)
+        if not isinstance(tenant_entry, dict):
+            return None, False
 
-    tenant_entry = google_sheets.get(tenant_key)
-    if not isinstance(tenant_entry, dict):
-        return None, False
+        entry = tenant_entry.get(sheet_key)
+        if not isinstance(entry, dict):
+            return None, False
 
-    entry = tenant_entry.get(sheet_key)
-    if not isinstance(entry, dict):
-        return None, False
+        rows = entry.get("rows")
+        if not isinstance(rows, list):
+            _delete_entry(root)
+            return None, False
 
-    rows = entry.get("rows")
-    if not isinstance(rows, list):
-        return None, False
+        entry_hash = (
+            entry.get("config_hash")
+            if isinstance(entry.get("config_hash"), str)
+            else None
+        )
+        hash_mismatch = bool(config_hash and entry_hash and entry_hash != config_hash)
+        if hash_mismatch:
+            _delete_entry(root)
+            return None, True
 
-    entry_hash = entry.get("config_hash") if isinstance(entry.get("config_hash"), str) else None
-    hash_mismatch = bool(config_hash and entry_hash and entry_hash != config_hash)
+        ttl_seconds = get_google_sheet_cache_ttl_seconds()
+        if ttl_seconds <= 0:
+            return rows, False
 
-    ttl_seconds = get_google_sheet_cache_ttl_seconds()
-    updated_at = _parse_cache_datetime(entry.get("updated_at"))
-    if ttl_seconds <= 0:
-        return rows, hash_mismatch
-    if updated_at is None:
-        return rows, True
+        updated_at = _parse_cache_datetime(entry.get("updated_at"))
+        if updated_at is None:
+            _delete_entry(root)
+            return None, True
 
-    now = datetime.now(ZoneInfo(get_timezone()))
-    age_seconds = (now - updated_at).total_seconds()
-    is_stale = age_seconds > ttl_seconds or hash_mismatch
-    return rows, is_stale
+        now = datetime.now(ZoneInfo(get_timezone()))
+        age_seconds = (now - updated_at).total_seconds()
+        is_stale = age_seconds > ttl_seconds
+        if is_stale:
+            _delete_entry(root)
+            return None, True
+
+        return rows, False
 
 
 def set_google_sheet_cache(

@@ -11,6 +11,7 @@ from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
     refresh_account_codes_cache,
     refresh_services_cache,
 )
+from shared.request_validation import allow_unknown_query_params
 
 router = APIRouter()
 
@@ -139,6 +140,7 @@ def _normalize_cache_requests(
         "warning/failure + Google Sheets + service caches for the current tenant."
     ),
 )
+@allow_unknown_query_params
 def refresh_cache_route(
     request: Request,
     caches: list[str] | None = Query(
