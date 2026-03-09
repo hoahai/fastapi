@@ -333,6 +333,91 @@ def get_nucar_recommended_budgets(
     ]
 
 
+def get_nucar_recommended_budgets_bulk(
+    account_codes: list[str],
+    service_id: str | None,
+    month: int,
+    year: int,
+) -> list[dict[str, object]]:
+    normalized_account_codes: list[str] = []
+    seen_accounts: set[str] = set()
+    for value in account_codes:
+        code = standardize_account_code(value)
+        if not code or code in seen_accounts:
+            continue
+        seen_accounts.add(code)
+        normalized_account_codes.append(code)
+    if not normalized_account_codes:
+        return []
+
+    service_ids = _resolve_requested_service_ids(service_id)
+    if not service_ids:
+        return []
+
+    service_mapping = get_service_mapping()
+    services = get_active_services_by_department(department_code="DIGM")
+    services_by_id = {
+        str(service.get("id", "")).strip(): str(service.get("name", "")).strip()
+        for service in services
+        if str(service.get("id", "")).strip()
+    }
+    service_context: list[tuple[str, str, str | None]] = []
+    for value in service_ids:
+        service_name = _resolve_service_name(
+            value,
+            service_mapping,
+            services_by_id,
+        )
+        target_column = _resolve_budget_sheet_column(
+            value,
+            service_name,
+            service_mapping,
+        )
+        service_context.append((value, service_name, target_column))
+
+    target_columns = {
+        column
+        for _, _, column in service_context
+        if isinstance(column, str) and column
+    }
+
+    rows = _get_monthly_budget_sheet_rows(month, year)
+    requested_accounts = set(normalized_account_codes)
+    amount_by_account_column: dict[str, dict[str, float]] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        normalized_row = _normalize_row_keys(row)
+        row_account_code = _extract_account_code(normalized_row)
+        if not row_account_code or row_account_code not in requested_accounts:
+            continue
+        if not target_columns:
+            continue
+
+        account_values = amount_by_account_column.setdefault(row_account_code, {})
+        for column in target_columns:
+            parsed = _to_float(normalized_row.get(column))
+            if parsed is None:
+                continue
+            account_values[column] = round(account_values.get(column, 0.0) + parsed, 2)
+
+    payload: list[dict[str, object]] = []
+    for account_code_value in normalized_account_codes:
+        account_values = amount_by_account_column.get(account_code_value, {})
+        for service_id_value, service_name, target_column in service_context:
+            has_value = bool(target_column and target_column in account_values)
+            amount = round(account_values.get(target_column, 0.0), 2) if has_value else None
+            payload.append(
+                {
+                    "accountCode": account_code_value,
+                    "serviceId": service_id_value,
+                    "serviceName": service_name,
+                    "amount": amount,
+                }
+            )
+    return payload
+
+
 def _resolve_master_budget_sheet_spreadsheet_id() -> str:
     sheets = get_spendsphere_sheets()
     budget_tool = sheets.get("budget_tool", {})

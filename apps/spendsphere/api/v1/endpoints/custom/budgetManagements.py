@@ -1,5 +1,8 @@
 from __future__ import annotations
 
+import hashlib
+import json
+import time
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Callable, Literal
 
@@ -14,6 +17,7 @@ from apps.spendsphere.api.v1.endpoints.core.periods import (
 from apps.spendsphere.api.v1.endpoints.custom.spreadsheetParser_nucar import (
     calculate_nucar_spreadsheet_budgets,
     get_nucar_recommended_budgets,
+    get_nucar_recommended_budgets_bulk,
     sync_nucar_master_budget_sheet,
 )
 from apps.spendsphere.api.v1.helpers.account_codes import standardize_account_code
@@ -45,6 +49,11 @@ from shared.utils import get_current_period
 _budget_managements_feature_dependency = require_feature("budget_managements")
 _BUDGET_OVERVIEW_CACHE_KEY_PREFIX = "budget_management_overview"
 _BUDGET_OVERVIEW_CACHE_HASH = "budget_management_overview::v14"
+_BUDGET_SPEND_CACHE_KEY_PREFIX = "budget_management_spend_by_adtype"
+_BUDGET_SPEND_CACHE_HASH = "budget_management_spend_by_adtype::v1"
+_CURRENT_PERIOD_SPEND_CACHE_TTL_SECONDS = 3600
+_SPEND_CACHE_META_KEY = "_meta"
+_SPEND_CACHE_GENERATED_AT_EPOCH_KEY = "generatedAtEpoch"
 _ADTYPE_PRIORITY_ORDER = ("SEM", "PM", "DIS", "VID", "DM")
 _ADTYPE_PRIORITY_RANK = {
     code: index for index, code in enumerate(_ADTYPE_PRIORITY_ORDER)
@@ -145,6 +154,86 @@ def _build_budget_overview_cache_key(month: int, year: int) -> str:
     return f"{_BUDGET_OVERVIEW_CACHE_KEY_PREFIX}::{year:04d}-{month:02d}"
 
 
+def _build_budget_spend_cache_key(
+    account_codes: list[str],
+    *,
+    month: int,
+    year: int,
+) -> str:
+    normalized_codes = sorted(set(normalize_account_codes(account_codes)))
+    payload = {
+        "accountCodes": normalized_codes,
+        "month": month,
+        "year": year,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
+    return f"{_BUDGET_SPEND_CACHE_KEY_PREFIX}::{year:04d}-{month:02d}::{digest}"
+
+
+def _serialize_google_spend_lookup(
+    spend_lookup: dict[tuple[str, str], Decimal],
+) -> list[dict[str, str]]:
+    rows: list[dict[str, str]] = []
+    for (account_code, ad_type_code), spent_value in sorted(
+        spend_lookup.items(),
+        key=lambda item: (item[0][0], _adtype_priority_rank(item[0][1])),
+    ):
+        rows.append(
+            {
+                "accountCode": account_code,
+                "adTypeCode": ad_type_code,
+                "spent": _format_decimal_2(spent_value),
+            }
+        )
+    return rows
+
+
+def _deserialize_google_spend_lookup(rows: list[dict]) -> dict[tuple[str, str], Decimal]:
+    lookup: dict[tuple[str, str], Decimal] = {}
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        account_code = standardize_account_code(row.get("accountCode"))
+        ad_type_code = str(row.get("adTypeCode") or "").strip().upper()
+        if not account_code or not ad_type_code:
+            continue
+        lookup[(account_code, ad_type_code)] = _to_decimal(row.get("spent"))
+    return lookup
+
+
+def _build_google_spend_cache_rows(
+    spend_lookup: dict[tuple[str, str], Decimal],
+) -> list[dict[str, object]]:
+    meta_row = {
+        _SPEND_CACHE_META_KEY: {
+            _SPEND_CACHE_GENERATED_AT_EPOCH_KEY: int(time.time()),
+        }
+    }
+    rows: list[dict[str, object]] = [meta_row]
+    rows.extend(_serialize_google_spend_lookup(spend_lookup))
+    return rows
+
+
+def _extract_google_spend_cache_generated_at_epoch(rows: list[dict]) -> int | None:
+    if not rows:
+        return None
+    first = rows[0]
+    if not isinstance(first, dict):
+        return None
+    meta = first.get(_SPEND_CACHE_META_KEY)
+    if not isinstance(meta, dict):
+        return None
+    raw_value = meta.get(_SPEND_CACHE_GENERATED_AT_EPOCH_KEY)
+    if raw_value is None:
+        return None
+    try:
+        parsed = int(raw_value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed >= 0 else None
+
+
 def invalidate_budget_management_overview_cache(month: int, year: int) -> int:
     return clear_google_sheet_cache_entries(
         sheet_keys=[_build_budget_overview_cache_key(month, year)]
@@ -223,38 +312,26 @@ def _sum_google_spend_by_account_adtype(
     *,
     month: int,
     year: int,
+    spend_lookup_context: tuple[
+        list[dict],
+        dict[tuple[str, str], str],
+        dict[tuple[str, str], str],
+    ]
+    | None = None,
 ) -> dict[tuple[str, str], Decimal]:
     if not account_codes:
         return {}
 
-    requested_codes = set(account_codes)
-    google_accounts = get_ggad_accounts(refresh_cache=False)
-    target_accounts = [
-        account
-        for account in google_accounts
-        if (standardize_account_code(account.get("accountCode")) or "") in requested_codes
-    ]
+    if spend_lookup_context is None:
+        spend_lookup_context = _build_google_spend_lookup_context(account_codes)
+
+    (
+        target_accounts,
+        campaign_adtype_by_campaign,
+        campaign_adtype_by_budget,
+    ) = spend_lookup_context
     if not target_accounts:
         return {}
-
-    campaigns = get_ggad_campaigns(target_accounts, refresh_cache=False)
-    campaign_adtype_by_campaign: dict[tuple[str, str], str] = {}
-    campaign_adtype_by_budget: dict[tuple[str, str], str] = {}
-    for campaign in campaigns:
-        customer_id = str(campaign.get("customerId") or "").strip()
-        campaign_id = str(campaign.get("campaignId") or "").strip()
-        budget_id = str(campaign.get("budgetId") or "").strip()
-        ad_type = str(campaign.get("adTypeCode") or "").strip().upper()
-        if not customer_id or not ad_type:
-            continue
-        if campaign_id:
-            campaign_adtype_by_campaign[(customer_id, campaign_id)] = ad_type
-        if budget_id:
-            key = (customer_id, budget_id)
-            campaign_adtype_by_budget[key] = _pick_preferred_adtype(
-                campaign_adtype_by_budget.get(key),
-                ad_type,
-            )
 
     spends = get_ggad_spents(
         target_accounts,
@@ -278,6 +355,93 @@ def _sum_google_spend_by_account_adtype(
     return totals
 
 
+def _sum_google_spend_by_account_adtype_cache_first(
+    account_codes: list[str],
+    *,
+    month: int,
+    year: int,
+    max_age_seconds: int | None = None,
+    spend_lookup_context: tuple[
+        list[dict],
+        dict[tuple[str, str], str],
+        dict[tuple[str, str], str],
+    ]
+    | None = None,
+) -> dict[tuple[str, str], Decimal]:
+    if not account_codes:
+        return {}
+
+    cache_key = _build_budget_spend_cache_key(
+        account_codes,
+        month=month,
+        year=year,
+    )
+    cached_payload, is_stale = get_google_sheet_cache_entry(
+        cache_key,
+        config_hash=_BUDGET_SPEND_CACHE_HASH,
+    )
+    if cached_payload is not None and not is_stale:
+        if max_age_seconds is None:
+            return _deserialize_google_spend_lookup(cached_payload)
+
+        generated_at_epoch = _extract_google_spend_cache_generated_at_epoch(cached_payload)
+        if generated_at_epoch is not None:
+            age_seconds = int(time.time()) - generated_at_epoch
+            if age_seconds <= max_age_seconds:
+                return _deserialize_google_spend_lookup(cached_payload)
+
+    spend_lookup = _sum_google_spend_by_account_adtype(
+        account_codes,
+        month=month,
+        year=year,
+        spend_lookup_context=spend_lookup_context,
+    )
+    set_google_sheet_cache(
+        cache_key,
+        _build_google_spend_cache_rows(spend_lookup),
+        config_hash=_BUDGET_SPEND_CACHE_HASH,
+    )
+    return spend_lookup
+
+
+def _build_google_spend_lookup_context(
+    account_codes: list[str],
+) -> tuple[list[dict], dict[tuple[str, str], str], dict[tuple[str, str], str]]:
+    if not account_codes:
+        return [], {}, {}
+
+    requested_codes = set(account_codes)
+    google_accounts = get_ggad_accounts(refresh_cache=False)
+    target_accounts = [
+        account
+        for account in google_accounts
+        if (standardize_account_code(account.get("accountCode")) or "") in requested_codes
+    ]
+    if not target_accounts:
+        return [], {}, {}
+
+    campaigns = get_ggad_campaigns(target_accounts, refresh_cache=False)
+    campaign_adtype_by_campaign: dict[tuple[str, str], str] = {}
+    campaign_adtype_by_budget: dict[tuple[str, str], str] = {}
+    for campaign in campaigns:
+        customer_id = str(campaign.get("customerId") or "").strip()
+        campaign_id = str(campaign.get("campaignId") or "").strip()
+        budget_id = str(campaign.get("budgetId") or "").strip()
+        ad_type = str(campaign.get("adTypeCode") or "").strip().upper()
+        if not customer_id or not ad_type:
+            continue
+        if campaign_id:
+            campaign_adtype_by_campaign[(customer_id, campaign_id)] = ad_type
+        if budget_id:
+            key = (customer_id, budget_id)
+            campaign_adtype_by_budget[key] = _pick_preferred_adtype(
+                campaign_adtype_by_budget.get(key),
+                ad_type,
+            )
+
+    return target_accounts, campaign_adtype_by_campaign, campaign_adtype_by_budget
+
+
 def _resolve_spreadsheet_parser(
     tenant_id: str | None,
 ) -> Callable[[list[str], int, int], list[dict[str, object]]] | None:
@@ -293,6 +457,16 @@ def _resolve_recommended_budget_parser(
 ) -> Callable[[str, str | None, int, int], list[dict[str, object]]] | None:
     parsers = {
         "nucar": get_nucar_recommended_budgets,
+    }
+    key = str(tenant_id or "").strip().lower()
+    return parsers.get(key)
+
+
+def _resolve_bulk_recommended_budget_parser(
+    tenant_id: str | None,
+) -> Callable[[list[str], str | None, int, int], list[dict[str, object]]] | None:
+    parsers = {
+        "nucar": get_nucar_recommended_budgets_bulk,
     }
     key = str(tenant_id or "").strip().lower()
     return parsers.get(key)
@@ -319,8 +493,22 @@ def _get_recommended_budget_payload(
         return []
 
     parser = _resolve_recommended_budget_parser(get_tenant_id())
-    if parser is None:
+    bulk_parser = _resolve_bulk_recommended_budget_parser(get_tenant_id())
+    if bulk_parser is None and parser is None:
         return []
+
+    if bulk_parser is not None:
+        try:
+            payload = bulk_parser(account_codes, service_id, month, year)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        payload.sort(
+            key=lambda item: (
+                str(item.get("accountCode") or "").casefold(),
+                str(item.get("serviceId") or "").casefold(),
+            )
+        )
+        return payload
 
     payload: list[dict[str, object]] = []
     for code in account_codes:
@@ -816,15 +1004,37 @@ def get_budget_management_db_rows(
         previous_month_budgets,
         service_mapping=service_mapping,
     )
-    current_period_spend_lookup = _sum_google_spend_by_account_adtype(
+    spend_lookup_context = _build_google_spend_lookup_context(active_account_codes)
+    current_period = get_current_period()
+    is_requested_period_current = (
+        period_month == current_period["month"]
+        and period_year == current_period["year"]
+    )
+    current_period_spend_lookup = _sum_google_spend_by_account_adtype_cache_first(
         active_account_codes,
         month=period_month,
         year=period_year,
+        max_age_seconds=(
+            _CURRENT_PERIOD_SPEND_CACHE_TTL_SECONDS
+            if is_requested_period_current
+            else None
+        ),
+        spend_lookup_context=spend_lookup_context,
     )
-    previous_month_spend_lookup = _sum_google_spend_by_account_adtype(
+    is_previous_period_current = (
+        previous_month == current_period["month"]
+        and previous_year == current_period["year"]
+    )
+    previous_month_spend_lookup = _sum_google_spend_by_account_adtype_cache_first(
         active_account_codes,
         month=previous_month,
         year=previous_year,
+        max_age_seconds=(
+            _CURRENT_PERIOD_SPEND_CACHE_TTL_SECONDS
+            if is_previous_period_current
+            else None
+        ),
+        spend_lookup_context=spend_lookup_context,
     )
 
     payload_rows: list[dict[str, object]] = []
