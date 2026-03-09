@@ -208,6 +208,34 @@ def soft_delete_masterbudget(
     )
 
 
+def hard_delete_masterbudget(
+    *,
+    budget_id: str,
+    account_code: str,
+    month: int,
+    year: int,
+) -> int:
+    """
+    Hard delete budget row for the target period.
+    """
+    tables = get_db_tables()
+    budgets_table = tables["BUDGETS"]
+
+    query = (
+        f"DELETE FROM {budgets_table} "
+        "WHERE id = %s AND accountCode = %s AND month = %s AND year = %s"
+    )
+    return execute_write(
+        query,
+        (
+            budget_id,
+            account_code,
+            month,
+            year,
+        ),
+    )
+
+
 def duplicate_masterbudgets(
     *,
     from_month: int,

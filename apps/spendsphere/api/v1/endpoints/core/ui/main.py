@@ -14,6 +14,7 @@ from apps.spendsphere.api.v1.endpoints.core.periods import (
 )
 from apps.spendsphere.api.v1.endpoints.custom.budgetManagements import (
     ensure_budget_managements_access,
+    invalidate_budget_management_overview_cache,
 )
 from apps.spendsphere.api.v1.helpers.account_codes import standardize_account_code
 from apps.spendsphere.api.v1.helpers.config import (
@@ -368,6 +369,239 @@ def _to_decimal(value: object, *, fallback: Decimal = Decimal("0")) -> Decimal:
     except (InvalidOperation, TypeError, ValueError):
         return fallback
     return -parsed if is_negative else parsed
+
+
+def _resolve_service_ad_type_code(
+    service_mapping: dict,
+    service_id: str | None,
+) -> str | None:
+    service_key = str(service_id or "").strip()
+    if not service_key:
+        return None
+    for key in (service_key, service_key.upper(), service_key.lower()):
+        mapping = service_mapping.get(key) if isinstance(service_mapping, dict) else None
+        if not isinstance(mapping, dict):
+            continue
+        ad_type_code = str(mapping.get("adTypeCode") or "").strip().upper()
+        if ad_type_code:
+            return ad_type_code
+    return None
+
+
+def _validate_ui_update_budget_spend_rules(
+    *,
+    account_code: str,
+    month: int,
+    year: int,
+    allocation_rows: list[dict],
+    master_budget_rows: list[dict],
+    rollbreak_rows: list[dict],
+) -> list[dict[str, object]]:
+    if not (allocation_rows or master_budget_rows or rollbreak_rows):
+        return []
+
+    period_date = _resolve_period_date(month, year)
+    ui_context = _get_ui_context_with_mutations(
+        account_code,
+        month,
+        year,
+        period_date=period_date,
+        return_new_data=False,
+        allow_mutations=False,
+        refresh_budgets=False,
+        api_name_prefix="spendsphere_v1_ui_update_validation",
+    )
+
+    service_mapping = get_service_mapping()
+
+    net_by_ad_type: dict[str, Decimal] = {}
+    existing_master_by_id: dict[str, dict] = {}
+    for row in ui_context["masterBudgets"]:
+        row_id = _normalize_optional_str(row.get("id"))
+        if row_id:
+            existing_master_by_id[row_id] = row
+        ad_type_code = _resolve_service_ad_type_code(
+            service_mapping,
+            row.get("serviceId"),
+        )
+        if not ad_type_code:
+            continue
+        net_by_ad_type[ad_type_code] = net_by_ad_type.get(
+            ad_type_code, Decimal("0")
+        ) + _to_decimal(row.get("netAmount"))
+
+    roll_by_ad_type: dict[str, Decimal] = {}
+    existing_rollbreak_by_id: dict[str, dict] = {}
+    for row in ui_context["rollbreakdowns"]:
+        row_id = _normalize_optional_str(row.get("id"))
+        if row_id:
+            existing_rollbreak_by_id[row_id] = row
+        ad_type_code = str(row.get("adTypeCode") or "").strip().upper()
+        if not ad_type_code:
+            continue
+        roll_by_ad_type[ad_type_code] = _to_decimal(row.get("amount"))
+
+    allocation_by_budget: dict[str, Decimal] = {}
+    allocation_id_to_budget: dict[str, str] = {}
+    for row in ui_context["allocations"]:
+        budget_id = str(row.get("ggBudgetId") or "").strip()
+        if not budget_id:
+            continue
+        allocation_by_budget[budget_id] = _to_decimal(row.get("allocation"))
+        row_id = _normalize_optional_str(row.get("id"))
+        if row_id:
+            allocation_id_to_budget[row_id] = budget_id
+
+    budget_rows: dict[str, dict[str, object]] = {}
+    for row in ui_context["rows"]:
+        budget_id = str(row.get("budgetId") or "").strip()
+        ad_type_code = str(row.get("adTypeCode") or "").strip().upper()
+        if not budget_id or not ad_type_code:
+            continue
+        budget_rows[budget_id] = {
+            "adTypeCode": ad_type_code,
+            "spent": _to_decimal(row.get("totalCost")),
+        }
+
+    impacted_budget_ids: set[str] = set()
+    impacted_ad_types: set[str] = set()
+
+    for row in master_budget_rows:
+        row_id = _normalize_optional_str(row.get("id"))
+        service_id = _normalize_optional_str(row.get("serviceId"))
+        amount_value = row.get("grossAmount")
+
+        if row_id:
+            existing = existing_master_by_id.get(row_id)
+            if not existing:
+                continue
+            current_service = str(existing.get("serviceId") or "").strip()
+            current_ad_type = _resolve_service_ad_type_code(
+                service_mapping,
+                current_service,
+            )
+            current_amount = _to_decimal(existing.get("netAmount"))
+            target_service = service_id or current_service
+            target_ad_type = _resolve_service_ad_type_code(
+                service_mapping,
+                target_service,
+            )
+            target_amount = (
+                current_amount
+                if amount_value is None
+                else _to_decimal(amount_value)
+            )
+
+            if current_ad_type:
+                net_by_ad_type[current_ad_type] = (
+                    net_by_ad_type.get(current_ad_type, Decimal("0")) - current_amount
+                )
+                impacted_ad_types.add(current_ad_type)
+            if target_ad_type:
+                net_by_ad_type[target_ad_type] = (
+                    net_by_ad_type.get(target_ad_type, Decimal("0")) + target_amount
+                )
+                impacted_ad_types.add(target_ad_type)
+            continue
+
+        if not service_id or amount_value is None:
+            continue
+        target_ad_type = _resolve_service_ad_type_code(service_mapping, service_id)
+        if not target_ad_type:
+            continue
+        net_by_ad_type[target_ad_type] = (
+            net_by_ad_type.get(target_ad_type, Decimal("0"))
+            + _to_decimal(amount_value)
+        )
+        impacted_ad_types.add(target_ad_type)
+
+    for row in rollbreak_rows:
+        row_id = _normalize_optional_str(row.get("id"))
+        target_ad_type = str(row.get("adTypeCode") or "").strip().upper()
+        target_amount = _to_decimal(row.get("amount"))
+
+        if row_id:
+            existing = existing_rollbreak_by_id.get(row_id)
+            if not existing:
+                continue
+            current_ad_type = str(existing.get("adTypeCode") or "").strip().upper()
+            current_amount = _to_decimal(existing.get("amount"))
+            final_ad_type = target_ad_type or current_ad_type
+
+            if current_ad_type:
+                roll_by_ad_type[current_ad_type] = (
+                    roll_by_ad_type.get(current_ad_type, Decimal("0")) - current_amount
+                )
+                impacted_ad_types.add(current_ad_type)
+            if final_ad_type:
+                roll_by_ad_type[final_ad_type] = (
+                    roll_by_ad_type.get(final_ad_type, Decimal("0")) + target_amount
+                )
+                impacted_ad_types.add(final_ad_type)
+            continue
+
+        if not target_ad_type:
+            continue
+        roll_by_ad_type[target_ad_type] = target_amount
+        impacted_ad_types.add(target_ad_type)
+
+    for row in allocation_rows:
+        budget_id = _normalize_optional_str(row.get("ggBudgetId"))
+        row_id = _normalize_optional_str(row.get("id"))
+        if not budget_id and row_id:
+            budget_id = allocation_id_to_budget.get(row_id)
+        if not budget_id:
+            continue
+        allocation_by_budget[budget_id] = _to_decimal(row.get("allocation"))
+        impacted_budget_ids.add(budget_id)
+
+    if impacted_ad_types:
+        impacted_budget_ids.update(
+            budget_id
+            for budget_id, data in budget_rows.items()
+            if str(data.get("adTypeCode") or "").strip().upper() in impacted_ad_types
+        )
+
+    errors: list[dict[str, object]] = []
+    for budget_id in sorted(impacted_budget_ids):
+        data = budget_rows.get(budget_id)
+        if not isinstance(data, dict):
+            continue
+        ad_type_code = str(data.get("adTypeCode") or "").strip().upper()
+        if not ad_type_code:
+            continue
+        spent = _to_decimal(data.get("spent"))
+        if spent <= 0:
+            continue
+        allocation = allocation_by_budget.get(budget_id)
+        if allocation is None:
+            continue
+
+        allocated_before_accel = (
+            (
+                net_by_ad_type.get(ad_type_code, Decimal("0"))
+                + roll_by_ad_type.get(ad_type_code, Decimal("0"))
+            )
+            * (allocation / Decimal("100"))
+        )
+        if allocated_before_accel < spent:
+            errors.append(
+                {
+                    "field": "updatedAllocations",
+                    "budgetId": budget_id,
+                    "adTypeCode": ad_type_code,
+                    "allocatedBudgetBeforeAcceleration": float(
+                        allocated_before_accel.quantize(Decimal("0.01"))
+                    ),
+                    "spent": float(spent.quantize(Decimal("0.01"))),
+                    "message": (
+                        "Update is not allowed because allocated budget before "
+                        "acceleration is lower than spent"
+                    ),
+                }
+            )
+
+    return errors
 
 
 def _get_accelerations_for_period(
@@ -1828,6 +2062,20 @@ def update_ui_allocations_rollbreaks(
             detail=_build_validation_error_detail(errors),
         )
 
+    spend_guard_errors = _validate_ui_update_budget_spend_rules(
+        account_code=account_code,
+        month=month_value,
+        year=year_value,
+        allocation_rows=allocation_rows,
+        master_budget_rows=master_budget_rows,
+        rollbreak_rows=rollbreak_rows,
+    )
+    if spend_guard_errors:
+        raise HTTPException(
+            status_code=400,
+            detail=_build_validation_error_detail(spend_guard_errors),
+        )
+
     allocations_result = upsert_allocations(
         allocation_rows,
         month=month_value,
@@ -1838,6 +2086,8 @@ def update_ui_allocations_rollbreaks(
         month=month_value,
         year=year_value,
     )
+    if master_budget_rows:
+        invalidate_budget_management_overview_cache(month_value, year_value)
     rollbreaks_result = upsert_rollbreakdowns(
         rollbreak_rows,
         month=month_value,

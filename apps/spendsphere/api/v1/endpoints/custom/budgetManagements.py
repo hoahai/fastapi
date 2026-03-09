@@ -21,6 +21,7 @@ from apps.spendsphere.api.v1.helpers.config import get_service_mapping
 from apps.spendsphere.api.v1.helpers.db_queries import (
     duplicate_masterbudgets,
     get_masterbudgets,
+    hard_delete_masterbudget,
     soft_delete_masterbudget,
     upsert_masterbudgets,
 )
@@ -30,6 +31,7 @@ from apps.spendsphere.api.v1.helpers.ggAd import (
     get_ggad_spents,
 )
 from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
+    clear_google_sheet_cache_entries,
     get_google_sheet_cache_entry,
     get_services_cache_entry,
     normalize_account_codes,
@@ -141,6 +143,37 @@ def _to_decimal(value: object, *, fallback: Decimal = Decimal("0")) -> Decimal:
 
 def _build_budget_overview_cache_key(month: int, year: int) -> str:
     return f"{_BUDGET_OVERVIEW_CACHE_KEY_PREFIX}::{year:04d}-{month:02d}"
+
+
+def invalidate_budget_management_overview_cache(month: int, year: int) -> int:
+    return clear_google_sheet_cache_entries(
+        sheet_keys=[_build_budget_overview_cache_key(month, year)]
+    )
+
+
+def refresh_budget_management_overview_cache(
+    *,
+    month: int | None = None,
+    year: int | None = None,
+) -> dict[str, object]:
+    period_month, period_year = _resolve_period(month, year)
+    invalidate_budget_management_overview_cache(period_month, period_year)
+    payload = get_budget_management_db_rows(
+        account_codes=None,
+        month=period_month,
+        year=period_year,
+    )
+    table_data = payload.get("tableData")
+    spent_data = payload.get("spentData")
+    recommended_data = payload.get("recommended")
+    return {
+        "period": {"month": period_month, "year": period_year},
+        "tableData": len(table_data) if isinstance(table_data, list) else 0,
+        "spentData": len(spent_data) if isinstance(spent_data, list) else 0,
+        "recommended": (
+            len(recommended_data) if isinstance(recommended_data, list) else 0
+        ),
+    }
 
 
 def _format_decimal_2(value: object) -> str:
@@ -305,6 +338,198 @@ def _get_recommended_budget_payload(
     return payload
 
 
+def _resolve_service_ad_type_code(
+    service_mapping: dict,
+    service_id: str | None,
+) -> str | None:
+    service_key = str(service_id or "").strip()
+    if not service_key:
+        return None
+    mapping = _get_service_mapping_entry(service_mapping, service_key)
+    ad_type_code = str(mapping.get("adTypeCode") or "").strip().upper()
+    return ad_type_code or None
+
+
+def _validate_budget_change_spend_rules(
+    *,
+    changes: list[BudgetManagementChangeItem],
+    existing_rows: list[dict],
+    existing_by_id: dict[str, dict],
+    month: int,
+    year: int,
+) -> list[dict[str, object]]:
+    if not changes:
+        return []
+
+    service_mapping = get_service_mapping()
+    projected_totals = _sum_db_budget_by_account_adtype(
+        existing_rows,
+        service_mapping=service_mapping,
+    )
+
+    account_codes = {
+        standardize_account_code(row.get("accountCode")) or ""
+        for row in existing_rows
+        if isinstance(row, dict) and standardize_account_code(row.get("accountCode"))
+    }
+    for change in changes:
+        explicit_account_code = (
+            standardize_account_code(change.accountCode)
+            if change.accountCode is not None
+            else None
+        )
+        if explicit_account_code:
+            account_codes.add(explicit_account_code)
+
+    spend_lookup = _sum_google_spend_by_account_adtype(
+        sorted(account_codes),
+        month=month,
+        year=year,
+    )
+
+    validation_errors: list[dict[str, object]] = []
+
+    for index, change in enumerate(changes):
+        op = str(change.op).strip().lower()
+        budget_id = str(change.id or "").strip()
+        existing_row = existing_by_id.get(budget_id) if budget_id else None
+
+        explicit_account_code = (
+            standardize_account_code(change.accountCode)
+            if change.accountCode is not None
+            else None
+        )
+        explicit_service_id = (
+            str(change.serviceId).strip()
+            if change.serviceId is not None
+            else None
+        )
+
+        if op == "create":
+            account_code = explicit_account_code
+            service_id = explicit_service_id
+            ad_type_code = _resolve_service_ad_type_code(service_mapping, service_id)
+            if not account_code or not ad_type_code:
+                continue
+            amount_value = (
+                _to_decimal(change.amount)
+                if change.amount is not None
+                else Decimal("0")
+            )
+            key = (account_code, ad_type_code)
+            projected_totals[key] = projected_totals.get(key, Decimal("0")) + amount_value
+            spent = spend_lookup.get(key, Decimal("0"))
+            if projected_totals[key] < spent:
+                validation_errors.append(
+                    {
+                        "index": index,
+                        "field": f"changes[{index}].amount",
+                        "accountCode": account_code,
+                        "adTypeCode": ad_type_code,
+                        "newAmount": float(amount_value),
+                        "projectedTotalBudget": float(projected_totals[key]),
+                        "spent": float(spent),
+                        "message": (
+                            "Create is not allowed because projected budget is "
+                            "lower than Google spend"
+                        ),
+                    }
+                )
+            continue
+
+        if not existing_row:
+            continue
+
+        current_account_code = (
+            standardize_account_code(existing_row.get("accountCode")) or ""
+        )
+        current_service_id = str(existing_row.get("serviceId") or "").strip()
+        current_ad_type = _resolve_service_ad_type_code(service_mapping, current_service_id)
+        current_amount = _to_decimal(existing_row.get("netAmount"))
+
+        if op == "delete":
+            if not current_account_code or not current_ad_type:
+                continue
+            key = (current_account_code, current_ad_type)
+            spent = spend_lookup.get(key, Decimal("0"))
+            if spent > 0:
+                validation_errors.append(
+                    {
+                        "index": index,
+                        "field": f"changes[{index}]",
+                        "budgetId": budget_id,
+                        "accountCode": current_account_code,
+                        "adTypeCode": current_ad_type,
+                        "spent": float(spent),
+                        "message": (
+                            "Delete is not allowed because this account/adType has "
+                            "Google spend in the target period"
+                        ),
+                    }
+                )
+                continue
+            projected_totals[key] = projected_totals.get(key, Decimal("0")) - current_amount
+            continue
+
+        if op != "update":
+            continue
+
+        target_account_code = explicit_account_code or current_account_code
+        target_service_id = explicit_service_id or current_service_id
+        target_ad_type = _resolve_service_ad_type_code(service_mapping, target_service_id)
+        target_amount = (
+            current_amount
+            if change.amount is None
+            else _to_decimal(change.amount)
+        )
+
+        candidate_totals = dict(projected_totals)
+        if current_account_code and current_ad_type:
+            current_key = (current_account_code, current_ad_type)
+            candidate_totals[current_key] = (
+                candidate_totals.get(current_key, Decimal("0")) - current_amount
+            )
+        if target_account_code and target_ad_type:
+            target_key = (target_account_code, target_ad_type)
+            candidate_totals[target_key] = (
+                candidate_totals.get(target_key, Decimal("0")) + target_amount
+            )
+
+            impacted_keys: list[tuple[str, str]] = []
+            if current_account_code and current_ad_type:
+                impacted_keys.append((current_account_code, current_ad_type))
+            impacted_keys.append(target_key)
+            violation = False
+            for impacted_key in impacted_keys:
+                spent = spend_lookup.get(impacted_key, Decimal("0"))
+                if candidate_totals.get(impacted_key, Decimal("0")) < spent:
+                    validation_errors.append(
+                        {
+                            "index": index,
+                            "field": f"changes[{index}].amount",
+                            "budgetId": budget_id,
+                            "accountCode": impacted_key[0],
+                            "adTypeCode": impacted_key[1],
+                            "newAmount": float(target_amount),
+                            "projectedTotalBudget": float(
+                                candidate_totals.get(impacted_key, Decimal("0"))
+                            ),
+                            "spent": float(spent),
+                            "message": (
+                                "Update is not allowed because projected budget is "
+                                "lower than Google spend"
+                            ),
+                        }
+                    )
+                    violation = True
+            if violation:
+                continue
+
+        projected_totals = candidate_totals
+
+    return validation_errors
+
+
 def ensure_budget_managements_access() -> None:
     _budget_managements_feature_dependency()
 
@@ -331,6 +556,40 @@ def _filter_and_sort_services(rows: list[dict]) -> list[dict]:
         )
     )
     return filtered
+
+
+def _raise_budget_change_spend_rule_errors(
+    *,
+    changes: list[BudgetManagementChangeItem],
+    month: int,
+    year: int,
+) -> None:
+    existing_rows = get_masterbudgets(None, month, year)
+    existing_by_id: dict[str, dict] = {}
+    for row in existing_rows:
+        row_id = str(row.get("id") or "").strip()
+        if row_id:
+            existing_by_id[row_id] = row
+
+    spend_validation_errors = _validate_budget_change_spend_rules(
+        changes=changes,
+        existing_rows=existing_rows,
+        existing_by_id=existing_by_id,
+        month=month,
+        year=year,
+    )
+    if spend_validation_errors:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Invalid payload",
+                "message": (
+                    "Budget update/create/delete is not allowed when it conflicts "
+                    "with Google spend rules"
+                ),
+                "items": spend_validation_errors,
+            },
+        )
 
 
 def get_budget_management_selections_data(
@@ -851,7 +1110,21 @@ def create_budget_managements(payload: BudgetManagementUpsertRequest):
         rows.append(item.model_dump())
 
     validate_account_codes(account_codes, month=month, year=year)
+    _raise_budget_change_spend_rule_errors(
+        changes=[
+            BudgetManagementChangeItem(
+                op="create",
+                accountCode=str(row.get("accountCode") or ""),
+                serviceId=str(row.get("serviceId") or ""),
+                amount=float(_to_decimal(row.get("netAmount"))),
+            )
+            for row in rows
+        ],
+        month=month,
+        year=year,
+    )
     result = upsert_masterbudgets(rows, month=month, year=year)
+    invalidate_budget_management_overview_cache(month, year)
     return {"period": {"month": month, "year": year}, **result}
 
 
@@ -896,7 +1169,22 @@ def update_budget_managements(payload: BudgetManagementUpsertRequest):
         rows.append(item.model_dump())
 
     validate_account_codes(account_codes, month=month, year=year)
+    _raise_budget_change_spend_rule_errors(
+        changes=[
+            BudgetManagementChangeItem(
+                op="update",
+                id=str(row.get("id") or ""),
+                accountCode=str(row.get("accountCode") or ""),
+                serviceId=str(row.get("serviceId") or ""),
+                amount=float(_to_decimal(row.get("netAmount"))),
+            )
+            for row in rows
+        ],
+        month=month,
+        year=year,
+    )
     result = upsert_masterbudgets(rows, month=month, year=year)
+    invalidate_budget_management_overview_cache(month, year)
     return {"period": {"month": month, "year": year}, **result}
 
 
@@ -932,6 +1220,8 @@ def soft_delete_budget_management(
     )
     if affected <= 0:
         raise HTTPException(status_code=404, detail="Budget not found")
+
+    invalidate_budget_management_overview_cache(period_month, period_year)
 
     return {
         "budgetId": budget_id,
@@ -1088,6 +1378,26 @@ def apply_budget_management_changes(
             year=year,
         )
 
+    spend_validation_errors = _validate_budget_change_spend_rules(
+        changes=payload.changes,
+        existing_rows=existing_rows,
+        existing_by_id=existing_by_id,
+        month=month,
+        year=year,
+    )
+    if spend_validation_errors:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "error": "Invalid payload",
+                "message": (
+                    "Budget update/create/delete is not allowed when it conflicts with "
+                    "Google spend rules"
+                ),
+                "items": spend_validation_errors,
+            },
+        )
+
     updated = 0
     inserted = 0
     if upsert_rows:
@@ -1101,13 +1411,16 @@ def apply_budget_management_changes(
 
     deleted = 0
     for budget_id, account_code in delete_rows:
-        affected = soft_delete_masterbudget(
+        affected = hard_delete_masterbudget(
             budget_id=budget_id,
             account_code=account_code,
             month=month,
             year=year,
         )
         deleted += max(int(affected or 0), 0)
+
+    if upsert_rows or delete_rows:
+        invalidate_budget_management_overview_cache(month, year)
 
     return {
         "period": {"month": month, "year": year},
@@ -1148,5 +1461,6 @@ def duplicate_budget_managements(payload: BudgetManagementDuplicateRequest):
         account_codes=normalized_codes,
         overwrite=overwrite,
     )
+    invalidate_budget_management_overview_cache(payload.toMonth, payload.toYear)
 
     return {"inserted": inserted}

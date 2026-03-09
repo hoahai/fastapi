@@ -996,6 +996,66 @@ def set_google_sheet_cache(
         _write_cache_root(cache_store, root)
 
 
+def clear_google_sheet_cache_entries(
+    *,
+    sheet_keys: list[str] | None = None,
+    key_prefixes: list[str] | None = None,
+    tenant_id: str | None = None,
+) -> int:
+    normalized_keys = {
+        str(value).strip()
+        for value in (sheet_keys or [])
+        if str(value).strip()
+    }
+    normalized_prefixes = tuple(
+        str(value).strip()
+        for value in (key_prefixes or [])
+        if str(value).strip()
+    )
+
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+        google_sheets = root.get(_GOOGLE_SHEETS_KEY)
+        if not isinstance(google_sheets, dict):
+            return 0
+
+        tenant_entry = google_sheets.get(tenant_key)
+        if not isinstance(tenant_entry, dict):
+            return 0
+
+        keys_to_remove: list[str]
+        if not normalized_keys and not normalized_prefixes:
+            keys_to_remove = list(tenant_entry.keys())
+        else:
+            keys_to_remove = []
+            for key in list(tenant_entry.keys()):
+                if key in normalized_keys:
+                    keys_to_remove.append(key)
+                    continue
+                if normalized_prefixes and any(
+                    key.startswith(prefix) for prefix in normalized_prefixes
+                ):
+                    keys_to_remove.append(key)
+
+        if not keys_to_remove:
+            return 0
+
+        for key in keys_to_remove:
+            tenant_entry.pop(key, None)
+
+        if tenant_entry:
+            google_sheets[tenant_key] = tenant_entry
+        else:
+            google_sheets.pop(tenant_key, None)
+        root[_GOOGLE_SHEETS_KEY] = google_sheets
+        _write_cache_root(cache_store, root)
+        return len(keys_to_remove)
+
+
 def get_services_cache_entry(
     *,
     tenant_id: str | None = None,

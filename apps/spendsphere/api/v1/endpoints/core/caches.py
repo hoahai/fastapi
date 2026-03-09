@@ -1,5 +1,8 @@
 from fastapi import APIRouter, HTTPException, Query, Request
 
+from apps.spendsphere.api.v1.endpoints.custom.budgetManagements import (
+    refresh_budget_management_overview_cache,
+)
 from apps.spendsphere.api.v1.helpers.ggAd import (
     get_ggad_accounts,
     get_ggad_budgets,
@@ -38,6 +41,10 @@ _CACHE_ALIASES = {
     "googleadsissues": "google_ads_warnings",
     "google_sheets": "google_sheets",
     "googlesheets": "google_sheets",
+    "budget_management_overview": "budget_management_overview",
+    "budget_management": "budget_management_overview",
+    "budget_managements": "budget_management_overview",
+    "budgetmanagementoverview": "budget_management_overview",
     "service": "services",
     "services": "services",
 }
@@ -49,6 +56,7 @@ _DEFAULT_CACHES = [
     "google_ads_campaigns",
     "google_ads_warnings",
     "google_sheets",
+    "budget_management_overview",
     "services",
 ]
 
@@ -137,7 +145,8 @@ def _normalize_cache_requests(
     summary="Refresh SpendSphere caches",
     description=(
         "Refreshes account code, Google Ads clients, budgets, campaigns, and "
-        "warning/failure + Google Sheets + service caches for the current tenant."
+        "warning/failure + Google Sheets + budget-management overview + "
+        "service caches for the current tenant."
     ),
 )
 @allow_unknown_query_params
@@ -149,7 +158,7 @@ def refresh_cache_route(
             "Optional cache list (legacy). Valid values: account_codes, "
             "google_ads_clients, google_ads_budgets, google_ads_campaigns, "
             "google_ads_warnings (or google_ads_failures / google_ads_issues), "
-            "google_sheets, services. Can be repeated or "
+            "google_sheets, budget_management_overview, services. Can be repeated or "
             "comma-separated. Prefer using query flags such as "
             "?account_codes&google_ads_clients=false."
         ),
@@ -176,6 +185,7 @@ def refresh_cache_route(
         google_ads_campaigns
         google_ads_warnings (also clears deduped failures)
         google_sheets
+        budget_management_overview
         services
 
     Example response:
@@ -191,6 +201,12 @@ def refresh_cache_route(
           "googleSheets": {
             "rollovers": 120,
             "activePeriod": 55
+          },
+          "budgetManagementOverview": {
+            "period": {"month": 3, "year": 2026},
+            "tableData": 120,
+            "spentData": 20,
+            "recommended": 85
           },
           "services": 6
         }
@@ -235,6 +251,11 @@ def refresh_cache_route(
             "rollovers": len(rollovers),
             "activePeriod": len(active_period),
         }
+
+    if "budget_management_overview" in requested:
+        response["budgetManagementOverview"] = (
+            refresh_budget_management_overview_cache()
+        )
 
     if "services" in requested:
         services = refresh_services_cache(department_code="DIGM")
