@@ -42,7 +42,7 @@ from shared.utils import get_current_period
 
 _budget_managements_feature_dependency = require_feature("budget_managements")
 _BUDGET_OVERVIEW_CACHE_KEY_PREFIX = "budget_management_overview"
-_BUDGET_OVERVIEW_CACHE_HASH = "budget_management_overview::v13"
+_BUDGET_OVERVIEW_CACHE_HASH = "budget_management_overview::v14"
 _ADTYPE_PRIORITY_ORDER = ("SEM", "PM", "DIS", "VID", "DM")
 _ADTYPE_PRIORITY_RANK = {
     code: index for index, code in enumerate(_ADTYPE_PRIORITY_ORDER)
@@ -275,6 +275,36 @@ def _resolve_master_budget_sheet_syncer(
     return parsers.get(key)
 
 
+def _get_recommended_budget_payload(
+    account_codes: list[str],
+    *,
+    month: int,
+    year: int,
+    service_id: str | None = None,
+) -> list[dict[str, object]]:
+    if not account_codes:
+        return []
+
+    parser = _resolve_recommended_budget_parser(get_tenant_id())
+    if parser is None:
+        return []
+
+    payload: list[dict[str, object]] = []
+    for code in account_codes:
+        try:
+            payload.extend(parser(code, service_id, month, year))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    payload.sort(
+        key=lambda item: (
+            str(item.get("accountCode") or "").casefold(),
+            str(item.get("serviceId") or "").casefold(),
+        )
+    )
+    return payload
+
+
 def ensure_budget_managements_access() -> None:
     _budget_managements_feature_dependency()
 
@@ -404,71 +434,87 @@ def get_budget_managements(
 
 
 def get_budget_management_db_rows(
+    account_codes: list[str] | None = None,
     month: int | None = None,
     year: int | None = None,
 ):
     """
-    Get DB budget rows for all active accounts in a period.
+    Get DB budget rows in a period.
+
+    - When account_codes is empty/None, returns all active accounts.
+    - When account_codes is provided, returns only those validated active accounts.
 
     Response includes:
     - tableData: account/service budget rows with previousMonthUnderspent
     - spentData: current-period Google spend rows with accountCode/adTypeCode/spent
+    - recommended: tenant recommended budget rows for the same account scope/period
     `previousMonthUnderspent` calculated as:
     previous-month DB budget minus previous-month Google spend, grouped by
     (accountCode, adType).
     Rows are sorted by accountCode, then adType priority:
     SEM > PM > DIS > VID > DM.
     """
+    normalized_codes = normalize_account_codes(account_codes)
     period_month, period_year = _resolve_period(month, year)
     previous_month, previous_year = _resolve_previous_period(period_month, period_year)
     cache_key = _build_budget_overview_cache_key(period_month, period_year)
+    use_cache = not normalized_codes
 
-    cached_payload, is_stale = get_google_sheet_cache_entry(
-        cache_key,
-        config_hash=_BUDGET_OVERVIEW_CACHE_HASH,
-    )
-    if cached_payload is not None and not is_stale:
-        table_data: list[dict[str, object]] = []
-        spent_data: list[dict[str, object]] = []
-        if isinstance(cached_payload, list) and cached_payload:
-            first_item = cached_payload[0]
-            if (
-                len(cached_payload) == 1
-                and isinstance(first_item, dict)
-                and (
-                    "tableData" in first_item
-                    or "spentData" in first_item
-                )
-            ):
-                cached_table_data = first_item.get("tableData")
-                cached_spent_data = first_item.get("spentData")
+    if use_cache:
+        cached_payload, is_stale = get_google_sheet_cache_entry(
+            cache_key,
+            config_hash=_BUDGET_OVERVIEW_CACHE_HASH,
+        )
+        if cached_payload is not None and not is_stale:
+            table_data: list[dict[str, object]] = []
+            spent_data: list[dict[str, object]] = []
+            recommended_data: list[dict[str, object]] = []
+            if isinstance(cached_payload, list) and cached_payload:
+                first_item = cached_payload[0]
+                if (
+                    len(cached_payload) == 1
+                    and isinstance(first_item, dict)
+                    and (
+                        "tableData" in first_item
+                        or "spentData" in first_item
+                    )
+                ):
+                    cached_table_data = first_item.get("tableData")
+                    cached_spent_data = first_item.get("spentData")
+                    cached_recommended_data = first_item.get("recommended")
+                    if isinstance(cached_table_data, list):
+                        table_data = cached_table_data
+                    if isinstance(cached_spent_data, list):
+                        spent_data = cached_spent_data
+                    if isinstance(cached_recommended_data, list):
+                        recommended_data = cached_recommended_data
+                else:
+                    table_data = cached_payload
+            elif isinstance(cached_payload, dict):
+                cached_table_data = cached_payload.get("tableData")
+                cached_spent_data = cached_payload.get("spentData")
+                cached_recommended_data = cached_payload.get("recommended")
                 if isinstance(cached_table_data, list):
                     table_data = cached_table_data
                 if isinstance(cached_spent_data, list):
                     spent_data = cached_spent_data
-            else:
-                table_data = cached_payload
-        elif isinstance(cached_payload, dict):
-            cached_table_data = cached_payload.get("tableData")
-            cached_spent_data = cached_payload.get("spentData")
-            if isinstance(cached_table_data, list):
-                table_data = cached_table_data
-            if isinstance(cached_spent_data, list):
-                spent_data = cached_spent_data
-        return {
-            "period": {"month": period_month, "year": period_year},
-            "previousPeriod": {"month": previous_month, "year": previous_year},
-            "tableData": table_data,
-            "spentData": spent_data,
-        }
+                if isinstance(cached_recommended_data, list):
+                    recommended_data = cached_recommended_data
+            return {
+                "period": {"month": period_month, "year": period_year},
+                "previousPeriod": {"month": previous_month, "year": previous_year},
+                "tableData": table_data,
+                "spentData": spent_data,
+                "recommended": recommended_data,
+            }
 
     accounts = validate_account_codes(
-        None,
+        normalized_codes or None,
         month=period_month,
         year=period_year,
     )
     account_name_by_code: dict[str, str] = {}
-    account_codes: list[str] = []
+    active_account_codes: list[str] = []
     for account in accounts:
         account_code = standardize_account_code(
             account.get("accountCode") or account.get("code")
@@ -476,7 +522,7 @@ def get_budget_management_db_rows(
         if not account_code:
             continue
         if account_code not in account_name_by_code:
-            account_codes.append(account_code)
+            active_account_codes.append(account_code)
         account_name = str(
             account.get("accountName")
             or account.get("name")
@@ -485,22 +531,24 @@ def get_budget_management_db_rows(
         ).strip()
         account_name_by_code[account_code] = account_name or account_code
 
-    if not account_codes:
-        set_google_sheet_cache(
-            cache_key,
-            [{"tableData": [], "spentData": []}],
-            config_hash=_BUDGET_OVERVIEW_CACHE_HASH,
-        )
+    if not active_account_codes:
+        if use_cache:
+            set_google_sheet_cache(
+                cache_key,
+                [{"tableData": [], "spentData": [], "recommended": []}],
+                config_hash=_BUDGET_OVERVIEW_CACHE_HASH,
+            )
         return {
             "period": {"month": period_month, "year": period_year},
             "previousPeriod": {"month": previous_month, "year": previous_year},
             "tableData": [],
             "spentData": [],
+            "recommended": [],
         }
 
-    budgets = get_masterbudgets(account_codes, period_month, period_year)
+    budgets = get_masterbudgets(active_account_codes, period_month, period_year)
     previous_month_budgets = get_masterbudgets(
-        account_codes,
+        active_account_codes,
         previous_month,
         previous_year,
     )
@@ -510,12 +558,12 @@ def get_budget_management_db_rows(
         service_mapping=service_mapping,
     )
     current_period_spend_lookup = _sum_google_spend_by_account_adtype(
-        account_codes,
+        active_account_codes,
         month=period_month,
         year=period_year,
     )
     previous_month_spend_lookup = _sum_google_spend_by_account_adtype(
-        account_codes,
+        active_account_codes,
         month=previous_month,
         year=previous_year,
     )
@@ -594,17 +642,31 @@ def get_budget_management_db_rows(
         )
     ]
 
-    set_google_sheet_cache(
-        cache_key,
-        [{"tableData": payload_rows, "spentData": spent_data}],
-        config_hash=_BUDGET_OVERVIEW_CACHE_HASH,
+    recommended_data = _get_recommended_budget_payload(
+        active_account_codes,
+        month=period_month,
+        year=period_year,
     )
+
+    if use_cache:
+        set_google_sheet_cache(
+            cache_key,
+            [
+                {
+                    "tableData": payload_rows,
+                    "spentData": spent_data,
+                    "recommended": recommended_data,
+                }
+            ],
+            config_hash=_BUDGET_OVERVIEW_CACHE_HASH,
+        )
 
     return {
         "period": {"month": period_month, "year": period_year},
         "previousPeriod": {"month": previous_month, "year": previous_year},
         "tableData": payload_rows,
         "spentData": spent_data,
+        "recommended": recommended_data,
     }
 
 
@@ -649,10 +711,12 @@ def get_recommended_budget_managements(
     if normalized_requested_codes:
         normalized_account_code = normalized_requested_codes[0]
         validate_account_codes([normalized_account_code], month=month, year=year)
-        try:
-            results = parser(normalized_account_code, service_id, month, year)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        results = _get_recommended_budget_payload(
+            [normalized_account_code],
+            month=month,
+            year=year,
+            service_id=service_id,
+        )
         if service_id is not None:
             if results:
                 return results[0]
@@ -675,21 +739,12 @@ def get_recommended_budget_managements(
             continue
         seen_codes.add(candidate)
         account_codes.append(candidate)
-
-    payload: list[dict[str, object]] = []
-    for code in account_codes:
-        try:
-            payload.extend(parser(code, service_id, month, year))
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    payload.sort(
-        key=lambda item: (
-            str(item.get("accountCode") or "").casefold(),
-            str(item.get("serviceId") or "").casefold(),
-        )
+    return _get_recommended_budget_payload(
+        account_codes,
+        month=month,
+        year=year,
+        service_id=service_id,
     )
-    return payload
 
 
 def sync_budget_management_master_budget_sheet(

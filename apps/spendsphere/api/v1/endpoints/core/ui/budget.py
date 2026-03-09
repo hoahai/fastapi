@@ -136,16 +136,27 @@ def get_budget_management_selections_ui(
 
 
 @router.get(
-    "/budgetOverview",
+    "/load",
     summary="Get DB budget rows for all accounts in a period",
     description=(
         "Returns master-budget DB rows (all active accounts) with account name, "
         "service, amount, note, previous-month underspent, and separate spentData "
-        "(previous DB budget - previous Google spend), sorted by accountCode "
+        "(previous DB budget - previous Google spend), plus recommended rows for "
+        "the same account scope/period, sorted by accountCode "
         "then adType priority (SEM > PM > DIS > VID > DM)."
     ),
 )
 def get_budget_management_db_budgets_ui(
+    account_codes: list[str] | None = Query(
+        None,
+        alias="accountCodes",
+        description="Optional account codes. Empty means all active accounts.",
+    ),
+    account_code: str | None = Query(
+        None,
+        alias="accountCode",
+        description="Legacy single account code alias. Optional.",
+    ),
     month: int | None = Query(None, description="Month (1-12)."),
     year: int | None = Query(None, description="Year (e.g., 2026)."),
 ):
@@ -153,11 +164,19 @@ def get_budget_management_db_budgets_ui(
     Get budget-management DB rows for all active accounts in a period.
 
     Example request:
-        GET /api/spendsphere/v1/uis/budgetManagament/budgetOverview?month=3&year=2026
+        GET /api/spendsphere/v1/uis/budgetManagament/load?month=3&year=2026
+        Header: X-Tenant-Id: nucar
+
+    Example request (filter specific accounts):
+        GET /api/spendsphere/v1/uis/budgetManagament/load?accountCodes=NUCAR&accountCodes=ALAM&month=3&year=2026
+        Header: X-Tenant-Id: nucar
+
+    Example request (legacy single-account alias):
+        GET /api/spendsphere/v1/uis/budgetManagament/load?accountCode=NUCAR&month=3&year=2026
         Header: X-Tenant-Id: nucar
 
     Example request (default current period):
-        GET /api/spendsphere/v1/uis/budgetManagament/budgetOverview
+        GET /api/spendsphere/v1/uis/budgetManagament/load
         Header: X-Tenant-Id: nucar
 
     Example response:
@@ -184,6 +203,14 @@ def get_budget_management_db_budgets_ui(
               "adTypeCode": "SEM",
               "spent": "320.25"
             }
+          ],
+          "recommended": [
+            {
+              "accountCode": "NUCAR",
+              "serviceId": "SEM",
+              "serviceName": "Google Search",
+              "amount": 800.0
+            }
           ]
         }
 
@@ -191,10 +218,16 @@ def get_budget_management_db_budgets_ui(
         - Requires X-Tenant-Id header
         - Requires valid API key
         - Requires FEATURE_FLAGS.budget_managements=true for this tenant
+        - Supports accountCodes and legacy accountCode; empty means all active accounts
         - month/year are optional and default to current tenant period
         - month/year must be provided together when specified
     """
+    merged_account_codes = list(account_codes or [])
+    if account_code is not None:
+        merged_account_codes.append(account_code)
+
     return budgetManagements.get_budget_management_db_rows(
+        account_codes=merged_account_codes,
         month=month,
         year=year,
     )
