@@ -208,6 +208,93 @@ def soft_delete_masterbudget(
     )
 
 
+def duplicate_masterbudgets(
+    *,
+    from_month: int,
+    from_year: int,
+    to_month: int,
+    to_year: int,
+    account_codes: list[str],
+    overwrite: bool = False,
+) -> int:
+    """
+    Duplicate master budgets from one month/year to another.
+    - Duplicates only for accounts active in the target period.
+    - Skips rows that already exist in the target month/year unless overwrite=True.
+    - Never duplicates rows with zero grossAmount.
+    """
+    from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
+        validate_account_codes,
+    )
+
+    tables = get_db_tables()
+    budgets_table = tables["BUDGETS"]
+    normalized_codes = standardize_account_codes(account_codes)
+    if not normalized_codes:
+        return 0
+
+    active_accounts = validate_account_codes(
+        None,
+        month=to_month,
+        year=to_year,
+    )
+    active_codes = {
+        standardize_account_code(account.get("code")) or ""
+        for account in active_accounts
+        if isinstance(account, dict) and standardize_account_code(account.get("code"))
+    }
+    eligible_codes = [code for code in normalized_codes if code in active_codes]
+    if not eligible_codes:
+        return 0
+
+    service_budgets = [
+        str(service_id).strip()
+        for service_id in get_service_budgets()
+        if str(service_id).strip()
+    ]
+    if not service_budgets:
+        return 0
+
+    query = (
+        f"INSERT INTO {budgets_table} "
+        "(id, accountCode, serviceId, subService, note, grossAmount, month, year) "
+        "SELECT UUID(), b.accountCode, b.serviceId, b.subService, b.note, b.grossAmount, %s, %s "
+        f"FROM {budgets_table} AS b "
+        f"LEFT JOIN {budgets_table} AS t "
+        "ON t.accountCode = b.accountCode "
+        "AND t.serviceId = b.serviceId "
+        "AND t.month = %s "
+        "AND t.year = %s "
+        "WHERE b.month = %s "
+        "AND b.year = %s "
+    )
+
+    params: list = [to_month, to_year, to_month, to_year, from_month, from_year]
+
+    if eligible_codes:
+        account_placeholders = ", ".join(["%s"] * len(eligible_codes))
+        query += f"AND b.accountCode IN ({account_placeholders}) "
+        params.extend(eligible_codes)
+
+    service_placeholders = ", ".join(["%s"] * len(service_budgets))
+    query += f"AND b.serviceId IN ({service_placeholders}) "
+    params.extend(service_budgets)
+
+    query += "AND b.grossAmount <> 0 "
+
+    if not overwrite:
+        query += "AND t.id IS NULL"
+    else:
+        query += (
+            "ON DUPLICATE KEY UPDATE "
+            "grossAmount = VALUES(grossAmount), "
+            "subService = VALUES(subService), "
+            "note = VALUES(note)"
+        )
+
+    return execute_write(query, tuple(params))
+
+
 # ============================================================
 # ALLOCATIONS
 # ============================================================

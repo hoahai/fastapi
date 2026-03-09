@@ -308,6 +308,47 @@ def sync_budget_management_master_budget_sheet_ui(
 
 
 @router.post(
+    "/duplicate",
+    summary="Duplicate budget management rows between periods",
+    description=(
+        "Duplicates master-budget rows from one period to another for selected "
+        "account codes."
+    ),
+)
+def duplicate_budget_managements_ui(
+    payload: budgetManagements.BudgetManagementDuplicateRequest,
+):
+    """
+    Example request:
+        POST /api/spendsphere/v1/uis/budgetManagament/duplicate
+        Header: X-Tenant-Id: nucar
+        {
+          "accountCodes": ["NUCAR", "ALAM"],
+          "fromMonth": 2,
+          "fromYear": 2026,
+          "toMonth": 3,
+          "toYear": 2026,
+          "overwrite": false
+        }
+
+    Example response:
+        {
+          "inserted": 4
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - Requires FEATURE_FLAGS.budget_managements=true for this tenant
+        - accountCodes is required
+        - fromMonth/toMonth must be in 1..12
+        - fromYear/toYear must be in 2000..2100
+        - Supports `overwrite` and legacy `overried` in request body
+    """
+    return budgetManagements.duplicate_budget_managements(payload)
+
+
+@router.post(
     "",
     summary="Create budget management rows",
     description="Creates master-budget rows for a selected period.",
@@ -451,7 +492,7 @@ def apply_budget_management_changes_ui(
 @router.delete(
     "/{budget_id}",
     summary="Soft delete a budget management row",
-    description="Soft deletes one master-budget row by setting net amount to zero.",
+    description="Soft deletes one master-budget row by setting gross amount to zero.",
 )
 def soft_delete_budget_management_ui(
     budget_id: str = Path(..., min_length=1),

@@ -19,6 +19,7 @@ from apps.spendsphere.api.v1.endpoints.custom.spreadsheetParser_nucar import (
 from apps.spendsphere.api.v1.helpers.account_codes import standardize_account_code
 from apps.spendsphere.api.v1.helpers.config import get_service_mapping
 from apps.spendsphere.api.v1.helpers.db_queries import (
+    duplicate_masterbudgets,
     get_masterbudgets,
     soft_delete_masterbudget,
     upsert_masterbudgets,
@@ -80,6 +81,17 @@ class BudgetManagementChangesRequest(BaseModel):
     month: int | None = None
     year: int | None = None
     changes: list[BudgetManagementChangeItem] = Field(min_length=1)
+
+
+class BudgetManagementDuplicateRequest(BaseModel):
+    model_config = ConfigDict(populate_by_name=True, extra="forbid")
+    accountCodes: list[str] | None = None
+    fromMonth: int
+    fromYear: int
+    toMonth: int
+    toYear: int
+    overwrite: bool = False
+    overried: bool | None = None
 
 
 def _resolve_period(month: int | None, year: int | None) -> tuple[int, int]:
@@ -840,7 +852,7 @@ def soft_delete_budget_management(
     year: int | None = None,
 ):
     """
-    Soft delete a budget by setting `netAmount` to 0.
+    Soft delete a budget by setting `grossAmount` to 0.
 
     Example request:
         DELETE /api/spendsphere/v1/uis/budgetManagament/65c8d225-9f8f-4d13-8558-d6698f239a45?accountCode=NUCAR&month=1&year=2026
@@ -957,11 +969,7 @@ def apply_budget_management_changes(
                     detail=f"changes[{index}] has invalid accountCode/serviceId",
                 )
 
-            amount = (
-                change.amount
-                if change.amount is not None
-                else float(existing_row.get("netAmount") or 0)
-            )
+            amount = change.amount if change.amount is not None else None
             sub_service = (
                 change.subService
                 if "subService" in change.model_fields_set
@@ -1053,3 +1061,37 @@ def apply_budget_management_changes(
         "deleted": deleted,
         "appliedChanges": len(payload.changes),
     }
+
+
+def duplicate_budget_managements(payload: BudgetManagementDuplicateRequest):
+    if payload.fromMonth < 1 or payload.fromMonth > 12:
+        raise HTTPException(status_code=400, detail="fromMonth must be 1-12")
+    if payload.toMonth < 1 or payload.toMonth > 12:
+        raise HTTPException(status_code=400, detail="toMonth must be 1-12")
+    if payload.fromYear < 2000 or payload.fromYear > 2100:
+        raise HTTPException(status_code=400, detail="fromYear must be 2000-2100")
+    if payload.toYear < 2000 or payload.toYear > 2100:
+        raise HTTPException(status_code=400, detail="toYear must be 2000-2100")
+
+    normalized_codes = normalize_account_codes(payload.accountCodes)
+    if not normalized_codes:
+        raise HTTPException(status_code=400, detail="accountCodes is required")
+
+    validate_account_codes(
+        normalized_codes,
+        month=payload.toMonth,
+        year=payload.toYear,
+    )
+
+    overwrite = payload.overried if payload.overried is not None else payload.overwrite
+
+    inserted = duplicate_masterbudgets(
+        from_month=payload.fromMonth,
+        from_year=payload.fromYear,
+        to_month=payload.toMonth,
+        to_year=payload.toYear,
+        account_codes=normalized_codes,
+        overwrite=overwrite,
+    )
+
+    return {"inserted": inserted}
