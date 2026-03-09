@@ -62,11 +62,85 @@ def get_budget_managements_ui(
 
 
 @router.get(
+    "/selections",
+    summary="Get budget management selection data",
+    description=(
+        "Returns period options, active services, and active accounts "
+        "for the budget management UI."
+    ),
+)
+def get_budget_management_selections_ui(
+    months_before: int = Query(
+        2, description="Number of months before current period to include."
+    ),
+    months_after: int = Query(
+        1, description="Number of months after current period to include."
+    ),
+    refresh_service_cache: bool = Query(
+        False,
+        description="When true, refreshes active service cache before loading.",
+    ),
+):
+    """
+    Example request:
+        GET /api/spendsphere/v1/uis/budgetManagament/selections
+        Header: X-Tenant-Id: nucar
+
+    Example request (custom period window):
+        GET /api/spendsphere/v1/uis/budgetManagament/selections?months_before=3&months_after=2
+        Header: X-Tenant-Id: nucar
+
+    Example request (force service cache refresh):
+        GET /api/spendsphere/v1/uis/budgetManagament/selections?refresh_service_cache=true
+        Header: X-Tenant-Id: nucar
+
+    Example response:
+        {
+          "periods": {
+            "currentPeriod": "3/2026",
+            "monthsArray": [
+              {"month": 1, "year": 2026, "period": "1/2026"},
+              {"month": 2, "year": 2026, "period": "2/2026"},
+              {"month": 3, "year": 2026, "period": "3/2026"},
+              {"month": 4, "year": 2026, "period": "4/2026"}
+            ]
+          },
+          "services": [
+            {
+              "id": "c6ac34bc-0fc0-46a6-9723-e83780ebb938",
+              "name": "Search Engine Marketing",
+              "adTypeCode": "SEM"
+            }
+          ],
+          "accounts": [
+            {
+              "id": "6563107233",
+              "descriptiveName": "NUCAR_NuCar",
+              "accountCode": "NUCAR",
+              "accountName": "NuCar"
+            }
+          ]
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - Requires FEATURE_FLAGS.budget_managements=true for this tenant
+        - months_before and months_after must be >= 0
+    """
+    return budgetManagements.get_budget_management_selections_data(
+        months_before=months_before,
+        months_after=months_after,
+        refresh_service_cache=refresh_service_cache,
+    )
+
+
+@router.get(
     "/budgetOverview",
     summary="Get DB budget rows for all accounts in a period",
     description=(
         "Returns master-budget DB rows (all active accounts) with account name, "
-        "service, amount, note, and previous-month underspent "
+        "service, amount, note, previous-month underspent, and separate spentData "
         "(previous DB budget - previous Google spend), sorted by accountCode "
         "then adType priority (SEM > PM > DIS > VID > DM)."
     ),
@@ -95,12 +169,20 @@ def get_budget_management_db_budgets_ui(
               "budgetId": "65c8d225-9f8f-4d13-8558-d6698f239a45",
               "accountCode": "NUCAR",
               "accountName": "NuCar",
+              "adTypeCode": "SEM",
               "serviceId": "c6ac34bc-0fc0-46a6-9723-e83780ebb938",
               "service": "Search Engine Marketing",
               "amount": "1500.00",
               "note": "March launch support",
               "previousMonthUnderspent": "250.00",
               "dataNo": 0
+            }
+          ],
+          "spentData": [
+            {
+              "accountCode": "NUCAR",
+              "adTypeCode": "SEM",
+              "spent": "320.25"
             }
           ]
         }
@@ -120,14 +202,14 @@ def get_budget_management_db_budgets_ui(
 
 @router.get(
     "/recommended",
-    summary="Get recommended budget values for one account",
+    summary="Get recommended budget values",
     description=(
-        "Returns tenant-specific recommended budget rows for one account and period. "
-        "When serviceId is provided, returns only one recommended item."
+        "Returns tenant-specific recommended budget rows for the selected period. "
+        "When accountCode is provided, returns one account; otherwise returns all active accounts."
     ),
 )
 def get_recommended_budget_managements_ui(
-    account_code: str = Query(..., alias="accountCode", min_length=1),
+    account_code: str | None = Query(None, alias="accountCode", min_length=1),
     month: int = Query(..., description="Month (1-12)."),
     year: int = Query(..., description="Year (e.g., 2026)."),
     service_id: str | None = Query(None, alias="serviceId", min_length=1),
@@ -137,8 +219,12 @@ def get_recommended_budget_managements_ui(
         GET /api/spendsphere/v1/uis/budgetManagament/recommended?accountCode=ALAM&serviceId=SEM&month=2&year=2026
         Header: X-Tenant-Id: nucar
 
-    Example request (all services):
+    Example request (single account, all services):
         GET /api/spendsphere/v1/uis/budgetManagament/recommended?accountCode=ALAM&month=2&year=2026
+        Header: X-Tenant-Id: nucar
+
+    Example request (all active accounts):
+        GET /api/spendsphere/v1/uis/budgetManagament/recommended?month=2&year=2026
         Header: X-Tenant-Id: nucar
 
     Example response:
@@ -153,7 +239,6 @@ def get_recommended_budget_managements_ui(
         - Requires X-Tenant-Id header
         - Requires valid API key
         - Requires FEATURE_FLAGS.budget_managements=true for this tenant
-        - accountCode must be a single non-empty code
         - month/year are required
     """
     return budgetManagements.get_recommended_budget_managements(
@@ -305,6 +390,62 @@ def update_budget_managements_ui(
         - month/year are optional and default to current tenant period
     """
     return budgetManagements.update_budget_managements(payload)
+
+
+@router.post(
+    "/update",
+    summary="Apply budget management create/update/delete changes",
+    description=(
+        "Applies mixed create/update/delete changes for master-budget rows "
+        "in one request."
+    ),
+)
+def apply_budget_management_changes_ui(
+    payload: budgetManagements.BudgetManagementChangesRequest,
+):
+    """
+    Example request:
+        POST /api/spendsphere/v1/uis/budgetManagament/update
+        Header: X-Tenant-Id: nucar
+        {
+          "month": 3,
+          "year": 2026,
+          "changes": [
+            {
+              "op": "create",
+              "accountCode": "NUCAR",
+              "serviceId": "SEM",
+              "amount": 1000
+            },
+            {
+              "op": "update",
+              "id": "65c8d225-9f8f-4d13-8558-d6698f239a45",
+              "amount": 1200
+            },
+            {
+              "op": "delete",
+              "id": "71f1a9f9-6ca7-4cf7-8d7d-299f249f7812"
+            }
+          ]
+        }
+
+    Example response:
+        {
+          "period": {"month": 3, "year": 2026},
+          "updated": 1,
+          "inserted": 1,
+          "deleted": 1,
+          "appliedChanges": 3
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - Requires FEATURE_FLAGS.budget_managements=true for this tenant
+        - month/year are optional and default to current tenant period
+        - month/year must be provided together when specified
+    """
+    return budgetManagements.apply_budget_management_changes(payload)
 
 
 @router.delete(

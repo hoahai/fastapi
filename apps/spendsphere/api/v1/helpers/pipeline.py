@@ -371,6 +371,7 @@ def _maybe_filter_google_ads_failures(
 def _collect_budget_allocation_and_spend_issues(
     *,
     rows: list[dict],
+    planned_new_amounts: dict[tuple[str, str], float] | None = None,
 ) -> tuple[dict[str, list[dict]], dict[str, list[dict]]]:
     warnings_by_customer: dict[str, list[dict]] = {}
     failures_by_customer: dict[str, list[dict]] = {}
@@ -484,6 +485,13 @@ def _collect_budget_allocation_and_spend_issues(
         if not customer_id:
             continue
 
+        budget_id = str(row.get("budgetId", "")).strip()
+        planned_new_amount = (
+            planned_new_amounts.get((customer_id, budget_id))
+            if planned_new_amounts and budget_id
+            else None
+        )
+
         campaigns = row.get("campaigns", [])
         all_campaigns_paused = bool(campaigns) and all(
             str(c.get("status", "")).strip().upper() == "PAUSED"
@@ -519,11 +527,11 @@ def _collect_budget_allocation_and_spend_issues(
                 else "Spend detected with 0 allocation"
             )
             issue = {
-                "budgetId": row.get("budgetId"),
+                "budgetId": budget_id or row.get("budgetId"),
                 "accountCode": row.get("accountCode"),
                 "campaignNames": campaign_names,
                 "currentAmount": current_google_budget,
-                "newAmount": None,
+                "newAmount": planned_new_amount,
                 "spent": float(spend),
                 "error": f"{allocation_error} ({spend_display}); budget update skipped.",
             }
@@ -546,15 +554,15 @@ def _collect_budget_allocation_and_spend_issues(
             budget_display = f"${float(allocated_budget_amount):,.2f}"
             warnings_by_customer.setdefault(customer_id, []).append(
                 {
-                    "budgetId": row.get("budgetId"),
+                    "budgetId": budget_id or row.get("budgetId"),
                     "accountCode": row.get("accountCode"),
                     "campaignNames": campaign_names,
-                    "currentAmount": float(allocated_budget_amount),
-                    "newAmount": None,
+                    "currentAmount": current_google_budget,
+                    "newAmount": planned_new_amount,
                     "spent": float(spend),
                     "warningCode": "BUDGET_LESS_THAN_SPEND",
                     "error": (
-                        "Allocated budget amount ((master budget + roll breakdown) x allocation, before acceleration) is lower than spend "
+                        "Allocated budget (before acceleration) is lower than spend "
                         f"({budget_display} < {spend_display})."
                     ),
                 }
@@ -563,11 +571,11 @@ def _collect_budget_allocation_and_spend_issues(
         if has_pacing_over_100 and pacing_percentage is not None:
             warnings_by_customer.setdefault(customer_id, []).append(
                 {
-                    "budgetId": row.get("budgetId"),
+                    "budgetId": budget_id or row.get("budgetId"),
                     "accountCode": row.get("accountCode"),
                     "campaignNames": campaign_names,
                     "currentAmount": current_google_budget,
-                    "newAmount": None,
+                    "newAmount": planned_new_amount,
                     "spent": float(spend),
                     "pacing": float(pacing_percentage),
                     "warningCode": "PACING_OVER_100",
@@ -581,11 +589,11 @@ def _collect_budget_allocation_and_spend_issues(
         if has_spend_pct_over_100 and spend_percentage is not None:
             warnings_by_customer.setdefault(customer_id, []).append(
                 {
-                    "budgetId": row.get("budgetId"),
+                    "budgetId": budget_id or row.get("budgetId"),
                     "accountCode": row.get("accountCode"),
                     "campaignNames": campaign_names,
                     "currentAmount": current_google_budget,
-                    "newAmount": None,
+                    "newAmount": planned_new_amount,
                     "spent": float(spend),
                     "spendPercent": float(spend_percentage),
                     "warningCode": "SPEND_PERCENT_OVER_100",
@@ -597,6 +605,30 @@ def _collect_budget_allocation_and_spend_issues(
             )
 
     return warnings_by_customer, failures_by_customer
+
+
+def _build_planned_budget_amount_lookup(
+    budget_payloads: list[dict],
+) -> dict[tuple[str, str], float]:
+    lookup: dict[tuple[str, str], float] = {}
+    for payload in budget_payloads:
+        customer_id = str(payload.get("customer_id", "")).strip()
+        if not customer_id:
+            continue
+        for update in payload.get("updates") or []:
+            if not isinstance(update, dict):
+                continue
+            budget_id = str(update.get("budgetId", "")).strip()
+            if not budget_id:
+                continue
+            new_amount = update.get("newAmount")
+            if new_amount is None:
+                continue
+            try:
+                lookup[(customer_id, budget_id)] = float(new_amount)
+            except (TypeError, ValueError):
+                continue
+    return lookup
 
 
 # =========================================================
@@ -1098,8 +1130,10 @@ def run_google_ads_budget_pipeline(
                 },
             )
 
+    planned_budget_amounts = _build_planned_budget_amount_lookup(budget_payloads)
     budget_warnings, budget_failures = _collect_budget_allocation_and_spend_issues(
         rows=results,
+        planned_new_amounts=planned_budget_amounts,
     )
     budget_warnings = _maybe_filter_google_ads_warnings(
         budget_warnings,

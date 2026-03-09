@@ -1,12 +1,16 @@
 from __future__ import annotations
 
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
-from typing import Callable
+from typing import Callable, Literal
 
 from fastapi import HTTPException
 from pydantic import BaseModel, ConfigDict, Field
 
 from apps.spendsphere.api.v1.deps import require_feature
+from apps.spendsphere.api.v1.endpoints.core.periods import (
+    build_periods_data,
+    validate_month_offsets,
+)
 from apps.spendsphere.api.v1.endpoints.custom.spreadsheetParser_nucar import (
     calculate_nucar_spreadsheet_budgets,
     get_nucar_recommended_budgets,
@@ -26,7 +30,9 @@ from apps.spendsphere.api.v1.helpers.ggAd import (
 )
 from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
     get_google_sheet_cache_entry,
+    get_services_cache_entry,
     normalize_account_codes,
+    refresh_services_cache,
     set_google_sheet_cache,
     validate_account_codes,
 )
@@ -35,7 +41,7 @@ from shared.utils import get_current_period
 
 _budget_managements_feature_dependency = require_feature("budget_managements")
 _BUDGET_OVERVIEW_CACHE_KEY_PREFIX = "budget_management_overview"
-_BUDGET_OVERVIEW_CACHE_HASH = "budget_management_overview::v9"
+_BUDGET_OVERVIEW_CACHE_HASH = "budget_management_overview::v13"
 _ADTYPE_PRIORITY_ORDER = ("SEM", "PM", "DIS", "VID", "DM")
 _ADTYPE_PRIORITY_RANK = {
     code: index for index, code in enumerate(_ADTYPE_PRIORITY_ORDER)
@@ -56,6 +62,24 @@ class BudgetManagementUpsertRequest(BaseModel):
     month: int | None = None
     year: int | None = None
     rows: list[BudgetManagementUpsertItem] = Field(min_length=1)
+
+
+class BudgetManagementChangeItem(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    op: Literal["create", "update", "delete"]
+    id: str | None = None
+    accountCode: str | None = None
+    serviceId: str | None = None
+    subService: str | None = None
+    note: str | None = None
+    amount: float | None = None
+
+
+class BudgetManagementChangesRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    month: int | None = None
+    year: int | None = None
+    changes: list[BudgetManagementChangeItem] = Field(min_length=1)
 
 
 def _resolve_period(month: int | None, year: int | None) -> tuple[int, int]:
@@ -243,6 +267,84 @@ def ensure_budget_managements_access() -> None:
     _budget_managements_feature_dependency()
 
 
+def _filter_and_sort_services(rows: list[dict]) -> list[dict]:
+    filtered: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        ad_type_code = str(row.get("adTypeCode", "")).strip()
+        if not ad_type_code:
+            continue
+        filtered.append(
+            {
+                "id": row.get("id"),
+                "name": row.get("name"),
+                "adTypeCode": ad_type_code,
+            }
+        )
+    filtered.sort(
+        key=lambda item: (
+            str(item.get("adTypeCode", "")).strip(),
+            str(item.get("name", "")).strip().lower(),
+        )
+    )
+    return filtered
+
+
+def get_budget_management_selections_data(
+    *,
+    months_before: int = 2,
+    months_after: int = 1,
+    refresh_service_cache: bool = False,
+) -> dict[str, object]:
+    """
+    Get budget-management UI selection data.
+
+    Returns period options, active services, and active accounts.
+    """
+    validate_month_offsets(months_before, months_after)
+
+    periods = build_periods_data(months_before, months_after)
+
+    services = get_services_cache_entry()
+    if refresh_service_cache or services is None:
+        services = refresh_services_cache(department_code="DIGM")
+    services_payload = _filter_and_sort_services(services)
+
+    accounts = validate_account_codes(None)
+    accounts_payload = sorted(
+        [
+            {
+                "id": account.get("id"),
+                "descriptiveName": account.get("descriptiveName"),
+                "accountCode": standardize_account_code(
+                    account.get("accountCode") or account.get("code")
+                ),
+                "accountName": str(
+                    account.get("accountName")
+                    or account.get("name")
+                    or account.get("descriptiveName")
+                    or ""
+                ).strip(),
+            }
+            for account in accounts
+        ],
+        key=lambda item: (
+            str(item.get("accountCode") or "").casefold(),
+            str(item.get("accountName") or "").casefold(),
+        ),
+    )
+    accounts_payload = [
+        account for account in accounts_payload if str(account.get("accountCode") or "").strip()
+    ]
+
+    return {
+        "periods": periods,
+        "services": services_payload,
+        "accounts": accounts_payload,
+    }
+
+
 def get_budget_managements(
     account_codes: list[str] | None = None,
     month: int | None = None,
@@ -296,7 +398,9 @@ def get_budget_management_db_rows(
     """
     Get DB budget rows for all active accounts in a period.
 
-    Response tableData includes account name, service, note, and
+    Response includes:
+    - tableData: account/service budget rows with previousMonthUnderspent
+    - spentData: current-period Google spend rows with accountCode/adTypeCode/spent
     `previousMonthUnderspent` calculated as:
     previous-month DB budget minus previous-month Google spend, grouped by
     (accountCode, adType).
@@ -307,15 +411,43 @@ def get_budget_management_db_rows(
     previous_month, previous_year = _resolve_previous_period(period_month, period_year)
     cache_key = _build_budget_overview_cache_key(period_month, period_year)
 
-    cached_rows, is_stale = get_google_sheet_cache_entry(
+    cached_payload, is_stale = get_google_sheet_cache_entry(
         cache_key,
         config_hash=_BUDGET_OVERVIEW_CACHE_HASH,
     )
-    if cached_rows is not None and not is_stale:
+    if cached_payload is not None and not is_stale:
+        table_data: list[dict[str, object]] = []
+        spent_data: list[dict[str, object]] = []
+        if isinstance(cached_payload, list) and cached_payload:
+            first_item = cached_payload[0]
+            if (
+                len(cached_payload) == 1
+                and isinstance(first_item, dict)
+                and (
+                    "tableData" in first_item
+                    or "spentData" in first_item
+                )
+            ):
+                cached_table_data = first_item.get("tableData")
+                cached_spent_data = first_item.get("spentData")
+                if isinstance(cached_table_data, list):
+                    table_data = cached_table_data
+                if isinstance(cached_spent_data, list):
+                    spent_data = cached_spent_data
+            else:
+                table_data = cached_payload
+        elif isinstance(cached_payload, dict):
+            cached_table_data = cached_payload.get("tableData")
+            cached_spent_data = cached_payload.get("spentData")
+            if isinstance(cached_table_data, list):
+                table_data = cached_table_data
+            if isinstance(cached_spent_data, list):
+                spent_data = cached_spent_data
         return {
             "period": {"month": period_month, "year": period_year},
             "previousPeriod": {"month": previous_month, "year": previous_year},
-            "tableData": cached_rows,
+            "tableData": table_data,
+            "spentData": spent_data,
         }
 
     accounts = validate_account_codes(
@@ -344,13 +476,14 @@ def get_budget_management_db_rows(
     if not account_codes:
         set_google_sheet_cache(
             cache_key,
-            [],
+            [{"tableData": [], "spentData": []}],
             config_hash=_BUDGET_OVERVIEW_CACHE_HASH,
         )
         return {
             "period": {"month": period_month, "year": period_year},
             "previousPeriod": {"month": previous_month, "year": previous_year},
             "tableData": [],
+            "spentData": [],
         }
 
     budgets = get_masterbudgets(account_codes, period_month, period_year)
@@ -363,6 +496,11 @@ def get_budget_management_db_rows(
     previous_month_budget_lookup = _sum_db_budget_by_account_adtype(
         previous_month_budgets,
         service_mapping=service_mapping,
+    )
+    current_period_spend_lookup = _sum_google_spend_by_account_adtype(
+        account_codes,
+        month=period_month,
+        year=period_year,
     )
     previous_month_spend_lookup = _sum_google_spend_by_account_adtype(
         account_codes,
@@ -394,6 +532,7 @@ def get_budget_management_db_rows(
                 "accountCode": account_code,
                 "accountName": account_name_by_code.get(account_code, account_code),
                 "_sortAdTypeCode": ad_type_code,
+                "adTypeCode": ad_type_code,
                 "serviceId": service_id,
                 "service": service_name,
                 "amount": _format_decimal_2(row.get("netAmount")),
@@ -414,9 +553,38 @@ def get_budget_management_db_rows(
         item.pop("_sortAdTypeCode", None)
         item["dataNo"] = index
 
+    spent_data_map: dict[tuple[str, str], Decimal] = {}
+    for row in payload_rows:
+        account_code = str(row.get("accountCode") or "").strip()
+        ad_type_code = str(row.get("adTypeCode") or "").strip().upper()
+        if not account_code or not ad_type_code:
+            continue
+        key = (account_code, ad_type_code)
+        if key in spent_data_map:
+            continue
+        spent_data_map[key] = current_period_spend_lookup.get(
+            (account_code, ad_type_code),
+            Decimal("0"),
+        )
+
+    spent_data = [
+        {
+            "accountCode": account_code,
+            "adTypeCode": ad_type_code,
+            "spent": _format_decimal_2(spent_amount),
+        }
+        for (account_code, ad_type_code), spent_amount in sorted(
+            spent_data_map.items(),
+            key=lambda item: (
+                item[0][0],
+                _adtype_priority_rank(item[0][1]),
+            ),
+        )
+    ]
+
     set_google_sheet_cache(
         cache_key,
-        payload_rows,
+        [{"tableData": payload_rows, "spentData": spent_data}],
         config_hash=_BUDGET_OVERVIEW_CACHE_HASH,
     )
 
@@ -424,11 +592,12 @@ def get_budget_management_db_rows(
         "period": {"month": period_month, "year": period_year},
         "previousPeriod": {"month": previous_month, "year": previous_year},
         "tableData": payload_rows,
+        "spentData": spent_data,
     }
 
 
 def get_recommended_budget_managements(
-    account_code: str,
+    account_code: str | None,
     month: int,
     year: int,
     service_id: str | None = None,
@@ -455,13 +624,7 @@ def get_recommended_budget_managements(
         - Requires valid API key
         - Requires FEATURE_FLAGS.budget_managements=true for this tenant
     """
-    requested_codes = normalize_account_codes([account_code])
-    if len(requested_codes) != 1:
-        raise HTTPException(status_code=400, detail="accountCode must contain exactly one code")
-    normalized_account_code = requested_codes[0]
-
     month, year = _resolve_period(month, year)
-    validate_account_codes([normalized_account_code], month=month, year=year)
 
     parser = _resolve_recommended_budget_parser(get_tenant_id())
     if parser is None:
@@ -469,20 +632,52 @@ def get_recommended_budget_managements(
             status_code=404,
             detail="Recommended budget parser not configured for this tenant",
         )
-    try:
-        results = parser(normalized_account_code, service_id, month, year)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
-    if service_id is not None:
-        if results:
-            return results[0]
-        return {
-            "accountCode": normalized_account_code,
-            "serviceId": service_id,
-            "serviceName": service_id,
-            "amount": None,
-        }
-    return results
+
+    normalized_requested_codes = normalize_account_codes([account_code]) if account_code else []
+    if normalized_requested_codes:
+        normalized_account_code = normalized_requested_codes[0]
+        validate_account_codes([normalized_account_code], month=month, year=year)
+        try:
+            results = parser(normalized_account_code, service_id, month, year)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        if service_id is not None:
+            if results:
+                return results[0]
+            return {
+                "accountCode": normalized_account_code,
+                "serviceId": service_id,
+                "serviceName": service_id,
+                "amount": None,
+            }
+        return results
+
+    accounts = validate_account_codes(None, month=month, year=year)
+    account_codes: list[str] = []
+    seen_codes: set[str] = set()
+    for account in accounts:
+        candidate = standardize_account_code(
+            account.get("accountCode") or account.get("code")
+        )
+        if not candidate or candidate in seen_codes:
+            continue
+        seen_codes.add(candidate)
+        account_codes.append(candidate)
+
+    payload: list[dict[str, object]] = []
+    for code in account_codes:
+        try:
+            payload.extend(parser(code, service_id, month, year))
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    payload.sort(
+        key=lambda item: (
+            str(item.get("accountCode") or "").casefold(),
+            str(item.get("serviceId") or "").casefold(),
+        )
+    )
+    return payload
 
 
 def sync_budget_management_master_budget_sheet(
@@ -677,4 +872,184 @@ def soft_delete_budget_management(
         "month": period_month,
         "year": period_year,
         "softDeleted": True,
+    }
+
+
+def apply_budget_management_changes(
+    payload: BudgetManagementChangesRequest,
+):
+    """
+    Apply create/update/delete budget changes in one request.
+    """
+    month, year = _resolve_period(payload.month, payload.year)
+
+    existing_rows = get_masterbudgets(None, month, year)
+    existing_by_id: dict[str, dict] = {}
+    for row in existing_rows:
+        row_id = str(row.get("id") or "").strip()
+        if row_id:
+            existing_by_id[row_id] = row
+
+    upsert_rows: list[dict[str, object]] = []
+    delete_rows: list[tuple[str, str]] = []
+    delete_keys: set[tuple[str, str]] = set()
+    account_codes_to_validate: set[str] = set()
+
+    for index, change in enumerate(payload.changes):
+        op = str(change.op).strip().lower()
+        budget_id = str(change.id or "").strip()
+        explicit_account_code = (
+            standardize_account_code(change.accountCode)
+            if change.accountCode is not None
+            else None
+        )
+        explicit_service_id = (
+            str(change.serviceId).strip()
+            if change.serviceId is not None
+            else None
+        )
+        existing_row = existing_by_id.get(budget_id) if budget_id else None
+
+        if op == "create":
+            if not explicit_account_code:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"changes[{index}].accountCode is required for create",
+                )
+            if not explicit_service_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"changes[{index}].serviceId is required for create",
+                )
+            upsert_rows.append(
+                {
+                    "accountCode": explicit_account_code,
+                    "serviceId": explicit_service_id,
+                    "subService": change.subService,
+                    "note": change.note,
+                    "netAmount": change.amount if change.amount is not None else 0,
+                }
+            )
+            account_codes_to_validate.add(explicit_account_code)
+            continue
+
+        if op == "update":
+            if not budget_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"changes[{index}].id is required for update",
+                )
+            if existing_row is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Budget not found for update: {budget_id}",
+                )
+
+            account_code = explicit_account_code or standardize_account_code(
+                existing_row.get("accountCode")
+            )
+            service_id = explicit_service_id or str(
+                existing_row.get("serviceId") or ""
+            ).strip()
+            if not account_code or not service_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"changes[{index}] has invalid accountCode/serviceId",
+                )
+
+            amount = (
+                change.amount
+                if change.amount is not None
+                else float(existing_row.get("netAmount") or 0)
+            )
+            sub_service = (
+                change.subService
+                if "subService" in change.model_fields_set
+                else existing_row.get("subService")
+            )
+            note = (
+                change.note
+                if "note" in change.model_fields_set
+                else existing_row.get("note")
+            )
+
+            upsert_rows.append(
+                {
+                    "id": budget_id,
+                    "accountCode": account_code,
+                    "serviceId": service_id,
+                    "subService": sub_service,
+                    "note": note,
+                    "netAmount": amount,
+                }
+            )
+            account_codes_to_validate.add(account_code)
+            continue
+
+        if op == "delete":
+            if not budget_id:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"changes[{index}].id is required for delete",
+                )
+            if existing_row is None:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Budget not found for delete: {budget_id}",
+                )
+            account_code = explicit_account_code or standardize_account_code(
+                existing_row.get("accountCode")
+            )
+            if not account_code:
+                raise HTTPException(
+                    status_code=400,
+                    detail=f"changes[{index}] has invalid accountCode",
+                )
+            delete_key = (budget_id, account_code)
+            if delete_key in delete_keys:
+                continue
+            delete_keys.add(delete_key)
+            delete_rows.append(delete_key)
+            account_codes_to_validate.add(account_code)
+            continue
+
+        raise HTTPException(
+            status_code=400,
+            detail=f"changes[{index}].op must be one of create/update/delete",
+        )
+
+    if account_codes_to_validate:
+        validate_account_codes(
+            sorted(account_codes_to_validate),
+            month=month,
+            year=year,
+        )
+
+    updated = 0
+    inserted = 0
+    if upsert_rows:
+        upsert_result = upsert_masterbudgets(
+            upsert_rows,
+            month=month,
+            year=year,
+        )
+        updated = int(upsert_result.get("updated") or 0)
+        inserted = int(upsert_result.get("inserted") or 0)
+
+    deleted = 0
+    for budget_id, account_code in delete_rows:
+        affected = soft_delete_masterbudget(
+            budget_id=budget_id,
+            account_code=account_code,
+            month=month,
+            year=year,
+        )
+        deleted += max(int(affected or 0), 0)
+
+    return {
+        "period": {"month": month, "year": year},
+        "updated": updated,
+        "inserted": inserted,
+        "deleted": deleted,
+        "appliedChanges": len(payload.changes),
     }

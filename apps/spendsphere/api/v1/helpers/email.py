@@ -163,6 +163,8 @@ def build_google_ads_alert_email(
         for item in r.get("warnings") or []:
             budget_warnings.append(_normalize_budget_issue(item, account_code))
 
+    budget_warnings = _merge_budget_issues_for_display(budget_warnings)
+
     campaign_status_summary = "update_campaign_statuses"
 
     def _issue_lines(issues: list[dict]) -> list[str]:
@@ -392,11 +394,15 @@ def _format_issue_title(issue: dict, *, include_account: bool = True) -> str:
 def _format_issue_detail_text(issue: dict) -> str:
     current_amount = _format_amount(issue.get("current_amount"))
     new_amount = _format_amount(issue.get("new_amount"))
-    message = issue.get("message") or "Unknown"
+    messages = _get_issue_messages(issue)
     lines = [
         f"Current budget: {current_amount} | New Budget: {new_amount}",
-        str(message),
     ]
+    if len(messages) == 1:
+        lines.append(messages[0])
+    else:
+        lines.append("Warnings:")
+        lines.extend(f"- {message}" for message in messages)
     lines.extend(_format_issue_meta_lines(issue))
     return "\n".join(lines)
 
@@ -404,11 +410,15 @@ def _format_issue_detail_text(issue: dict) -> str:
 def _format_issue_detail_html(issue: dict) -> str:
     current_amount = html_lib.escape(_format_amount(issue.get("current_amount")))
     new_amount = html_lib.escape(_format_amount(issue.get("new_amount")))
-    message = html_lib.escape(str(issue.get("message") or "Unknown"))
+    messages = [html_lib.escape(message) for message in _get_issue_messages(issue)]
     parts = [
         f"Current budget: {current_amount} | New Budget: {new_amount}",
-        message,
     ]
+    if len(messages) == 1:
+        parts.append(messages[0])
+    else:
+        parts.append("Warnings:")
+        parts.extend(f"- {message}" for message in messages)
     parts.extend(html_lib.escape(line) for line in _format_issue_meta_lines(issue))
     return "<br>".join(parts)
 
@@ -470,6 +480,64 @@ def _format_amount(value: object) -> str:
         return f"${float(value):,.2f}"
     except (TypeError, ValueError):
         return str(value)
+
+
+def _get_issue_messages(issue: dict) -> list[str]:
+    raw_messages = issue.get("messages")
+    if isinstance(raw_messages, list):
+        cleaned = [str(message).strip() for message in raw_messages if str(message).strip()]
+        if cleaned:
+            return cleaned
+    message = str(issue.get("message") or "Unknown").strip()
+    return [message or "Unknown"]
+
+
+def _merge_budget_issues_for_display(issues: list[dict]) -> list[dict]:
+    merged: dict[tuple[str, str], dict] = {}
+    order: list[tuple[str, str]] = []
+
+    for issue in issues:
+        account_code = str(issue.get("account_code") or "Unknown")
+        budget_id = str(issue.get("budget_id") or "Unknown")
+        key = (account_code, budget_id)
+        message = str(issue.get("message") or "Unknown").strip() or "Unknown"
+
+        if key not in merged:
+            merged_issue = dict(issue)
+            merged_issue["messages"] = [message]
+            merged[key] = merged_issue
+            order.append(key)
+            continue
+
+        existing = merged[key]
+
+        existing_campaigns = existing.get("campaign_names")
+        incoming_campaigns = issue.get("campaign_names")
+        campaign_names: list[str] = []
+        if isinstance(existing_campaigns, list):
+            campaign_names.extend(str(name).strip() for name in existing_campaigns if str(name).strip())
+        if isinstance(incoming_campaigns, list):
+            campaign_names.extend(str(name).strip() for name in incoming_campaigns if str(name).strip())
+        deduped_campaigns: list[str] = []
+        for name in campaign_names:
+            if name not in deduped_campaigns:
+                deduped_campaigns.append(name)
+        if deduped_campaigns:
+            existing["campaign_names"] = deduped_campaigns
+
+        if existing.get("current_amount") is None and issue.get("current_amount") is not None:
+            existing["current_amount"] = issue.get("current_amount")
+        if existing.get("new_amount") is None and issue.get("new_amount") is not None:
+            existing["new_amount"] = issue.get("new_amount")
+
+        messages = existing.get("messages")
+        if not isinstance(messages, list):
+            messages = []
+        if message not in messages:
+            messages.append(message)
+        existing["messages"] = messages
+
+    return [merged[key] for key in order]
 
 
 def _group_issues_by_account(issues: list[dict]) -> list[tuple[str, list[dict]]]:
