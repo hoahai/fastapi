@@ -41,28 +41,85 @@ def build_meta(
 
 
 def normalize_error_payload(raw: object | None) -> dict[str, object]:
+    detail_raw: object | None
     if isinstance(raw, dict):
-        payload = dict(raw)
-    elif raw is None:
-        payload = {}
+        raw_dict = dict(raw)
+        detail_raw = raw_dict.get("detail", raw_dict)
     else:
-        payload = {"detail": raw}
+        detail_raw = raw
 
-    if "message" not in payload:
-        detail = payload.get("detail")
-        if isinstance(detail, str) and detail:
-            message = detail
-        elif isinstance(detail, list) and detail:
-            message = "Validation error"
-        else:
-            err = payload.get("error")
-            if isinstance(err, str) and err:
-                message = err
+    detail = _normalize_error_detail(detail_raw)
+    return {
+        "detail": detail,
+        "message": "Request failed",
+    }
+
+
+def _normalize_error_detail(raw: object | None) -> dict[str, object]:
+    if isinstance(raw, dict):
+        detail = dict(raw)
+
+        if "errors" not in detail and isinstance(detail.get("items"), list):
+            detail["errors"] = detail["items"]
+
+        error_value = detail.get("error")
+        message_value = detail.get("message")
+        messages_value = detail.get("messages")
+        errors_value = detail.get("errors")
+
+        if not isinstance(errors_value, list):
+            errors_value = []
+        detail["errors"] = errors_value
+
+        if not isinstance(messages_value, list):
+            if isinstance(message_value, str) and message_value:
+                messages_value = [message_value]
             else:
-                message = "Request failed"
-        payload["message"] = message
+                messages_value = []
+        else:
+            messages_value = [str(item) for item in messages_value if str(item)]
+        detail["messages"] = messages_value
 
-    return payload
+        if not isinstance(message_value, str) or not message_value:
+            if messages_value:
+                message_value = "; ".join(messages_value)
+            elif isinstance(error_value, str) and error_value:
+                message_value = error_value
+            else:
+                message_value = "Request failed"
+            detail["message"] = message_value
+
+        if not isinstance(error_value, str) or not error_value:
+            detail["error"] = "Invalid payload" if errors_value else "Request failed"
+
+        return detail
+
+    if isinstance(raw, list):
+        messages = [str(item) for item in raw if str(item)]
+        message = "; ".join(messages) if messages else "Validation error"
+        return {
+            "error": "Invalid payload",
+            "message": message,
+            "messages": messages or [message],
+            "errors": raw,
+        }
+
+    if isinstance(raw, str):
+        message = raw or "Request failed"
+        return {
+            "error": "Request failed",
+            "message": message,
+            "messages": [message],
+            "errors": [],
+        }
+
+    message = "Request failed"
+    return {
+        "error": "Request failed",
+        "message": message,
+        "messages": [message],
+        "errors": [],
+    }
 
 
 def wrap_success(

@@ -2,9 +2,9 @@
 
 ## Overview
 
--   This repo is a multi-tenant FastAPI service with two apps:
-    **SpendSphere** and **Shiftzy**.
--   The root app mounts both under `/api` and applies shared middleware
+-   This repo is a multi-tenant FastAPI service with three apps:
+    **SpendSphere**, **Shiftzy**, and **FundSphere**.
+-   The root app mounts all apps under `/api` and applies shared middleware
     (auth, tenant, logging).
 -   The system is strictly tenant-isolated and must maintain
     architectural consistency across apps.
@@ -18,12 +18,14 @@
 -   `main.py` is the root FastAPI app and mounts app-specific sub-apps.
 -   `apps/spendsphere/api/main.py` bootstraps SpendSphere (v1 + v2).
 -   `apps/shiftzy/api/main.py` bootstraps Shiftzy (v1).
+-   `apps/fundsphere/api/main.py` bootstraps FundSphere (v1).
 
 ### Example Full Routes
 
 -   SpendSphere v1: `/api/spendsphere/v1/...`
 -   SpendSphere v2: `/api/spendsphere/v2/...`
 -   Shiftzy v1: `/api/shiftzy/v1/...`
+-   FundSphere v1: `/api/fundsphere/v1/...`
 
 ------------------------------------------------------------------------
 
@@ -37,7 +39,7 @@
 4.  `timing_middleware`
 
 -   App-level `response_envelope_middleware` runs inside each sub-app
-    stack (SpendSphere/Shiftzy).
+    stack (SpendSphere/Shiftzy/FundSphere).
 
 ### Response Envelope Format
 
@@ -120,6 +122,9 @@ Do not introduce new environment loading mechanisms.
 **Shiftzy requires:** - `START_WEEK_NO` - `START_DATE` (must be
 Monday) - `WEEK_BEFORE` - `WEEK_AFTER` - `POSITION_AREAS_ENUM` -
 `SCHEDULE_SECTIONS_ENUM` - `DB_TABLES` - `PDF` (optional)
+
+**FundSphere requires:** - no app-specific tenant keys are enforced in
+v1 scaffold (tenant context and API key are still required)
 
 ------------------------------------------------------------------------
 
@@ -374,6 +379,34 @@ Documentation rules:
 -   Routes live under `/api/shiftzy/v1`.
 -   PDF generation uses `fpdf2`.
 -   Assets live in `apps/shiftzy/api/assets`.
+
+### FundSphere
+
+-   Routes live under `/api/fundsphere/v1`.
+-   Endpoint layout:
+    -   Core shared routes:
+        `apps/fundsphere/api/v1/endpoints/core`
+    -   Custom tenant-specific routes/helpers:
+        `apps/fundsphere/api/v1/endpoints/custom`
+-   Bootstrap route scaffold:
+    -   `GET /api/fundsphere/v1/bootstrap`
+-   Accounts route:
+    -   `GET /api/fundsphere/v1/accounts`
+    -   Reads `code`, `name`, `active` from `Accounts`
+    -   Sorted by `active DESC`, then `code ASC`
+-   Tenant validation currently enforces tenant presence only:
+    -   `apps/fundsphere/api/v1/helpers/config.py`
+-   Google Sheets integration architecture (recommended):
+    -   Backend API must return already-calculated, structured data
+        ready for table rendering.
+    -   Google Apps Script should handle sheet UI layout and read/write
+        in batch (`getValues` / `setValues`), never cell-by-cell.
+    -   Provide bulk mutation routes (for example:
+        `/bulk-update`, `/bulk-delete`) to reduce request count.
+    -   Support incremental sync (for example:
+        `updated_since`, row version) so sheets pull only changed rows.
+    -   Keep authentication and business rules in backend APIs; never
+        expose database access directly to Apps Script.
 
 ------------------------------------------------------------------------
 
