@@ -33,14 +33,20 @@ _ACCOUNT_CODES_KEY = "account_codes"
 _GOOGLE_ADS_CLIENTS_KEY = "google_ads_clients"
 _GOOGLE_ADS_BUDGETS_KEY = "google_ads_budgets"
 _GOOGLE_ADS_CAMPAIGNS_KEY = "google_ads_campaigns"
+_GOOGLE_ADS_SPENT_KEY = "google_ads_spent"
 _GOOGLE_ADS_WARNINGS_KEY = "google_ads_warnings"
 _GOOGLE_SHEETS_KEY = "google_sheets"
+_BUDGET_MANAGEMENTS_KEY = "budget_managements"
 _SERVICES_KEY = "services"
 _GOOGLE_ADS_CLIENTS_CACHE_TTL_ENV = "SPENDSPHERE_GOOGLE_ADS_CLIENTS_CACHE_TTL_SECONDS"
 _GOOGLE_ADS_CLIENTS_CACHE_TTL_FALLBACK_ENV = "ttl_time"
 _DEFAULT_SPENDSPHERE_CACHE_TTL_SECONDS = 86400
 _DEFAULT_GOOGLE_ADS_ISSUE_CACHE_TTL_SECONDS = 28800
 _DEFAULT_GOOGLE_ADS_RESOURCE_CACHE_TTL_SECONDS = 300
+_DEFAULT_SERVICES_CACHE_TTL_SECONDS = 86400
+_DEFAULT_GOOGLE_ADS_SPENT_CACHE_TTL_SECONDS = 300
+_BUDGET_MANAGEMENT_OVERVIEW_CACHE_KEY_PREFIX = "budget_management_overview::"
+_BUDGET_MANAGEMENT_SPEND_CACHE_KEY_PREFIX = "budget_management_spend_by_adtype::"
 _ACCOUNT_CODES_SCOPE_ACTIVE = "active"
 _ACCOUNT_CODES_SCOPE_ALL = "all"
 _CACHE_STORES: dict[str, FileCache] = {}
@@ -63,6 +69,31 @@ def _normalize_account_codes(account_codes: str | list[str] | None) -> list[str]
 
 def normalize_account_codes(account_codes: str | list[str] | None) -> list[str]:
     return _normalize_account_codes(account_codes)
+
+
+def filter_and_sort_services_with_ad_type(rows: list[dict]) -> list[dict]:
+    filtered: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        ad_type_code = str(row.get("adTypeCode", "")).strip()
+        if not ad_type_code:
+            continue
+        filtered.append(
+            {
+                "id": row.get("id"),
+                "name": row.get("name"),
+                "adTypeCode": ad_type_code,
+            }
+        )
+
+    filtered.sort(
+        key=lambda item: (
+            str(item.get("adTypeCode", "")).strip(),
+            str(item.get("name", "")).strip().lower(),
+        )
+    )
+    return filtered
 
 
 def _get_cache_path(include_all: bool) -> Path:
@@ -89,26 +120,6 @@ def _normalize_account_map(raw: object) -> dict[str, dict]:
             continue
         normalized[normalized_code] = account
     return normalized
-
-
-def _extract_legacy_all_accounts(raw: object) -> dict[str, dict]:
-    if not isinstance(raw, dict):
-        return {}
-    candidate = raw.get(_ACCOUNT_CODES_KEY, raw)
-    if not isinstance(candidate, dict):
-        return {}
-
-    if "default" in candidate and isinstance(candidate.get("default"), dict):
-        default_entry = candidate.get("default") or {}
-        if _ACCOUNT_CODES_SCOPE_ALL in default_entry and isinstance(
-            default_entry.get(_ACCOUNT_CODES_SCOPE_ALL), dict
-        ):
-            scope_entry = default_entry.get(_ACCOUNT_CODES_SCOPE_ALL) or {}
-            candidate = scope_entry.get("accounts", scope_entry)
-        else:
-            candidate = default_entry.get("accounts", default_entry)
-
-    return _normalize_account_map(candidate)
 
 
 def _is_legacy_account_map(raw: object) -> bool:
@@ -184,8 +195,12 @@ def _load_cache_root(cache_store: FileCache) -> dict[str, object]:
     if (
         _ACCOUNT_CODES_KEY in data
         or _GOOGLE_ADS_CLIENTS_KEY in data
+        or _GOOGLE_ADS_BUDGETS_KEY in data
+        or _GOOGLE_ADS_CAMPAIGNS_KEY in data
+        or _GOOGLE_ADS_SPENT_KEY in data
         or _GOOGLE_ADS_WARNINGS_KEY in data
         or _GOOGLE_SHEETS_KEY in data
+        or _BUDGET_MANAGEMENTS_KEY in data
         or _SERVICES_KEY in data
     ):
         root = data
@@ -207,6 +222,10 @@ def _load_cache_root(cache_store: FileCache) -> dict[str, object]:
     if not isinstance(google_ads_campaigns, dict):
         google_ads_campaigns = {}
 
+    google_ads_spent = root.get(_GOOGLE_ADS_SPENT_KEY)
+    if not isinstance(google_ads_spent, dict):
+        google_ads_spent = {}
+
     google_ads_warnings = root.get(_GOOGLE_ADS_WARNINGS_KEY)
     if not isinstance(google_ads_warnings, dict):
         google_ads_warnings = {}
@@ -214,6 +233,10 @@ def _load_cache_root(cache_store: FileCache) -> dict[str, object]:
     google_sheets = root.get(_GOOGLE_SHEETS_KEY)
     if not isinstance(google_sheets, dict):
         google_sheets = {}
+
+    budget_managements = root.get(_BUDGET_MANAGEMENTS_KEY)
+    if not isinstance(budget_managements, dict):
+        budget_managements = {}
 
     services = root.get(_SERVICES_KEY)
     if not isinstance(services, dict):
@@ -224,28 +247,16 @@ def _load_cache_root(cache_store: FileCache) -> dict[str, object]:
         _GOOGLE_ADS_CLIENTS_KEY: google_ads,
         _GOOGLE_ADS_BUDGETS_KEY: google_ads_budgets,
         _GOOGLE_ADS_CAMPAIGNS_KEY: google_ads_campaigns,
+        _GOOGLE_ADS_SPENT_KEY: google_ads_spent,
         _GOOGLE_ADS_WARNINGS_KEY: google_ads_warnings,
         _GOOGLE_SHEETS_KEY: google_sheets,
+        _BUDGET_MANAGEMENTS_KEY: budget_managements,
         _SERVICES_KEY: services,
     }
 
 
 def _write_cache_root(cache_store: FileCache, cache: dict[str, object]) -> None:
     cache_store.write_root(cache)
-
-
-def _write_cache(cache_path: Path, cache: dict[str, dict]) -> None:
-    cache_store = _get_cache_store(cache_path)
-    root = _load_cache_root(cache_store)
-    root[_ACCOUNT_CODES_KEY] = {
-        "default": {
-            _ACCOUNT_CODES_SCOPE_ACTIVE: {
-                "accounts": cache,
-                "updated_at": datetime.now(ZoneInfo(get_timezone())).isoformat(),
-            }
-        }
-    }
-    _write_cache_root(cache_store, root)
 
 
 def _normalize_tenant_cache_key(tenant_id: str | None) -> str:
@@ -350,7 +361,7 @@ def _get_cache_override(keys: tuple[str, ...]) -> int | None:
 
 
 def get_spendsphere_cache_ttl_seconds() -> int:
-    value = _get_cache_override(("ttl_time", "ttl"))
+    value = _get_cache_override(("ttl_time",))
     if value is None:
         value = _parse_ttl_value(get_env(_GOOGLE_ADS_CLIENTS_CACHE_TTL_FALLBACK_ENV))
     if value is None:
@@ -359,13 +370,7 @@ def get_spendsphere_cache_ttl_seconds() -> int:
 
 
 def get_account_codes_cache_ttl_seconds() -> int:
-    value = _get_cache_override(
-        (
-            "account_codes_ttl_time",
-            "account_code_ttl_time",
-            "accountcode_ttl_time",
-        )
-    )
+    value = _get_cache_override(("account_codes_ttl_time",))
     if value is None:
         return get_spendsphere_cache_ttl_seconds()
     return value
@@ -376,66 +381,63 @@ def get_google_ads_clients_cache_ttl_seconds() -> int:
     value = _parse_ttl_value(raw)
     if value is not None:
         return value
-    value = _get_cache_override(
-        (
-            "google_ads_clients_ttl_time",
-            "google_ads_client_ttl_time",
-            "google_ads_ttl_time",
-            "googleadsclients_ttl_time",
-        )
-    )
+    value = _get_cache_override(("google_ads_clients_ttl_time",))
     if value is None:
         return get_spendsphere_cache_ttl_seconds()
     return value
 
 
 def get_google_sheet_cache_ttl_seconds() -> int:
-    value = _get_cache_override(
-        (
-            "google_sheet_ttl_time",
-            "google_sheets_ttl_time",
-            "googlesheet_ttl_time",
-        )
-    )
+    value = _get_cache_override(("google_sheet_ttl_time",))
     if value is None:
         return get_spendsphere_cache_ttl_seconds()
     return value
 
 
+def get_budget_management_cache_ttl_seconds() -> int:
+    value = _get_cache_override(("budget_managements_ttl_time",))
+    if value is None:
+        return get_spendsphere_cache_ttl_seconds()
+    return value
+
+
+def get_budget_management_spent_cache_ttl_seconds() -> int:
+    value = _get_cache_override(("budget_management_spent_ttl_time",))
+    if value is None:
+        return get_budget_management_cache_ttl_seconds()
+    return value
+
+
 def get_google_ads_budgets_cache_ttl_seconds() -> int:
-    value = _get_cache_override(
-        (
-            "google_ads_budgets_ttl_time",
-            "google_ads_budget_ttl_time",
-            "googleadsbudgets_ttl_time",
-        )
-    )
+    value = _get_cache_override(("google_ads_budgets_ttl_time",))
     if value is None:
         return _DEFAULT_GOOGLE_ADS_RESOURCE_CACHE_TTL_SECONDS
     return value
 
 
 def get_google_ads_campaigns_cache_ttl_seconds() -> int:
-    value = _get_cache_override(
-        (
-            "google_ads_campaigns_ttl_time",
-            "google_ads_campaign_ttl_time",
-            "googleadscampaigns_ttl_time",
-        )
-    )
+    value = _get_cache_override(("google_ads_campaigns_ttl_time",))
     if value is None:
         return _DEFAULT_GOOGLE_ADS_RESOURCE_CACHE_TTL_SECONDS
     return value
 
 
+def get_google_ads_spent_cache_ttl_seconds() -> int:
+    value = _get_cache_override(("google_ads_spent_ttl_time",))
+    if value is None:
+        return _DEFAULT_GOOGLE_ADS_SPENT_CACHE_TTL_SECONDS
+    return value
+
+
+def get_services_cache_ttl_seconds() -> int:
+    value = _get_cache_override(("services_ttl_time",))
+    if value is None:
+        return _DEFAULT_SERVICES_CACHE_TTL_SECONDS
+    return value
+
+
 def get_google_ads_warning_cache_ttl_seconds() -> int:
-    value = _get_cache_override(
-        (
-            "google_ads_warnings_ttl_time",
-            "google_ads_warning_ttl_time",
-            "googleadswarnings_ttl_time",
-        )
-    )
+    value = _get_cache_override(("google_ads_warnings_ttl_time",))
     if value is None:
         return _DEFAULT_GOOGLE_ADS_ISSUE_CACHE_TTL_SECONDS
     return value
@@ -634,6 +636,328 @@ def clear_google_ads_warning_cache(
         root[_GOOGLE_ADS_WARNINGS_KEY] = warnings_cache
         _write_cache_root(cache_store, root)
         return removed
+
+
+def cleanup_stale_cache_entries(
+    *,
+    tenant_id: str | None = None,
+) -> dict[str, int]:
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+    now = datetime.now(ZoneInfo(get_timezone()))
+    today_key = now.date().isoformat()
+
+    removed: dict[str, int] = {
+        "account_codes": 0,
+        "google_ads_clients": 0,
+        "google_ads_budgets": 0,
+        "google_ads_campaigns": 0,
+        "google_ads_spent": 0,
+        "google_ads_warnings": 0,
+        "google_sheets": 0,
+        "budget_management": 0,
+        "budget_management_spent": 0,
+        "services": 0,
+    }
+
+    changed = False
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+
+        account_cache = root.get(_ACCOUNT_CODES_KEY)
+        if isinstance(account_cache, dict):
+            tenant_entry = account_cache.get(tenant_key)
+            if isinstance(tenant_entry, dict):
+                ttl_seconds = get_account_codes_cache_ttl_seconds()
+                for scope_key in (_ACCOUNT_CODES_SCOPE_ACTIVE, _ACCOUNT_CODES_SCOPE_ALL):
+                    scope_entry = tenant_entry.get(scope_key)
+                    should_remove = False
+                    if not isinstance(scope_entry, dict):
+                        if scope_key in tenant_entry:
+                            should_remove = True
+                    else:
+                        accounts = scope_entry.get("accounts")
+                        if not isinstance(accounts, dict):
+                            should_remove = True
+                        elif ttl_seconds > 0:
+                            updated_at = _parse_cache_datetime(scope_entry.get("updated_at"))
+                            if updated_at is None:
+                                should_remove = True
+                            elif (now - updated_at).total_seconds() > ttl_seconds:
+                                should_remove = True
+                    if should_remove and scope_key in tenant_entry:
+                        tenant_entry.pop(scope_key, None)
+                        removed["account_codes"] += 1
+                        changed = True
+
+                if tenant_entry:
+                    account_cache[tenant_key] = tenant_entry
+                else:
+                    account_cache.pop(tenant_key, None)
+                    changed = True
+                root[_ACCOUNT_CODES_KEY] = account_cache
+
+        clients_cache = root.get(_GOOGLE_ADS_CLIENTS_KEY)
+        if isinstance(clients_cache, dict):
+            tenant_entry = clients_cache.get(tenant_key)
+            if isinstance(tenant_entry, dict):
+                ttl_seconds = get_google_ads_clients_cache_ttl_seconds()
+                clients = tenant_entry.get("clients")
+                updated_at = _parse_cache_datetime(tenant_entry.get("updated_at"))
+                should_remove = not isinstance(clients, list)
+                if not should_remove and ttl_seconds > 0:
+                    should_remove = (
+                        updated_at is None
+                        or (now - updated_at).total_seconds() > ttl_seconds
+                    )
+                if should_remove:
+                    clients_cache.pop(tenant_key, None)
+                    root[_GOOGLE_ADS_CLIENTS_KEY] = clients_cache
+                    removed["google_ads_clients"] += 1
+                    changed = True
+
+        budgets_cache = root.get(_GOOGLE_ADS_BUDGETS_KEY)
+        if isinstance(budgets_cache, dict):
+            tenant_entry = budgets_cache.get(tenant_key)
+            if isinstance(tenant_entry, dict):
+                ttl_seconds = get_google_ads_budgets_cache_ttl_seconds()
+                for account_code in list(tenant_entry.keys()):
+                    entry = tenant_entry.get(account_code)
+                    should_remove = not isinstance(entry, dict)
+                    if not should_remove:
+                        budgets = entry.get("budgets")
+                        updated_at = _parse_cache_datetime(entry.get("updated_at"))
+                        should_remove = not isinstance(budgets, list)
+                        if not should_remove and ttl_seconds > 0:
+                            should_remove = (
+                                updated_at is None
+                                or (now - updated_at).total_seconds() > ttl_seconds
+                            )
+                    if should_remove:
+                        tenant_entry.pop(account_code, None)
+                        removed["google_ads_budgets"] += 1
+                        changed = True
+                if tenant_entry:
+                    budgets_cache[tenant_key] = tenant_entry
+                else:
+                    budgets_cache.pop(tenant_key, None)
+                root[_GOOGLE_ADS_BUDGETS_KEY] = budgets_cache
+
+        campaigns_cache = root.get(_GOOGLE_ADS_CAMPAIGNS_KEY)
+        if isinstance(campaigns_cache, dict):
+            tenant_entry = campaigns_cache.get(tenant_key)
+            if isinstance(tenant_entry, dict):
+                ttl_seconds = get_google_ads_campaigns_cache_ttl_seconds()
+                for account_code in list(tenant_entry.keys()):
+                    entry = tenant_entry.get(account_code)
+                    should_remove = not isinstance(entry, dict)
+                    if not should_remove:
+                        campaigns = entry.get("campaigns")
+                        updated_at = _parse_cache_datetime(entry.get("updated_at"))
+                        should_remove = not isinstance(campaigns, list)
+                        if not should_remove and ttl_seconds > 0:
+                            should_remove = (
+                                updated_at is None
+                                or (now - updated_at).total_seconds() > ttl_seconds
+                            )
+                    if should_remove:
+                        tenant_entry.pop(account_code, None)
+                        removed["google_ads_campaigns"] += 1
+                        changed = True
+                if tenant_entry:
+                    campaigns_cache[tenant_key] = tenant_entry
+                else:
+                    campaigns_cache.pop(tenant_key, None)
+                root[_GOOGLE_ADS_CAMPAIGNS_KEY] = campaigns_cache
+
+        spent_cache = root.get(_GOOGLE_ADS_SPENT_KEY)
+        if isinstance(spent_cache, dict):
+            tenant_entry = spent_cache.get(tenant_key)
+            if isinstance(tenant_entry, dict):
+                ttl_seconds = get_google_ads_spent_cache_ttl_seconds()
+                for account_code in list(tenant_entry.keys()):
+                    account_entry = tenant_entry.get(account_code)
+                    if not isinstance(account_entry, dict):
+                        tenant_entry.pop(account_code, None)
+                        removed["google_ads_spent"] += 1
+                        changed = True
+                        continue
+
+                    removed_in_account = False
+                    for period_key in list(account_entry.keys()):
+                        entry = account_entry.get(period_key)
+                        should_remove = not isinstance(entry, dict)
+                        if not should_remove:
+                            spends = entry.get("spends")
+                            updated_at = _parse_cache_datetime(entry.get("updated_at"))
+                            should_remove = not isinstance(spends, list)
+                            if not should_remove and ttl_seconds > 0:
+                                should_remove = (
+                                    updated_at is None
+                                    or (now - updated_at).total_seconds() > ttl_seconds
+                                )
+                        if should_remove:
+                            account_entry.pop(period_key, None)
+                            removed["google_ads_spent"] += 1
+                            removed_in_account = True
+
+                    if not account_entry:
+                        tenant_entry.pop(account_code, None)
+                        removed_in_account = True
+
+                    if removed_in_account:
+                        changed = True
+
+                if tenant_entry:
+                    spent_cache[tenant_key] = tenant_entry
+                else:
+                    spent_cache.pop(tenant_key, None)
+                root[_GOOGLE_ADS_SPENT_KEY] = spent_cache
+
+        warnings_cache = root.get(_GOOGLE_ADS_WARNINGS_KEY)
+        if isinstance(warnings_cache, dict):
+            tenant_entry = warnings_cache.get(tenant_key)
+            if isinstance(tenant_entry, dict):
+                ttl_seconds = get_google_ads_warning_cache_ttl_seconds()
+                for fingerprint in list(tenant_entry.keys()):
+                    entry = tenant_entry.get(fingerprint)
+                    should_remove = not isinstance(entry, dict)
+                    if not should_remove:
+                        updated_at = _parse_cache_datetime(entry.get("updated_at"))
+                        if updated_at is None:
+                            should_remove = True
+                        else:
+                            cached_day = str(entry.get("date", "")).strip()
+                            if not cached_day:
+                                cached_day = updated_at.date().isoformat()
+                            if cached_day != today_key:
+                                should_remove = True
+                            elif ttl_seconds > 0 and (
+                                (now - updated_at).total_seconds() > ttl_seconds
+                            ):
+                                should_remove = True
+                    if should_remove:
+                        tenant_entry.pop(fingerprint, None)
+                        removed["google_ads_warnings"] += 1
+                        changed = True
+
+                if tenant_entry:
+                    warnings_cache[tenant_key] = tenant_entry
+                else:
+                    warnings_cache.pop(tenant_key, None)
+                root[_GOOGLE_ADS_WARNINGS_KEY] = warnings_cache
+
+        budget_managements_cache = root.get(_BUDGET_MANAGEMENTS_KEY)
+        if isinstance(budget_managements_cache, dict):
+            tenant_entry = budget_managements_cache.get(tenant_key)
+            if isinstance(tenant_entry, dict):
+                for cache_key in list(tenant_entry.keys()):
+                    entry = tenant_entry.get(cache_key)
+                    ttl_seconds = (
+                        get_budget_management_spent_cache_ttl_seconds()
+                        if str(cache_key).startswith(
+                            _BUDGET_MANAGEMENT_SPEND_CACHE_KEY_PREFIX
+                        )
+                        else get_budget_management_cache_ttl_seconds()
+                    )
+                    should_remove = not isinstance(entry, dict)
+                    if not should_remove:
+                        rows = entry.get("rows")
+                        updated_at = _parse_cache_datetime(entry.get("updated_at"))
+                        should_remove = not isinstance(rows, list)
+                        if not should_remove and ttl_seconds > 0:
+                            should_remove = (
+                                updated_at is None
+                                or (now - updated_at).total_seconds() > ttl_seconds
+                            )
+                    if should_remove:
+                        tenant_entry.pop(cache_key, None)
+                        if str(cache_key).startswith(
+                            _BUDGET_MANAGEMENT_OVERVIEW_CACHE_KEY_PREFIX
+                        ):
+                            removed["budget_management"] += 1
+                        elif str(cache_key).startswith(
+                            _BUDGET_MANAGEMENT_SPEND_CACHE_KEY_PREFIX
+                        ):
+                            removed["budget_management_spent"] += 1
+                        changed = True
+
+                if tenant_entry:
+                    budget_managements_cache[tenant_key] = tenant_entry
+                else:
+                    budget_managements_cache.pop(tenant_key, None)
+                root[_BUDGET_MANAGEMENTS_KEY] = budget_managements_cache
+
+        sheets_cache = root.get(_GOOGLE_SHEETS_KEY)
+        if isinstance(sheets_cache, dict):
+            tenant_entry = sheets_cache.get(tenant_key)
+            if isinstance(tenant_entry, dict):
+                for sheet_key in list(tenant_entry.keys()):
+                    entry = tenant_entry.get(sheet_key)
+                    ttl_seconds = get_google_sheet_cache_ttl_seconds()
+                    if _is_budget_management_cache_key(str(sheet_key)):
+                        ttl_seconds = (
+                            get_budget_management_spent_cache_ttl_seconds()
+                            if str(sheet_key).startswith(
+                                _BUDGET_MANAGEMENT_SPEND_CACHE_KEY_PREFIX
+                            )
+                            else get_budget_management_cache_ttl_seconds()
+                        )
+                    should_remove = not isinstance(entry, dict)
+                    if not should_remove:
+                        rows = entry.get("rows")
+                        updated_at = _parse_cache_datetime(entry.get("updated_at"))
+                        should_remove = not isinstance(rows, list)
+                        if not should_remove and ttl_seconds > 0:
+                            should_remove = (
+                                updated_at is None
+                                or (now - updated_at).total_seconds() > ttl_seconds
+                            )
+                    if should_remove:
+                        tenant_entry.pop(sheet_key, None)
+                        if str(sheet_key).startswith(
+                            _BUDGET_MANAGEMENT_OVERVIEW_CACHE_KEY_PREFIX
+                        ):
+                            removed["budget_management"] += 1
+                        elif str(sheet_key).startswith(
+                            _BUDGET_MANAGEMENT_SPEND_CACHE_KEY_PREFIX
+                        ):
+                            removed["budget_management_spent"] += 1
+                        else:
+                            removed["google_sheets"] += 1
+                        changed = True
+
+                if tenant_entry:
+                    sheets_cache[tenant_key] = tenant_entry
+                else:
+                    sheets_cache.pop(tenant_key, None)
+                root[_GOOGLE_SHEETS_KEY] = sheets_cache
+
+        services_cache = root.get(_SERVICES_KEY)
+        if isinstance(services_cache, dict):
+            tenant_entry = services_cache.get(tenant_key)
+            if isinstance(tenant_entry, dict):
+                ttl_seconds = get_services_cache_ttl_seconds()
+                rows = tenant_entry.get("rows")
+                updated_at = _parse_cache_datetime(tenant_entry.get("updated_at"))
+                should_remove = not isinstance(rows, list)
+                if not should_remove and ttl_seconds > 0:
+                    should_remove = (
+                        updated_at is None
+                        or (now - updated_at).total_seconds() > ttl_seconds
+                    )
+                if should_remove:
+                    services_cache.pop(tenant_key, None)
+                    root[_SERVICES_KEY] = services_cache
+                    removed["services"] += 1
+                    changed = True
+
+        if changed:
+            _write_cache_root(cache_store, root)
+
+    return removed
 
 
 def _write_account_codes_cache(
@@ -892,6 +1216,400 @@ def set_google_ads_campaigns_cache(
         _write_cache_root(cache_store, root)
 
 
+def get_google_ads_spent_cache_entries(
+    account_codes: list[str] | None,
+    *,
+    month: int,
+    year: int,
+    tenant_id: str | None = None,
+) -> tuple[dict[str, list[dict]], set[str]]:
+    codes = _normalize_account_codes(account_codes)
+    if not codes:
+        return {}, set()
+
+    period_key = f"{year:04d}-{month:02d}"
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+    ttl_seconds = get_google_ads_spent_cache_ttl_seconds()
+    now = datetime.now(ZoneInfo(get_timezone()))
+
+    cached: dict[str, list[dict]] = {}
+    missing: set[str] = set()
+    cache_changed = False
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+        spent_cache = root.get(_GOOGLE_ADS_SPENT_KEY)
+        if not isinstance(spent_cache, dict):
+            return {}, set(codes)
+
+        tenant_entry = spent_cache.get(tenant_key)
+        if not isinstance(tenant_entry, dict):
+            return {}, set(codes)
+
+        for code in codes:
+            account_entry = tenant_entry.get(code)
+            if not isinstance(account_entry, dict):
+                missing.add(code)
+                continue
+
+            if ttl_seconds > 0:
+                for account_period_key in list(account_entry.keys()):
+                    account_period_entry = account_entry.get(account_period_key)
+                    if not isinstance(account_period_entry, dict):
+                        account_entry.pop(account_period_key, None)
+                        cache_changed = True
+                        continue
+                    updated_at = _parse_cache_datetime(
+                        account_period_entry.get("updated_at")
+                    )
+                    if updated_at is None:
+                        account_entry.pop(account_period_key, None)
+                        cache_changed = True
+                        continue
+                    age_seconds = (now - updated_at).total_seconds()
+                    if age_seconds > ttl_seconds:
+                        account_entry.pop(account_period_key, None)
+                        cache_changed = True
+
+                if not account_entry:
+                    tenant_entry.pop(code, None)
+                    cache_changed = True
+                    missing.add(code)
+                    continue
+
+            entry = account_entry.get(period_key)
+            if not isinstance(entry, dict):
+                missing.add(code)
+                continue
+
+            spends = entry.get("spends")
+            if not isinstance(spends, list):
+                account_entry.pop(period_key, None)
+                cache_changed = True
+                if not account_entry:
+                    tenant_entry.pop(code, None)
+                missing.add(code)
+                continue
+
+            if ttl_seconds <= 0:
+                cached[code] = spends
+                continue
+
+            updated_at = _parse_cache_datetime(entry.get("updated_at"))
+            if updated_at is None:
+                account_entry.pop(period_key, None)
+                cache_changed = True
+                if not account_entry:
+                    tenant_entry.pop(code, None)
+                missing.add(code)
+                continue
+
+            age_seconds = (now - updated_at).total_seconds()
+            if age_seconds > ttl_seconds:
+                account_entry.pop(period_key, None)
+                cache_changed = True
+                if not account_entry:
+                    tenant_entry.pop(code, None)
+                missing.add(code)
+                continue
+
+            cached[code] = spends
+
+        if cache_changed:
+            if tenant_entry:
+                spent_cache[tenant_key] = tenant_entry
+            else:
+                spent_cache.pop(tenant_key, None)
+            root[_GOOGLE_ADS_SPENT_KEY] = spent_cache
+            _write_cache_root(cache_store, root)
+
+    return cached, missing
+
+
+def set_google_ads_spent_cache(
+    account_code: str,
+    *,
+    month: int,
+    year: int,
+    spends: list[dict],
+    tenant_id: str | None = None,
+) -> None:
+    code = standardize_account_code(account_code)
+    if not code:
+        return
+
+    period_key = f"{year:04d}-{month:02d}"
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+        spent_cache = root.get(_GOOGLE_ADS_SPENT_KEY)
+        if not isinstance(spent_cache, dict):
+            spent_cache = {}
+        tenant_entry = spent_cache.get(tenant_key)
+        if not isinstance(tenant_entry, dict):
+            tenant_entry = {}
+        account_entry = tenant_entry.get(code)
+        if not isinstance(account_entry, dict):
+            account_entry = {}
+
+        account_entry[period_key] = {
+            "spends": spends,
+            "updated_at": datetime.now(ZoneInfo(get_timezone())).isoformat(),
+        }
+        tenant_entry[code] = account_entry
+        spent_cache[tenant_key] = tenant_entry
+        root[_GOOGLE_ADS_SPENT_KEY] = spent_cache
+        _write_cache_root(cache_store, root)
+
+
+def _is_budget_management_cache_key(cache_key: str) -> bool:
+    normalized = str(cache_key or "").strip()
+    return normalized.startswith(_BUDGET_MANAGEMENT_OVERVIEW_CACHE_KEY_PREFIX) or normalized.startswith(
+        _BUDGET_MANAGEMENT_SPEND_CACHE_KEY_PREFIX
+    )
+
+
+def _migrate_legacy_budget_management_cache_entry(
+    root: dict[str, object],
+    *,
+    tenant_key: str,
+    cache_key: str,
+) -> tuple[dict | None, bool]:
+    google_sheets = root.get(_GOOGLE_SHEETS_KEY)
+    if not isinstance(google_sheets, dict):
+        return None, False
+    sheets_tenant_entry = google_sheets.get(tenant_key)
+    if not isinstance(sheets_tenant_entry, dict):
+        return None, False
+    entry = sheets_tenant_entry.get(cache_key)
+    if not isinstance(entry, dict):
+        return None, False
+
+    budget_managements = root.get(_BUDGET_MANAGEMENTS_KEY)
+    if not isinstance(budget_managements, dict):
+        budget_managements = {}
+    budget_managements_tenant_entry = budget_managements.get(tenant_key)
+    if not isinstance(budget_managements_tenant_entry, dict):
+        budget_managements_tenant_entry = {}
+    budget_managements_tenant_entry[cache_key] = entry
+    budget_managements[tenant_key] = budget_managements_tenant_entry
+    root[_BUDGET_MANAGEMENTS_KEY] = budget_managements
+
+    sheets_tenant_entry.pop(cache_key, None)
+    if sheets_tenant_entry:
+        google_sheets[tenant_key] = sheets_tenant_entry
+    else:
+        google_sheets.pop(tenant_key, None)
+    root[_GOOGLE_SHEETS_KEY] = google_sheets
+    return entry, True
+
+
+def get_budget_management_cache_entry(
+    cache_key: str,
+    *,
+    config_hash: str | None = None,
+    tenant_id: str | None = None,
+) -> tuple[list[dict] | None, bool]:
+    def _delete_entry(root: dict[str, object]) -> None:
+        budget_managements = root.get(_BUDGET_MANAGEMENTS_KEY)
+        if not isinstance(budget_managements, dict):
+            return
+        tenant_entry = budget_managements.get(tenant_key)
+        if not isinstance(tenant_entry, dict):
+            return
+        if cache_key not in tenant_entry:
+            return
+        tenant_entry.pop(cache_key, None)
+        if tenant_entry:
+            budget_managements[tenant_key] = tenant_entry
+        else:
+            budget_managements.pop(tenant_key, None)
+        root[_BUDGET_MANAGEMENTS_KEY] = budget_managements
+        _write_cache_root(cache_store, root)
+
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+        cache_changed = False
+
+        budget_managements = root.get(_BUDGET_MANAGEMENTS_KEY)
+        if not isinstance(budget_managements, dict):
+            budget_managements = {}
+
+        tenant_entry = budget_managements.get(tenant_key)
+        if not isinstance(tenant_entry, dict):
+            tenant_entry = {}
+
+        entry = tenant_entry.get(cache_key)
+        if not isinstance(entry, dict):
+            entry, migrated = _migrate_legacy_budget_management_cache_entry(
+                root,
+                tenant_key=tenant_key,
+                cache_key=cache_key,
+            )
+            if migrated:
+                cache_changed = True
+
+        if not isinstance(entry, dict):
+            if cache_changed:
+                _write_cache_root(cache_store, root)
+            return None, False
+
+        rows = entry.get("rows")
+        if not isinstance(rows, list):
+            _delete_entry(root)
+            return None, False
+
+        entry_hash = (
+            entry.get("config_hash")
+            if isinstance(entry.get("config_hash"), str)
+            else None
+        )
+        hash_mismatch = bool(config_hash and entry_hash and entry_hash != config_hash)
+        if hash_mismatch:
+            _delete_entry(root)
+            return None, True
+
+        ttl_seconds = (
+            get_budget_management_spent_cache_ttl_seconds()
+            if str(cache_key).startswith(_BUDGET_MANAGEMENT_SPEND_CACHE_KEY_PREFIX)
+            else get_budget_management_cache_ttl_seconds()
+        )
+        if ttl_seconds <= 0:
+            if cache_changed:
+                _write_cache_root(cache_store, root)
+            return rows, False
+
+        updated_at = _parse_cache_datetime(entry.get("updated_at"))
+        if updated_at is None:
+            _delete_entry(root)
+            return None, True
+
+        now = datetime.now(ZoneInfo(get_timezone()))
+        age_seconds = (now - updated_at).total_seconds()
+        if age_seconds > ttl_seconds:
+            _delete_entry(root)
+            return None, True
+
+        if cache_changed:
+            _write_cache_root(cache_store, root)
+        return rows, False
+
+
+def set_budget_management_cache(
+    cache_key: str,
+    rows: list[dict],
+    *,
+    config_hash: str | None = None,
+    tenant_id: str | None = None,
+) -> None:
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+        budget_managements = root.get(_BUDGET_MANAGEMENTS_KEY)
+        if not isinstance(budget_managements, dict):
+            budget_managements = {}
+        tenant_entry = budget_managements.get(tenant_key)
+        if not isinstance(tenant_entry, dict):
+            tenant_entry = {}
+        tenant_entry[cache_key] = {
+            "rows": rows,
+            "updated_at": datetime.now(ZoneInfo(get_timezone())).isoformat(),
+            "config_hash": config_hash,
+        }
+        budget_managements[tenant_key] = tenant_entry
+        root[_BUDGET_MANAGEMENTS_KEY] = budget_managements
+        _write_cache_root(cache_store, root)
+
+
+def clear_budget_management_cache_entries(
+    *,
+    cache_keys: list[str] | None = None,
+    key_prefixes: list[str] | None = None,
+    tenant_id: str | None = None,
+) -> int:
+    normalized_keys = {
+        str(value).strip()
+        for value in (cache_keys or [])
+        if str(value).strip()
+    }
+    normalized_prefixes = tuple(
+        str(value).strip()
+        for value in (key_prefixes or [])
+        if str(value).strip()
+    )
+
+    def _collect_keys(entry: dict[str, object]) -> list[str]:
+        if not normalized_keys and not normalized_prefixes:
+            return [k for k in entry.keys() if _is_budget_management_cache_key(k)]
+        selected: list[str] = []
+        for key in list(entry.keys()):
+            if key in normalized_keys:
+                selected.append(key)
+                continue
+            if normalized_prefixes and any(
+                key.startswith(prefix) for prefix in normalized_prefixes
+            ):
+                selected.append(key)
+        return selected
+
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+        removed = 0
+
+        budget_managements = root.get(_BUDGET_MANAGEMENTS_KEY)
+        if isinstance(budget_managements, dict):
+            tenant_entry = budget_managements.get(tenant_key)
+            if isinstance(tenant_entry, dict):
+                keys_to_remove = _collect_keys(tenant_entry)
+                for key in keys_to_remove:
+                    tenant_entry.pop(key, None)
+                    removed += 1
+                if tenant_entry:
+                    budget_managements[tenant_key] = tenant_entry
+                else:
+                    budget_managements.pop(tenant_key, None)
+                root[_BUDGET_MANAGEMENTS_KEY] = budget_managements
+
+        # Backward-compatible cleanup for legacy entries that were previously
+        # stored under google_sheets.
+        google_sheets = root.get(_GOOGLE_SHEETS_KEY)
+        if isinstance(google_sheets, dict):
+            sheets_tenant_entry = google_sheets.get(tenant_key)
+            if isinstance(sheets_tenant_entry, dict):
+                legacy_keys = [
+                    key for key in _collect_keys(sheets_tenant_entry)
+                    if _is_budget_management_cache_key(key)
+                ]
+                for key in legacy_keys:
+                    sheets_tenant_entry.pop(key, None)
+                    removed += 1
+                if sheets_tenant_entry:
+                    google_sheets[tenant_key] = sheets_tenant_entry
+                else:
+                    google_sheets.pop(tenant_key, None)
+                root[_GOOGLE_SHEETS_KEY] = google_sheets
+
+        if removed:
+            _write_cache_root(cache_store, root)
+        return removed
+
+
 def get_google_sheet_cache_entry(
     sheet_key: str,
     *,
@@ -1066,19 +1784,41 @@ def get_services_cache_entry(
 
     with cache_store.lock():
         root = _load_cache_root(cache_store)
+        services_cache = root.get(_SERVICES_KEY)
+        if not isinstance(services_cache, dict):
+            return None
 
-    services_cache = root.get(_SERVICES_KEY)
-    if not isinstance(services_cache, dict):
-        return None
+        tenant_entry = services_cache.get(tenant_key)
+        if not isinstance(tenant_entry, dict):
+            return None
 
-    tenant_entry = services_cache.get(tenant_key)
-    if not isinstance(tenant_entry, dict):
-        return None
+        rows = tenant_entry.get("rows")
+        if not isinstance(rows, list):
+            services_cache.pop(tenant_key, None)
+            root[_SERVICES_KEY] = services_cache
+            _write_cache_root(cache_store, root)
+            return None
 
-    rows = tenant_entry.get("rows")
-    if not isinstance(rows, list):
-        return None
-    return rows
+        ttl_seconds = get_services_cache_ttl_seconds()
+        if ttl_seconds <= 0:
+            return rows
+
+        updated_at = _parse_cache_datetime(tenant_entry.get("updated_at"))
+        if updated_at is None:
+            services_cache.pop(tenant_key, None)
+            root[_SERVICES_KEY] = services_cache
+            _write_cache_root(cache_store, root)
+            return None
+
+        now = datetime.now(ZoneInfo(get_timezone()))
+        age_seconds = (now - updated_at).total_seconds()
+        if age_seconds > ttl_seconds:
+            services_cache.pop(tenant_key, None)
+            root[_SERVICES_KEY] = services_cache
+            _write_cache_root(cache_store, root)
+            return None
+
+        return rows
 
 
 def set_services_cache(
@@ -1143,6 +1883,22 @@ def refresh_services_cache(
 
     set_services_cache(payload, tenant_id=tenant_id)
     return payload
+
+
+def get_services(
+    *,
+    department_code: str = "DIGM",
+    refresh_cache: bool = False,
+    tenant_id: str | None = None,
+) -> list[dict]:
+    if not refresh_cache:
+        cached = get_services_cache_entry(tenant_id=tenant_id)
+        if cached is not None:
+            return cached
+    return refresh_services_cache(
+        department_code=department_code,
+        tenant_id=tenant_id,
+    )
 
 
 def refresh_account_codes_cache(

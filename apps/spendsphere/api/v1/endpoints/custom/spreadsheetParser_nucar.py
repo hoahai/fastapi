@@ -11,10 +11,10 @@ from apps.spendsphere.api.v1.helpers.config import (
     get_service_mapping,
     get_spendsphere_sheets,
 )
-from apps.spendsphere.api.v1.helpers.db_queries import get_active_services_by_department
 from apps.spendsphere.api.v1.helpers.ggSheet import get_rollovers
 from apps.spendsphere.api.v1.helpers.pipeline import build_transform_rows_for_period
 from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
+    get_services,
     get_google_sheet_cache_entry,
     set_google_sheet_cache,
 )
@@ -252,7 +252,7 @@ def get_nucar_recommended_budget(
         }
 
     service_mapping = get_service_mapping()
-    services = get_active_services_by_department(department_code="DIGM")
+    services = get_services(department_code="DIGM")
     services_by_id = {
         str(service.get("id", "")).strip(): str(service.get("name", "")).strip()
         for service in services
@@ -355,7 +355,7 @@ def get_nucar_recommended_budgets_bulk(
         return []
 
     service_mapping = get_service_mapping()
-    services = get_active_services_by_department(department_code="DIGM")
+    services = get_services(department_code="DIGM")
     services_by_id = {
         str(service.get("id", "")).strip(): str(service.get("name", "")).strip()
         for service in services

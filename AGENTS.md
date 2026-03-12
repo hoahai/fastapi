@@ -345,7 +345,7 @@ Documentation rules:
             until TTL expires, and always reset at the start of a new local day.
         -   Default TTL is 24 hours (`86400` seconds).
         -   Tenant override is under `CACHE` with
-            `google_ads_warnings_ttl_time` (or `google_ads_warning_ttl_time`).
+            `google_ads_warnings_ttl_time`.
         -   TTL `<= 0` keeps same-day dedupe and still resets on new day.
     -   Warning logging policy:
         -   Row-detail warnings are logged in `Google Ads pipeline warnings`.
@@ -357,17 +357,73 @@ Documentation rules:
     -   `dryRun=false`: executes budget and campaign mutations in
         parallel.
 
-### SpendSphere UI Load Cache Refresh (Current)
+### SpendSphere Cache Behavior (Current)
 
--   Applies to:
-    -   `GET /api/spendsphere/v1/uis/load`
--   Query parameter:
-    -   `refresh_google_ads_caches` (default `false`)
--   Behavior:
-    -   When `true`, the route refreshes Google Ads clients, campaign,
-        and budget caches before assembling UI load data.
-    -   When `false`, the route uses normal cache-first behavior with
-        TTL/staleness checks.
+-   Cache store and tenant scoping:
+    -   SpendSphere caches are stored in `caches.json` and scoped by
+        tenant key.
+    -   Active cache buckets are:
+        `account_codes`, `google_ads_clients`,
+        `google_ads_budgets`, `google_ads_campaigns`,
+        `google_ads_spent`, `google_ads_warnings`,
+        `google_sheets`, `budget_managements`, `services`.
+    -   `budget_management_overview` payload is cached in
+        `budget_managements` bucket (cache key prefix
+        `budget_management_overview::`), not under `google_sheets`.
+    -   Legacy budget-management entries in `google_sheets` are
+        migrated to `budget_managements` lazily on read.
+-   Default TTL + tenant override:
+    -   `google_ads_spent`: default `300` seconds; override via
+        `CACHE.google_ads_spent_ttl_time`.
+    -   `budget_managements` (overview cache):
+        default `86400` seconds; override via
+        `CACHE.budget_managements_ttl_time`.
+    -   `budget_managements` spend-by-adtype cache:
+        default follows budget-management TTL; override via
+        `CACHE.budget_management_spent_ttl_time`.
+    -   `services`: default `86400` seconds; override via
+        `CACHE.services_ttl_time`.
+    -   Other cache TTLs follow current helper/config behavior and
+        `CACHE.md`.
+-   Fetch-level cache-first behavior:
+    -   Cache reads are executed at data-fetch layer (Google Ads/Sheets/DB helper level),
+        not only at route level.
+    -   For Google Ads account/client, budgets, campaigns, spend, services,
+        and budget-management overview/spend helper flows:
+        read cache first, fetch missing/stale entries only, then write fresh
+        data back to cache.
+-   Route fresh-data controls:
+    -   `GET /api/spendsphere/v1/uis/load` uses `fresh_data`
+        (default `false`).
+    -   `fresh_data=true` bypasses cache-backed sources for the request:
+        Google Ads (clients/campaigns/budgets/spend) and
+        Google Sheets (`rollovers`, `active_period`), then updates cache with
+        fresh results.
+    -   `GET /api/spendsphere/v1/uis/budgetManagament/load` supports:
+        `fresh_data` (default `false`) and
+        `fresh_spent_data` (default `false`).
+    -   `fresh_data=true` bypasses budget-management overview and related
+        Google Ads cache-first paths for that request.
+    -   `fresh_spent_data=true` forces fresh spend recomputation paths
+        for that request.
+-   Cache management endpoints:
+    -   `POST /api/spendsphere/v1/cache/refresh` accepts only exact keys:
+        `account_codes`, `google_ads_clients`, `google_ads_budgets`,
+        `google_ads_campaigns`, `google_ads_spent`,
+        `google_ads_warnings`, `google_sheets`,
+        `budget_management`, `budget_management_spent`, `services`.
+    -   `POST /api/spendsphere/v1/cache/refresh` with
+        `budget_management` forces a fresh overview rebuild
+        (`fresh_data=true`) before writing cache.
+    -   `POST /api/spendsphere/v1/cache/refresh` with
+        `budget_management_spent` forces fresh spend recompute
+        (`fresh_spent_data=true`) before writing cache.
+    -   `POST /api/spendsphere/v1/cache/cleanup` removes stale cache data
+        across all supported SpendSphere caches and returns removed counts.
+-   Stale cleanup behavior:
+    -   Lazy cleanup is applied during cache reads for stale/invalid entries.
+    -   Entries that are never read again can be proactively removed by
+        calling `POST /api/spendsphere/v1/cache/cleanup`.
 
 ### Shiftzy
 

@@ -35,12 +35,12 @@ from apps.spendsphere.api.v1.helpers.ggAd import (
     get_ggad_spents,
 )
 from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
-    clear_google_sheet_cache_entries,
-    get_google_sheet_cache_entry,
-    get_services_cache_entry,
+    clear_budget_management_cache_entries,
+    filter_and_sort_services_with_ad_type,
+    get_budget_management_cache_entry,
+    get_services,
     normalize_account_codes,
-    refresh_services_cache,
-    set_google_sheet_cache,
+    set_budget_management_cache,
     validate_account_codes,
 )
 from shared.tenant import get_tenant_id
@@ -235,15 +235,17 @@ def _extract_google_spend_cache_generated_at_epoch(rows: list[dict]) -> int | No
 
 
 def invalidate_budget_management_overview_cache(month: int, year: int) -> int:
-    return clear_google_sheet_cache_entries(
-        sheet_keys=[_build_budget_overview_cache_key(month, year)]
+    return clear_budget_management_cache_entries(
+        cache_keys=[_build_budget_overview_cache_key(month, year)]
     )
 
 
-def refresh_budget_management_overview_cache(
+def refresh_budget_management_cache(
     *,
     month: int | None = None,
     year: int | None = None,
+    fresh_data: bool = False,
+    fresh_spent_data: bool = False,
 ) -> dict[str, object]:
     period_month, period_year = _resolve_period(month, year)
     invalidate_budget_management_overview_cache(period_month, period_year)
@@ -251,18 +253,52 @@ def refresh_budget_management_overview_cache(
         account_codes=None,
         month=period_month,
         year=period_year,
+        fresh_data=fresh_data,
+        fresh_spent_data=fresh_spent_data,
     )
     table_data = payload.get("tableData")
     spent_data = payload.get("spentData")
     recommended_data = payload.get("recommended")
+    cached_table_data = table_data if isinstance(table_data, list) else []
+    cached_spent_data = spent_data if isinstance(spent_data, list) else []
+    cached_recommended_data = (
+        recommended_data if isinstance(recommended_data, list) else []
+    )
+    set_budget_management_cache(
+        _build_budget_overview_cache_key(period_month, period_year),
+        [
+            {
+                "tableData": cached_table_data,
+                "spentData": cached_spent_data,
+                "recommended": cached_recommended_data,
+            }
+        ],
+        config_hash=_BUDGET_OVERVIEW_CACHE_HASH,
+    )
     return {
         "period": {"month": period_month, "year": period_year},
-        "tableData": len(table_data) if isinstance(table_data, list) else 0,
-        "spentData": len(spent_data) if isinstance(spent_data, list) else 0,
+        "tableData": len(cached_table_data),
+        "spentData": len(cached_spent_data),
         "recommended": (
-            len(recommended_data) if isinstance(recommended_data, list) else 0
+            len(cached_recommended_data)
         ),
     }
+
+
+def refresh_budget_management_overview_cache(
+    *,
+    month: int | None = None,
+    year: int | None = None,
+    fresh_data: bool = False,
+    fresh_spent_data: bool = False,
+) -> dict[str, object]:
+    # Backward-compatible alias for older callers.
+    return refresh_budget_management_cache(
+        month=month,
+        year=year,
+        fresh_data=fresh_data,
+        fresh_spent_data=fresh_spent_data,
+    )
 
 
 def _format_decimal_2(value: object) -> str:
@@ -312,6 +348,7 @@ def _sum_google_spend_by_account_adtype(
     *,
     month: int,
     year: int,
+    refresh_spent_cache: bool = False,
     spend_lookup_context: tuple[
         list[dict],
         dict[tuple[str, str], str],
@@ -337,6 +374,7 @@ def _sum_google_spend_by_account_adtype(
         target_accounts,
         month=month,
         year=year,
+        refresh_cache=refresh_spent_cache,
     )
     totals: dict[tuple[str, str], Decimal] = {}
     for spend_row in spends:
@@ -361,6 +399,7 @@ def _sum_google_spend_by_account_adtype_cache_first(
     month: int,
     year: int,
     max_age_seconds: int | None = None,
+    refresh_spent_data: bool = False,
     spend_lookup_context: tuple[
         list[dict],
         dict[tuple[str, str], str],
@@ -376,27 +415,29 @@ def _sum_google_spend_by_account_adtype_cache_first(
         month=month,
         year=year,
     )
-    cached_payload, is_stale = get_google_sheet_cache_entry(
-        cache_key,
-        config_hash=_BUDGET_SPEND_CACHE_HASH,
-    )
-    if cached_payload is not None and not is_stale:
-        if max_age_seconds is None:
-            return _deserialize_google_spend_lookup(cached_payload)
-
-        generated_at_epoch = _extract_google_spend_cache_generated_at_epoch(cached_payload)
-        if generated_at_epoch is not None:
-            age_seconds = int(time.time()) - generated_at_epoch
-            if age_seconds <= max_age_seconds:
+    if not refresh_spent_data:
+        cached_payload, is_stale = get_budget_management_cache_entry(
+            cache_key,
+            config_hash=_BUDGET_SPEND_CACHE_HASH,
+        )
+        if cached_payload is not None and not is_stale:
+            if max_age_seconds is None:
                 return _deserialize_google_spend_lookup(cached_payload)
+
+            generated_at_epoch = _extract_google_spend_cache_generated_at_epoch(cached_payload)
+            if generated_at_epoch is not None:
+                age_seconds = int(time.time()) - generated_at_epoch
+                if age_seconds <= max_age_seconds:
+                    return _deserialize_google_spend_lookup(cached_payload)
 
     spend_lookup = _sum_google_spend_by_account_adtype(
         account_codes,
         month=month,
         year=year,
+        refresh_spent_cache=refresh_spent_data,
         spend_lookup_context=spend_lookup_context,
     )
-    set_google_sheet_cache(
+    set_budget_management_cache(
         cache_key,
         _build_google_spend_cache_rows(spend_lookup),
         config_hash=_BUDGET_SPEND_CACHE_HASH,
@@ -406,12 +447,14 @@ def _sum_google_spend_by_account_adtype_cache_first(
 
 def _build_google_spend_lookup_context(
     account_codes: list[str],
+    *,
+    refresh_google_ads_caches: bool = False,
 ) -> tuple[list[dict], dict[tuple[str, str], str], dict[tuple[str, str], str]]:
     if not account_codes:
         return [], {}, {}
 
     requested_codes = set(account_codes)
-    google_accounts = get_ggad_accounts(refresh_cache=False)
+    google_accounts = get_ggad_accounts(refresh_cache=refresh_google_ads_caches)
     target_accounts = [
         account
         for account in google_accounts
@@ -420,7 +463,10 @@ def _build_google_spend_lookup_context(
     if not target_accounts:
         return [], {}, {}
 
-    campaigns = get_ggad_campaigns(target_accounts, refresh_cache=False)
+    campaigns = get_ggad_campaigns(
+        target_accounts,
+        refresh_cache=refresh_google_ads_caches,
+    )
     campaign_adtype_by_campaign: dict[tuple[str, str], str] = {}
     campaign_adtype_by_budget: dict[tuple[str, str], str] = {}
     for campaign in campaigns:
@@ -722,30 +768,6 @@ def ensure_budget_managements_access() -> None:
     _budget_managements_feature_dependency()
 
 
-def _filter_and_sort_services(rows: list[dict]) -> list[dict]:
-    filtered: list[dict] = []
-    for row in rows:
-        if not isinstance(row, dict):
-            continue
-        ad_type_code = str(row.get("adTypeCode", "")).strip()
-        if not ad_type_code:
-            continue
-        filtered.append(
-            {
-                "id": row.get("id"),
-                "name": row.get("name"),
-                "adTypeCode": ad_type_code,
-            }
-        )
-    filtered.sort(
-        key=lambda item: (
-            str(item.get("adTypeCode", "")).strip(),
-            str(item.get("name", "")).strip().lower(),
-        )
-    )
-    return filtered
-
-
 def _raise_budget_change_spend_rule_errors(
     *,
     changes: list[BudgetManagementChangeItem],
@@ -795,10 +817,11 @@ def get_budget_management_selections_data(
 
     periods = build_periods_data(months_before, months_after)
 
-    services = get_services_cache_entry()
-    if refresh_service_cache or services is None:
-        services = refresh_services_cache(department_code="DIGM")
-    services_payload = _filter_and_sort_services(services)
+    services = get_services(
+        department_code="DIGM",
+        refresh_cache=refresh_service_cache,
+    )
+    services_payload = filter_and_sort_services_with_ad_type(services)
 
     accounts = validate_account_codes(None)
     accounts_payload = sorted(
@@ -884,6 +907,9 @@ def get_budget_management_db_rows(
     account_codes: list[str] | None = None,
     month: int | None = None,
     year: int | None = None,
+    *,
+    fresh_data: bool = False,
+    fresh_spent_data: bool = False,
 ):
     """
     Get DB budget rows in a period.
@@ -905,10 +931,27 @@ def get_budget_management_db_rows(
     period_month, period_year = _resolve_period(month, year)
     previous_month, previous_year = _resolve_previous_period(period_month, period_year)
     cache_key = _build_budget_overview_cache_key(period_month, period_year)
-    use_cache = not normalized_codes
+    cache_scope_all_accounts = not normalized_codes
+    use_cache = not fresh_data and not fresh_spent_data
+    should_refresh_spent_data = bool(fresh_data or fresh_spent_data)
+    validated_accounts: list[dict] | None = None
+    requested_active_account_codes: set[str] = set()
+
+    if normalized_codes:
+        validated_accounts = validate_account_codes(
+            normalized_codes,
+            month=period_month,
+            year=period_year,
+        )
+        for account in validated_accounts:
+            account_code = standardize_account_code(
+                account.get("accountCode") or account.get("code")
+            )
+            if account_code:
+                requested_active_account_codes.add(account_code)
 
     if use_cache:
-        cached_payload, is_stale = get_google_sheet_cache_entry(
+        cached_payload, is_stale = get_budget_management_cache_entry(
             cache_key,
             config_hash=_BUDGET_OVERVIEW_CACHE_HASH,
         )
@@ -947,6 +990,22 @@ def get_budget_management_db_rows(
                     spent_data = cached_spent_data
                 if isinstance(cached_recommended_data, list):
                     recommended_data = cached_recommended_data
+
+            if requested_active_account_codes:
+                def _filter_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+                    filtered: list[dict[str, object]] = []
+                    for row in rows:
+                        if not isinstance(row, dict):
+                            continue
+                        row_account_code = standardize_account_code(row.get("accountCode"))
+                        if row_account_code in requested_active_account_codes:
+                            filtered.append(row)
+                    return filtered
+
+                table_data = _filter_rows(table_data)
+                spent_data = _filter_rows(spent_data)
+                recommended_data = _filter_rows(recommended_data)
+
             return {
                 "period": {"month": period_month, "year": period_year},
                 "previousPeriod": {"month": previous_month, "year": previous_year},
@@ -955,10 +1014,14 @@ def get_budget_management_db_rows(
                 "recommended": recommended_data,
             }
 
-    accounts = validate_account_codes(
-        normalized_codes or None,
-        month=period_month,
-        year=period_year,
+    accounts = (
+        validated_accounts
+        if validated_accounts is not None
+        else validate_account_codes(
+            None,
+            month=period_month,
+            year=period_year,
+        )
     )
     account_name_by_code: dict[str, str] = {}
     active_account_codes: list[str] = []
@@ -979,8 +1042,8 @@ def get_budget_management_db_rows(
         account_name_by_code[account_code] = account_name or account_code
 
     if not active_account_codes:
-        if use_cache:
-            set_google_sheet_cache(
+        if use_cache and cache_scope_all_accounts:
+            set_budget_management_cache(
                 cache_key,
                 [{"tableData": [], "spentData": [], "recommended": []}],
                 config_hash=_BUDGET_OVERVIEW_CACHE_HASH,
@@ -1004,7 +1067,10 @@ def get_budget_management_db_rows(
         previous_month_budgets,
         service_mapping=service_mapping,
     )
-    spend_lookup_context = _build_google_spend_lookup_context(active_account_codes)
+    spend_lookup_context = _build_google_spend_lookup_context(
+        active_account_codes,
+        refresh_google_ads_caches=fresh_data,
+    )
     current_period = get_current_period()
     is_requested_period_current = (
         period_month == current_period["month"]
@@ -1019,6 +1085,7 @@ def get_budget_management_db_rows(
             if is_requested_period_current
             else None
         ),
+        refresh_spent_data=should_refresh_spent_data,
         spend_lookup_context=spend_lookup_context,
     )
     is_previous_period_current = (
@@ -1034,6 +1101,7 @@ def get_budget_management_db_rows(
             if is_previous_period_current
             else None
         ),
+        refresh_spent_data=should_refresh_spent_data,
         spend_lookup_context=spend_lookup_context,
     )
 
@@ -1117,8 +1185,8 @@ def get_budget_management_db_rows(
         year=period_year,
     )
 
-    if use_cache:
-        set_google_sheet_cache(
+    if use_cache and cache_scope_all_accounts:
+        set_budget_management_cache(
             cache_key,
             [
                 {

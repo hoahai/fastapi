@@ -1,6 +1,6 @@
 # Cache Behavior (SpendSphere)
 
-This document describes the SpendSphere cache behavior for account codes, Google Ads clients, budgets, and campaigns.
+This document describes the SpendSphere cache behavior for account codes, Google Ads clients, budgets, campaigns, and spend.
 
 ## Cache file
 - Location: `fastapi/caches.json`
@@ -19,7 +19,11 @@ This document describes the SpendSphere cache behavior for account codes, Google
   - `google_ads_clients_ttl_time`
   - `google_ads_budgets_ttl_time`
   - `google_ads_campaigns_ttl_time`
+  - `google_ads_spent_ttl_time`
+  - `budget_managements_ttl_time`
+  - `budget_management_spent_ttl_time`
   - `google_sheet_ttl_time`
+  - `services_ttl_time`
 - Optional env override (highest priority): `SPENDSPHERE_GOOGLE_ADS_CLIENTS_CACHE_TTL_SECONDS`.
 
 If a cache entry is stale, the API **blocks and refreshes** from the source before returning data.
@@ -48,13 +52,42 @@ If a cache entry is stale, the API **blocks and refreshes** from the source befo
 - Reads return cached data when fresh.
 - If stale, data is fetched from Google Ads and the cache is updated.
 
+## Google Ads spent cache
+- Stored under `google_ads_spent` per tenant (per accountCode + period `YYYY-MM`).
+- Default TTL: 300 seconds (5 minutes).
+- Reads return cached data when fresh.
+- If stale, data is fetched from Google Ads and the cache is updated.
+
 Example tenant override:
 ```yaml
 spendsphere:
   CACHE:
     google_ads_budgets_ttl_time: 300
     google_ads_campaigns_ttl_time: 300
+    google_ads_spent_ttl_time: 300
+    services_ttl_time: 86400
 ```
+
+## Services cache
+- Stored under `services` per tenant.
+- Default TTL: 86400 seconds (24 hours).
+- Reads return cached data when fresh.
+- If stale, data is fetched from DB and the cache is updated.
+
+## Budget Management cache
+- Stored under `budget_managements` per tenant.
+- Cached keys include:
+  - `budget_management_overview::YYYY-MM`
+  - `budget_management_spend_by_adtype::YYYY-MM::<digest>`
+- Overview default TTL: 86400 seconds (24 hours).
+- Overview tenant override:
+  - `spendsphere.CACHE.budget_managements_ttl_time`
+- Spend-by-adtype default TTL:
+  - follows overview TTL unless overridden.
+- Spend-by-adtype tenant override:
+  - `spendsphere.CACHE.budget_management_spent_ttl_time`
+- Reads return cached data when fresh.
+- If stale, data is fetched/recomputed and the cache is updated.
 
 ## Google Sheets cache
 - Stored under `google_sheets` per tenant.
@@ -67,5 +100,23 @@ spendsphere:
 ## Refresh controls
 - `GET /api/spendsphere/v1/google-ads?refresh_cache=true`
 - `GET /api/spendsphere/v1/uis/selections?refresh_cache=true`
+- `GET /api/spendsphere/v1/uis/load?fresh_data=true`
+- `GET /api/spendsphere/v1/uis/budgetManagament/load?fresh_data=true`
+- `GET /api/spendsphere/v1/uis/budgetManagament/load?fresh_spent_data=true`
 - `POST /api/spendsphere/v1/google-ads/refresh`
 - `POST /api/spendsphere/v1/cache/refresh`
+- `POST /api/spendsphere/v1/cache/cleanup` (remove stale entries for current tenant)
+
+Notes:
+- `GET /api/spendsphere/v1/uis/load?fresh_data=true`
+  forces fresh reads for cache-backed data used by the route:
+  Google Ads (`clients/campaigns/budgets/spend`) and
+  Google Sheets (`rollovers`, `active_period`).
+- `POST /api/spendsphere/v1/cache/refresh?budget_management`
+  forces fresh recompute for overview (`fresh_data=true`) before
+  updating cached `tableData`/`spentData`/`recommended`.
+- `POST /api/spendsphere/v1/cache/refresh?budget_management_spent`
+  forces fresh spend recompute (`fresh_spent_data=true`) before
+  updating cached values.
+- `POST /api/spendsphere/v1/cache/cleanup` removes stale entries from
+  all cache buckets, including budget-management overview and spend entries.

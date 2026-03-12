@@ -159,6 +159,20 @@ def get_budget_management_db_budgets_ui(
     ),
     month: int | None = Query(None, description="Month (1-12)."),
     year: int | None = Query(None, description="Year (e.g., 2026)."),
+    fresh_data: bool = Query(
+        False,
+        description=(
+            "When true, bypasses budget-management overview + Google Ads mapping "
+            "caches and fetches fresh data."
+        ),
+    ),
+    fresh_spent_data: bool = Query(
+        False,
+        description=(
+            "When true, bypasses spend caches and fetches fresh Google Ads spend "
+            "before building spentData/underspent values."
+        ),
+    ),
 ):
     """
     Get budget-management DB rows for all active accounts in a period.
@@ -177,6 +191,14 @@ def get_budget_management_db_budgets_ui(
 
     Example request (default current period):
         GET /api/spendsphere/v1/uis/budgetManagament/load
+        Header: X-Tenant-Id: nucar
+
+    Example request (force fresh data):
+        GET /api/spendsphere/v1/uis/budgetManagament/load?month=3&year=2026&fresh_data=true
+        Header: X-Tenant-Id: nucar
+
+    Example request (force fresh spend only):
+        GET /api/spendsphere/v1/uis/budgetManagament/load?month=3&year=2026&fresh_spent_data=true
         Header: X-Tenant-Id: nucar
 
     Example response:
@@ -221,6 +243,8 @@ def get_budget_management_db_budgets_ui(
         - Supports accountCodes and legacy accountCode; empty means all active accounts
         - month/year are optional and default to current tenant period
         - month/year must be provided together when specified
+        - `fresh_data=true` bypasses cache-first behavior for this route
+        - `fresh_spent_data=true` bypasses cached overview payload and refreshes spend data
     """
     merged_account_codes = list(account_codes or [])
     if account_code is not None:
@@ -230,6 +254,8 @@ def get_budget_management_db_budgets_ui(
         account_codes=merged_account_codes,
         month=month,
         year=year,
+        fresh_data=fresh_data,
+        fresh_spent_data=fresh_spent_data,
     )
 
 

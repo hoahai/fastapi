@@ -104,6 +104,8 @@ def get_rollovers(
     month: int | None = None,
     year: int | None = None,
     include_unrollable: bool = False,
+    *,
+    refresh_cache: bool = False,
 ) -> list[dict]:
     """
     Get rollover data for the current month/year.
@@ -111,7 +113,7 @@ def get_rollovers(
     NOTE:
     - Must NOT be called in a process that uses threads
     """
-    data = _get_sheet_data("rollovers")
+    data = _get_sheet_data("rollovers", refresh_cache=refresh_cache)
 
     if not data:
         return []
@@ -152,6 +154,7 @@ def get_active_period(
     year: int | None = None,
     *,
     as_of: date | None = None,
+    refresh_cache: bool = False,
 ) -> list[dict]:
     """
     Get active period data.
@@ -159,7 +162,7 @@ def get_active_period(
     NOTE:
     - Must NOT be called in a process that uses threads
     """
-    data = _get_sheet_data("active_period")
+    data = _get_sheet_data("active_period", refresh_cache=refresh_cache)
 
     if not data:
         return []

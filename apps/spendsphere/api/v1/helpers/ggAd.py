@@ -40,9 +40,11 @@ from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
     get_google_ads_budgets_cache_entries,
     get_google_ads_campaigns_cache_entries,
     get_google_ads_clients_cache_entry,
+    get_google_ads_spent_cache_entries,
     set_google_ads_budgets_cache,
     set_google_ads_campaigns_cache,
     set_google_ads_clients_cache,
+    set_google_ads_spent_cache,
 )
 
 logger = get_logger("Google Ads")
@@ -956,6 +958,10 @@ def get_ggad_budgets(
         account_map[code] = account
         account_codes.append(code)
 
+    if not account_codes:
+        tasks = [(per_account_func, (account,)) for account in accounts]
+        return run_parallel_flatten(tasks=tasks, api_name="google_ads")
+
     cached: dict[str, list[dict]] = {}
     missing: set[str] = set(account_codes)
     if not refresh_cache:
@@ -1282,16 +1288,24 @@ def get_ggad_spents(
     accounts: list[dict],
     month: int | None = None,
     year: int | None = None,
+    *,
+    refresh_cache: bool = False,
 ) -> list[dict]:
     """
     Get campaign spend for multiple Google Ads accounts (parallelized).
     """
+    if not accounts:
+        return []
+
+    period = _resolve_period(month, year)
+    month_value = period["month"]
+    year_value = period["year"]
 
     def per_account_func(account: dict) -> list[dict]:
         spents = get_ggad_spent(
             account["id"],
-            month=month,
-            year=year,
+            month=month_value,
+            year=year_value,
         )
         return [
             {
@@ -1303,9 +1317,45 @@ def get_ggad_spents(
             for s in spents
         ]
 
-    tasks = [(per_account_func, (account,)) for account in accounts]
+    account_map: dict[str, dict] = {}
+    account_codes: list[str] = []
+    for account in accounts:
+        code = standardize_account_code(account.get("accountCode"))
+        if not code or code in account_map:
+            continue
+        account_map[code] = account
+        account_codes.append(code)
 
-    return run_parallel_flatten(tasks=tasks, api_name="google_ads")
+    cached: dict[str, list[dict]] = {}
+    missing: set[str] = set(account_codes)
+    if not refresh_cache:
+        cached, missing = get_google_ads_spent_cache_entries(
+            account_codes,
+            month=month_value,
+            year=year_value,
+        )
+
+    results: list[dict] = []
+    for code in account_codes:
+        if code in cached:
+            results.extend(cached[code])
+
+    if missing:
+        missing_accounts = [account_map[code] for code in account_codes if code in missing]
+        tasks = [(per_account_func, (account,)) for account in missing_accounts]
+        fetched_lists = run_parallel(tasks=tasks, api_name="google_ads")
+
+        for account, fetched in zip(missing_accounts, fetched_lists):
+            spends = fetched if isinstance(fetched, list) else []
+            results.extend(spends)
+            set_google_ads_spent_cache(
+                account.get("accountCode"),
+                month=month_value,
+                year=year_value,
+                spends=spends,
+            )
+
+    return results
 
 
 # =====================

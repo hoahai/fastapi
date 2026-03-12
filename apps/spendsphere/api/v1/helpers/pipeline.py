@@ -862,7 +862,12 @@ def build_transform_rows_for_period(
         )
 
     costs = (
-        get_ggad_spents(accounts, resolved_month, resolved_year)
+        get_ggad_spents(
+            accounts,
+            resolved_month,
+            resolved_year,
+            refresh_cache=refresh_google_ads_caches,
+        )
         if include_costs
         else []
     )
@@ -939,7 +944,7 @@ def run_google_ads_budget_pipeline(
     # =====================================================
     # 2. Google Ads data (parallel)
     # =====================================================
-    accounts = get_ggad_accounts()
+    accounts = get_ggad_accounts(refresh_cache=refresh_google_ads_caches)
 
     if account_code_filter:
         accounts = [
@@ -961,11 +966,17 @@ def run_google_ads_budget_pipeline(
             refresh_cache=refresh_google_ads_caches,
         )
 
+    def _get_spends(rows: list[dict]) -> list[dict]:
+        return get_ggad_spents(
+            rows,
+            refresh_cache=refresh_google_ads_caches,
+        )
+
     campaigns, budgets, costs, fallback_ad_types_by_budget = run_parallel(
         tasks=[
             (_get_campaigns, (accounts,)),
             (_get_budgets, (accounts,)),
-            (get_ggad_spents, (accounts,)),
+            (_get_spends, (accounts,)),
             (get_ggad_budget_adtype_candidates, (accounts,)),
         ],
         api_name="google_ads",
