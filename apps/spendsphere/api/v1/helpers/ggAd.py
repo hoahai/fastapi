@@ -1461,9 +1461,15 @@ def validate_updates(
                             Decimal("0.01"), rounding=ROUND_HALF_UP
                         )
                         if new_amount_dec <= expected_daily:
+                            multiplier_display = f"{GGADS_MAX_BUDGET_MULTIPLIER}x"
+                            expected_daily_display = f"${float(expected_daily):,.2f}"
+                            r["validationWarningCode"] = (
+                                "BUDGET_SPIKE_WITHIN_EXPECTED_DAILY"
+                            )
                             r["validationWarning"] = (
-                                "Budget spike exceeds the allowed multiplier; "
-                                "update allowed within expected daily budget."
+                                "Budget spike exceeds the allowed multiplier "
+                                f"({multiplier_display}); update allowed within expected "
+                                f"daily budget ({expected_daily_display})."
                             )
                             r["expectedDaily"] = float(expected_daily)
                         else:
@@ -1662,6 +1668,8 @@ def update_budgets(
                                 "currentAmount": row.get("currentAmount"),
                                 "newAmount": row.get("newAmount"),
                                 "expectedDaily": row.get("expectedDaily"),
+                                "warningCode": row.get("validationWarningCode")
+                                or "BUDGET_VALIDATION_WARNING",
                                 "error": warning,
                             }
                         )

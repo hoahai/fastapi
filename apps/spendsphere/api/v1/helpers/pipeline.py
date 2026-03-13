@@ -11,6 +11,11 @@ from apps.spendsphere.api.v1.helpers.account_codes import (
     standardize_account_code,
     standardize_account_code_set,
 )
+from apps.spendsphere.api.v1.helpers.campaign_rules import (
+    DEFAULT_INACTIVE_PREFIXES,
+    has_any_active_campaign,
+    should_filter_row,
+)
 from apps.spendsphere.api.v1.helpers.dataTransform import (
     build_update_payloads_from_inputs,
     transform_google_ads_data,
@@ -123,10 +128,6 @@ def _collect_budget_threshold_warnings(
 ) -> dict[str, list[dict]]:
     warnings_by_customer: dict[str, list[dict]] = {}
     threshold_display = f"${float(threshold):,.2f}"
-    message = (
-        "New budget amount exceeds configured threshold "
-        f"({threshold_display})."
-    )
 
     for payload in budget_payloads:
         customer_id = str(payload.get("customer_id", "")).strip()
@@ -139,6 +140,11 @@ def _collect_budget_threshold_warnings(
                 continue
             if new_amount <= threshold:
                 continue
+            new_amount_display = f"${float(new_amount):,.2f}"
+            message = (
+                f"New budget amount ({new_amount_display}) exceeds configured "
+                f"threshold ({threshold_display})."
+            )
 
             warnings_by_customer.setdefault(customer_id, []).append(
                 {
@@ -547,6 +553,10 @@ def _collect_budget_allocation_and_spend_issues(
                     {
                         **issue,
                         "warningCode": "SPEND_WITHOUT_ALLOCATION",
+                        "error": (
+                            f"Spend detected ({spend_display}) with 0 allocation; "
+                            "budget update skipped."
+                        ),
                     }
                 )
 
@@ -569,6 +579,8 @@ def _collect_budget_allocation_and_spend_issues(
             )
 
         if has_pacing_over_100 and pacing_percentage is not None:
+            pacing_display = f"{float(pacing_percentage):,.2f}"
+            budget_id_display = str(budget_id or row.get("budgetId") or "Unknown")
             warnings_by_customer.setdefault(customer_id, []).append(
                 {
                     "budgetId": budget_id or row.get("budgetId"),
@@ -579,14 +591,12 @@ def _collect_budget_allocation_and_spend_issues(
                     "spent": float(spend),
                     "pacing": float(pacing_percentage),
                     "warningCode": "PACING_OVER_100",
-                    "error": (
-                        "Pacing is more than 100% "
-                        f"({_format_percent(pacing_percentage)})."
-                    ),
+                    "error": f"Budget Id ({budget_id_display}) has pacing ({pacing_display}%) more than 100%.",
                 }
             )
 
         if has_spend_pct_over_100 and spend_percentage is not None:
+            spend_percent_display = f"{float(spend_percentage):,.2f}"
             warnings_by_customer.setdefault(customer_id, []).append(
                 {
                     "budgetId": budget_id or row.get("budgetId"),
@@ -597,10 +607,7 @@ def _collect_budget_allocation_and_spend_issues(
                     "spent": float(spend),
                     "spendPercent": float(spend_percentage),
                     "warningCode": "SPEND_PERCENT_OVER_100",
-                    "error": (
-                        "%Spend is more than 100% "
-                        f"({_format_percent(spend_percentage)})."
-                    ),
+                    "error": f"Percent Spent ({spend_percent_display}%) is more than 100%.",
                 }
             )
 
@@ -614,10 +621,28 @@ def _collect_ad_type_allocation_total_warnings(
     year: int,
 ) -> dict[str, list[dict]]:
     grouped: dict[tuple[str, str, str], dict[str, object]] = {}
+    inactive_prefixes = DEFAULT_INACTIVE_PREFIXES
 
     for row in rows:
         if not isinstance(row, dict):
             continue
+
+        allocation_value = _to_decimal(row.get("allocation"))
+        no_allocation = allocation_value is None or allocation_value == Decimal("0")
+        spent_value = _to_decimal(row.get("totalCost"))
+        no_spent = spent_value is None or spent_value == Decimal("0")
+        no_active_campaigns = not has_any_active_campaign(
+            row.get("campaigns"),
+            inactive_prefixes=inactive_prefixes,
+        )
+        # Align with tableData row filtering: filter rows before grouping/checking totals.
+        if should_filter_row(
+            no_allocation=no_allocation,
+            no_active_campaigns=no_active_campaigns,
+            no_spent=no_spent,
+        ):
+            continue
+
         customer_id = str(row.get("ggAccountId", "")).strip()
         account_code = standardize_account_code(row.get("accountCode")) or ""
         ad_type_code = str(row.get("adTypeCode", "")).strip().upper()
@@ -631,6 +656,8 @@ def _collect_ad_type_allocation_total_warnings(
             {
                 "totalAllocation": Decimal("0"),
                 "budgetIds": set(),
+                "hasMasterBudgetValue": False,
+                "masterBudgetSum": Decimal("0"),
             },
         )
         budget_ids = entry["budgetIds"]
@@ -641,18 +668,32 @@ def _collect_ad_type_allocation_total_warnings(
             continue
         budget_ids.add(budget_id)
 
-        allocation = _to_decimal(row.get("allocation"))
-        if allocation is None:
-            allocation = Decimal("0")
+        allocation = allocation_value if allocation_value is not None else Decimal("0")
         entry["totalAllocation"] = (
             entry.get("totalAllocation", Decimal("0")) + allocation
         )
+
+        master_budget_amount = _to_decimal(row.get("netAmount"))
+        if master_budget_amount is not None:
+            entry["hasMasterBudgetValue"] = True
+            entry["masterBudgetSum"] = (
+                entry.get("masterBudgetSum", Decimal("0")) + master_budget_amount
+            )
 
     warnings_by_customer: dict[str, list[dict]] = {}
     expected_total = Decimal("100.00")
     quantize_factor = Decimal("0.01")
 
     for (customer_id, account_code, ad_type_code), entry in grouped.items():
+        has_master_budget_value = bool(entry.get("hasMasterBudgetValue"))
+        if has_master_budget_value:
+            master_budget_sum = entry.get("masterBudgetSum", Decimal("0"))
+            if not isinstance(master_budget_sum, Decimal):
+                master_budget_sum = _to_decimal(master_budget_sum) or Decimal("0")
+            # Treat summed $0 master budget as "no budgets" for this allocation-total check.
+            if master_budget_sum.quantize(quantize_factor) == Decimal("0.00"):
+                continue
+
         total_allocation = entry.get("totalAllocation", Decimal("0"))
         if not isinstance(total_allocation, Decimal):
             total_allocation = _to_decimal(total_allocation) or Decimal("0")
@@ -673,8 +714,8 @@ def _collect_ad_type_allocation_total_warnings(
                 "expectedAllocationTotal": float(expected_total),
                 "warningCode": "ADTYPE_ALLOCATION_TOTAL_NOT_100",
                 "error": (
-                    "Total allocation for adTypeCode must equal 100% "
-                    f"for {period_key}."
+                    f"Total allocation ({float(normalized_total):,.2f}) for "
+                    f"adTypeCode ({ad_type_code}) must equal 100%."
                 ),
             }
         )

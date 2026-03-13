@@ -348,6 +348,10 @@ def _normalize_budget_issue(issue: object, fallback_account: str | None) -> dict
     new_amount = issue.get("newAmount")
     message = issue.get("error") or issue.get("message") or "Unknown"
     error_code = issue.get("errorCode")
+    if error_code is None:
+        error_code = issue.get("warningCode")
+    if error_code is None:
+        error_code = issue.get("failureCode")
     error_type = issue.get("errorType")
     error_enum = issue.get("errorEnum")
     trigger = issue.get("trigger")
@@ -379,25 +383,26 @@ def _normalize_budget_issue(issue: object, fallback_account: str | None) -> dict
 
 
 def _format_issue_title(issue: dict, *, include_account: bool = True) -> str:
-    account_code = issue.get("account_code") or "Unknown"
+    _ = include_account  # Signature kept for compatibility.
+    code = _resolve_issue_code(issue)
     campaign_names = issue.get("campaign_names") or ["Unknown Campaign"]
     if isinstance(campaign_names, list):
-        campaigns = ", ".join(campaign_names)
+        campaigns = ",".join(str(name).strip() for name in campaign_names if str(name).strip())
     else:
         campaigns = str(campaign_names)
+    if not campaigns:
+        campaigns = "Unknown Campaign"
     budget_id = issue.get("budget_id") or "Unknown"
-    if include_account:
-        return f"{account_code} - {campaigns} ({budget_id})"
-    return f"{campaigns} ({budget_id})"
+    return f"{code}: {budget_id} {campaigns}"
 
 
 def _format_issue_detail_text(issue: dict) -> str:
     current_amount = _format_amount(issue.get("current_amount"))
     new_amount = _format_amount(issue.get("new_amount"))
     messages = _get_issue_messages(issue)
-    lines = [
-        f"Current budget: {current_amount} | New Budget: {new_amount}",
-    ]
+    lines: list[str] = []
+    if _should_include_budget_line(issue):
+        lines.append(f"Current budget: {current_amount} | New Budget: {new_amount}")
     if len(messages) == 1:
         lines.append(messages[0])
     else:
@@ -411,9 +416,9 @@ def _format_issue_detail_html(issue: dict) -> str:
     current_amount = html_lib.escape(_format_amount(issue.get("current_amount")))
     new_amount = html_lib.escape(_format_amount(issue.get("new_amount")))
     messages = [html_lib.escape(message) for message in _get_issue_messages(issue)]
-    parts = [
-        f"Current budget: {current_amount} | New Budget: {new_amount}",
-    ]
+    parts: list[str] = []
+    if _should_include_budget_line(issue):
+        parts.append(f"Current budget: {current_amount} | New Budget: {new_amount}")
     if len(messages) == 1:
         parts.append(messages[0])
     else:
@@ -425,15 +430,6 @@ def _format_issue_detail_html(issue: dict) -> str:
 
 def _format_issue_meta_lines(issue: dict) -> list[str]:
     metadata_parts: list[str] = []
-
-    error_code = str(issue.get("error_code") or "").strip()
-    if not error_code:
-        error_type = str(issue.get("error_type") or "").strip()
-        error_enum = str(issue.get("error_enum") or "").strip()
-        if error_type and error_enum:
-            error_code = f"{error_type}.{error_enum}"
-    if error_code:
-        metadata_parts.append(f"code {error_code}")
 
     trigger = str(issue.get("trigger") or "").strip()
     if trigger:
@@ -471,6 +467,27 @@ def _format_issue_meta_lines(issue: dict) -> list[str]:
         lines.append("Retry summary: " + "; ".join(sentence_parts) + ".")
 
     return lines
+
+
+_BUDGET_LINE_CODES = {
+    "BUDGET_SPIKE_WITHIN_EXPECTED_DAILY",
+    "BUDGET_AMOUNT_THRESHOLD_EXCEEDED",
+}
+
+
+def _resolve_issue_code(issue: dict) -> str:
+    code = str(issue.get("error_code") or "").strip()
+    if code:
+        return code
+    error_type = str(issue.get("error_type") or "").strip()
+    error_enum = str(issue.get("error_enum") or "").strip()
+    if error_type and error_enum:
+        return f"{error_type}.{error_enum}"
+    return "UNKNOWN_CODE"
+
+
+def _should_include_budget_line(issue: dict) -> bool:
+    return _resolve_issue_code(issue).upper() in _BUDGET_LINE_CODES
 
 
 def _format_amount(value: object) -> str:
