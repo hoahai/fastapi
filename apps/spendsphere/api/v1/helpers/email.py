@@ -172,7 +172,10 @@ def build_google_ads_alert_email(
         for issue in issues:
             title = _format_issue_title(issue)
             detail = _format_issue_detail_text(issue)
-            lines.append(f"- {title}")
+            title_lines = title.splitlines() or ["Unknown"]
+            lines.append(f"- {title_lines[0]}")
+            for title_line in title_lines[1:]:
+                lines.append(f"  {title_line}")
             lines.append(f"  - {detail}")
         return lines
 
@@ -183,7 +186,10 @@ def build_google_ads_alert_email(
             for issue in account_issues:
                 title = _format_issue_title(issue, include_account=False)
                 detail_lines = _format_issue_detail_text(issue).splitlines() or ["Unknown"]
-                lines.append(f"  - {title}")
+                title_lines = title.splitlines() or ["Unknown"]
+                lines.append(f"  - {title_lines[0]}")
+                for title_line in title_lines[1:]:
+                    lines.append(f"    {title_line}")
                 lines.append(f"    - {detail_lines[0]}")
                 for detail_line in detail_lines[1:]:
                     lines.append(f"      {detail_line}")
@@ -230,7 +236,7 @@ def build_google_ads_alert_email(
             return "<p style=\"margin:0;color:#6b7280;\">None</p>"
         items_html = []
         for issue in issues:
-            header = esc(_format_issue_title(issue))
+            header = esc(_format_issue_title(issue)).replace("\n", "<br>")
             detail = _format_issue_detail_html(issue)
             items_html.append(
                 "<div style=\"padding:12px;border:1px solid #e5e7eb;border-radius:12px;margin-bottom:10px;\">"
@@ -248,7 +254,9 @@ def build_google_ads_alert_email(
         for account_code, account_issues in _group_issues_by_account(issues):
             issue_cards = []
             for issue in account_issues:
-                header = esc(_format_issue_title(issue, include_account=False))
+                header = esc(_format_issue_title(issue, include_account=False)).replace(
+                    "\n", "<br>"
+                )
                 detail = _format_issue_detail_html(issue)
                 issue_cards.append(
                     "<div style=\"padding:12px;border:1px solid #e5e7eb;border-radius:12px;margin-bottom:10px;\">"
@@ -322,6 +330,7 @@ def _normalize_budget_issue(issue: object, fallback_account: str | None) -> dict
             "error_code": None,
             "error_type": None,
             "error_enum": None,
+            "ad_type_code": None,
             "trigger": None,
             "field_path": None,
             "retryable": None,
@@ -354,6 +363,7 @@ def _normalize_budget_issue(issue: object, fallback_account: str | None) -> dict
         error_code = issue.get("failureCode")
     error_type = issue.get("errorType")
     error_enum = issue.get("errorEnum")
+    ad_type_code = issue.get("adTypeCode")
     trigger = issue.get("trigger")
     field_path = issue.get("fieldPath")
     retryable = issue.get("retryable")
@@ -373,6 +383,7 @@ def _normalize_budget_issue(issue: object, fallback_account: str | None) -> dict
         "error_code": str(error_code).strip() if error_code is not None else None,
         "error_type": str(error_type).strip() if error_type is not None else None,
         "error_enum": str(error_enum).strip() if error_enum is not None else None,
+        "ad_type_code": str(ad_type_code).strip() if ad_type_code is not None else None,
         "trigger": str(trigger).strip() if trigger is not None else None,
         "field_path": str(field_path).strip() if field_path is not None else None,
         "retryable": retryable if isinstance(retryable, bool) else None,
@@ -385,6 +396,10 @@ def _normalize_budget_issue(issue: object, fallback_account: str | None) -> dict
 def _format_issue_title(issue: dict, *, include_account: bool = True) -> str:
     _ = include_account  # Signature kept for compatibility.
     code = _resolve_issue_code(issue)
+    if code.upper() == "ADTYPE_ALLOCATION_TOTAL_NOT_100":
+        ad_type_code = _resolve_issue_ad_type_code(issue)
+        return f"{code}\nAd type code: {ad_type_code}"
+
     campaign_names = issue.get("campaign_names") or ["Unknown Campaign"]
     if isinstance(campaign_names, list):
         campaigns = ",".join(str(name).strip() for name in campaign_names if str(name).strip())
@@ -393,7 +408,7 @@ def _format_issue_title(issue: dict, *, include_account: bool = True) -> str:
     if not campaigns:
         campaigns = "Unknown Campaign"
     budget_id = issue.get("budget_id") or "Unknown"
-    return f"{code}: {budget_id} {campaigns}"
+    return f"{code}\n{budget_id}: {campaigns}"
 
 
 def _format_issue_detail_text(issue: dict) -> str:
@@ -488,6 +503,21 @@ def _resolve_issue_code(issue: dict) -> str:
 
 def _should_include_budget_line(issue: dict) -> bool:
     return _resolve_issue_code(issue).upper() in _BUDGET_LINE_CODES
+
+
+def _resolve_issue_ad_type_code(issue: dict) -> str:
+    ad_type_code = str(issue.get("ad_type_code") or "").strip()
+    if ad_type_code:
+        return ad_type_code
+    campaign_names = issue.get("campaign_names")
+    if isinstance(campaign_names, list):
+        for name in campaign_names:
+            text = str(name).strip()
+            if text.lower().startswith("adtypecode="):
+                value = text.split("=", 1)[1].strip()
+                if value:
+                    return value
+    return "Unknown"
 
 
 def _format_amount(value: object) -> str:

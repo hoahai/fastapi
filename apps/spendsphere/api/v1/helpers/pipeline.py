@@ -714,8 +714,8 @@ def _collect_ad_type_allocation_total_warnings(
                 "expectedAllocationTotal": float(expected_total),
                 "warningCode": "ADTYPE_ALLOCATION_TOTAL_NOT_100",
                 "error": (
-                    f"Total allocation ({float(normalized_total):,.2f}) for "
-                    f"adTypeCode ({ad_type_code}) must equal 100%."
+                    f"Total allocation ({float(normalized_total):,.2f}%) for "
+                    f"{ad_type_code} must equal 100%."
                 ),
             }
         )
