@@ -45,7 +45,7 @@ _DEFAULT_GOOGLE_ADS_ISSUE_CACHE_TTL_SECONDS = 28800
 _DEFAULT_GOOGLE_ADS_RESOURCE_CACHE_TTL_SECONDS = 300
 _DEFAULT_SERVICES_CACHE_TTL_SECONDS = 86400
 _DEFAULT_GOOGLE_ADS_SPENT_CACHE_TTL_SECONDS = 300
-_BUDGET_MANAGEMENT_OVERVIEW_CACHE_KEY_PREFIX = "budget_management_overview::"
+_BUDGET_MANAGEMENTS_CACHE_KEY_PREFIX = "budget_managements::"
 _BUDGET_MANAGEMENT_SPEND_CACHE_KEY_PREFIX = "budget_management_spend_by_adtype::"
 _ACCOUNT_CODES_SCOPE_ACTIVE = "active"
 _ACCOUNT_CODES_SCOPE_ALL = "all"
@@ -875,7 +875,7 @@ def cleanup_stale_cache_entries(
                     if should_remove:
                         tenant_entry.pop(cache_key, None)
                         if str(cache_key).startswith(
-                            _BUDGET_MANAGEMENT_OVERVIEW_CACHE_KEY_PREFIX
+                            _BUDGET_MANAGEMENTS_CACHE_KEY_PREFIX
                         ):
                             removed["budget_management"] += 1
                         elif str(cache_key).startswith(
@@ -918,7 +918,7 @@ def cleanup_stale_cache_entries(
                     if should_remove:
                         tenant_entry.pop(sheet_key, None)
                         if str(sheet_key).startswith(
-                            _BUDGET_MANAGEMENT_OVERVIEW_CACHE_KEY_PREFIX
+                            _BUDGET_MANAGEMENTS_CACHE_KEY_PREFIX
                         ):
                             removed["budget_management"] += 1
                         elif str(sheet_key).startswith(
@@ -1369,8 +1369,9 @@ def set_google_ads_spent_cache(
 
 def _is_budget_management_cache_key(cache_key: str) -> bool:
     normalized = str(cache_key or "").strip()
-    return normalized.startswith(_BUDGET_MANAGEMENT_OVERVIEW_CACHE_KEY_PREFIX) or normalized.startswith(
-        _BUDGET_MANAGEMENT_SPEND_CACHE_KEY_PREFIX
+    return (
+        normalized.startswith(_BUDGET_MANAGEMENTS_CACHE_KEY_PREFIX)
+        or normalized.startswith(_BUDGET_MANAGEMENT_SPEND_CACHE_KEY_PREFIX)
     )
 
 

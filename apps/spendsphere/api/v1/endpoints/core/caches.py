@@ -112,7 +112,7 @@ def _normalize_cache_requests(
     summary="Refresh SpendSphere caches",
     description=(
         "Refreshes account code, Google Ads clients, budgets, campaigns, and "
-        "spend + warning/failure + Google Sheets + budget-management overview/spend + "
+        "spend + warning/failure + Google Sheets + budget-management/spend + "
         "service caches for the current tenant."
     ),
 )
@@ -261,7 +261,7 @@ def refresh_cache_route(
     description=(
         "Removes stale cache entries (based on cache-specific TTL rules) "
         "for the current tenant across all SpendSphere cache types, "
-        "including budget-management overview/spend caches."
+        "including budget-management/spend caches."
     ),
 )
 def cleanup_cache_route():

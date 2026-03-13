@@ -607,6 +607,81 @@ def _collect_budget_allocation_and_spend_issues(
     return warnings_by_customer, failures_by_customer
 
 
+def _collect_ad_type_allocation_total_warnings(
+    *,
+    rows: list[dict],
+    month: int,
+    year: int,
+) -> dict[str, list[dict]]:
+    grouped: dict[tuple[str, str, str], dict[str, object]] = {}
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        customer_id = str(row.get("ggAccountId", "")).strip()
+        account_code = standardize_account_code(row.get("accountCode")) or ""
+        ad_type_code = str(row.get("adTypeCode", "")).strip().upper()
+        budget_id = str(row.get("budgetId", "")).strip()
+        if not customer_id or not account_code or not ad_type_code or not budget_id:
+            continue
+
+        key = (customer_id, account_code, ad_type_code)
+        entry = grouped.setdefault(
+            key,
+            {
+                "totalAllocation": Decimal("0"),
+                "budgetIds": set(),
+            },
+        )
+        budget_ids = entry["budgetIds"]
+        if not isinstance(budget_ids, set):
+            budget_ids = set()
+            entry["budgetIds"] = budget_ids
+        if budget_id in budget_ids:
+            continue
+        budget_ids.add(budget_id)
+
+        allocation = _to_decimal(row.get("allocation"))
+        if allocation is None:
+            allocation = Decimal("0")
+        entry["totalAllocation"] = (
+            entry.get("totalAllocation", Decimal("0")) + allocation
+        )
+
+    warnings_by_customer: dict[str, list[dict]] = {}
+    expected_total = Decimal("100.00")
+    quantize_factor = Decimal("0.01")
+
+    for (customer_id, account_code, ad_type_code), entry in grouped.items():
+        total_allocation = entry.get("totalAllocation", Decimal("0"))
+        if not isinstance(total_allocation, Decimal):
+            total_allocation = _to_decimal(total_allocation) or Decimal("0")
+        normalized_total = total_allocation.quantize(quantize_factor)
+        if normalized_total == expected_total:
+            continue
+
+        period_key = f"{year:04d}-{month:02d}"
+        warnings_by_customer.setdefault(customer_id, []).append(
+            {
+                "budgetId": f"ALLOC_TOTAL:{period_key}:{ad_type_code}",
+                "accountCode": account_code,
+                "campaignNames": [f"adTypeCode={ad_type_code}"],
+                "adTypeCode": ad_type_code,
+                "month": month,
+                "year": year,
+                "actualAllocationTotal": float(normalized_total),
+                "expectedAllocationTotal": float(expected_total),
+                "warningCode": "ADTYPE_ALLOCATION_TOTAL_NOT_100",
+                "error": (
+                    "Total allocation for adTypeCode must equal 100% "
+                    f"for {period_key}."
+                ),
+            }
+        )
+
+    return warnings_by_customer
+
+
 def _build_planned_budget_amount_lookup(
     budget_payloads: list[dict],
 ) -> dict[tuple[str, str], float]:
@@ -1161,6 +1236,21 @@ def run_google_ads_budget_pipeline(
     _inject_budget_failures(
         mutation_results=mutation_results,
         failures_by_customer=budget_failures,
+    )
+
+    current_period = get_current_period()
+    ad_type_allocation_warnings = _collect_ad_type_allocation_total_warnings(
+        rows=results,
+        month=current_period["month"],
+        year=current_period["year"],
+    )
+    ad_type_allocation_warnings = _maybe_filter_google_ads_warnings(
+        ad_type_allocation_warnings,
+        use_cache=not refresh_google_ads_caches,
+    )
+    _inject_budget_warnings(
+        mutation_results=mutation_results,
+        warnings_by_customer=ad_type_allocation_warnings,
     )
 
     # =====================================================

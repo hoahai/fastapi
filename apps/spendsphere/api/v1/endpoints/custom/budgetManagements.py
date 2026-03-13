@@ -47,8 +47,8 @@ from shared.tenant import get_tenant_id
 from shared.utils import get_current_period
 
 _budget_managements_feature_dependency = require_feature("budget_managements")
-_BUDGET_OVERVIEW_CACHE_KEY_PREFIX = "budget_management_overview"
-_BUDGET_OVERVIEW_CACHE_HASH = "budget_management_overview::v14"
+_BUDGET_MANAGEMENTS_CACHE_KEY_PREFIX = "budget_managements"
+_BUDGET_MANAGEMENTS_CACHE_HASH = "budget_managements::v1"
 _BUDGET_SPEND_CACHE_KEY_PREFIX = "budget_management_spend_by_adtype"
 _BUDGET_SPEND_CACHE_HASH = "budget_management_spend_by_adtype::v1"
 _CURRENT_PERIOD_SPEND_CACHE_TTL_SECONDS = 3600
@@ -150,8 +150,22 @@ def _to_decimal(value: object, *, fallback: Decimal = Decimal("0")) -> Decimal:
         return fallback
 
 
-def _build_budget_overview_cache_key(month: int, year: int) -> str:
-    return f"{_BUDGET_OVERVIEW_CACHE_KEY_PREFIX}::{year:04d}-{month:02d}"
+def _build_budget_managements_cache_key(
+    month: int,
+    year: int,
+    *,
+    account_codes: list[str] | None = None,
+) -> str:
+    normalized_codes = sorted(set(normalize_account_codes(account_codes)))
+    if normalized_codes:
+        payload = {"accountCodes": normalized_codes}
+        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+        scope_key = f"subset::{hashlib.sha256(encoded.encode('utf-8')).hexdigest()[:24]}"
+    else:
+        scope_key = "all"
+    return (
+        f"{_BUDGET_MANAGEMENTS_CACHE_KEY_PREFIX}::{year:04d}-{month:02d}::{scope_key}"
+    )
 
 
 def _build_budget_spend_cache_key(
@@ -234,9 +248,12 @@ def _extract_google_spend_cache_generated_at_epoch(rows: list[dict]) -> int | No
     return parsed if parsed >= 0 else None
 
 
-def invalidate_budget_management_overview_cache(month: int, year: int) -> int:
+def invalidate_budget_managements_cache(month: int, year: int) -> int:
+    period_prefix = (
+        f"{_BUDGET_MANAGEMENTS_CACHE_KEY_PREFIX}::{year:04d}-{month:02d}"
+    )
     return clear_budget_management_cache_entries(
-        cache_keys=[_build_budget_overview_cache_key(month, year)]
+        key_prefixes=[period_prefix]
     )
 
 
@@ -248,7 +265,7 @@ def refresh_budget_management_cache(
     fresh_spent_data: bool = False,
 ) -> dict[str, object]:
     period_month, period_year = _resolve_period(month, year)
-    invalidate_budget_management_overview_cache(period_month, period_year)
+    invalidate_budget_managements_cache(period_month, period_year)
     payload = get_budget_management_db_rows(
         account_codes=None,
         month=period_month,
@@ -265,7 +282,11 @@ def refresh_budget_management_cache(
         recommended_data if isinstance(recommended_data, list) else []
     )
     set_budget_management_cache(
-        _build_budget_overview_cache_key(period_month, period_year),
+        _build_budget_managements_cache_key(
+            period_month,
+            period_year,
+            account_codes=None,
+        ),
         [
             {
                 "tableData": cached_table_data,
@@ -273,7 +294,7 @@ def refresh_budget_management_cache(
                 "recommended": cached_recommended_data,
             }
         ],
-        config_hash=_BUDGET_OVERVIEW_CACHE_HASH,
+        config_hash=_BUDGET_MANAGEMENTS_CACHE_HASH,
     )
     return {
         "period": {"month": period_month, "year": period_year},
@@ -285,7 +306,7 @@ def refresh_budget_management_cache(
     }
 
 
-def refresh_budget_management_overview_cache(
+def refresh_budget_managements_cache(
     *,
     month: int | None = None,
     year: int | None = None,
@@ -930,12 +951,14 @@ def get_budget_management_db_rows(
     normalized_codes = normalize_account_codes(account_codes)
     period_month, period_year = _resolve_period(month, year)
     previous_month, previous_year = _resolve_previous_period(period_month, period_year)
-    cache_key = _build_budget_overview_cache_key(period_month, period_year)
-    cache_scope_all_accounts = not normalized_codes
+    cache_key = _build_budget_managements_cache_key(
+        period_month,
+        period_year,
+        account_codes=normalized_codes,
+    )
     use_cache = not fresh_data and not fresh_spent_data
     should_refresh_spent_data = bool(fresh_data or fresh_spent_data)
     validated_accounts: list[dict] | None = None
-    requested_active_account_codes: set[str] = set()
 
     if normalized_codes:
         validated_accounts = validate_account_codes(
@@ -943,17 +966,11 @@ def get_budget_management_db_rows(
             month=period_month,
             year=period_year,
         )
-        for account in validated_accounts:
-            account_code = standardize_account_code(
-                account.get("accountCode") or account.get("code")
-            )
-            if account_code:
-                requested_active_account_codes.add(account_code)
 
     if use_cache:
         cached_payload, is_stale = get_budget_management_cache_entry(
             cache_key,
-            config_hash=_BUDGET_OVERVIEW_CACHE_HASH,
+            config_hash=_BUDGET_MANAGEMENTS_CACHE_HASH,
         )
         if cached_payload is not None and not is_stale:
             table_data: list[dict[str, object]] = []
@@ -991,21 +1008,6 @@ def get_budget_management_db_rows(
                 if isinstance(cached_recommended_data, list):
                     recommended_data = cached_recommended_data
 
-            if requested_active_account_codes:
-                def _filter_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
-                    filtered: list[dict[str, object]] = []
-                    for row in rows:
-                        if not isinstance(row, dict):
-                            continue
-                        row_account_code = standardize_account_code(row.get("accountCode"))
-                        if row_account_code in requested_active_account_codes:
-                            filtered.append(row)
-                    return filtered
-
-                table_data = _filter_rows(table_data)
-                spent_data = _filter_rows(spent_data)
-                recommended_data = _filter_rows(recommended_data)
-
             return {
                 "period": {"month": period_month, "year": period_year},
                 "previousPeriod": {"month": previous_month, "year": previous_year},
@@ -1042,12 +1044,11 @@ def get_budget_management_db_rows(
         account_name_by_code[account_code] = account_name or account_code
 
     if not active_account_codes:
-        if use_cache and cache_scope_all_accounts:
-            set_budget_management_cache(
-                cache_key,
-                [{"tableData": [], "spentData": [], "recommended": []}],
-                config_hash=_BUDGET_OVERVIEW_CACHE_HASH,
-            )
+        set_budget_management_cache(
+            cache_key,
+            [{"tableData": [], "spentData": [], "recommended": []}],
+            config_hash=_BUDGET_MANAGEMENTS_CACHE_HASH,
+        )
         return {
             "period": {"month": period_month, "year": period_year},
             "previousPeriod": {"month": previous_month, "year": previous_year},
@@ -1185,18 +1186,17 @@ def get_budget_management_db_rows(
         year=period_year,
     )
 
-    if use_cache and cache_scope_all_accounts:
-        set_budget_management_cache(
-            cache_key,
-            [
-                {
-                    "tableData": payload_rows,
-                    "spentData": spent_data,
-                    "recommended": recommended_data,
-                }
-            ],
-            config_hash=_BUDGET_OVERVIEW_CACHE_HASH,
-        )
+    set_budget_management_cache(
+        cache_key,
+        [
+            {
+                "tableData": payload_rows,
+                "spentData": spent_data,
+                "recommended": recommended_data,
+            }
+        ],
+        config_hash=_BUDGET_MANAGEMENTS_CACHE_HASH,
+    )
 
     return {
         "period": {"month": period_month, "year": period_year},
@@ -1402,7 +1402,7 @@ def create_budget_managements(payload: BudgetManagementUpsertRequest):
         year=year,
     )
     result = upsert_masterbudgets(rows, month=month, year=year)
-    invalidate_budget_management_overview_cache(month, year)
+    invalidate_budget_managements_cache(month, year)
     return {"period": {"month": month, "year": year}, **result}
 
 
@@ -1462,7 +1462,7 @@ def update_budget_managements(payload: BudgetManagementUpsertRequest):
         year=year,
     )
     result = upsert_masterbudgets(rows, month=month, year=year)
-    invalidate_budget_management_overview_cache(month, year)
+    invalidate_budget_managements_cache(month, year)
     return {"period": {"month": month, "year": year}, **result}
 
 
@@ -1499,7 +1499,7 @@ def soft_delete_budget_management(
     if affected <= 0:
         raise HTTPException(status_code=404, detail="Budget not found")
 
-    invalidate_budget_management_overview_cache(period_month, period_year)
+    invalidate_budget_managements_cache(period_month, period_year)
 
     return {
         "budgetId": budget_id,
@@ -1698,7 +1698,7 @@ def apply_budget_management_changes(
         deleted += max(int(affected or 0), 0)
 
     if upsert_rows or delete_rows:
-        invalidate_budget_management_overview_cache(month, year)
+        invalidate_budget_managements_cache(month, year)
 
     return {
         "period": {"month": month, "year": year},
@@ -1739,6 +1739,6 @@ def duplicate_budget_managements(payload: BudgetManagementDuplicateRequest):
         account_codes=normalized_codes,
         overwrite=overwrite,
     )
-    invalidate_budget_management_overview_cache(payload.toMonth, payload.toYear)
+    invalidate_budget_managements_cache(payload.toMonth, payload.toYear)
 
     return {"inserted": inserted}

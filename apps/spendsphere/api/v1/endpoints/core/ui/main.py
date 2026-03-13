@@ -14,7 +14,7 @@ from apps.spendsphere.api.v1.endpoints.core.periods import (
 )
 from apps.spendsphere.api.v1.endpoints.custom.budgetManagements import (
     ensure_budget_managements_access,
-    invalidate_budget_management_overview_cache,
+    invalidate_budget_managements_cache,
 )
 from apps.spendsphere.api.v1.helpers.account_codes import standardize_account_code
 from apps.spendsphere.api.v1.helpers.config import (
@@ -2100,7 +2100,7 @@ def update_ui_allocations_rollbreaks(
         year=year_value,
     )
     if master_budget_rows:
-        invalidate_budget_management_overview_cache(month_value, year_value)
+        invalidate_budget_managements_cache(month_value, year_value)
     rollbreaks_result = upsert_rollbreakdowns(
         rollbreak_rows,
         month=month_value,

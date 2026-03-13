@@ -330,6 +330,12 @@ Documentation rules:
         -   Uses transformed `%Spend` values when present; otherwise
             computes `%Spend` from spend vs allocated budget before acceleration.
         -   Does not block updates; warning is added to mutation result.
+    -   `ADTYPE_ALLOCATION_TOTAL_NOT_100` warning:
+        -   Triggered when grouped allocation total by
+            `accountCode + month + year + adTypeCode` is not `100%`.
+        -   Grouping is derived from transformed budget rows and includes only
+            rows with valid `budgetId`.
+        -   Does not block updates; warning is added to mutation result.
     -   Shared row-level skip conditions for the two warnings above:
         -   Skipped when budget has no linked campaigns.
         -   Skipped when all linked campaigns are `PAUSED`.
