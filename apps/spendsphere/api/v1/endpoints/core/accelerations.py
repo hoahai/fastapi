@@ -175,11 +175,12 @@ class AccelerationPayload(BaseModel):
 class AccelerationMonthPayload(BaseModel):
     accountCodes: list[str]
     scopeLevel: str
-    scopeValue: str = Field(alias="scope_value")
+    scopeValue: list[str]
     multiplier: float
     month: int
     year: int
     dayFront: int = Field(alias="day_front")
+    overwrite: bool = False
     note: str | None = Field(default=None, max_length=2048)
 
     model_config = ConfigDict(
@@ -189,26 +190,27 @@ class AccelerationMonthPayload(BaseModel):
                 {
                     "accountCodes": [],
                     "scopeLevel": "AD_TYPE",
-                    "scope_value": "SEM",
+                    "scopeValue": ["SEM"],
                     "multiplier": 120.0,
                     "month": 1,
                     "year": 2026,
                     "dayFront": 15,
+                    "overwrite": False,
+                    "note": "Front-load early month",
                 }
             ]
         },
     )
 
 
-class AccelerationMonthAccountsPayload(BaseModel):
-    accountCodes: list[str] = Field(default_factory=list)
+class AccelerationDateRangePayload(BaseModel):
+    accountCodes: list[str]
     scopeLevel: str
-    scopeValue: str = Field(alias="scope_value")
+    scopeValue: list[str]
     multiplier: float
-    month: int | None = None
-    year: int | None = None
-    startDate: date | None = None
-    endDate: date | None = None
+    startDate: date
+    endDate: date
+    overwrite: bool = False
     note: str | None = Field(default=None, max_length=2048)
 
     model_config = ConfigDict(
@@ -218,12 +220,12 @@ class AccelerationMonthAccountsPayload(BaseModel):
                 {
                     "accountCodes": ["TAAA", "LACS"],
                     "scopeLevel": "AD_TYPE",
-                    "scope_value": "SEM",
+                    "scopeValue": ["SEM"],
                     "multiplier": 120.0,
-                    "month": 1,
-                    "year": 2026,
-                    "startDate": None,
-                    "endDate": None,
+                    "startDate": "2026-01-05",
+                    "endDate": "2026-01-20",
+                    "overwrite": False,
+                    "note": "Promotion period boost",
                 }
             ]
         },
@@ -245,6 +247,20 @@ class AccelerationIdsPayload(BaseModel):
 
 def _normalize_codes(values: list[str]) -> list[str]:
     return standardize_account_codes(values)
+
+
+def _normalize_scope_values(values: list[str] | None) -> list[str]:
+    if not values:
+        return []
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in values:
+        cleaned = str(value).strip()
+        if not cleaned or cleaned in seen:
+            continue
+        seen.add(cleaned)
+        normalized.append(cleaned)
+    return normalized
 
 
 def _resolve_account_codes(
@@ -517,6 +533,34 @@ def _validate_update_keys_exist(rows: list[dict]) -> None:
         )
 
 
+def _acceleration_row_key(row: dict) -> tuple:
+    return (
+        row.get("accountCode"),
+        row.get("scopeLevel"),
+        row.get("scopeValue"),
+        row.get("startDate"),
+        row.get("endDate"),
+    )
+
+
+def _apply_overwrite_policy(rows: list[dict], *, overwrite: bool) -> list[dict]:
+    if overwrite or not rows:
+        return rows
+
+    existing_keys = get_existing_acceleration_keys(rows)
+    filtered: list[dict] = []
+    seen_new_keys: set[tuple] = set()
+
+    for row in rows:
+        key = _acceleration_row_key(row)
+        if key in existing_keys or key in seen_new_keys:
+            continue
+        seen_new_keys.add(key)
+        filtered.append(row)
+
+    return filtered
+
+
 @router.post(
     "/accelerations",
     summary="Create accelerations (bulk)",
@@ -524,32 +568,6 @@ def _validate_update_keys_exist(rows: list[dict]) -> None:
         "Bulk insert accelerations. All fields are required per item. "
         "Values are normalized and validated against tenant config."
     ),
-    responses={
-        200: {
-            "description": "Insert summary",
-            "content": {"application/json": {"example": {"inserted": 2}}},
-        },
-        400: {
-            "description": "Validation error",
-            "content": {
-                "application/json": {
-                    "example": {
-                        "detail": {
-                            "error": "Invalid payload",
-                            "items": [
-                                {
-                                    "index": 0,
-                                    "field": "scopeLevel",
-                                    "value": "BAD",
-                                    "allowed": ["ACCOUNT", "AD_TYPE", "BUDGET"],
-                                }
-                            ],
-                        }
-                    }
-                }
-            },
-        },
-    },
 )
 def create_accelerations(request_payload: list[AccelerationPayload]):
     """
@@ -678,35 +696,49 @@ def delete_accelerations_by_ids(request_payload: AccelerationIdsPayload):
         "inclusively from startDate."
     ),
 )
-def create_accelerations_by_month(request_payload: list[AccelerationMonthPayload]):
+def create_accelerations_by_month(request_payload: AccelerationMonthPayload):
     """
     Example request:
         POST /api/spendsphere/v1/accelerations/by-month
-        [
-          {
-            "accountCodes": ["TAAA", "LACS"],
-            "scopeLevel": "AD_TYPE",
-            "scope_value": "SEM",
-            "multiplier": 120.0,
-            "month": 1,
-            "year": 2026,
-            "dayFront": 15
-          }
-        ]
+        {
+          "accountCodes": ["TAAA", "LACS"],
+          "scopeLevel": "AD_TYPE",
+          "scopeValue": ["SEM"],
+          "multiplier": 120.0,
+          "month": 1,
+          "year": 2026,
+          "dayFront": 15,
+          "overwrite": false,
+          "note": "Front-load early month"
+        }
 
     Example request (resolve all eligible accounts):
         POST /api/spendsphere/v1/accelerations/by-month
-        [
-          {
-            "accountCodes": [],
-            "scopeLevel": "AD_TYPE",
-            "scope_value": "SEM",
-            "multiplier": 120.0,
-            "month": 1,
-            "year": 2026,
-            "dayFront": 15
-          }
-        ]
+        {
+          "accountCodes": [],
+          "scopeLevel": "AD_TYPE",
+          "scopeValue": ["SEM"],
+          "multiplier": 120.0,
+          "month": 1,
+          "year": 2026,
+          "dayFront": 15,
+          "overwrite": false,
+          "note": "Apply default early-month boost"
+        }
+
+    Example request (ACCOUNT scope):
+        POST /api/spendsphere/v1/accelerations/by-month
+        {
+          "accountCodes": ["TAAA", "LACS"],
+          "scopeLevel": "ACCOUNT",
+          "scopeValue": ["IGNORED_FOR_ACCOUNT_SCOPE"],
+          "multiplier": 110.0,
+          "month": 1,
+          "year": 2026,
+          "dayFront": 15,
+          "overwrite": false,
+          "note": "Account-level acceleration"
+        }
 
     Example response:
         {
@@ -718,7 +750,8 @@ def create_accelerations_by_month(request_payload: list[AccelerationMonthPayload
               "scopeValue": "SEM",
               "startDate": "2026-01-01",
               "endDate": "2026-01-15",
-              "multiplier": 120.0
+              "multiplier": 120.0,
+              "note": "Front-load early month"
             },
             {
               "accountCode": "LACS",
@@ -726,93 +759,144 @@ def create_accelerations_by_month(request_payload: list[AccelerationMonthPayload
               "scopeValue": "SEM",
               "startDate": "2026-01-01",
               "endDate": "2026-01-15",
-              "multiplier": 120.0
+              "multiplier": 120.0,
+              "note": "Front-load early month"
             }
           ]
         }
+
+    Requirements:
+        - accountCodes can be [] to resolve all eligible account codes for the period
+        - scopeLevel must be ACCOUNT or AD_TYPE
+        - scopeValue must be a non-empty array for non-ACCOUNT scopes
+        - month must be 1-12, year must be 2000-2100
+        - dayFront must be >= 0
+        - multiplier must be >= 100
+        - when scopeLevel is ACCOUNT, scopeValue is normalized to each accountCode
+        - overwrite defaults to false; false skips existing keys, true updates on duplicate key
+        - note is optional (max length 2048)
+        - validation errors are returned as indexed items (index=0 for this single payload)
     """
-    if not request_payload:
-        raise HTTPException(status_code=400, detail="No accelerations provided")
+    idx = 0
+    data = request_payload.model_dump()
+    month = data.get("month")
+    year = data.get("year")
+    day_front = data.get("dayFront")
+    overwrite = bool(data.get("overwrite"))
+    multiplier = data.get("multiplier")
+    raw_account_codes = data.get("accountCodes") or []
+    raw_scope_values = data.get("scopeValue")
+    scope_level = str(data.get("scopeLevel") or "").strip().upper()
+    use_all_accounts = len(raw_account_codes) == 0
+    account_field = "accountCodes"
+    account_input = raw_account_codes
+    scope_field = "scopeValue"
+    allowed_scope_levels = {"ACCOUNT", "AD_TYPE"}
 
-    rows: list[dict] = []
+    account_codes = [
+        code.strip().upper()
+        for code in raw_account_codes
+        if isinstance(code, str) and code.strip()
+    ]
+    account_codes = _normalize_codes(account_codes)
+    scope_values = _normalize_scope_values(raw_scope_values)
+
     errors: list[dict] = []
-    for idx, item in enumerate(request_payload):
-        data = item.model_dump()
-        month = data.get("month")
-        year = data.get("year")
-        day_front = data.get("dayFront")
-        multiplier = data.get("multiplier")
-        raw_account_codes = data.get("accountCodes") or []
-        use_all_accounts = len(raw_account_codes) == 0
-        account_field = "accountCodes"
-        account_input = raw_account_codes
-        account_codes = [
-            code.strip().upper()
-            for code in raw_account_codes
-            if isinstance(code, str) and code.strip()
-        ]
-        account_codes = _normalize_codes(account_codes)
+    if not account_codes and not use_all_accounts:
+        errors.append(
+            {
+                "index": idx,
+                "field": "accountCodes",
+                "value": account_input,
+                "message": "accountCodes must contain non-empty strings",
+            }
+        )
 
-        if not account_codes and not use_all_accounts:
-            errors.append(
-                {
-                    "index": idx,
-                    "field": "accountCodes",
-                    "value": account_input,
-                    "message": "accountCodes must contain non-empty strings",
-                }
-            )
-            continue
+    if scope_level not in allowed_scope_levels:
+        errors.append(
+            {
+                "index": idx,
+                "field": "scopeLevel",
+                "value": data.get("scopeLevel"),
+                "allowed": sorted(allowed_scope_levels),
+                "message": "scopeLevel must be ACCOUNT or AD_TYPE",
+            }
+        )
 
-        if not isinstance(month, int) or month < 1 or month > 12:
-            errors.append(
-                {"index": idx, "field": "month", "value": month, "message": "month must be 1-12"}
-            )
-            continue
-        if not isinstance(year, int) or year < 2000 or year > 2100:
-            errors.append(
-                {"index": idx, "field": "year", "value": year, "message": "year must be 2000-2100"}
-            )
-            continue
-        if not isinstance(day_front, int) or day_front < 0:
-            errors.append(
-                {
-                    "index": idx,
-                    "field": "dayFront",
-                    "value": day_front,
-                    "message": "dayFront must be >= 0",
-                }
-            )
-            continue
-        if isinstance(multiplier, bool) or not isinstance(multiplier, (int, float)):
-            errors.append(
-                {
-                    "index": idx,
-                    "field": "multiplier",
-                    "value": multiplier,
-                    "message": "multiplier must be a number",
-                }
-            )
-            continue
-        if multiplier < 100:
-            errors.append(
-                {
-                    "index": idx,
-                    "field": "multiplier",
-                    "value": multiplier,
-                    "message": "multiplier must be >= 100",
-                }
-            )
-            continue
+    if scope_level != "ACCOUNT" and not scope_values:
+        errors.append(
+            {
+                "index": idx,
+                "field": scope_field,
+                "value": raw_scope_values,
+                "message": "scopeValue must contain at least one non-empty string",
+            }
+        )
 
+    if not isinstance(month, int) or month < 1 or month > 12:
+        errors.append(
+            {
+                "index": idx,
+                "field": "month",
+                "value": month,
+                "message": "month must be 1-12",
+            }
+        )
+
+    if not isinstance(year, int) or year < 2000 or year > 2100:
+        errors.append(
+            {
+                "index": idx,
+                "field": "year",
+                "value": year,
+                "message": "year must be 2000-2100",
+            }
+        )
+
+    if not isinstance(day_front, int) or day_front < 0:
+        errors.append(
+            {
+                "index": idx,
+                "field": "dayFront",
+                "value": day_front,
+                "message": "dayFront must be >= 0",
+            }
+        )
+
+    if isinstance(multiplier, bool) or not isinstance(multiplier, (int, float)):
+        errors.append(
+            {
+                "index": idx,
+                "field": "multiplier",
+                "value": multiplier,
+                "message": "multiplier must be a number",
+            }
+        )
+    elif multiplier < 100:
+        errors.append(
+            {
+                "index": idx,
+                "field": "multiplier",
+                "value": multiplier,
+                "message": "multiplier must be >= 100",
+            }
+        )
+
+    start_date: date | None = None
+    if not errors:
         try:
             start_date = date(year, month, 1)
         except ValueError:
             errors.append(
-                {"index": idx, "field": "month", "value": month, "message": "invalid month/year"}
+                {
+                    "index": idx,
+                    "field": "month",
+                    "value": month,
+                    "message": "invalid month/year",
+                }
             )
-            continue
 
+    if not errors and isinstance(start_date, date):
         try:
             account_codes = _resolve_account_codes(
                 [] if use_all_accounts else account_codes,
@@ -830,146 +914,307 @@ def create_accelerations_by_month(request_payload: list[AccelerationMonthPayload
                     "detail": exc.detail,
                 }
             )
+
+    if not errors and not account_codes:
+        errors.append(
+            {
+                "index": idx,
+                "field": account_field,
+                "value": account_input,
+                "message": "No accountCodes resolved for acceleration creation",
+            }
+        )
+
+    if errors:
+        raise HTTPException(
+            status_code=400,
+            detail={"error": "Invalid payload", "items": errors},
+        )
+
+    end_offset_days = max(day_front - 1, 0)
+    end_date = start_date + timedelta(days=end_offset_days)
+
+    rows: list[dict] = []
+    scope_type = data.get("scopeLevel")
+    note = data.get("note")
+    for account_code in account_codes:
+        if str(scope_type).strip().upper() == "ACCOUNT":
+            rows.append(
+                {
+                    "accountCode": account_code,
+                    "scopeLevel": scope_type,
+                    "scopeValue": account_code,
+                    "startDate": start_date,
+                    "endDate": end_date,
+                    "multiplier": multiplier,
+                    "note": note,
+                }
+            )
             continue
-        if not account_codes:
+        for scope_value in scope_values:
+            rows.append(
+                {
+                    "accountCode": account_code,
+                    "scopeLevel": scope_type,
+                    "scopeValue": scope_value,
+                    "startDate": start_date,
+                    "endDate": end_date,
+                    "multiplier": multiplier,
+                    "note": note,
+                }
+            )
+
+    rows = _normalize_and_validate_rows(rows, validate_account_codes_rows=False)
+    _validate_budget_scope_values(rows)
+    rows_to_write = _apply_overwrite_policy(rows, overwrite=overwrite)
+    inserted = insert_accelerations(rows_to_write)
+    return {
+        "summary": {"requested": len(rows), "inserted": inserted},
+        "accelerations": rows_to_write,
+    }
+
+
+@router.post(
+    "/accelerations/by-date-range",
+    summary="Create accelerations by date range (bulk)",
+    description=(
+        "Bulk insert accelerations using explicit startDate/endDate. "
+        "accountCodes may be provided as a list; when accountCodes is an empty list, "
+        "the route resolves all eligible account codes for the startDate period."
+    ),
+)
+def create_accelerations_by_date_range(
+    request_payload: AccelerationDateRangePayload,
+):
+    """
+    Creates accelerations in bulk for one or more account codes using explicit dates.
+
+    Example request:
+        POST /api/spendsphere/v1/accelerations/by-date-range
+        {
+          "accountCodes": ["TAAA", "LACS"],
+          "scopeLevel": "AD_TYPE",
+          "scopeValue": ["SEM"],
+          "multiplier": 120.0,
+          "startDate": "2026-01-05",
+          "endDate": "2026-01-20",
+          "overwrite": false,
+          "note": "Promotion period boost"
+        }
+
+    Example request (resolve all eligible accounts):
+        POST /api/spendsphere/v1/accelerations/by-date-range
+        {
+          "accountCodes": [],
+          "scopeLevel": "AD_TYPE",
+          "scopeValue": ["SEM"],
+          "multiplier": 120.0,
+          "startDate": "2026-01-05",
+          "endDate": "2026-01-20",
+          "overwrite": false,
+          "note": "Apply campaign launch boost"
+        }
+
+    Example request (ACCOUNT scope):
+        POST /api/spendsphere/v1/accelerations/by-date-range
+        {
+          "accountCodes": ["TAAA", "LACS"],
+          "scopeLevel": "ACCOUNT",
+          "scopeValue": ["IGNORED_FOR_ACCOUNT_SCOPE"],
+          "multiplier": 110.0,
+          "startDate": "2026-01-05",
+          "endDate": "2026-01-20",
+          "overwrite": false,
+          "note": "Account-level acceleration"
+        }
+
+    Example response:
+        {
+          "summary": {"requested": 2, "inserted": 2},
+          "accelerations": [
+            {
+              "accountCode": "TAAA",
+              "scopeLevel": "AD_TYPE",
+              "scopeValue": "SEM",
+              "startDate": "2026-01-05",
+              "endDate": "2026-01-20",
+              "multiplier": 120.0,
+              "note": "Promotion period boost"
+            },
+            {
+              "accountCode": "LACS",
+              "scopeLevel": "AD_TYPE",
+              "scopeValue": "SEM",
+              "startDate": "2026-01-05",
+              "endDate": "2026-01-20",
+              "multiplier": 120.0,
+              "note": "Promotion period boost"
+            }
+          ]
+        }
+
+    Requirements:
+        - accountCodes can be [] to resolve all eligible account codes for the period
+        - scopeLevel must be ACCOUNT or AD_TYPE
+        - scopeValue must be a non-empty array for non-ACCOUNT scopes
+        - startDate must be on or before endDate
+        - multiplier must be >= 100
+        - when scopeLevel is ACCOUNT, scopeValue is normalized to each accountCode
+        - overwrite defaults to false; false skips existing keys, true updates on duplicate key
+        - note is optional (max length 2048)
+        - validation errors are returned as indexed items (index=0 for this single payload)
+    """
+    idx = 0
+    data = request_payload.model_dump()
+    start_date = data.get("startDate")
+    end_date = data.get("endDate")
+    overwrite = bool(data.get("overwrite"))
+    multiplier = data.get("multiplier")
+    raw_account_codes = data.get("accountCodes") or []
+    raw_scope_values = data.get("scopeValue")
+    scope_level = str(data.get("scopeLevel") or "").strip().upper()
+    use_all_accounts = len(raw_account_codes) == 0
+    account_field = "accountCodes"
+    account_input = raw_account_codes
+    scope_field = "scopeValue"
+    allowed_scope_levels = {"ACCOUNT", "AD_TYPE"}
+
+    account_codes = [
+        code.strip().upper()
+        for code in raw_account_codes
+        if isinstance(code, str) and code.strip()
+    ]
+    account_codes = _normalize_codes(account_codes)
+    scope_values = _normalize_scope_values(raw_scope_values)
+
+    errors: list[dict] = []
+    if not account_codes and not use_all_accounts:
+        errors.append(
+            {
+                "index": idx,
+                "field": "accountCodes",
+                "value": account_input,
+                "message": "accountCodes must contain non-empty strings",
+            }
+        )
+
+    if scope_level not in allowed_scope_levels:
+        errors.append(
+            {
+                "index": idx,
+                "field": "scopeLevel",
+                "value": data.get("scopeLevel"),
+                "allowed": sorted(allowed_scope_levels),
+                "message": "scopeLevel must be ACCOUNT or AD_TYPE",
+            }
+        )
+
+    if scope_level != "ACCOUNT" and not scope_values:
+        errors.append(
+            {
+                "index": idx,
+                "field": scope_field,
+                "value": raw_scope_values,
+                "message": "scopeValue must contain at least one non-empty string",
+            }
+        )
+
+    if start_date > end_date:
+        errors.append(
+            {
+                "index": idx,
+                "field": "startDate",
+                "value": str(start_date),
+                "message": "startDate must be on or before endDate",
+            }
+        )
+
+    if isinstance(multiplier, bool) or not isinstance(multiplier, (int, float)):
+        errors.append(
+            {
+                "index": idx,
+                "field": "multiplier",
+                "value": multiplier,
+                "message": "multiplier must be a number",
+            }
+        )
+    elif multiplier < 100:
+        errors.append(
+            {
+                "index": idx,
+                "field": "multiplier",
+                "value": multiplier,
+                "message": "multiplier must be >= 100",
+            }
+        )
+
+    if not errors:
+        try:
+            account_codes = _resolve_account_codes(
+                [] if use_all_accounts else account_codes,
+                month=start_date.month,
+                year=start_date.year,
+                as_of=start_date,
+            )
+        except HTTPException as exc:
             errors.append(
                 {
                     "index": idx,
                     "field": account_field,
                     "value": account_input,
-                    "message": "No accountCodes resolved for acceleration creation",
+                    "message": "Invalid accountCodes",
+                    "detail": exc.detail,
                 }
             )
-            continue
 
-        end_offset_days = max(day_front - 1, 0)
-        end_date = start_date + timedelta(days=end_offset_days)
-
-        scope_type = data.get("scopeLevel")
-        scope_value = data.get("scopeValue")
-        note = data.get("note")
-        for account_code in account_codes:
-            if str(scope_type).strip().upper() == "ACCOUNT":
-                scope_value = account_code
-            row = {
-                "accountCode": account_code,
-                "scopeLevel": scope_type,
-                "scopeValue": scope_value,
-                "startDate": start_date,
-                "endDate": end_date,
-                "multiplier": multiplier,
-                "note": note,
+    if not errors and not account_codes:
+        errors.append(
+            {
+                "index": idx,
+                "field": account_field,
+                "value": account_input,
+                "message": "No accountCodes resolved for acceleration creation",
             }
-            rows.append(row)
+        )
 
     if errors:
         raise HTTPException(status_code=400, detail={"error": "Invalid payload", "items": errors})
 
+    rows: list[dict] = []
+    scope_type = data.get("scopeLevel")
+    note = data.get("note")
+    for account_code in account_codes:
+        if str(scope_type).strip().upper() == "ACCOUNT":
+            rows.append(
+                {
+                    "accountCode": account_code,
+                    "scopeLevel": scope_type,
+                    "scopeValue": account_code,
+                    "startDate": start_date,
+                    "endDate": end_date,
+                    "multiplier": multiplier,
+                    "note": note,
+                }
+            )
+            continue
+        for scope_value in scope_values:
+            rows.append(
+                {
+                    "accountCode": account_code,
+                    "scopeLevel": scope_type,
+                    "scopeValue": scope_value,
+                    "startDate": start_date,
+                    "endDate": end_date,
+                    "multiplier": multiplier,
+                    "note": note,
+                }
+            )
+
     rows = _normalize_and_validate_rows(rows, validate_account_codes_rows=False)
     _validate_budget_scope_values(rows)
-    inserted = insert_accelerations(rows)
+    rows_to_write = _apply_overwrite_policy(rows, overwrite=overwrite)
+    inserted = insert_accelerations(rows_to_write)
     return {
         "summary": {"requested": len(rows), "inserted": inserted},
-        "accelerations": rows,
+        "accelerations": rows_to_write,
     }
-
-
-@router.post(
-    "/accelerations/by-month/accounts",
-    summary="Create accelerations for multiple accounts by month",
-    description=(
-        "Creates one acceleration per accountCode. If accountCodes is empty, "
-        "uses all active account codes that have matching Google Ads accounts."
-    ),
-)
-def create_accelerations_by_month_accounts(
-    request_payload: AccelerationMonthAccountsPayload,
-):
-    """
-    Example request:
-        POST /api/spendsphere/v1/accelerations/by-month/accounts
-        {
-          "accountCodes": [],
-          "scopeLevel": "AD_TYPE",
-          "scope_value": "SEM",
-          "multiplier": 120.0,
-          "month": 1,
-          "year": 2026
-        }
-
-    Example request (custom dates):
-        POST /api/spendsphere/v1/accelerations/by-month/accounts
-        {
-          "accountCodes": ["TAAA"],
-          "scopeLevel": "ACCOUNT",
-          "scope_value": "TAAA",
-          "multiplier": 110.0,
-          "startDate": "2026-01-05",
-          "endDate": "2026-01-20"
-        }
-
-    Example response:
-        {
-          "meta": {"timestamp": "2026-01-20T10:00:00-05:00", "duration_ms": 2},
-          "data": {"inserted": 5}
-        }
-    """
-    start_date = request_payload.startDate
-    end_date = request_payload.endDate
-
-    if (start_date and not end_date) or (end_date and not start_date):
-        raise HTTPException(
-            status_code=400,
-            detail="startDate and endDate must be provided together",
-        )
-
-    if start_date and end_date:
-        if start_date > end_date:
-            raise HTTPException(
-                status_code=400,
-                detail="startDate must be on or before endDate",
-            )
-    else:
-        month = request_payload.month
-        year = request_payload.year
-        if not isinstance(month, int) or month < 1 or month > 12:
-            raise HTTPException(status_code=400, detail="month must be 1-12")
-        if not isinstance(year, int) or year < 2000 or year > 2100:
-            raise HTTPException(status_code=400, detail="year must be 2000-2100")
-        start_date = date(year, month, 1)
-        end_date = date(year, month, calendar.monthrange(year, month)[1])
-
-    account_codes = _resolve_account_codes(
-        request_payload.accountCodes,
-        month=start_date.month,
-        year=start_date.year,
-        as_of=start_date,
-    )
-    if not account_codes:
-        raise HTTPException(
-            status_code=400,
-            detail="No accountCodes resolved for acceleration creation",
-        )
-
-    rows: list[dict] = []
-    scope_type = request_payload.scopeLevel
-    scope_value = request_payload.scopeValue
-    note = request_payload.note
-    for code in account_codes:
-        row = {
-            "accountCode": code,
-            "scopeLevel": scope_type,
-            "scopeValue": scope_value,
-            "startDate": start_date,
-            "endDate": end_date,
-            "multiplier": request_payload.multiplier,
-            "note": note,
-        }
-        if str(scope_type).strip().upper() == "ACCOUNT":
-            row["scopeValue"] = code
-        rows.append(row)
-
-    rows = _normalize_and_validate_rows(rows, validate_account_codes_rows=False)
-    _validate_budget_scope_values(rows)
-    inserted = insert_accelerations(rows)
-    return {"inserted": inserted}

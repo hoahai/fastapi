@@ -431,6 +431,82 @@ Documentation rules:
     -   Entries that are never read again can be proactively removed by
         calling `POST /api/spendsphere/v1/cache/cleanup`.
 
+### SpendSphere Accelerations Behavior (Current)
+
+-   Applies to:
+    -   `POST /api/spendsphere/v1/accelerations`
+    -   `POST /api/spendsphere/v1/accelerations/by-month`
+    -   `POST /api/spendsphere/v1/accelerations/by-date-range`
+-   Duplicate-key handling for acceleration create flows:
+    -   Uniqueness key is
+        `(accountCode, scopeLevel, scopeValue, startDate, endDate)`.
+    -   Base insert helper uses upsert behavior (`ON DUPLICATE KEY UPDATE`)
+        instead of failing.
+    -   On duplicate key, existing row is updated with incoming
+        `multiplier`, `note`, and `active` when upsert path is used
+        (for example: `POST /accelerations`, or `overwrite=true` on
+        month/date-range routes).
+-   `/accelerations/by-month` request modes:
+    -   Requires a single object payload (not an array) with:
+        `accountCodes`, `scopeLevel`, `scopeValue`, `multiplier`,
+        `month`, `year`, `dayFront`, `overwrite` (optional).
+    -   `scopeValue` is an array of values; rows are expanded per
+        `accountCode x scopeValue`.
+    -   `scopeLevel` is restricted to `ACCOUNT` or `AD_TYPE`.
+    -   `startDate` is first day of month and `endDate` is computed from
+        `dayFront` (inclusive).
+    -   Returns `summary` and expanded `accelerations` rows.
+    -   Validation errors use indexed `items` format (`index=0` for this
+        single payload).
+    -   `overwrite` defaults to `false`:
+        - `false` skips rows whose unique keys already exist.
+        - `true` updates existing rows on duplicate key.
+    -   Supports optional `note` (max length `2048`) and persists it to
+        acceleration rows.
+-   `/accelerations/by-date-range` request mode:
+    -   Requires a single object payload (not an array) with:
+        `accountCodes`, `scopeLevel`, `scopeValue`, `multiplier`,
+        `startDate`, `endDate`, `overwrite` (optional).
+    -   `scopeValue` is an array of values; rows are expanded per
+        `accountCode x scopeValue`.
+    -   `scopeLevel` is restricted to `ACCOUNT` or `AD_TYPE`.
+    -   `startDate` must be on or before `endDate`.
+    -   Returns `summary` and expanded `accelerations` rows.
+    -   Validation errors use indexed `items` format (`index=0` for this
+        single payload).
+    -   `overwrite` defaults to `false`:
+        - `false` skips rows whose unique keys already exist.
+        - `true` updates existing rows on duplicate key.
+    -   Supports optional `note` (max length `2048`) and persists it to
+        acceleration rows.
+
+### SpendSphere DB Insert/Upsert Rules (Current)
+
+-   Budgets upsert (`upsert_masterbudgets`):
+    -   Unique key:
+        `(accountCode, month, year, serviceId, subService)`.
+    -   Insert flow uses `ON DUPLICATE KEY UPDATE` to update:
+        `grossAmount`, `serviceId`, `subService`, `note`.
+-   Allocations upsert (`upsert_allocations`):
+    -   Unique key:
+        `(accountCode, ggBudgetId, month, year)`.
+    -   Insert flow uses `ON DUPLICATE KEY UPDATE` to update:
+        `allocation`.
+-   Rollbreakdowns upsert (`upsert_rollbreakdowns`):
+    -   Unique key:
+        `(accountCode, adTypeCode, month, year)`.
+    -   Insert flow uses `ON DUPLICATE KEY UPDATE` to update:
+        `amount`.
+-   Accelerations create/upsert (`insert_accelerations`):
+    -   Unique key:
+        `(accountCode, scopeLevel, scopeValue, startDate, endDate)`.
+    -   Insert flow uses `ON DUPLICATE KEY UPDATE` to update:
+        `multiplier`, `note`, `active`.
+-   Duplicate period-copy flows:
+    -   `duplicate_masterbudgets` and `duplicate_allocations`:
+        `overwrite=false` skips existing target rows;
+        `overwrite=true` enables `ON DUPLICATE KEY UPDATE`.
+
 ### Shiftzy
 
 -   Routes live under `/api/shiftzy/v1`.

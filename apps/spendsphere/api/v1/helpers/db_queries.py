@@ -750,7 +750,11 @@ def insert_accelerations(rows: list[dict]) -> int:
     query = (
         f"INSERT INTO {accelerations_table} "
         "(accountCode, scopeLevel, scopeValue, startDate, endDate, multiplier, note, active) "
-        f"VALUES {placeholders}"
+        f"VALUES {placeholders} "
+        "ON DUPLICATE KEY UPDATE "
+        "multiplier = VALUES(multiplier), "
+        "note = VALUES(note), "
+        "active = VALUES(active)"
     )
 
     params: list = []
