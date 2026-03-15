@@ -48,6 +48,12 @@ def normalize_error_payload(raw: object | None) -> dict[str, object]:
     else:
         payload = {"detail": raw}
 
+    detail = payload.get("detail")
+    if isinstance(detail, dict):
+        for key, value in detail.items():
+            payload.setdefault(key, value)
+        payload.pop("detail", None)
+
     if "message" not in payload:
         detail = payload.get("detail")
         if isinstance(detail, str) and detail:
