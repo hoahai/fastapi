@@ -68,6 +68,23 @@ def normalize_error_payload(raw: object | None) -> dict[str, object]:
                 message = "Request failed"
         payload["message"] = message
 
+    messages = payload.get("messages")
+    if not isinstance(messages, list):
+        messages = []
+    if not messages:
+        message = payload.get("message")
+        if isinstance(message, str) and message:
+            messages = [message]
+    payload["messages"] = messages
+
+    errors = payload.get("errors")
+    if isinstance(errors, list):
+        payload["errors"] = errors
+    elif isinstance(payload.get("items"), list):
+        payload["errors"] = payload["items"]
+    else:
+        payload["errors"] = []
+
     return payload
 
 

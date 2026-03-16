@@ -276,8 +276,8 @@ def build_google_ads_alert_email(
     stats_html = (
         _html_stat_card("Total", total_count, "#0f172a", "#e2e8f0")
         + _html_stat_card("Succeeded", succeeded_count, "#065f46", "#d1fae5")
-        + _html_stat_card("Failed", failed_count, "#991b1b", "#fee2e2")
         + _html_stat_card("Warnings", warning_count, "#f97316", "#ffedd5")
+        + _html_stat_card("Failed", failed_count, "#991b1b", "#fee2e2")
     )
 
     resolved_template_path = (
