@@ -37,6 +37,34 @@ def get_bootstrap(
     tables: list[str] | None = Query(None),
     include_all: bool = Query(False, alias="all"),
 ):
+    """
+    Fetch multiple Shiftzy bootstrap datasets in one request.
+
+    Example request:
+        GET /api/shiftzy/v1/bootstrap
+
+    Example request (selected tables + include inactive):
+        GET /api/shiftzy/v1/bootstrap?tables=shifts,employees&all=true
+
+    Example request (single table):
+        GET /api/shiftzy/v1/bootstrap?tables=positions&all=true
+
+    Example response:
+        {
+          "meta": {"timestamp": "2026-03-16T10:00:00-05:00", "duration_ms": 6},
+          "data": {
+            "shifts": [{"id": 3, "name": "Morning", "start_time": "08:00", "end_time": "12:00", "active": 1, "duration": "04:00"}],
+            "employees": [{"id": "948f09c9-f6b9-11f0-b7f6-5a4783e25118", "name": "Taylor Reed", "schedule_section": "Front", "note": null, "ref_positionCode": "FR-CASH", "active": 1}]
+          }
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - Unknown `tables` values return 400
+        - Query param `all` maps to `include_all` for shifts/employees/positions
+        - `all` does not apply to `weeks`
+    """
     selected = _normalize_tables(tables)
     if not selected:
         selected = list(_TABLE_LOADERS.keys())
@@ -56,3 +84,4 @@ def get_bootstrap(
     data = {name: result for name, result in zip(selected, results)}
 
     return data
+

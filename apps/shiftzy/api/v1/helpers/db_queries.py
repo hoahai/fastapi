@@ -388,6 +388,226 @@ def delete_employees(employees: list[dict] | dict) -> int:
     return run_transaction(_work)
 
 
+def apply_employee_changes(payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise TypeError("payload must be a dict")
+
+    create_rows = _coerce_optional_list(payload.get("toCreate"), name="toCreate")
+    update_rows = _coerce_optional_list(payload.get("toUpdate"), name="toUpdate")
+    delete_rows = _coerce_optional_list(payload.get("toDelete"), name="toDelete")
+
+    _validate_employee_change_conflicts(
+        create_rows=create_rows,
+        update_rows=update_rows,
+        delete_rows=delete_rows,
+    )
+
+    create_values = _build_employee_insert_values(create_rows)
+    update_statements = _build_employee_update_statements(update_rows)
+    delete_payload = _build_employee_delete_payload(delete_rows)
+
+    def _work(cursor) -> dict:
+        deleted = _execute_employee_delete(cursor, delete_payload)
+        updated = _execute_employee_updates(cursor, update_statements)
+        inserted = _execute_employee_inserts(cursor, create_values)
+        return {"inserted": inserted, "updated": updated, "deleted": deleted}
+
+    return run_transaction(_work)
+
+
+def _employee_insert_query() -> str:
+    tables = get_db_tables()
+    employees_table = tables["EMPLOYEES"]
+    return (
+        f"INSERT INTO {employees_table} "
+        "(id, name, schedule_section, note, ref_positionCode, active) "
+        "VALUES (%s, %s, %s, %s, %s, %s)"
+    )
+
+
+def _extract_employee_id(value: object) -> str:
+    if isinstance(value, dict):
+        raw = value.get("id") or value.get("employee_id") or ""
+    else:
+        raw = value
+    if raw is None:
+        return ""
+    return str(raw).strip()
+
+
+def _validate_employee_change_conflicts(
+    *,
+    create_rows: list[dict],
+    update_rows: list[dict],
+    delete_rows: list,
+) -> None:
+    create_ids = [_extract_employee_id(item) for item in create_rows]
+    update_ids = [_extract_employee_id(item) for item in update_rows]
+    delete_ids = [_extract_employee_id(item) for item in delete_rows]
+
+    create_non_empty = [v for v in create_ids if v]
+    update_non_empty = [v for v in update_ids if v]
+    delete_non_empty = [v for v in delete_ids if v]
+
+    create_set = set(create_non_empty)
+    update_set = set(update_non_empty)
+    delete_set = set(delete_non_empty)
+
+    if create_ids and len(create_set) != len(create_non_empty):
+        raise ValueError("Duplicate ids found in toCreate")
+    if update_ids and len(update_set) != len(update_non_empty):
+        raise ValueError("Duplicate ids found in toUpdate")
+    if delete_ids and len(delete_set) != len(delete_non_empty):
+        raise ValueError("Duplicate ids found in toDelete")
+
+    overlap_create_update = create_set & update_set
+    overlap_create_delete = create_set & delete_set
+    overlap_update_delete = update_set & delete_set
+
+    if overlap_create_update:
+        raise ValueError(
+            "Employee ids cannot appear in both toCreate and toUpdate: "
+            + ", ".join(sorted(overlap_create_update))
+        )
+    if overlap_create_delete:
+        raise ValueError(
+            "Employee ids cannot appear in both toCreate and toDelete: "
+            + ", ".join(sorted(overlap_create_delete))
+        )
+    if overlap_update_delete:
+        raise ValueError(
+            "Employee ids cannot appear in both toUpdate and toDelete: "
+            + ", ".join(sorted(overlap_update_delete))
+        )
+
+
+def _build_employee_insert_values(rows: list[dict]) -> list[tuple]:
+    allowed_sections = {v.strip() for v in get_schedule_sections()}
+    values: list[tuple] = []
+    for item in rows:
+        if not isinstance(item, dict):
+            raise TypeError("employees must be a dict or list[dict]")
+        employee_id = (item.get("id") or "").strip() or str(uuid4())
+        name = (item.get("name") or "").strip()
+        section = (item.get("schedule_section") or "").strip()
+        note = item.get("note")
+        ref_position_code = item.get("ref_positionCode")
+        if isinstance(ref_position_code, str):
+            ref_position_code = ref_position_code.strip() or None
+        if not name or not section:
+            raise ValueError("name and schedule_section are required for employees")
+        if section not in allowed_sections:
+            raise ValueError(f"Invalid schedule_section: {section}")
+        active = _normalize_bool(item.get("active"), default=True)
+        values.append(
+            (employee_id, name, section, note, ref_position_code, active)
+        )
+    return values
+
+
+def _execute_employee_inserts(cursor, values: list[tuple]) -> int:
+    if not values:
+        return 0
+    cursor.executemany(_employee_insert_query(), values)
+    return cursor.rowcount
+
+
+def _build_employee_update_statements(rows: list[dict]) -> list[tuple[str, tuple]]:
+    tables = get_db_tables()
+    employees_table = tables["EMPLOYEES"]
+    allowed_sections = {v.strip() for v in get_schedule_sections()}
+    statements: list[tuple[str, tuple]] = []
+    for item in rows:
+        if not isinstance(item, dict):
+            raise TypeError("employees must be a dict or list[dict]")
+        employee_id = _extract_employee_id(item)
+        if not employee_id:
+            raise ValueError("id is required for employees update")
+
+        fields: list[str] = []
+        params: list[object] = []
+
+        if "name" in item:
+            name = (item.get("name") or "").strip()
+            if not name:
+                raise ValueError("name cannot be empty")
+            fields.append("name = %s")
+            params.append(name)
+
+        if "schedule_section" in item:
+            section = (item.get("schedule_section") or "").strip()
+            if not section:
+                raise ValueError("schedule_section cannot be empty")
+            if section not in allowed_sections:
+                raise ValueError(f"Invalid schedule_section: {section}")
+            fields.append("schedule_section = %s")
+            params.append(section)
+
+        if "note" in item:
+            fields.append("note = %s")
+            params.append(item.get("note"))
+
+        if "ref_positionCode" in item:
+            ref_position_code = item.get("ref_positionCode")
+            if isinstance(ref_position_code, str):
+                ref_position_code = ref_position_code.strip() or None
+            fields.append("ref_positionCode = %s")
+            params.append(ref_position_code)
+
+        if "active" in item:
+            active_value = item.get("active")
+            if active_value is None:
+                raise ValueError("active cannot be null")
+            active = _normalize_bool(active_value, default=True)
+            fields.append("active = %s")
+            params.append(active)
+
+        if not fields:
+            raise ValueError(
+                f"No updatable fields provided for employee id {employee_id}"
+            )
+
+        params.append(employee_id)
+        query = f"UPDATE {employees_table} SET " + ", ".join(fields) + " WHERE id = %s"
+        statements.append((query, tuple(params)))
+
+    return statements
+
+
+def _execute_employee_updates(cursor, statements: list[tuple[str, tuple]]) -> int:
+    updated = 0
+    for query, params in statements:
+        cursor.execute(query, params)
+        updated += cursor.rowcount
+    return updated
+
+
+def _build_employee_delete_payload(rows: list) -> tuple[str, tuple] | None:
+    tables = get_db_tables()
+    employees_table = tables["EMPLOYEES"]
+    if not rows:
+        return None
+
+    employee_ids: list[str] = []
+    for item in rows:
+        employee_id = _extract_employee_id(item)
+        if not employee_id:
+            raise ValueError("id is required for employees delete")
+        employee_ids.append(employee_id)
+
+    placeholders = ", ".join(["%s"] * len(employee_ids))
+    query = f"UPDATE {employees_table} SET active = 0 WHERE id IN ({placeholders})"
+    return query, tuple(employee_ids)
+
+
+def _execute_employee_delete(cursor, payload: tuple[str, tuple] | None) -> int:
+    if payload is None:
+        return 0
+    query, params = payload
+    cursor.execute(query, params)
+    return cursor.rowcount
+
+
 # ============================================================
 # SHIFTS
 # ============================================================

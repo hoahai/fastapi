@@ -23,6 +23,40 @@ def get_weeks(
     date_value: DateType | None = Query(None, alias="date"),
     week_no: int | None = Query(None, ge=0),
 ):
+    """
+    Resolve Shiftzy week data by range, by date, or by explicit week number.
+
+    Example request:
+        GET /api/shiftzy/v1/weeks
+
+    Example request (custom range):
+        GET /api/shiftzy/v1/weeks?week_before=2&week_after=4
+
+    Example request (specific date):
+        GET /api/shiftzy/v1/weeks?date=2026-03-16
+
+    Example request (specific week):
+        GET /api/shiftzy/v1/weeks?week_no=120
+
+    Example response:
+        {
+          "meta": {"timestamp": "2026-03-16T10:00:00-05:00", "duration_ms": 2},
+          "data": [
+            {
+              "week_no": 120,
+              "start_date": "2026-03-16",
+              "end_date": "2026-03-22",
+              "is_today_week": true
+            }
+          ]
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - Use only one mode: week_before/week_after OR date OR week_no
+        - week_before, week_after, and week_no must be >= 0
+    """
     has_list_params = week_before is not None or week_after is not None
     has_date = date_value is not None
     has_week_no = week_no is not None
