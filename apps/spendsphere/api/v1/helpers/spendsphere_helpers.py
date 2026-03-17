@@ -37,6 +37,7 @@ _GOOGLE_ADS_SPENT_KEY = "google_ads_spent"
 _GOOGLE_ADS_WARNINGS_KEY = "google_ads_warnings"
 _GOOGLE_SHEETS_KEY = "google_sheets"
 _BUDGET_MANAGEMENTS_KEY = "budget_managements"
+_BUDGET_MANAGEMENT_RECOMMENDED_KEY = "budget_management_recommended"
 _SERVICES_KEY = "services"
 _GOOGLE_ADS_CLIENTS_CACHE_TTL_ENV = "SPENDSPHERE_GOOGLE_ADS_CLIENTS_CACHE_TTL_SECONDS"
 _GOOGLE_ADS_CLIENTS_CACHE_TTL_FALLBACK_ENV = "ttl_time"
@@ -45,8 +46,10 @@ _DEFAULT_GOOGLE_ADS_ISSUE_CACHE_TTL_SECONDS = 28800
 _DEFAULT_GOOGLE_ADS_RESOURCE_CACHE_TTL_SECONDS = 300
 _DEFAULT_SERVICES_CACHE_TTL_SECONDS = 86400
 _DEFAULT_GOOGLE_ADS_SPENT_CACHE_TTL_SECONDS = 300
+_DEFAULT_BUDGET_MANAGEMENT_RECOMMENDED_CACHE_TTL_SECONDS = 300
 _BUDGET_MANAGEMENTS_CACHE_KEY_PREFIX = "budget_managements::"
-_BUDGET_MANAGEMENT_SPEND_CACHE_KEY_PREFIX = "budget_management_spend_by_adtype::"
+_BUDGET_MANAGEMENTS_CACHE_KEY_PREFIX_LEGACY = "budget_managements_table_data::"
+_BUDGET_MANAGEMENT_RECOMMENDED_CACHE_KEY_PREFIX = "budget_management_recommended::"
 _ACCOUNT_CODES_SCOPE_ACTIVE = "active"
 _ACCOUNT_CODES_SCOPE_ALL = "all"
 _CACHE_STORES: dict[str, FileCache] = {}
@@ -201,6 +204,7 @@ def _load_cache_root(cache_store: FileCache) -> dict[str, object]:
         or _GOOGLE_ADS_WARNINGS_KEY in data
         or _GOOGLE_SHEETS_KEY in data
         or _BUDGET_MANAGEMENTS_KEY in data
+        or _BUDGET_MANAGEMENT_RECOMMENDED_KEY in data
         or _SERVICES_KEY in data
     ):
         root = data
@@ -238,6 +242,10 @@ def _load_cache_root(cache_store: FileCache) -> dict[str, object]:
     if not isinstance(budget_managements, dict):
         budget_managements = {}
 
+    budget_management_recommended = root.get(_BUDGET_MANAGEMENT_RECOMMENDED_KEY)
+    if not isinstance(budget_management_recommended, dict):
+        budget_management_recommended = {}
+
     services = root.get(_SERVICES_KEY)
     if not isinstance(services, dict):
         services = {}
@@ -251,6 +259,7 @@ def _load_cache_root(cache_store: FileCache) -> dict[str, object]:
         _GOOGLE_ADS_WARNINGS_KEY: google_ads_warnings,
         _GOOGLE_SHEETS_KEY: google_sheets,
         _BUDGET_MANAGEMENTS_KEY: budget_managements,
+        _BUDGET_MANAGEMENT_RECOMMENDED_KEY: budget_management_recommended,
         _SERVICES_KEY: services,
     }
 
@@ -401,10 +410,10 @@ def get_budget_management_cache_ttl_seconds() -> int:
     return value
 
 
-def get_budget_management_spent_cache_ttl_seconds() -> int:
-    value = _get_cache_override(("budget_management_spent_ttl_time",))
+def get_budget_management_recommended_cache_ttl_seconds() -> int:
+    value = _get_cache_override(("budget_management_recommended_ttl_time",))
     if value is None:
-        return get_budget_management_cache_ttl_seconds()
+        return _DEFAULT_BUDGET_MANAGEMENT_RECOMMENDED_CACHE_TTL_SECONDS
     return value
 
 
@@ -657,7 +666,6 @@ def cleanup_stale_cache_entries(
         "google_ads_warnings": 0,
         "google_sheets": 0,
         "budget_management": 0,
-        "budget_management_spent": 0,
         "services": 0,
     }
 
@@ -855,12 +863,8 @@ def cleanup_stale_cache_entries(
             if isinstance(tenant_entry, dict):
                 for cache_key in list(tenant_entry.keys()):
                     entry = tenant_entry.get(cache_key)
-                    ttl_seconds = (
-                        get_budget_management_spent_cache_ttl_seconds()
-                        if str(cache_key).startswith(
-                            _BUDGET_MANAGEMENT_SPEND_CACHE_KEY_PREFIX
-                        )
-                        else get_budget_management_cache_ttl_seconds()
+                    ttl_seconds = _get_budget_management_cache_ttl_seconds_for_key(
+                        cache_key
                     )
                     should_remove = not isinstance(entry, dict)
                     if not should_remove:
@@ -874,14 +878,7 @@ def cleanup_stale_cache_entries(
                             )
                     if should_remove:
                         tenant_entry.pop(cache_key, None)
-                        if str(cache_key).startswith(
-                            _BUDGET_MANAGEMENTS_CACHE_KEY_PREFIX
-                        ):
-                            removed["budget_management"] += 1
-                        elif str(cache_key).startswith(
-                            _BUDGET_MANAGEMENT_SPEND_CACHE_KEY_PREFIX
-                        ):
-                            removed["budget_management_spent"] += 1
+                        removed["budget_management"] += 1
                         changed = True
 
                 if tenant_entry:
@@ -889,6 +886,38 @@ def cleanup_stale_cache_entries(
                 else:
                     budget_managements_cache.pop(tenant_key, None)
                 root[_BUDGET_MANAGEMENTS_KEY] = budget_managements_cache
+
+        budget_management_recommended_cache = root.get(
+            _BUDGET_MANAGEMENT_RECOMMENDED_KEY
+        )
+        if isinstance(budget_management_recommended_cache, dict):
+            tenant_entry = budget_management_recommended_cache.get(tenant_key)
+            if isinstance(tenant_entry, dict):
+                ttl_seconds = get_budget_management_recommended_cache_ttl_seconds()
+                for cache_key in list(tenant_entry.keys()):
+                    entry = tenant_entry.get(cache_key)
+                    should_remove = not isinstance(entry, dict)
+                    if not should_remove:
+                        rows = entry.get("rows")
+                        updated_at = _parse_cache_datetime(entry.get("updated_at"))
+                        should_remove = not isinstance(rows, list)
+                        if not should_remove and ttl_seconds > 0:
+                            should_remove = (
+                                updated_at is None
+                                or (now - updated_at).total_seconds() > ttl_seconds
+                            )
+                    if should_remove:
+                        tenant_entry.pop(cache_key, None)
+                        removed["budget_management"] += 1
+                        changed = True
+
+                if tenant_entry:
+                    budget_management_recommended_cache[tenant_key] = tenant_entry
+                else:
+                    budget_management_recommended_cache.pop(tenant_key, None)
+                root[_BUDGET_MANAGEMENT_RECOMMENDED_KEY] = (
+                    budget_management_recommended_cache
+                )
 
         sheets_cache = root.get(_GOOGLE_SHEETS_KEY)
         if isinstance(sheets_cache, dict):
@@ -898,12 +927,8 @@ def cleanup_stale_cache_entries(
                     entry = tenant_entry.get(sheet_key)
                     ttl_seconds = get_google_sheet_cache_ttl_seconds()
                     if _is_budget_management_cache_key(str(sheet_key)):
-                        ttl_seconds = (
-                            get_budget_management_spent_cache_ttl_seconds()
-                            if str(sheet_key).startswith(
-                                _BUDGET_MANAGEMENT_SPEND_CACHE_KEY_PREFIX
-                            )
-                            else get_budget_management_cache_ttl_seconds()
+                        ttl_seconds = _get_budget_management_cache_ttl_seconds_for_key(
+                            sheet_key
                         )
                     should_remove = not isinstance(entry, dict)
                     if not should_remove:
@@ -917,14 +942,8 @@ def cleanup_stale_cache_entries(
                             )
                     if should_remove:
                         tenant_entry.pop(sheet_key, None)
-                        if str(sheet_key).startswith(
-                            _BUDGET_MANAGEMENTS_CACHE_KEY_PREFIX
-                        ):
+                        if _is_budget_management_cache_key(str(sheet_key)):
                             removed["budget_management"] += 1
-                        elif str(sheet_key).startswith(
-                            _BUDGET_MANAGEMENT_SPEND_CACHE_KEY_PREFIX
-                        ):
-                            removed["budget_management_spent"] += 1
                         else:
                             removed["google_sheets"] += 1
                         changed = True
@@ -1036,11 +1055,17 @@ def set_google_ads_clients_cache(
         google_ads = root.get(_GOOGLE_ADS_CLIENTS_KEY)
         if not isinstance(google_ads, dict):
             google_ads = {}
+        existing_entry = google_ads.get(tenant_key)
+        existing_clients = (
+            existing_entry.get("clients") if isinstance(existing_entry, dict) else None
+        )
         google_ads[tenant_key] = {
             "clients": clients,
             "updated_at": datetime.now(ZoneInfo(get_timezone())).isoformat(),
         }
         root[_GOOGLE_ADS_CLIENTS_KEY] = google_ads
+        if not (isinstance(existing_clients, list) and existing_clients == clients):
+            _remove_budget_management_table_cache_keys(root, tenant_key=tenant_key)
         _write_cache_root(cache_store, root)
 
 
@@ -1207,12 +1232,18 @@ def set_google_ads_campaigns_cache(
         tenant_entry = campaigns_cache.get(tenant_key)
         if not isinstance(tenant_entry, dict):
             tenant_entry = {}
+        existing_entry = tenant_entry.get(code)
+        existing_campaigns = (
+            existing_entry.get("campaigns") if isinstance(existing_entry, dict) else None
+        )
         tenant_entry[code] = {
             "campaigns": campaigns,
             "updated_at": datetime.now(ZoneInfo(get_timezone())).isoformat(),
         }
         campaigns_cache[tenant_key] = tenant_entry
         root[_GOOGLE_ADS_CAMPAIGNS_KEY] = campaigns_cache
+        if not (isinstance(existing_campaigns, list) and existing_campaigns == campaigns):
+            _remove_budget_management_table_cache_keys(root, tenant_key=tenant_key)
         _write_cache_root(cache_store, root)
 
 
@@ -1356,6 +1387,12 @@ def set_google_ads_spent_cache(
         account_entry = tenant_entry.get(code)
         if not isinstance(account_entry, dict):
             account_entry = {}
+        existing_period_entry = account_entry.get(period_key)
+        existing_spends = (
+            existing_period_entry.get("spends")
+            if isinstance(existing_period_entry, dict)
+            else None
+        )
 
         account_entry[period_key] = {
             "spends": spends,
@@ -1364,15 +1401,116 @@ def set_google_ads_spent_cache(
         tenant_entry[code] = account_entry
         spent_cache[tenant_key] = tenant_entry
         root[_GOOGLE_ADS_SPENT_KEY] = spent_cache
+        if not (isinstance(existing_spends, list) and existing_spends == spends):
+            next_month, next_year = _resolve_next_month_year(month, year)
+            _remove_budget_management_table_cache_keys(
+                root,
+                tenant_key=tenant_key,
+                key_prefixes=[
+                    _build_budget_management_period_key_prefix(month=month, year=year),
+                    _build_budget_management_period_key_prefix(
+                        month=month,
+                        year=year,
+                        legacy=True,
+                    ),
+                    _build_budget_management_period_key_prefix(
+                        month=next_month,
+                        year=next_year,
+                    ),
+                    _build_budget_management_period_key_prefix(
+                        month=next_month,
+                        year=next_year,
+                        legacy=True,
+                    ),
+                ],
+            )
         _write_cache_root(cache_store, root)
+
+
+def _resolve_next_month_year(month: int, year: int) -> tuple[int, int]:
+    if month == 12:
+        return 1, year + 1
+    return month + 1, year
+
+
+def _build_budget_management_period_key_prefix(
+    *,
+    month: int,
+    year: int,
+    legacy: bool = False,
+) -> str:
+    prefix = (
+        _BUDGET_MANAGEMENTS_CACHE_KEY_PREFIX_LEGACY
+        if legacy
+        else _BUDGET_MANAGEMENTS_CACHE_KEY_PREFIX
+    )
+    return f"{prefix}{year:04d}-{month:02d}"
+
+
+def _remove_budget_management_table_cache_keys(
+    root: dict[str, object],
+    *,
+    tenant_key: str,
+    key_prefixes: list[str] | None = None,
+) -> int:
+    normalized_prefixes = tuple(
+        str(prefix).strip() for prefix in (key_prefixes or []) if str(prefix).strip()
+    )
+    removed = 0
+
+    def _should_remove(key: str) -> bool:
+        if not _is_budget_management_cache_key(key):
+            return False
+        if not normalized_prefixes:
+            return True
+        return any(key.startswith(prefix) for prefix in normalized_prefixes)
+
+    budget_managements = root.get(_BUDGET_MANAGEMENTS_KEY)
+    if isinstance(budget_managements, dict):
+        tenant_entry = budget_managements.get(tenant_key)
+        if isinstance(tenant_entry, dict):
+            for cache_key in list(tenant_entry.keys()):
+                if not _should_remove(str(cache_key)):
+                    continue
+                tenant_entry.pop(cache_key, None)
+                removed += 1
+            if tenant_entry:
+                budget_managements[tenant_key] = tenant_entry
+            else:
+                budget_managements.pop(tenant_key, None)
+            root[_BUDGET_MANAGEMENTS_KEY] = budget_managements
+
+    google_sheets = root.get(_GOOGLE_SHEETS_KEY)
+    if isinstance(google_sheets, dict):
+        tenant_entry = google_sheets.get(tenant_key)
+        if isinstance(tenant_entry, dict):
+            for cache_key in list(tenant_entry.keys()):
+                if not _should_remove(str(cache_key)):
+                    continue
+                tenant_entry.pop(cache_key, None)
+                removed += 1
+            if tenant_entry:
+                google_sheets[tenant_key] = tenant_entry
+            else:
+                google_sheets.pop(tenant_key, None)
+            root[_GOOGLE_SHEETS_KEY] = google_sheets
+
+    return removed
 
 
 def _is_budget_management_cache_key(cache_key: str) -> bool:
     normalized = str(cache_key or "").strip()
-    return (
-        normalized.startswith(_BUDGET_MANAGEMENTS_CACHE_KEY_PREFIX)
-        or normalized.startswith(_BUDGET_MANAGEMENT_SPEND_CACHE_KEY_PREFIX)
+    return normalized.startswith(
+        (
+            _BUDGET_MANAGEMENTS_CACHE_KEY_PREFIX,
+            _BUDGET_MANAGEMENTS_CACHE_KEY_PREFIX_LEGACY,
+        )
     )
+
+
+def _get_budget_management_cache_ttl_seconds_for_key(cache_key: str) -> int:
+    del cache_key
+    return get_budget_management_cache_ttl_seconds()
 
 
 def _migrate_legacy_budget_management_cache_entry(
@@ -1479,11 +1617,7 @@ def get_budget_management_cache_entry(
             _delete_entry(root)
             return None, True
 
-        ttl_seconds = (
-            get_budget_management_spent_cache_ttl_seconds()
-            if str(cache_key).startswith(_BUDGET_MANAGEMENT_SPEND_CACHE_KEY_PREFIX)
-            else get_budget_management_cache_ttl_seconds()
-        )
+        ttl_seconds = _get_budget_management_cache_ttl_seconds_for_key(cache_key)
         if ttl_seconds <= 0:
             if cache_changed:
                 _write_cache_root(cache_store, root)
@@ -1609,6 +1743,241 @@ def clear_budget_management_cache_entries(
         if removed:
             _write_cache_root(cache_store, root)
         return removed
+
+
+def _migrate_legacy_budget_management_recommended_cache_entry(
+    root: dict[str, object],
+    *,
+    tenant_key: str,
+    cache_key: str,
+) -> tuple[dict | None, bool]:
+    budget_managements = root.get(_BUDGET_MANAGEMENTS_KEY)
+    if not isinstance(budget_managements, dict):
+        budget_managements = {}
+    old_tenant_entry = budget_managements.get(tenant_key)
+    entry = old_tenant_entry.get(cache_key) if isinstance(old_tenant_entry, dict) else None
+
+    # Backward-compatible fallback from legacy google_sheets storage.
+    if not isinstance(entry, dict):
+        google_sheets = root.get(_GOOGLE_SHEETS_KEY)
+        if isinstance(google_sheets, dict):
+            sheets_tenant_entry = google_sheets.get(tenant_key)
+            if isinstance(sheets_tenant_entry, dict):
+                candidate = sheets_tenant_entry.get(cache_key)
+                if isinstance(candidate, dict):
+                    entry = candidate
+                    sheets_tenant_entry.pop(cache_key, None)
+                    if sheets_tenant_entry:
+                        google_sheets[tenant_key] = sheets_tenant_entry
+                    else:
+                        google_sheets.pop(tenant_key, None)
+                    root[_GOOGLE_SHEETS_KEY] = google_sheets
+
+    if not isinstance(entry, dict):
+        return None, False
+
+    # Remove from old budget_managements bucket if present.
+    if isinstance(old_tenant_entry, dict) and cache_key in old_tenant_entry:
+        old_tenant_entry.pop(cache_key, None)
+        if old_tenant_entry:
+            budget_managements[tenant_key] = old_tenant_entry
+        else:
+            budget_managements.pop(tenant_key, None)
+        root[_BUDGET_MANAGEMENTS_KEY] = budget_managements
+
+    budget_management_recommended = root.get(_BUDGET_MANAGEMENT_RECOMMENDED_KEY)
+    if not isinstance(budget_management_recommended, dict):
+        budget_management_recommended = {}
+    tenant_entry = budget_management_recommended.get(tenant_key)
+    if not isinstance(tenant_entry, dict):
+        tenant_entry = {}
+    tenant_entry[cache_key] = entry
+    budget_management_recommended[tenant_key] = tenant_entry
+    root[_BUDGET_MANAGEMENT_RECOMMENDED_KEY] = budget_management_recommended
+    return entry, True
+
+
+def get_budget_management_recommended_cache_entry(
+    cache_key: str,
+    *,
+    config_hash: str | None = None,
+    tenant_id: str | None = None,
+) -> tuple[list[dict] | None, bool]:
+    def _delete_entry(root: dict[str, object]) -> None:
+        bucket = root.get(_BUDGET_MANAGEMENT_RECOMMENDED_KEY)
+        if not isinstance(bucket, dict):
+            return
+        tenant_entry = bucket.get(tenant_key)
+        if not isinstance(tenant_entry, dict):
+            return
+        if cache_key not in tenant_entry:
+            return
+        tenant_entry.pop(cache_key, None)
+        if tenant_entry:
+            bucket[tenant_key] = tenant_entry
+        else:
+            bucket.pop(tenant_key, None)
+        root[_BUDGET_MANAGEMENT_RECOMMENDED_KEY] = bucket
+        _write_cache_root(cache_store, root)
+
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+        cache_changed = False
+
+        bucket = root.get(_BUDGET_MANAGEMENT_RECOMMENDED_KEY)
+        if not isinstance(bucket, dict):
+            bucket = {}
+        tenant_entry = bucket.get(tenant_key)
+        if not isinstance(tenant_entry, dict):
+            tenant_entry = {}
+
+        entry = tenant_entry.get(cache_key)
+        if not isinstance(entry, dict):
+            entry, migrated = _migrate_legacy_budget_management_recommended_cache_entry(
+                root,
+                tenant_key=tenant_key,
+                cache_key=cache_key,
+            )
+            if migrated:
+                cache_changed = True
+
+        if not isinstance(entry, dict):
+            if cache_changed:
+                _write_cache_root(cache_store, root)
+            return None, False
+
+        rows = entry.get("rows")
+        if not isinstance(rows, list):
+            _delete_entry(root)
+            return None, False
+
+        entry_hash = (
+            entry.get("config_hash")
+            if isinstance(entry.get("config_hash"), str)
+            else None
+        )
+        hash_mismatch = bool(config_hash and entry_hash and entry_hash != config_hash)
+        if hash_mismatch:
+            _delete_entry(root)
+            return None, True
+
+        ttl_seconds = get_budget_management_recommended_cache_ttl_seconds()
+        if ttl_seconds <= 0:
+            if cache_changed:
+                _write_cache_root(cache_store, root)
+            return rows, False
+
+        updated_at = _parse_cache_datetime(entry.get("updated_at"))
+        if updated_at is None:
+            _delete_entry(root)
+            return None, True
+
+        now = datetime.now(ZoneInfo(get_timezone()))
+        age_seconds = (now - updated_at).total_seconds()
+        if age_seconds > ttl_seconds:
+            _delete_entry(root)
+            return None, True
+
+        if cache_changed:
+            _write_cache_root(cache_store, root)
+        return rows, False
+
+
+def set_budget_management_recommended_cache(
+    cache_key: str,
+    rows: list[dict],
+    *,
+    config_hash: str | None = None,
+    tenant_id: str | None = None,
+) -> None:
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+        bucket = root.get(_BUDGET_MANAGEMENT_RECOMMENDED_KEY)
+        if not isinstance(bucket, dict):
+            bucket = {}
+        tenant_entry = bucket.get(tenant_key)
+        if not isinstance(tenant_entry, dict):
+            tenant_entry = {}
+        tenant_entry[cache_key] = {
+            "rows": rows,
+            "updated_at": datetime.now(ZoneInfo(get_timezone())).isoformat(),
+            "config_hash": config_hash,
+        }
+        bucket[tenant_key] = tenant_entry
+        root[_BUDGET_MANAGEMENT_RECOMMENDED_KEY] = bucket
+        _write_cache_root(cache_store, root)
+
+
+def clear_budget_management_recommended_cache_entries(
+    *,
+    cache_keys: list[str] | None = None,
+    key_prefixes: list[str] | None = None,
+    tenant_id: str | None = None,
+) -> int:
+    normalized_keys = {
+        str(value).strip()
+        for value in (cache_keys or [])
+        if str(value).strip()
+    }
+    normalized_prefixes = tuple(
+        str(value).strip()
+        for value in (key_prefixes or [])
+        if str(value).strip()
+    )
+
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+        bucket = root.get(_BUDGET_MANAGEMENT_RECOMMENDED_KEY)
+        if not isinstance(bucket, dict):
+            return 0
+
+        tenant_entry = bucket.get(tenant_key)
+        if not isinstance(tenant_entry, dict):
+            return 0
+
+        keys_to_remove: list[str]
+        if not normalized_keys and not normalized_prefixes:
+            keys_to_remove = [
+                key
+                for key in list(tenant_entry.keys())
+                if str(key).startswith(_BUDGET_MANAGEMENT_RECOMMENDED_CACHE_KEY_PREFIX)
+            ]
+        else:
+            keys_to_remove = []
+            for key in list(tenant_entry.keys()):
+                if key in normalized_keys:
+                    keys_to_remove.append(key)
+                    continue
+                if normalized_prefixes and any(
+                    key.startswith(prefix) for prefix in normalized_prefixes
+                ):
+                    keys_to_remove.append(key)
+
+        if not keys_to_remove:
+            return 0
+
+        for key in keys_to_remove:
+            tenant_entry.pop(key, None)
+
+        if tenant_entry:
+            bucket[tenant_key] = tenant_entry
+        else:
+            bucket.pop(tenant_key, None)
+        root[_BUDGET_MANAGEMENT_RECOMMENDED_KEY] = bucket
+        _write_cache_root(cache_store, root)
+        return len(keys_to_remove)
 
 
 def get_google_sheet_cache_entry(
@@ -1941,14 +2310,33 @@ def refresh_account_codes_cache(
     cache_path = _get_cache_path(include_all)
     tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
     cache_store = _get_cache_store(cache_path)
+    scope_key = (
+        _ACCOUNT_CODES_SCOPE_ALL if include_all else _ACCOUNT_CODES_SCOPE_ACTIVE
+    )
 
     with cache_store.lock():
-        _write_account_codes_cache(
-            cache_path,
-            tenant_key=tenant_key,
-            accounts=accounts_map,
-            include_all=include_all,
+        root = _load_cache_root(cache_store)
+        account_cache = root.get(_ACCOUNT_CODES_KEY)
+        if not isinstance(account_cache, dict):
+            account_cache = {}
+        tenant_entry = account_cache.get(tenant_key)
+        if not isinstance(tenant_entry, dict):
+            tenant_entry = {}
+        existing_scope_entry = tenant_entry.get(scope_key)
+        existing_accounts = (
+            existing_scope_entry.get("accounts")
+            if isinstance(existing_scope_entry, dict)
+            else None
         )
+        tenant_entry[scope_key] = {
+            "accounts": accounts_map,
+            "updated_at": datetime.now(ZoneInfo(get_timezone())).isoformat(),
+        }
+        account_cache[tenant_key] = tenant_entry
+        root[_ACCOUNT_CODES_KEY] = account_cache
+        if not (isinstance(existing_accounts, dict) and existing_accounts == accounts_map):
+            _remove_budget_management_table_cache_keys(root, tenant_key=tenant_key)
+        _write_cache_root(cache_store, root)
 
     return accounts
 

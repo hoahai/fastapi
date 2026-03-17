@@ -29,7 +29,6 @@ _DEFAULT_CACHES = [
     "google_ads_warnings",
     "google_sheets",
     "budget_management",
-    "budget_management_spent",
     "services",
 ]
 _VALID_CACHE_KEYS = set(_DEFAULT_CACHES)
@@ -112,7 +111,7 @@ def _normalize_cache_requests(
     summary="Refresh SpendSphere caches",
     description=(
         "Refreshes account code, Google Ads clients, budgets, campaigns, and "
-        "spend + warning/failure + Google Sheets + budget-management/spend + "
+        "spend + warning/failure + Google Sheets + budget-management + "
         "service caches for the current tenant."
     ),
 )
@@ -126,7 +125,7 @@ def refresh_cache_route(
             "google_ads_clients, google_ads_budgets, google_ads_campaigns, "
             "google_ads_spent, "
             "google_ads_warnings, "
-            "google_sheets, budget_management, budget_management_spent, services. "
+            "google_sheets, budget_management, services. "
             "Can be repeated or "
             "comma-separated. Prefer using query flags such as "
             "?account_codes&google_ads_clients=false."
@@ -156,7 +155,6 @@ def refresh_cache_route(
         google_ads_warnings (also clears deduped failures)
         google_sheets
         budget_management
-        budget_management_spent
         services
 
     Example response:
@@ -179,10 +177,6 @@ def refresh_cache_route(
             "tableData": 120,
             "spentData": 20,
             "recommended": 85
-          },
-          "budgetManagementSpent": {
-            "period": {"month": 3, "year": 2026},
-            "spentData": 20
           },
           "services": 6
         }
@@ -233,20 +227,12 @@ def refresh_cache_route(
             "activePeriod": len(active_period),
         }
 
-    refresh_budget_management = "budget_management" in requested
-    refresh_budget_management_spent = "budget_management_spent" in requested
-    if refresh_budget_management or refresh_budget_management_spent:
+    if "budget_management" in requested:
         refreshed_budget_management = refresh_budget_management_cache(
             fresh_data=True,
-            fresh_spent_data=refresh_budget_management_spent,
+            fresh_spent_data=False,
         )
-        if refresh_budget_management:
-            response["budgetManagement"] = refreshed_budget_management
-        if refresh_budget_management_spent:
-            response["budgetManagementSpent"] = {
-                "period": refreshed_budget_management.get("period"),
-                "spentData": refreshed_budget_management.get("spentData", 0),
-            }
+        response["budgetManagement"] = refreshed_budget_management
 
     if "services" in requested:
         services = get_services(department_code="DIGM", refresh_cache=True)
@@ -261,7 +247,7 @@ def refresh_cache_route(
     description=(
         "Removes stale cache entries (based on cache-specific TTL rules) "
         "for the current tenant across all SpendSphere cache types, "
-        "including budget-management/spend caches."
+        "including budget-management caches."
     ),
 )
 def cleanup_cache_route():
@@ -283,10 +269,9 @@ def cleanup_cache_route():
             "googleAdsWarnings": 2,
             "googleSheets": 1,
             "budgetManagement": 1,
-            "budgetManagementSpent": 2,
             "services": 1
           },
-          "totalRemoved": 19
+          "totalRemoved": 17
         }
 
     Requirements:
@@ -303,9 +288,6 @@ def cleanup_cache_route():
         "googleAdsWarnings": int(removed.get("google_ads_warnings", 0) or 0),
         "googleSheets": int(removed.get("google_sheets", 0) or 0),
         "budgetManagement": int(removed.get("budget_management", 0) or 0),
-        "budgetManagementSpent": int(
-            removed.get("budget_management_spent", 0) or 0
-        ),
         "services": int(removed.get("services", 0) or 0),
     }
     return {

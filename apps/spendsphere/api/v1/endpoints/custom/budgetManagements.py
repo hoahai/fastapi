@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import hashlib
 import json
-import time
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 from typing import Callable, Literal
 
@@ -38,22 +37,22 @@ from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
     clear_budget_management_cache_entries,
     filter_and_sort_services_with_ad_type,
     get_budget_management_cache_entry,
+    get_budget_management_recommended_cache_entry,
     get_services,
     normalize_account_codes,
     set_budget_management_cache,
+    set_budget_management_recommended_cache,
     validate_account_codes,
 )
 from shared.tenant import get_tenant_id
 from shared.utils import get_current_period
 
 _budget_managements_feature_dependency = require_feature("budget_managements")
-_BUDGET_MANAGEMENTS_CACHE_KEY_PREFIX = "budget_managements"
-_BUDGET_MANAGEMENTS_CACHE_HASH = "budget_managements::v1"
-_BUDGET_SPEND_CACHE_KEY_PREFIX = "budget_management_spend_by_adtype"
-_BUDGET_SPEND_CACHE_HASH = "budget_management_spend_by_adtype::v1"
-_CURRENT_PERIOD_SPEND_CACHE_TTL_SECONDS = 3600
-_SPEND_CACHE_META_KEY = "_meta"
-_SPEND_CACHE_GENERATED_AT_EPOCH_KEY = "generatedAtEpoch"
+_BUDGET_MANAGEMENTS_TABLE_DATA_CACHE_KEY_PREFIX = "budget_managements"
+_BUDGET_MANAGEMENTS_TABLE_DATA_CACHE_KEY_PREFIX_LEGACY = "budget_managements_table_data"
+_BUDGET_MANAGEMENTS_TABLE_DATA_CACHE_HASH = "budget_managements::v1"
+_BUDGET_RECOMMENDED_CACHE_KEY_PREFIX = "budget_management_recommended"
+_BUDGET_RECOMMENDED_CACHE_HASH = "budget_management_recommended::v1"
 _ADTYPE_PRIORITY_ORDER = ("SEM", "PM", "DIS", "VID", "DM")
 _ADTYPE_PRIORITY_RANK = {
     code: index for index, code in enumerate(_ADTYPE_PRIORITY_ORDER)
@@ -130,6 +129,12 @@ def _resolve_previous_period(month: int, year: int) -> tuple[int, int]:
     return month - 1, year
 
 
+def _resolve_next_period(month: int, year: int) -> tuple[int, int]:
+    if month == 12:
+        return 1, year + 1
+    return month + 1, year
+
+
 def _get_service_mapping_entry(
     service_mapping: dict,
     service_id: str,
@@ -156,104 +161,128 @@ def _build_budget_managements_cache_key(
     *,
     account_codes: list[str] | None = None,
 ) -> str:
-    normalized_codes = sorted(set(normalize_account_codes(account_codes)))
-    if normalized_codes:
-        payload = {"accountCodes": normalized_codes}
-        encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-        scope_key = f"subset::{hashlib.sha256(encoded.encode('utf-8')).hexdigest()[:24]}"
-    else:
-        scope_key = "all"
-    return (
-        f"{_BUDGET_MANAGEMENTS_CACHE_KEY_PREFIX}::{year:04d}-{month:02d}::{scope_key}"
-    )
+    del account_codes  # Canonical period cache key.
+    return f"{_BUDGET_MANAGEMENTS_TABLE_DATA_CACHE_KEY_PREFIX}::{year:04d}-{month:02d}"
 
 
-def _build_budget_spend_cache_key(
-    account_codes: list[str],
+def _build_budget_recommended_cache_key(
     *,
     month: int,
     year: int,
 ) -> str:
-    normalized_codes = sorted(set(normalize_account_codes(account_codes)))
-    payload = {
-        "accountCodes": normalized_codes,
-        "month": month,
-        "year": year,
-    }
-    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
-    digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()[:24]
-    return f"{_BUDGET_SPEND_CACHE_KEY_PREFIX}::{year:04d}-{month:02d}::{digest}"
+    return f"{_BUDGET_RECOMMENDED_CACHE_KEY_PREFIX}::{year:04d}-{month:02d}"
 
 
-def _serialize_google_spend_lookup(
-    spend_lookup: dict[tuple[str, str], Decimal],
-) -> list[dict[str, str]]:
-    rows: list[dict[str, str]] = []
-    for (account_code, ad_type_code), spent_value in sorted(
-        spend_lookup.items(),
-        key=lambda item: (item[0][0], _adtype_priority_rank(item[0][1])),
-    ):
-        rows.append(
-            {
-                "accountCode": account_code,
-                "adTypeCode": ad_type_code,
-                "spent": _format_decimal_2(spent_value),
-            }
+def _build_budget_managements_table_cache_hash() -> str:
+    service_mapping = get_service_mapping()
+    serialized = json.dumps(
+        service_mapping if isinstance(service_mapping, dict) else {},
+        sort_keys=True,
+        separators=(",", ":"),
+        default=str,
+    )
+    digest = hashlib.sha256(serialized.encode("utf-8")).hexdigest()[:16]
+    return f"{_BUDGET_MANAGEMENTS_TABLE_DATA_CACHE_HASH}:{digest}"
+
+
+def _extract_account_codes_from_accounts(accounts: list[dict]) -> list[str]:
+    seen_codes: set[str] = set()
+    account_codes: list[str] = []
+    for account in accounts:
+        account_code = standardize_account_code(
+            account.get("accountCode") or account.get("code")
         )
-    return rows
-
-
-def _deserialize_google_spend_lookup(rows: list[dict]) -> dict[tuple[str, str], Decimal]:
-    lookup: dict[tuple[str, str], Decimal] = {}
-    for row in rows:
-        if not isinstance(row, dict):
+        if not account_code or account_code in seen_codes:
             continue
-        account_code = standardize_account_code(row.get("accountCode"))
-        ad_type_code = str(row.get("adTypeCode") or "").strip().upper()
-        if not account_code or not ad_type_code:
-            continue
-        lookup[(account_code, ad_type_code)] = _to_decimal(row.get("spent"))
-    return lookup
+        seen_codes.add(account_code)
+        account_codes.append(account_code)
+    return account_codes
 
 
-def _build_google_spend_cache_rows(
-    spend_lookup: dict[tuple[str, str], Decimal],
+def _filter_table_rows_by_account_codes(
+    rows: list[dict[str, object]],
+    account_codes: list[str] | None,
 ) -> list[dict[str, object]]:
-    meta_row = {
-        _SPEND_CACHE_META_KEY: {
-            _SPEND_CACHE_GENERATED_AT_EPOCH_KEY: int(time.time()),
-        }
-    }
-    rows: list[dict[str, object]] = [meta_row]
-    rows.extend(_serialize_google_spend_lookup(spend_lookup))
-    return rows
+    requested_codes = set(normalize_account_codes(account_codes))
+    if not requested_codes:
+        return rows
+
+    filtered_rows: list[dict[str, object]] = []
+    for row in rows:
+        account_code = standardize_account_code(row.get("accountCode"))
+        if not account_code or account_code not in requested_codes:
+            continue
+        filtered_rows.append({**row})
+
+    for index, row in enumerate(filtered_rows):
+        row["dataNo"] = index
+    return filtered_rows
 
 
-def _extract_google_spend_cache_generated_at_epoch(rows: list[dict]) -> int | None:
-    if not rows:
-        return None
-    first = rows[0]
-    if not isinstance(first, dict):
-        return None
-    meta = first.get(_SPEND_CACHE_META_KEY)
-    if not isinstance(meta, dict):
-        return None
-    raw_value = meta.get(_SPEND_CACHE_GENERATED_AT_EPOCH_KEY)
-    if raw_value is None:
-        return None
-    try:
-        parsed = int(raw_value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed >= 0 else None
+def _filter_recommended_rows(
+    rows: list[dict[str, object]],
+    *,
+    account_codes: list[str],
+    service_id: str | None = None,
+) -> list[dict[str, object]]:
+    requested_codes = set(normalize_account_codes(account_codes))
+    if not requested_codes:
+        return []
+
+    requested_service_id = str(service_id or "").strip().casefold() or None
+    filtered: list[dict[str, object]] = []
+    for row in rows:
+        account_code = standardize_account_code(row.get("accountCode"))
+        if not account_code or account_code not in requested_codes:
+            continue
+
+        if requested_service_id is not None:
+            row_service_id = str(row.get("serviceId") or "").strip().casefold()
+            if row_service_id != requested_service_id:
+                continue
+        filtered.append(row)
+
+    filtered.sort(
+        key=lambda item: (
+            str(item.get("accountCode") or "").casefold(),
+            str(item.get("serviceId") or "").casefold(),
+        )
+    )
+    return filtered
 
 
 def invalidate_budget_managements_cache(month: int, year: int) -> int:
     period_prefix = (
-        f"{_BUDGET_MANAGEMENTS_CACHE_KEY_PREFIX}::{year:04d}-{month:02d}"
+        f"{_BUDGET_MANAGEMENTS_TABLE_DATA_CACHE_KEY_PREFIX}::{year:04d}-{month:02d}"
+    )
+    period_prefix_legacy = (
+        f"{_BUDGET_MANAGEMENTS_TABLE_DATA_CACHE_KEY_PREFIX_LEGACY}::{year:04d}-{month:02d}"
+    )
+    next_month, next_year = _resolve_next_period(month, year)
+    next_period_prefix = (
+        f"{_BUDGET_MANAGEMENTS_TABLE_DATA_CACHE_KEY_PREFIX}::"
+        f"{next_year:04d}-{next_month:02d}"
+    )
+    next_period_prefix_legacy = (
+        f"{_BUDGET_MANAGEMENTS_TABLE_DATA_CACHE_KEY_PREFIX_LEGACY}::"
+        f"{next_year:04d}-{next_month:02d}"
     )
     return clear_budget_management_cache_entries(
-        key_prefixes=[period_prefix]
+        key_prefixes=[
+            period_prefix,
+            next_period_prefix,
+            period_prefix_legacy,
+            next_period_prefix_legacy,
+        ]
+    )
+
+
+def invalidate_budget_managements_table_data_cache() -> int:
+    return clear_budget_management_cache_entries(
+        key_prefixes=[
+            f"{_BUDGET_MANAGEMENTS_TABLE_DATA_CACHE_KEY_PREFIX}::",
+            f"{_BUDGET_MANAGEMENTS_TABLE_DATA_CACHE_KEY_PREFIX_LEGACY}::",
+        ]
     )
 
 
@@ -265,6 +294,7 @@ def refresh_budget_management_cache(
     fresh_spent_data: bool = False,
 ) -> dict[str, object]:
     period_month, period_year = _resolve_period(month, year)
+    table_cache_hash = _build_budget_managements_table_cache_hash()
     invalidate_budget_managements_cache(period_month, period_year)
     payload = get_budget_management_db_rows(
         account_codes=None,
@@ -290,11 +320,9 @@ def refresh_budget_management_cache(
         [
             {
                 "tableData": cached_table_data,
-                "spentData": cached_spent_data,
-                "recommended": cached_recommended_data,
             }
         ],
-        config_hash=_BUDGET_MANAGEMENTS_CACHE_HASH,
+        config_hash=table_cache_hash,
     )
     return {
         "period": {"month": period_month, "year": period_year},
@@ -414,58 +442,6 @@ def _sum_google_spend_by_account_adtype(
     return totals
 
 
-def _sum_google_spend_by_account_adtype_cache_first(
-    account_codes: list[str],
-    *,
-    month: int,
-    year: int,
-    max_age_seconds: int | None = None,
-    refresh_spent_data: bool = False,
-    spend_lookup_context: tuple[
-        list[dict],
-        dict[tuple[str, str], str],
-        dict[tuple[str, str], str],
-    ]
-    | None = None,
-) -> dict[tuple[str, str], Decimal]:
-    if not account_codes:
-        return {}
-
-    cache_key = _build_budget_spend_cache_key(
-        account_codes,
-        month=month,
-        year=year,
-    )
-    if not refresh_spent_data:
-        cached_payload, is_stale = get_budget_management_cache_entry(
-            cache_key,
-            config_hash=_BUDGET_SPEND_CACHE_HASH,
-        )
-        if cached_payload is not None and not is_stale:
-            if max_age_seconds is None:
-                return _deserialize_google_spend_lookup(cached_payload)
-
-            generated_at_epoch = _extract_google_spend_cache_generated_at_epoch(cached_payload)
-            if generated_at_epoch is not None:
-                age_seconds = int(time.time()) - generated_at_epoch
-                if age_seconds <= max_age_seconds:
-                    return _deserialize_google_spend_lookup(cached_payload)
-
-    spend_lookup = _sum_google_spend_by_account_adtype(
-        account_codes,
-        month=month,
-        year=year,
-        refresh_spent_cache=refresh_spent_data,
-        spend_lookup_context=spend_lookup_context,
-    )
-    set_budget_management_cache(
-        cache_key,
-        _build_google_spend_cache_rows(spend_lookup),
-        config_hash=_BUDGET_SPEND_CACHE_HASH,
-    )
-    return spend_lookup
-
-
 def _build_google_spend_lookup_context(
     account_codes: list[str],
     *,
@@ -555,42 +531,65 @@ def _get_recommended_budget_payload(
     month: int,
     year: int,
     service_id: str | None = None,
+    use_cache: bool = True,
 ) -> list[dict[str, object]]:
-    if not account_codes:
+    requested_account_codes = normalize_account_codes(account_codes)
+    if not requested_account_codes:
         return []
 
-    parser = _resolve_recommended_budget_parser(get_tenant_id())
-    bulk_parser = _resolve_bulk_recommended_budget_parser(get_tenant_id())
-    if bulk_parser is None and parser is None:
-        return []
+    cache_key = _build_budget_recommended_cache_key(
+        month=month,
+        year=year,
+    )
+    canonical_payload: list[dict[str, object]] | None = None
+    if use_cache:
+        cached_payload, is_stale = get_budget_management_recommended_cache_entry(
+            cache_key,
+            config_hash=_BUDGET_RECOMMENDED_CACHE_HASH,
+        )
+        if cached_payload is not None and not is_stale:
+            canonical_payload = cached_payload
 
-    if bulk_parser is not None:
-        try:
-            payload = bulk_parser(account_codes, service_id, month, year)
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-        payload.sort(
+    if canonical_payload is None:
+        parser = _resolve_recommended_budget_parser(get_tenant_id())
+        bulk_parser = _resolve_bulk_recommended_budget_parser(get_tenant_id())
+        if bulk_parser is None and parser is None:
+            return []
+
+        active_accounts = validate_account_codes(None, month=month, year=year)
+        active_account_codes = _extract_account_codes_from_accounts(active_accounts)
+
+        canonical_payload = []
+        if active_account_codes:
+            if bulk_parser is not None:
+                try:
+                    canonical_payload = bulk_parser(active_account_codes, None, month, year)
+                except ValueError as exc:
+                    raise HTTPException(status_code=400, detail=str(exc)) from exc
+            else:
+                for code in active_account_codes:
+                    try:
+                        canonical_payload.extend(parser(code, None, month, year))
+                    except ValueError as exc:
+                        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+        canonical_payload.sort(
             key=lambda item: (
                 str(item.get("accountCode") or "").casefold(),
                 str(item.get("serviceId") or "").casefold(),
             )
         )
-        return payload
-
-    payload: list[dict[str, object]] = []
-    for code in account_codes:
-        try:
-            payload.extend(parser(code, service_id, month, year))
-        except ValueError as exc:
-            raise HTTPException(status_code=400, detail=str(exc)) from exc
-
-    payload.sort(
-        key=lambda item: (
-            str(item.get("accountCode") or "").casefold(),
-            str(item.get("serviceId") or "").casefold(),
+        set_budget_management_recommended_cache(
+            cache_key,
+            canonical_payload,
+            config_hash=_BUDGET_RECOMMENDED_CACHE_HASH,
         )
+
+    return _filter_recommended_rows(
+        canonical_payload,
+        account_codes=requested_account_codes,
+        service_id=service_id,
     )
-    return payload
 
 
 def _resolve_service_ad_type_code(
@@ -958,7 +957,11 @@ def get_budget_management_db_rows(
     )
     use_cache = not fresh_data and not fresh_spent_data
     should_refresh_spent_data = bool(fresh_data or fresh_spent_data)
+    table_cache_hash = _build_budget_managements_table_cache_hash()
     validated_accounts: list[dict] | None = None
+    payload_rows: list[dict[str, object]] | None = None
+    active_account_codes: list[str] | None = None
+    current_period_spend_lookup: dict[tuple[str, str], Decimal] | None = None
 
     if normalized_codes:
         validated_accounts = validate_account_codes(
@@ -970,189 +973,171 @@ def get_budget_management_db_rows(
     if use_cache:
         cached_payload, is_stale = get_budget_management_cache_entry(
             cache_key,
-            config_hash=_BUDGET_MANAGEMENTS_CACHE_HASH,
+            config_hash=table_cache_hash,
         )
         if cached_payload is not None and not is_stale:
-            table_data: list[dict[str, object]] = []
-            spent_data: list[dict[str, object]] = []
-            recommended_data: list[dict[str, object]] = []
+            table_data: list[dict[str, object]] | None = None
             if isinstance(cached_payload, list) and cached_payload:
                 first_item = cached_payload[0]
                 if (
                     len(cached_payload) == 1
                     and isinstance(first_item, dict)
-                    and (
-                        "tableData" in first_item
-                        or "spentData" in first_item
-                    )
+                    and "tableData" in first_item
                 ):
                     cached_table_data = first_item.get("tableData")
-                    cached_spent_data = first_item.get("spentData")
-                    cached_recommended_data = first_item.get("recommended")
                     if isinstance(cached_table_data, list):
                         table_data = cached_table_data
-                    if isinstance(cached_spent_data, list):
-                        spent_data = cached_spent_data
-                    if isinstance(cached_recommended_data, list):
-                        recommended_data = cached_recommended_data
                 else:
                     table_data = cached_payload
             elif isinstance(cached_payload, dict):
                 cached_table_data = cached_payload.get("tableData")
-                cached_spent_data = cached_payload.get("spentData")
-                cached_recommended_data = cached_payload.get("recommended")
                 if isinstance(cached_table_data, list):
                     table_data = cached_table_data
-                if isinstance(cached_spent_data, list):
-                    spent_data = cached_spent_data
-                if isinstance(cached_recommended_data, list):
-                    recommended_data = cached_recommended_data
+            payload_rows = table_data
 
-            return {
-                "period": {"month": period_month, "year": period_year},
-                "previousPeriod": {"month": previous_month, "year": previous_year},
-                "tableData": table_data,
-                "spentData": spent_data,
-                "recommended": recommended_data,
-            }
-
-    accounts = (
-        validated_accounts
-        if validated_accounts is not None
-        else validate_account_codes(
+    if payload_rows is None:
+        accounts = validate_account_codes(
             None,
             month=period_month,
             year=period_year,
         )
-    )
-    account_name_by_code: dict[str, str] = {}
-    active_account_codes: list[str] = []
-    for account in accounts:
-        account_code = standardize_account_code(
-            account.get("accountCode") or account.get("code")
-        )
-        if not account_code:
-            continue
-        if account_code not in account_name_by_code:
-            active_account_codes.append(account_code)
-        account_name = str(
-            account.get("accountName")
-            or account.get("name")
-            or account.get("descriptiveName")
-            or account_code
-        ).strip()
-        account_name_by_code[account_code] = account_name or account_code
+        account_name_by_code: dict[str, str] = {}
+        active_account_codes = _extract_account_codes_from_accounts(accounts)
+        for account in accounts:
+            account_code = standardize_account_code(
+                account.get("accountCode") or account.get("code")
+            )
+            if not account_code:
+                continue
+            account_name = str(
+                account.get("accountName")
+                or account.get("name")
+                or account.get("descriptiveName")
+                or account_code
+            ).strip()
+            account_name_by_code[account_code] = account_name or account_code
 
-    if not active_account_codes:
+        payload_rows = []
+        if active_account_codes:
+            budgets = get_masterbudgets(active_account_codes, period_month, period_year)
+            previous_month_budgets = get_masterbudgets(
+                active_account_codes,
+                previous_month,
+                previous_year,
+            )
+            service_mapping = get_service_mapping()
+            previous_month_budget_lookup = _sum_db_budget_by_account_adtype(
+                previous_month_budgets,
+                service_mapping=service_mapping,
+            )
+            spend_lookup_context = _build_google_spend_lookup_context(
+                active_account_codes,
+                refresh_google_ads_caches=fresh_data,
+            )
+            current_period_spend_lookup = _sum_google_spend_by_account_adtype(
+                active_account_codes,
+                month=period_month,
+                year=period_year,
+                refresh_spent_cache=should_refresh_spent_data,
+                spend_lookup_context=spend_lookup_context,
+            )
+            previous_month_spend_lookup = _sum_google_spend_by_account_adtype(
+                active_account_codes,
+                month=previous_month,
+                year=previous_year,
+                refresh_spent_cache=should_refresh_spent_data,
+                spend_lookup_context=spend_lookup_context,
+            )
+
+            for row in budgets:
+                account_code = standardize_account_code(row.get("accountCode")) or ""
+                service_id = str(row.get("serviceId") or "").strip()
+                mapping = _get_service_mapping_entry(service_mapping, service_id)
+                ad_type_code = str(mapping.get("adTypeCode") or "").strip().upper()
+                service_name = str(
+                    row.get("serviceName")
+                    or mapping.get("serviceName")
+                    or service_id
+                ).strip()
+
+                previous_month_underspent = Decimal("0")
+                if account_code and ad_type_code:
+                    previous_month_underspent = (
+                        previous_month_budget_lookup.get((account_code, ad_type_code), Decimal("0"))
+                        - previous_month_spend_lookup.get((account_code, ad_type_code), Decimal("0"))
+                    )
+                payload_rows.append(
+                    {
+                        "budgetId": row.get("id"),
+                        "accountCode": account_code,
+                        "accountName": account_name_by_code.get(account_code, account_code),
+                        "_sortAdTypeCode": ad_type_code,
+                        "adTypeCode": ad_type_code,
+                        "serviceId": service_id,
+                        "service": service_name,
+                        "amount": _format_decimal_2(row.get("netAmount")),
+                        "note": row.get("note"),
+                        "previousMonthUnderspent": _format_decimal_2(previous_month_underspent),
+                    }
+                )
+
+            payload_rows.sort(
+                key=lambda item: (
+                    str(item.get("accountCode") or ""),
+                    _adtype_priority_rank(str(item.get("_sortAdTypeCode") or "")),
+                    str(item.get("service") or "").lower(),
+                    str(item.get("budgetId") or ""),
+                )
+            )
+            for index, item in enumerate(payload_rows):
+                item.pop("_sortAdTypeCode", None)
+                item["dataNo"] = index
+
         set_budget_management_cache(
             cache_key,
-            [{"tableData": [], "spentData": [], "recommended": []}],
-            config_hash=_BUDGET_MANAGEMENTS_CACHE_HASH,
+            [
+                {
+                    "tableData": payload_rows,
+                }
+            ],
+            config_hash=table_cache_hash,
         )
-        return {
-            "period": {"month": period_month, "year": period_year},
-            "previousPeriod": {"month": previous_month, "year": previous_year},
-            "tableData": [],
-            "spentData": [],
-            "recommended": [],
-        }
 
-    budgets = get_masterbudgets(active_account_codes, period_month, period_year)
-    previous_month_budgets = get_masterbudgets(
-        active_account_codes,
-        previous_month,
-        previous_year,
-    )
-    service_mapping = get_service_mapping()
-    previous_month_budget_lookup = _sum_db_budget_by_account_adtype(
-        previous_month_budgets,
-        service_mapping=service_mapping,
-    )
-    spend_lookup_context = _build_google_spend_lookup_context(
-        active_account_codes,
-        refresh_google_ads_caches=fresh_data,
-    )
-    current_period = get_current_period()
-    is_requested_period_current = (
-        period_month == current_period["month"]
-        and period_year == current_period["year"]
-    )
-    current_period_spend_lookup = _sum_google_spend_by_account_adtype_cache_first(
-        active_account_codes,
-        month=period_month,
-        year=period_year,
-        max_age_seconds=(
-            _CURRENT_PERIOD_SPEND_CACHE_TTL_SECONDS
-            if is_requested_period_current
-            else None
-        ),
-        refresh_spent_data=should_refresh_spent_data,
-        spend_lookup_context=spend_lookup_context,
-    )
-    is_previous_period_current = (
-        previous_month == current_period["month"]
-        and previous_year == current_period["year"]
-    )
-    previous_month_spend_lookup = _sum_google_spend_by_account_adtype_cache_first(
-        active_account_codes,
-        month=previous_month,
-        year=previous_year,
-        max_age_seconds=(
-            _CURRENT_PERIOD_SPEND_CACHE_TTL_SECONDS
-            if is_previous_period_current
-            else None
-        ),
-        refresh_spent_data=should_refresh_spent_data,
-        spend_lookup_context=spend_lookup_context,
+    if normalized_codes:
+        scope_account_codes = _extract_account_codes_from_accounts(validated_accounts or [])
+    elif active_account_codes is None:
+        scope_accounts = validate_account_codes(
+            None,
+            month=period_month,
+            year=period_year,
+        )
+        scope_account_codes = _extract_account_codes_from_accounts(scope_accounts)
+    else:
+        scope_account_codes = active_account_codes
+
+    scoped_payload_rows = _filter_table_rows_by_account_codes(
+        payload_rows,
+        normalized_codes or None,
     )
 
-    payload_rows: list[dict[str, object]] = []
-    for row in budgets:
-        account_code = standardize_account_code(row.get("accountCode")) or ""
-        service_id = str(row.get("serviceId") or "").strip()
-        mapping = _get_service_mapping_entry(service_mapping, service_id)
-        ad_type_code = str(mapping.get("adTypeCode") or "").strip().upper()
-        service_name = str(
-            row.get("serviceName")
-            or mapping.get("serviceName")
-            or service_id
-        ).strip()
-
-        previous_month_underspent = Decimal("0")
-        if account_code and ad_type_code:
-            previous_month_underspent = (
-                previous_month_budget_lookup.get((account_code, ad_type_code), Decimal("0"))
-                - previous_month_spend_lookup.get((account_code, ad_type_code), Decimal("0"))
+    if current_period_spend_lookup is None:
+        if scope_account_codes:
+            spend_lookup_context = _build_google_spend_lookup_context(
+                scope_account_codes,
+                refresh_google_ads_caches=fresh_data,
             )
-        payload_rows.append(
-            {
-                "budgetId": row.get("id"),
-                "accountCode": account_code,
-                "accountName": account_name_by_code.get(account_code, account_code),
-                "_sortAdTypeCode": ad_type_code,
-                "adTypeCode": ad_type_code,
-                "serviceId": service_id,
-                "service": service_name,
-                "amount": _format_decimal_2(row.get("netAmount")),
-                "note": row.get("note"),
-                "previousMonthUnderspent": _format_decimal_2(previous_month_underspent),
-            }
-        )
-
-    payload_rows.sort(
-        key=lambda item: (
-            str(item.get("accountCode") or ""),
-            _adtype_priority_rank(str(item.get("_sortAdTypeCode") or "")),
-            str(item.get("service") or "").lower(),
-            str(item.get("budgetId") or ""),
-        )
-    )
-    for index, item in enumerate(payload_rows):
-        item.pop("_sortAdTypeCode", None)
-        item["dataNo"] = index
+            current_period_spend_lookup = _sum_google_spend_by_account_adtype(
+                scope_account_codes,
+                month=period_month,
+                year=period_year,
+                refresh_spent_cache=should_refresh_spent_data,
+                spend_lookup_context=spend_lookup_context,
+            )
+        else:
+            current_period_spend_lookup = {}
 
     spent_data_map: dict[tuple[str, str], Decimal] = {}
-    for row in payload_rows:
+    for row in scoped_payload_rows:
         account_code = str(row.get("accountCode") or "").strip()
         ad_type_code = str(row.get("adTypeCode") or "").strip().upper()
         if not account_code or not ad_type_code:
@@ -1181,27 +1166,16 @@ def get_budget_management_db_rows(
     ]
 
     recommended_data = _get_recommended_budget_payload(
-        active_account_codes,
+        scope_account_codes,
         month=period_month,
         year=period_year,
-    )
-
-    set_budget_management_cache(
-        cache_key,
-        [
-            {
-                "tableData": payload_rows,
-                "spentData": spent_data,
-                "recommended": recommended_data,
-            }
-        ],
-        config_hash=_BUDGET_MANAGEMENTS_CACHE_HASH,
+        use_cache=not fresh_data,
     )
 
     return {
         "period": {"month": period_month, "year": period_year},
         "previousPeriod": {"month": previous_month, "year": previous_year},
-        "tableData": payload_rows,
+        "tableData": scoped_payload_rows,
         "spentData": spent_data,
         "recommended": recommended_data,
     }
