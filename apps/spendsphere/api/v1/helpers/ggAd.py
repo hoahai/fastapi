@@ -95,14 +95,21 @@ def _resolve_google_ads_enum_name(
     return enum_value.name if enum_value else None
 
 
+def _as_protobuf_message(message_obj):
+    return getattr(message_obj, "_pb", message_obj)
+
+
 def _extract_google_ads_error_metadata(err) -> dict[str, object]:
     error_type: str | None = None
     error_enum: str | None = None
     error_code: str | None = None
 
-    error_code_obj = getattr(err, "error_code", None)
+    error_code_obj = _as_protobuf_message(getattr(err, "error_code", None))
     if error_code_obj is not None:
-        raw_type = error_code_obj.WhichOneof("error_code")
+        try:
+            raw_type = error_code_obj.WhichOneof("error_code")
+        except Exception:
+            raw_type = None
         if raw_type:
             error_type = str(raw_type).strip()
             raw_value = getattr(error_code_obj, error_type, None)
