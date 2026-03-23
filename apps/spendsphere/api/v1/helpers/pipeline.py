@@ -143,7 +143,7 @@ def _collect_budget_threshold_warnings(
             new_amount_display = f"${float(new_amount):,.2f}"
             message = (
                 f"New budget amount ({new_amount_display}) exceeds configured "
-                f"threshold ({threshold_display})."
+                f"threshold ({threshold_display}). Budget update is still applied."
             )
 
             warnings_by_customer.setdefault(customer_id, []).append(
@@ -1232,7 +1232,6 @@ def run_google_ads_budget_pipeline(
     )
 
     budget_warning_threshold = get_budget_warning_threshold()
-    threshold_warning_count = 0
     if budget_warning_threshold is not None:
         threshold_warnings_by_customer = _collect_budget_threshold_warnings(
             budget_payloads=budget_payloads,
@@ -1242,20 +1241,10 @@ def run_google_ads_budget_pipeline(
             threshold_warnings_by_customer,
             use_cache=not refresh_google_ads_caches,
         )
-        threshold_warning_count = _inject_budget_warnings(
+        _inject_budget_warnings(
             mutation_results=mutation_results,
             warnings_by_customer=threshold_warnings_by_customer,
         )
-        if threshold_warning_count > 0:
-            logger.warning(
-                "Google Ads budget threshold warnings",
-                extra={
-                    "extra_fields": {
-                        "threshold": float(budget_warning_threshold),
-                        "warning_count": threshold_warning_count,
-                    }
-                },
-            )
 
     planned_budget_amounts = _build_planned_budget_amount_lookup(budget_payloads)
     budget_warnings, budget_failures = _collect_budget_allocation_and_spend_issues(

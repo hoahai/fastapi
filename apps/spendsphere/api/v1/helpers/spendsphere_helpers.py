@@ -486,6 +486,10 @@ def _build_google_ads_issue_fingerprint(
     campaign_names = _normalize_campaign_names_for_issue_cache(
         issue.get("campaignNames")
     )
+    if warning_code == "BUDGET_AMOUNT_THRESHOLD_EXCEEDED":
+        # Threshold warnings should dedupe once/day per budget/account, not by amount text.
+        message = ""
+        campaign_names = []
     if not (
         warning_code
         or failure_code
