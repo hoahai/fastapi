@@ -11,7 +11,7 @@ from apps.fundsphere.api.v1.helpers.config import (
     get_fundsphere_budget_data_sheet_settings,
     get_fundsphere_budget_data_update_settings,
 )
-from apps.fundsphere.api.v1.helpers.db_queries import (
+from apps.fundsphere.api.v1.helpers.dbQueries import (
     get_master_budget_control_budget_data,
     update_master_budget_control_budget_data,
     validate_master_budget_control_budget_refs,

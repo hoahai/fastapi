@@ -4,7 +4,7 @@ import pytz
 from shared.db import execute_many, execute_write, fetch_all
 from shared.utils import get_current_period
 from shared.tenant import get_timezone
-from apps.spendsphere.api.v1.helpers.account_codes import (
+from apps.spendsphere.api.v1.helpers.accountCodes import (
     standardize_account_code,
     standardize_account_codes,
 )
@@ -251,7 +251,7 @@ def duplicate_masterbudgets(
     - Skips rows that already exist in the target month/year unless overwrite=True.
     - Never duplicates rows with zero grossAmount.
     """
-    from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
+    from apps.spendsphere.api.v1.helpers.spendsphereHelpers import (
         validate_account_codes,
     )
 
@@ -379,7 +379,7 @@ def duplicate_allocations(
     - Skips rows that already exist in the target month/year unless overwrite=True.
     - Never duplicates rows with zero allocation.
     """
-    from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
+    from apps.spendsphere.api.v1.helpers.spendsphereHelpers import (
         validate_account_codes,
     )
 

@@ -9,10 +9,10 @@ from fastapi import Depends, FastAPI
 
 from apps.spendsphere.api.v1.router import router as v1_router
 
-from shared.exception_handlers import register_exception_handlers
+from shared.exceptionHandlers import register_exception_handlers
 from shared.logger import log_run_start
 from shared.middleware import response_envelope_middleware, timing_middleware
-from shared.request_validation import validate_query_params
+from shared.requestValidation import validate_query_params
 
 
 @asynccontextmanager

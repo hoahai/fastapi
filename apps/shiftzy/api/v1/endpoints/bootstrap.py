@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, HTTPException, Query
 
-from apps.shiftzy.api.v1.helpers.db_queries import (
+from apps.shiftzy.api.v1.helpers.dbQueries import (
     get_employees,
     get_positions,
     get_shifts,

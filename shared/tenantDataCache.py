@@ -9,7 +9,7 @@ from pathlib import Path
 from threading import Lock
 from zoneinfo import ZoneInfo
 
-from shared.file_cache import FileCache, normalize_tenant_key
+from shared.fileCache import FileCache, normalize_tenant_key
 from shared.tenant import get_app_scoped_env, get_env, get_tenant_id, get_timezone
 
 _SHARED_CACHE_PATH = Path(

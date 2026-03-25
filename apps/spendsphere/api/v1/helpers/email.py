@@ -285,7 +285,7 @@ def build_google_ads_alert_email(
         if template_path is not None
         else Path(__file__).resolve().parents[5]
         / "static"
-        / "google_ads_alert_email.html"
+        / "googleAdsAlertEmail.html"
     )
     template = _load_alert_template(resolved_template_path)
     html_body = Template(template).safe_substitute(

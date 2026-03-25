@@ -6,7 +6,7 @@ from apps.fundsphere.api.v1.helpers.config import (
     get_fundsphere_sheet_settings,
     validate_tenant_config,
 )
-from apps.fundsphere.api.v1.helpers.db_queries import (
+from apps.fundsphere.api.v1.helpers.dbQueries import (
     apply_budget_mutations_with_history,
     get_master_budget_control_budget_data,
     get_master_budget_control_accounts,

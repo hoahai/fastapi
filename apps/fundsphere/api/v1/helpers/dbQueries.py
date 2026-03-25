@@ -8,7 +8,7 @@ from zoneinfo import ZoneInfo
 
 from shared.db import fetch_all, run_transaction
 from shared.tenant import get_tenant_id, get_timezone
-from shared.tenant_data_cache import (
+from shared.tenantDataCache import (
     delete_tenant_shared_cache_values_by_prefix,
     get_shared_cache_ttl_seconds,
     get_tenant_shared_cache_value,

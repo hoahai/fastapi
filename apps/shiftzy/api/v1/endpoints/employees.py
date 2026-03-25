@@ -3,7 +3,7 @@ from __future__ import annotations
 from fastapi import APIRouter, Body, HTTPException, Query
 from pydantic import BaseModel
 
-from apps.shiftzy.api.v1.helpers.db_queries import (
+from apps.shiftzy.api.v1.helpers.dbQueries import (
     apply_employee_changes,
     delete_employees,
     get_employees,

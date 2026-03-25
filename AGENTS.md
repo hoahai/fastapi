@@ -269,7 +269,7 @@ Documentation rules:
 ### SpendSphere AccountCode Validation (Current)
 
 -   Shared validator location:
-    -   `apps/spendsphere/api/v1/helpers/spendsphere_helpers.py`
+    -   `apps/spendsphere/api/v1/helpers/spendsphereHelpers.py`
     -   `validate_account_codes(...)`
     -   `require_account_code(...)`
     -   `normalize_account_codes(...)`
@@ -688,6 +688,22 @@ This rule is mandatory and takes precedence over convenience.
 
 -   Follow existing architectural patterns.
 -   Do not introduce new DB or middleware patterns.
+
+## File Naming Convention (Mandatory)
+
+-   For application source files, use **camelCase** filenames.
+-   Do **not** use underscore-style names for new files (for example:
+    `db_queries.py`, `file_cache.py`, `account_codes.py` are not
+    allowed).
+-   Preferred examples:
+    `dbQueries.py`, `fileCache.py`, `accountCodes.py`,
+    `requestValidation.py`, `exceptionHandlers.py`.
+-   When renaming files, update all imports/usages in the same change.
+-   Allowed exceptions:
+    -   `__init__.py` (Python standard)
+    -   `spreadsheetParser_nucar.py` (explicit approved exception)
+-   If any additional exception is required, it must be explicitly
+    documented in this `AGENTS.md` before use.
 
 ## 6. Resource Efficiency Rule (Critical – Free Server Constraint)
 

@@ -5,7 +5,7 @@ from datetime import date as DateType, time as TimeType
 from fastapi import APIRouter, Body, HTTPException, Query, Response
 from pydantic import BaseModel
 
-from apps.shiftzy.api.v1.helpers.db_queries import (
+from apps.shiftzy.api.v1.helpers.dbQueries import (
     apply_schedule_changes,
     delete_schedules as delete_schedules_db,
     delete_schedules_by_week as delete_schedules_by_week_db,
@@ -15,7 +15,7 @@ from apps.shiftzy.api.v1.helpers.db_queries import (
     update_schedules as update_schedules_db,
 )
 from shared.utils import normalize_payload, normalize_payload_list
-from apps.shiftzy.api.v1.helpers.schedule_pdf import build_schedule_pdf
+from apps.shiftzy.api.v1.helpers.schedulePdf import build_schedule_pdf
 from apps.shiftzy.api.v1.helpers.weeks import build_week_info
 
 router = APIRouter()

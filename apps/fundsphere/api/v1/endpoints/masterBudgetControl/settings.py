@@ -8,7 +8,7 @@ from apps.fundsphere.api.v1.helpers.config import (
     get_fundsphere_services_sheet_settings,
     get_fundsphere_sheet_settings,
 )
-from apps.fundsphere.api.v1.helpers.db_queries import (
+from apps.fundsphere.api.v1.helpers.dbQueries import (
     get_master_budget_control_accounts,
     get_master_budget_control_services,
 )

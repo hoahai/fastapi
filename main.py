@@ -15,7 +15,7 @@ from apps.shiftzy.api.v1.helpers.config import (
 from apps.fundsphere.api.v1.helpers.config import (
     validate_tenant_config as validate_fundsphere_tenant_config,
 )
-from shared.exception_handlers import register_exception_handlers
+from shared.exceptionHandlers import register_exception_handlers
 from shared.middleware import (
     timing_middleware,
     api_key_auth_middleware,

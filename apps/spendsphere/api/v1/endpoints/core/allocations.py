@@ -1,11 +1,11 @@
 from fastapi import APIRouter, HTTPException, Query
 from pydantic import BaseModel, ConfigDict
 
-from apps.spendsphere.api.v1.helpers.db_queries import (
+from apps.spendsphere.api.v1.helpers.dbQueries import (
     duplicate_allocations,
     get_allocations,
 )
-from apps.spendsphere.api.v1.helpers.spendsphere_helpers import (
+from apps.spendsphere.api.v1.helpers.spendsphereHelpers import (
     normalize_account_codes,
     validate_account_codes,
 )

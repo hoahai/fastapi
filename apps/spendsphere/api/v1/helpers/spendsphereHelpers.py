@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
 
-from apps.spendsphere.api.v1.helpers.account_codes import (
+from apps.spendsphere.api.v1.helpers.accountCodes import (
     standardize_account_code,
     standardize_account_codes,
 )
@@ -19,7 +19,7 @@ from apps.spendsphere.api.v1.helpers.config import (
     get_service_mapping,
     is_google_ads_inactive_name,
 )
-from shared.file_cache import FileCache, normalize_tenant_key
+from shared.fileCache import FileCache, normalize_tenant_key
 from shared.tenant import get_env, get_tenant_id, get_timezone
 from shared.utils import get_current_period
 
@@ -39,7 +39,6 @@ _GOOGLE_SHEETS_KEY = "google_sheets"
 _BUDGET_MANAGEMENTS_KEY = "budget_managements"
 _BUDGET_MANAGEMENT_RECOMMENDED_KEY = "budget_management_recommended"
 _SERVICES_KEY = "services"
-_SHARED_DATA_KEY = "shared_data"
 _GOOGLE_ADS_CLIENTS_CACHE_TTL_ENV = "SPENDSPHERE_GOOGLE_ADS_CLIENTS_CACHE_TTL_SECONDS"
 _GOOGLE_ADS_CLIENTS_CACHE_TTL_FALLBACK_ENV = "ttl_time"
 _DEFAULT_SPENDSPHERE_CACHE_TTL_SECONDS = 86400
@@ -53,6 +52,18 @@ _BUDGET_MANAGEMENTS_CACHE_KEY_PREFIX_LEGACY = "budget_managements_table_data::"
 _BUDGET_MANAGEMENT_RECOMMENDED_CACHE_KEY_PREFIX = "budget_management_recommended::"
 _ACCOUNT_CODES_SCOPE_ACTIVE = "active"
 _ACCOUNT_CODES_SCOPE_ALL = "all"
+_SPENDSPHERE_CACHE_KEYS = (
+    _ACCOUNT_CODES_KEY,
+    _GOOGLE_ADS_CLIENTS_KEY,
+    _GOOGLE_ADS_BUDGETS_KEY,
+    _GOOGLE_ADS_CAMPAIGNS_KEY,
+    _GOOGLE_ADS_SPENT_KEY,
+    _GOOGLE_ADS_WARNINGS_KEY,
+    _GOOGLE_SHEETS_KEY,
+    _BUDGET_MANAGEMENTS_KEY,
+    _BUDGET_MANAGEMENT_RECOMMENDED_KEY,
+    _SERVICES_KEY,
+)
 _CACHE_STORES: dict[str, FileCache] = {}
 _CACHE_STORES_LOCK = Lock()
 
@@ -196,22 +207,12 @@ def _load_cache_root(cache_store: FileCache) -> dict[str, object]:
     if not isinstance(data, dict):
         data = {}
 
-    if (
-        _ACCOUNT_CODES_KEY in data
-        or _GOOGLE_ADS_CLIENTS_KEY in data
-        or _GOOGLE_ADS_BUDGETS_KEY in data
-        or _GOOGLE_ADS_CAMPAIGNS_KEY in data
-        or _GOOGLE_ADS_SPENT_KEY in data
-        or _GOOGLE_ADS_WARNINGS_KEY in data
-        or _GOOGLE_SHEETS_KEY in data
-        or _BUDGET_MANAGEMENTS_KEY in data
-        or _BUDGET_MANAGEMENT_RECOMMENDED_KEY in data
-        or _SERVICES_KEY in data
-        or _SHARED_DATA_KEY in data
-    ):
-        root = data
-    else:
+    if any(cache_key in data for cache_key in _SPENDSPHERE_CACHE_KEYS):
+        root = dict(data)
+    elif _is_legacy_account_map(data):
         root = {_ACCOUNT_CODES_KEY: data}
+    else:
+        root = dict(data)
 
     account_data = root.get(_ACCOUNT_CODES_KEY)
     account_cache = _normalize_account_codes_cache(account_data)
@@ -252,23 +253,19 @@ def _load_cache_root(cache_store: FileCache) -> dict[str, object]:
     if not isinstance(services, dict):
         services = {}
 
-    shared_data = root.get(_SHARED_DATA_KEY)
-    if not isinstance(shared_data, dict):
-        shared_data = {}
-
-    return {
-        _ACCOUNT_CODES_KEY: account_cache,
-        _GOOGLE_ADS_CLIENTS_KEY: google_ads,
-        _GOOGLE_ADS_BUDGETS_KEY: google_ads_budgets,
-        _GOOGLE_ADS_CAMPAIGNS_KEY: google_ads_campaigns,
-        _GOOGLE_ADS_SPENT_KEY: google_ads_spent,
-        _GOOGLE_ADS_WARNINGS_KEY: google_ads_warnings,
-        _GOOGLE_SHEETS_KEY: google_sheets,
-        _BUDGET_MANAGEMENTS_KEY: budget_managements,
-        _BUDGET_MANAGEMENT_RECOMMENDED_KEY: budget_management_recommended,
-        _SERVICES_KEY: services,
-        _SHARED_DATA_KEY: shared_data,
-    }
+    normalized_root = dict(root)
+    normalized_root[_ACCOUNT_CODES_KEY] = account_cache
+    normalized_root[_GOOGLE_ADS_CLIENTS_KEY] = google_ads
+    normalized_root[_GOOGLE_ADS_BUDGETS_KEY] = google_ads_budgets
+    normalized_root[_GOOGLE_ADS_CAMPAIGNS_KEY] = google_ads_campaigns
+    normalized_root[_GOOGLE_ADS_SPENT_KEY] = google_ads_spent
+    normalized_root[_GOOGLE_ADS_WARNINGS_KEY] = google_ads_warnings
+    normalized_root[_GOOGLE_SHEETS_KEY] = google_sheets
+    normalized_root[_BUDGET_MANAGEMENTS_KEY] = budget_managements
+    normalized_root[_BUDGET_MANAGEMENT_RECOMMENDED_KEY] = budget_management_recommended
+    normalized_root[_SERVICES_KEY] = services
+    normalized_root.pop("shared_data", None)
+    return normalized_root
 
 
 def _write_cache_root(cache_store: FileCache, cache: dict[str, object]) -> None:
@@ -2229,7 +2226,7 @@ def refresh_services_cache(
     department_code: str = "DIGM",
     tenant_id: str | None = None,
 ) -> list[dict]:
-    from apps.spendsphere.api.v1.helpers.db_queries import (
+    from apps.spendsphere.api.v1.helpers.dbQueries import (
         get_active_services_by_department,
     )
 
