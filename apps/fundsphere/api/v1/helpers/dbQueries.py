@@ -1796,6 +1796,7 @@ def apply_budget_mutations_with_history(
 
     tables = get_db_tables(require_services=True)
     budgets_table = tables["BUDGETS"]
+    services_table = tables["SERVICES"]
     change_histories_table = tables["CHANGEHISTORIES"]
     budget_change_histories_table = (
         str(tables.get("BUDGETCHANGEHISTORIES") or "").strip() or "BudgetChangeHistories"
@@ -1820,11 +1821,13 @@ def apply_budget_mutations_with_history(
     )
 
     quoted_budgets_table = _quote_table_name(budgets_table)
+    quoted_services_table = _quote_table_name(services_table)
     quoted_history_table = _quote_table_name(change_histories_table)
     quoted_budget_change_history_table = _quote_table_name(budget_change_histories_table)
 
     budget_id_expr = _quote_identifier(budget_columns["budget_id_col"])
     budget_account_code_expr = _quote_identifier(budget_columns["budget_account_code_col"])
+    budget_service_id_expr = _quote_identifier(budget_columns["budget_service_id_col"])
     budget_month_expr = _quote_identifier(budget_columns["budget_month_col"])
     budget_year_expr = _quote_identifier(budget_columns["budget_year_col"])
     sub_service_expr = _quote_identifier(budget_columns["budget_sub_service_col"])
@@ -1832,18 +1835,25 @@ def apply_budget_mutations_with_history(
     commission_expr = _quote_identifier(budget_columns["budget_commission_col"])
     net_adjustment_expr = _quote_identifier(budget_columns["budget_net_adjustment_col"])
     note_expr = _quote_identifier(budget_columns["budget_note_col"])
+    service_id_col, service_name_col = _resolve_service_identity_columns(services_table)
+    service_id_expr = _quote_identifier(service_id_col)
+    service_name_expr = _quote_identifier(service_name_col)
     select_existing_budget_query = (
         "SELECT "
-        f"{budget_account_code_expr} AS accountCode, "
-        f"{budget_month_expr} AS month, "
-        f"{budget_year_expr} AS year, "
-        f"{sub_service_expr} AS subService, "
-        f"{gross_amount_expr} AS grossAmount, "
-        f"{commission_expr} AS commission, "
-        f"{net_adjustment_expr} AS netAdjustment, "
-        f"{note_expr} AS note "
-        f"FROM {quoted_budgets_table} "
-        f"WHERE {budget_id_expr} = %s"
+        f"b.{budget_account_code_expr} AS accountCode, "
+        f"b.{budget_month_expr} AS month, "
+        f"b.{budget_year_expr} AS year, "
+        f"b.{budget_service_id_expr} AS serviceId, "
+        f"s.{service_name_expr} AS serviceName, "
+        f"b.{sub_service_expr} AS subService, "
+        f"b.{gross_amount_expr} AS grossAmount, "
+        f"b.{commission_expr} AS commission, "
+        f"b.{net_adjustment_expr} AS netAdjustment, "
+        f"b.{note_expr} AS note "
+        f"FROM {quoted_budgets_table} b "
+        f"LEFT JOIN {quoted_services_table} s "
+        f"ON b.{budget_service_id_expr} = s.{service_id_expr} "
+        f"WHERE b.{budget_id_expr} = %s"
     )
     delete_query = f"DELETE FROM {quoted_budgets_table} WHERE {budget_id_expr} = %s"
 
@@ -1935,18 +1945,23 @@ def apply_budget_mutations_with_history(
             existing_row = cursor.fetchone()
             if not existing_row:
                 raise ValueError(f"Budget not found for delete: {budget_id}")
+            old_account_code = str(existing_row[0] or "").strip().upper()
+            old_month_value = _to_int(existing_row[1], default=0)
+            old_year_value = _to_int(existing_row[2], default=0)
+            old_service_id = str(existing_row[3] or "").strip()
+            old_service_name = str(existing_row[4] or "").strip()
+            old_sub_service = str(existing_row[5] or "").strip()
+            old_gross_amount = _to_decimal(existing_row[6], scale=2)
+            old_commission = _to_decimal(existing_row[7], scale=4)
+            old_net_adjustment = _to_decimal(existing_row[8], scale=2)
+            old_note = str(existing_row[9] or "").strip()
             delete_bucket = _normalize_budget_bucket(
-                account_code=existing_row[0],
-                month=existing_row[1],
-                year=existing_row[2],
+                account_code=old_account_code,
+                month=old_month_value,
+                year=old_year_value,
             )
             if delete_bucket:
                 affected_buckets.add(delete_bucket)
-            old_sub_service = str(existing_row[3] or "").strip()
-            old_gross_amount = _to_decimal(existing_row[4], scale=2)
-            old_commission = _to_decimal(existing_row[5], scale=4)
-            old_net_adjustment = _to_decimal(existing_row[6], scale=2)
-            old_note = str(existing_row[7] or "").strip()
 
             cursor.execute(delete_query, (budget_id,))
             if int(cursor.rowcount or 0) <= 0:
@@ -1989,26 +2004,24 @@ def apply_budget_mutations_with_history(
                     "updated_at": now,
                     "tenant_id": tenant_id,
                     "changed_by": normalized_changed_by,
-                    "account_code": None,
-                    "service_id": None,
-                    "month": None,
-                    "year": None,
+                    "account_code": old_account_code or None,
+                    "service_id": old_service_id or None,
+                    "month": old_month_value if old_month_value > 0 else None,
+                    "year": old_year_value if old_year_value > 0 else None,
                 }
                 history_rows.append(tuple(value_map.get(key) for key in history_semantics))
 
             delete_old_data: dict[str, object] = {
+                "accountCode": old_account_code or None,
+                "month": old_month_value if old_month_value > 0 else None,
+                "year": old_year_value if old_year_value > 0 else None,
+                "serviceId": old_service_id or None,
+                "serviceName": old_service_name or None,
                 "subService": old_sub_service,
                 "grossAmount": f"{old_gross_amount:.2f}",
                 "commission": f"{old_commission:.4f}",
                 "netAdjustment": f"{old_net_adjustment:.2f}",
                 "note": old_note,
-            }
-            delete_new_data: dict[str, object] = {
-                "subService": None,
-                "grossAmount": None,
-                "commission": None,
-                "netAdjustment": None,
-                "note": None,
             }
             budget_change_history_value_map = {
                 "budget_id": budget_id,
@@ -2018,7 +2031,7 @@ def apply_budget_mutations_with_history(
                     ensure_ascii=False,
                 ),
                 "old_data": json.dumps(delete_old_data, ensure_ascii=False),
-                "new_data": json.dumps(delete_new_data, ensure_ascii=False),
+                "new_data": None,
                 "changed_by": normalized_changed_by,
                 "note": normalized_change_note,
             }
