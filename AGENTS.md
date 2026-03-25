@@ -2,9 +2,9 @@
 
 ## Overview
 
--   This repo is a multi-tenant FastAPI service with two apps:
-    **SpendSphere** and **Shiftzy**.
--   The root app mounts both under `/api` and applies shared middleware
+-   This repo is a multi-tenant FastAPI service with three apps:
+    **SpendSphere**, **Shiftzy**, and **FundSphere**.
+-   The root app mounts all apps under `/api` and applies shared middleware
     (auth, tenant, logging).
 -   The system is strictly tenant-isolated and must maintain
     architectural consistency across apps.
@@ -18,12 +18,14 @@
 -   `main.py` is the root FastAPI app and mounts app-specific sub-apps.
 -   `apps/spendsphere/api/main.py` bootstraps SpendSphere (v1 + v2).
 -   `apps/shiftzy/api/main.py` bootstraps Shiftzy (v1).
+-   `apps/fundsphere/api/main.py` bootstraps FundSphere (v1).
 
 ### Example Full Routes
 
 -   SpendSphere v1: `/api/spendsphere/v1/...`
 -   SpendSphere v2: `/api/spendsphere/v2/...`
 -   Shiftzy v1: `/api/shiftzy/v1/...`
+-   FundSphere v1: `/api/fundsphere/v1/...`
 
 ------------------------------------------------------------------------
 
@@ -37,7 +39,7 @@
 4.  `timing_middleware`
 
 -   App-level `response_envelope_middleware` runs inside each sub-app
-    stack (SpendSphere/Shiftzy).
+    stack (SpendSphere/Shiftzy/FundSphere).
 
 ### Response Envelope Format
 
@@ -79,6 +81,24 @@ All endpoints must respect this structure.
     -   `DB_USER`
     -   `DB_PASSWORD`
     -   `DB_NAME`
+-   Axiom logging is configured per app in tenant config:
+    -   `spendsphere.axiom_log`
+    -   `shiftzy.axiom_log`
+    -   `fundsphere.axiom_log`
+-   App `axiom_log` is optional:
+    -   if `AXIOM_API_TOKEN` and `AXIOM_DATASET` are present for the
+        current app, Axiom logging is enabled for that app
+    -   if app `axiom_log` is missing or incomplete, Axiom logging is
+        skipped for that app
+-   Optional app `axiom_log` keys:
+    -   `AXIOM_API_URL` (default: `https://api.axiom.co`)
+    -   `AXIOM_BATCH_SIZE` (default: `25`)
+    -   `AXIOM_FLUSH_SECONDS` (default: `2.0`)
+-   For tenant files that define multiple app sections, app validators
+    resolve app-scoped config first (for example:
+    `SPENDSPHERE_DB_TABLES`, `SPENDSPHERE_SPREADSHEETS`,
+    `SHIFTZY_DB_TABLES`, `FUNDSPHERE_DB_TABLES`) to avoid cross-app
+    key collisions on shared keys like `DB_TABLES` and `SPREADSHEETS`.
 
 Do not introduce new environment loading mechanisms.
 
@@ -120,6 +140,25 @@ Do not introduce new environment loading mechanisms.
 **Shiftzy requires:** - `START_WEEK_NO` - `START_DATE` (must be
 Monday) - `WEEK_BEFORE` - `WEEK_AFTER` - `POSITION_AREAS_ENUM` -
 `SCHEDULE_SECTIONS_ENUM` - `DB_TABLES` - `PDF` (optional)
+
+**FundSphere requires:** - `SPREADSHEETS` - `DB_TABLES`
+
+**SPREADSHEETS structure (FundSphere):**
+- `SPREADSHEETS.masterBudgetControl.id`
+- `SPREADSHEETS.masterBudgetControl.settingsSheetName`
+  (aliases accepted: `settingsTabName`, `tabName`, `sheetName`)
+- `SPREADSHEETS.masterBudgetControl.settingAccountsRange`
+  (alias accepted: `settingsRange`; format like `E4:H`)
+- `SPREADSHEETS.masterBudgetControl.settingServicesRange`
+  (route-specific for services sync; alias accepted: `servicesRange`;
+  format like `J4:O`)
+
+**DB_TABLES structure (FundSphere):**
+- `DB_TABLES.accounts`
+- `DB_TABLES.departments`
+- `DB_TABLES.budgets`
+- `DB_TABLES.changeHistories`
+- `DB_TABLES.services` (route-specific for services sync)
 
 ------------------------------------------------------------------------
 
@@ -372,7 +411,11 @@ Documentation rules:
         `account_codes`, `google_ads_clients`,
         `google_ads_budgets`, `google_ads_campaigns`,
         `google_ads_spent`, `google_ads_warnings`,
-        `google_sheets`, `budget_managements`, `services`.
+        `google_sheets`, `budget_managements`, `services`,
+        `shared_data`.
+    -   `shared_data` is reserved for shared cross-app tenant-scoped
+        cache entries (for example FundSphere DB read cache bucket
+        `db_reads`).
     -   `budget_management_overview` payload is cached in
         `budget_managements` bucket (cache key prefix
         `budget_management_overview::`), not under `google_sheets`.
@@ -512,6 +555,71 @@ Documentation rules:
 -   Routes live under `/api/shiftzy/v1`.
 -   PDF generation uses `fpdf2`.
 -   Assets live in `apps/shiftzy/api/assets`.
+
+### FundSphere
+
+-   Routes live under `/api/fundsphere/v1`.
+-   Current endpoint:
+    - `POST /api/fundsphere/v1/settings/accounts`
+      (supports optional query `fresh_data=true`)
+    - `POST /api/fundsphere/v1/settings/services`
+      (supports optional query `fresh_data=true`)
+-   Tenant sheet config source:
+    - `SPREADSHEETS.masterBudgetControl.id`
+    - `SPREADSHEETS.masterBudgetControl.settingsSheetName` (aliases:
+      `settingsTabName`, `tabName`, `sheetName`)
+    - `SPREADSHEETS.masterBudgetControl.settingAccountsRange`
+      (alias: `settingsRange`)
+    - `SPREADSHEETS.masterBudgetControl.settingServicesRange`
+      (alias: `servicesRange`)
+-   Tenant DB table config source:
+    - `DB_TABLES.accounts`
+    - `DB_TABLES.departments`
+    - `DB_TABLES.budgets`
+    - `DB_TABLES.changeHistories`
+    - `DB_TABLES.services` (required for `/settings/services`)
+-   Settings accounts sync behavior:
+    - Pulls account rows from `DB_TABLES.accounts`
+    - Reads `DB_TABLES.accounts` with cache-first behavior using
+      shared cross-app cache bucket `db_reads`
+    - Cache key format is tenant-scoped
+      `accounts::<db_tables.accounts>`
+    - Default shared cache TTL is `300` seconds
+    - TTL override order:
+      `fundsphere.CACHE.db_accounts_ttl_time` (tenant config) ->
+      `fundsphere.CACHE.ttl_time` (tenant config) ->
+      fallback `CACHE.db_accounts_ttl_time` / `CACHE.ttl_time` ->
+      default `300`
+    - `fresh_data=true` bypasses cache and refreshes DB rows before
+      writing sheet
+    - `active_only=true` writes only rows with active value normalized to `1`
+    - Clears configured sheet tab range from `settingAccountsRange`
+    - Writes header row: `accountCode`, `accountName`, `active`, `dropdownValue`
+    - Writes DB rows under header
+    - `accountCode` is normalized to uppercase
+    - `active` is normalized to numeric `0` or `1`
+    - `dropdownValue` is generated as `"<ACCOUNTCODE> - <accountName>"`
+-   Settings services sync behavior:
+    - Pulls rows from `DB_TABLES.services` joined with `DB_TABLES.departments`
+    - Join key is `services.departmentCode = departments.code`
+    - Row order is `departments.listingOrder ASC`, then `services.name ASC`
+    - Reads services rows with cache-first behavior using
+      shared cross-app cache bucket `db_reads`
+    - Cache key format is tenant-scoped
+      `services::<db_tables.services>::<db_tables.departments>`
+    - Default shared cache TTL is `300` seconds
+    - TTL override order:
+      `fundsphere.CACHE.db_services_ttl_time` (tenant config) ->
+      `fundsphere.CACHE.ttl_time` (tenant config) ->
+      fallback `CACHE.db_services_ttl_time` / `CACHE.ttl_time` ->
+      default `300`
+    - `fresh_data=true` bypasses cache and refreshes DB rows before
+      writing sheet
+    - Requires `SPREADSHEETS.masterBudgetControl.settingServicesRange`
+      (alias: `servicesRange`)
+    - Writes header row:
+      `depListingOrder`, `departmentCode`, `departmentName`,
+      `serviceId`, `serviceName`, `commission`
 
 ------------------------------------------------------------------------
 
@@ -790,7 +898,7 @@ This format is mandatory for all generated commit messages.
 The AI agent MUST keep this `AGENTS.md` file synchronized with system behavior.
 
 This file is the single source of truth for architectural, configuration,
-and behavioral contracts across SpendSphere and Shiftzy.
+and behavioral contracts across SpendSphere, Shiftzy, and FundSphere.
 
 ## Mandatory Update Requirement
 
@@ -820,7 +928,7 @@ When implementing behavior or config changes, the agent must:
 1. Update the relevant section inside `AGENTS.md`.
 2. Ensure documentation reflects the exact runtime behavior.
 3. Add or modify bullet rules under the correct domain section
-   (SpendSphere, Shiftzy, Middleware, Tenancy, etc.).
+   (SpendSphere, Shiftzy, FundSphere, Middleware, Tenancy, etc.).
 4. Keep wording precise and implementation-aligned.
 5. Remove outdated documentation when logic changes.
 6. Never leave stale behavior documented.

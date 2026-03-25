@@ -96,6 +96,7 @@ LOCAL_SECRETS_DIR = LOCAL_ETC_DIR / "secrets"
 
 _TENANT_ENV_CACHE: dict[str, tuple[float, dict[str, float], dict[str, str]]] = {}
 _CACHE_LOCK = threading.Lock()
+_APP_SCOPED_ENV_SECTIONS = {"spendsphere", "shiftzy", "fundsphere"}
 
 
 def normalize_tenant_id(raw: str) -> str:
@@ -133,12 +134,45 @@ def _stringify(value: Any) -> str:
     return str(value)
 
 
+def _normalize_env_key(name: object) -> str:
+    normalized = re.sub(r"[^A-Za-z0-9]+", "_", str(name or "").strip())
+    return normalized.strip("_").upper()
+
+
 def _flatten_env(data: dict[str, Any]) -> dict[str, str]:
     env: dict[str, str] = {}
     for key, value in data.items():
         if isinstance(value, dict):
+            section_scope = str(key).strip().lower()
+            is_app_section = section_scope in _APP_SCOPED_ENV_SECTIONS
+            scoped_prefix = section_scope.upper()
+            app_axiom: dict[str, Any] | None = None
             for sub_key, sub_value in value.items():
                 env[str(sub_key)] = _stringify(sub_value)
+
+                if is_app_section:
+                    normalized_sub_key = _normalize_env_key(sub_key)
+                    if normalized_sub_key:
+                        env[f"{scoped_prefix}_{normalized_sub_key}"] = _stringify(
+                            sub_value
+                        )
+
+                if str(sub_key).strip().lower() == "axiom_log" and isinstance(
+                    sub_value,
+                    dict,
+                ):
+                    app_axiom = sub_value
+
+            # App-scoped Axiom settings (per-tenant, per-app):
+            # spendsphere.axiom_log.*, shiftzy.axiom_log.*, fundsphere.axiom_log.*
+            if isinstance(app_axiom, dict):
+                for axiom_key, axiom_value in app_axiom.items():
+                    normalized_axiom_key = str(axiom_key).strip().upper()
+                    if not normalized_axiom_key:
+                        continue
+                    env[f"{scoped_prefix}_{normalized_axiom_key}"] = _stringify(
+                        axiom_value
+                    )
         else:
             env[str(key)] = _stringify(value)
     return env
@@ -275,6 +309,35 @@ def get_env(key: str, default: str | None = None) -> str | None:
     if ctx and key in ctx.env:
         return ctx.env[key]
     return os.getenv(key, default)
+
+
+def _normalize_app_scope(app_name: str | None) -> str | None:
+    if app_name is None:
+        return None
+    cleaned = re.sub(r"[^A-Za-z0-9]+", "", str(app_name).strip())
+    if not cleaned:
+        return None
+    return cleaned.lower()
+
+
+def get_app_scoped_env(
+    app_name: str | None,
+    key: str,
+    default: str | None = None,
+) -> str | None:
+    app_scope = _normalize_app_scope(app_name)
+    if not app_scope:
+        return default
+
+    normalized_key = str(key or "").strip().upper()
+    if not normalized_key:
+        return default
+
+    scoped_key = f"{app_scope.upper()}_{normalized_key}"
+    value = get_env(scoped_key)
+    if value is None or str(value).strip() == "":
+        return default
+    return str(value).strip()
 
 
 def get_timezone(default: str | None = None) -> str:

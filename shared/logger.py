@@ -22,7 +22,7 @@ from shared.constants import (
     LOG_LEVEL,
     AXIOM_LOG_LEVEL,
 )
-from shared.tenant import get_env, get_tenant_id
+from shared.tenant import get_app_scoped_env, get_tenant_id
 
 # ======================================================
 # TIMEZONE
@@ -43,6 +43,7 @@ _RUN_START_TIME = time.monotonic()
 
 _REQUEST_ID: ContextVar[str | None] = ContextVar("request_id", default=None)
 _CLIENT_ID: ContextVar[str | None] = ContextVar("client_id", default=None)
+_APP_SCOPE: ContextVar[str | None] = ContextVar("app_scope", default=None)
 
 
 def set_request_id(request_id: str) -> ContextVar.Token:
@@ -67,6 +68,18 @@ def reset_client_id(token: ContextVar.Token) -> None:
 
 def get_client_id() -> str | None:
     return _CLIENT_ID.get()
+
+
+def set_log_app_scope(app_scope: str) -> ContextVar.Token:
+    return _APP_SCOPE.set(str(app_scope or "").strip().lower() or None)
+
+
+def reset_log_app_scope(token: ContextVar.Token) -> None:
+    _APP_SCOPE.reset(token)
+
+
+def get_log_app_scope() -> str | None:
+    return _APP_SCOPE.get()
 
 
 _LOGGER_REGISTRY: set[logging.Logger] = set()
@@ -98,11 +111,30 @@ def _get_host_context() -> dict[str, str]:
 
 
 def _get_axiom_config() -> tuple[bool, str, str, str, int, float]:
-    token = get_env("AXIOM_API_TOKEN", "")
-    dataset = get_env("AXIOM_DATASET", "")
-    api_url = get_env("AXIOM_API_URL", "https://api.axiom.co").rstrip("/")
-    batch_size = int(get_env("AXIOM_BATCH_SIZE", "25"))
-    flush_seconds = float(get_env("AXIOM_FLUSH_SECONDS", "2.0"))
+    app_scope = get_log_app_scope()
+    if not app_scope:
+        return False, "", "", "https://api.axiom.co", 25, 2.0
+
+    def _resolve_axiom_value(
+        key: str,
+        default: str,
+    ) -> str:
+        return str(get_app_scoped_env(app_scope, key, default) or default).strip()
+
+    token = _resolve_axiom_value("AXIOM_API_TOKEN", "")
+    dataset = _resolve_axiom_value("AXIOM_DATASET", "")
+    api_url = _resolve_axiom_value("AXIOM_API_URL", "https://api.axiom.co").rstrip("/")
+
+    try:
+        batch_size = int(_resolve_axiom_value("AXIOM_BATCH_SIZE", "25"))
+    except ValueError:
+        batch_size = 25
+
+    try:
+        flush_seconds = float(_resolve_axiom_value("AXIOM_FLUSH_SECONDS", "2.0"))
+    except ValueError:
+        flush_seconds = 2.0
+
     enabled = bool(token and dataset)
     return enabled, token, dataset, api_url, batch_size, flush_seconds
 

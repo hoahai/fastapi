@@ -17,6 +17,8 @@ from shared.logger import (
     reset_request_id,
     set_client_id,
     reset_client_id,
+    set_log_app_scope,
+    reset_log_app_scope,
 )
 from shared.tenant import (
     TenantConfigError,
@@ -249,6 +251,7 @@ async def tenant_context_middleware(request: Request, call_next):
     requires_tenant = path.startswith("/api") or path.startswith("/spendsphere/api")
     tenant_header = request.headers.get("x-tenant-id")
     token = None
+    app_scope_token = None
     if not requires_tenant and not tenant_header:
         request.state.tenant_id = None
         return await call_next(request)
@@ -268,6 +271,7 @@ async def tenant_context_middleware(request: Request, call_next):
         app_name, validator = _resolve_tenant_validator(path, registry)
         if app_name:
             request.state.tenant_app = app_name
+            app_scope_token = set_log_app_scope(app_name)
         if validator is None:
             validator = getattr(request.app.state, "tenant_validator", None)
             validator_prefixes = getattr(
@@ -316,6 +320,8 @@ async def tenant_context_middleware(request: Request, call_next):
     try:
         return await call_next(request)
     finally:
+        if app_scope_token:
+            reset_log_app_scope(app_scope_token)
         if token:
             reset_tenant_context(token)
 

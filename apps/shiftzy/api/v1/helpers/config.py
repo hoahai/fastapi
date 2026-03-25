@@ -8,6 +8,7 @@ import threading
 
 from shared.tenant import (
     TenantConfigValidationError,
+    get_app_scoped_env,
     get_env,
     get_tenant_id,
 )
@@ -71,11 +72,19 @@ def _parse_raw_value(raw: str, key: str, expected_type):
 
 
 def _get_db_tables_raw() -> str | None:
-    return get_env("DB_TABLES") or get_env("db_tables")
+    return (
+        get_app_scoped_env(APP_NAME, "DB_TABLES")
+        or get_env("DB_TABLES")
+        or get_env("db_tables")
+    )
 
 
 def _get_pdf_raw() -> str | None:
-    return get_env("PDF") or get_env("pdf")
+    return (
+        get_app_scoped_env(APP_NAME, "PDF")
+        or get_env("PDF")
+        or get_env("pdf")
+    )
 
 
 def get_position_areas() -> list[str]:

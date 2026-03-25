@@ -6,6 +6,7 @@ from decimal import Decimal, InvalidOperation
 
 from shared.tenant import (
     TenantConfigValidationError,
+    get_app_scoped_env,
     get_env,
     get_tenant_id,
 )
@@ -62,11 +63,19 @@ def _parse_raw_value(raw: str, key: str, expected_type):
 
 
 def _get_db_tables_raw() -> str | None:
-    return get_env("DB_TABLES") or get_env("db_tables")
+    return (
+        get_app_scoped_env(APP_NAME, "DB_TABLES")
+        or get_env("DB_TABLES")
+        or get_env("db_tables")
+    )
 
 
 def _get_spreadsheets_raw() -> str | None:
-    return get_env("SPREADSHEETS") or get_env("spreadsheets")
+    return (
+        get_app_scoped_env(APP_NAME, "SPREADSHEETS")
+        or get_env("SPREADSHEETS")
+        or get_env("spreadsheets")
+    )
 
 
 def _to_bool(value: object) -> bool | None:
@@ -319,7 +328,7 @@ def _normalize_spreadsheet_entry(
 
 
 def _should_require_custom_spreadsheets() -> bool:
-    raw = get_env("FEATURE_FLAGS")
+    raw = get_app_scoped_env(APP_NAME, "FEATURE_FLAGS") or get_env("FEATURE_FLAGS")
     if raw is None or str(raw).strip() == "":
         return False
     try:

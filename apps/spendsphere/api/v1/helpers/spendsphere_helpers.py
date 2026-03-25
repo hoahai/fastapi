@@ -39,6 +39,7 @@ _GOOGLE_SHEETS_KEY = "google_sheets"
 _BUDGET_MANAGEMENTS_KEY = "budget_managements"
 _BUDGET_MANAGEMENT_RECOMMENDED_KEY = "budget_management_recommended"
 _SERVICES_KEY = "services"
+_SHARED_DATA_KEY = "shared_data"
 _GOOGLE_ADS_CLIENTS_CACHE_TTL_ENV = "SPENDSPHERE_GOOGLE_ADS_CLIENTS_CACHE_TTL_SECONDS"
 _GOOGLE_ADS_CLIENTS_CACHE_TTL_FALLBACK_ENV = "ttl_time"
 _DEFAULT_SPENDSPHERE_CACHE_TTL_SECONDS = 86400
@@ -206,6 +207,7 @@ def _load_cache_root(cache_store: FileCache) -> dict[str, object]:
         or _BUDGET_MANAGEMENTS_KEY in data
         or _BUDGET_MANAGEMENT_RECOMMENDED_KEY in data
         or _SERVICES_KEY in data
+        or _SHARED_DATA_KEY in data
     ):
         root = data
     else:
@@ -250,6 +252,10 @@ def _load_cache_root(cache_store: FileCache) -> dict[str, object]:
     if not isinstance(services, dict):
         services = {}
 
+    shared_data = root.get(_SHARED_DATA_KEY)
+    if not isinstance(shared_data, dict):
+        shared_data = {}
+
     return {
         _ACCOUNT_CODES_KEY: account_cache,
         _GOOGLE_ADS_CLIENTS_KEY: google_ads,
@@ -261,6 +267,7 @@ def _load_cache_root(cache_store: FileCache) -> dict[str, object]:
         _BUDGET_MANAGEMENTS_KEY: budget_managements,
         _BUDGET_MANAGEMENT_RECOMMENDED_KEY: budget_management_recommended,
         _SERVICES_KEY: services,
+        _SHARED_DATA_KEY: shared_data,
     }
 
 

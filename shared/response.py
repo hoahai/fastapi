@@ -78,7 +78,7 @@ def normalize_error_payload(raw: object | None) -> dict[str, object]:
     payload["messages"] = messages
 
     errors = payload.get("errors")
-    if isinstance(errors, list):
+    if isinstance(errors, (list, dict)):
         payload["errors"] = errors
     elif isinstance(payload.get("items"), list):
         payload["errors"] = payload["items"]
