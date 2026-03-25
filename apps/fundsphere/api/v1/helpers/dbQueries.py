@@ -1099,6 +1099,299 @@ def validate_master_budget_control_budget_refs(
     }
 
 
+def _normalize_budget_unique_key(
+    *,
+    account_code: object,
+    month: object,
+    year: object,
+    service_id: object,
+    sub_service: object,
+) -> tuple[str, int, int, str, str] | None:
+    normalized_account_code = str(account_code or "").strip().upper()
+    normalized_service_id = str(service_id or "").strip()
+    normalized_sub_service = str(sub_service or "").strip()
+
+    try:
+        normalized_month = int(month)
+        normalized_year = int(year)
+    except (TypeError, ValueError):
+        return None
+
+    if (
+        not normalized_account_code
+        or not normalized_service_id
+        or normalized_month < 1
+        or normalized_month > 12
+        or normalized_year <= 0
+    ):
+        return None
+
+    return (
+        normalized_account_code,
+        normalized_month,
+        normalized_year,
+        normalized_service_id,
+        normalized_sub_service,
+    )
+
+
+def validate_master_budget_control_budget_duplicates(
+    *,
+    changes: list[dict[str, object]] | None = None,
+    creates: list[dict[str, object]] | None = None,
+    deletes: list[dict[str, object]] | None = None,
+) -> dict[str, list[dict[str, object]]]:
+    change_items = changes or []
+    create_items = creates or []
+    delete_items = deletes or []
+    if not change_items and not create_items:
+        return {"duplicateKeys": []}
+
+    tables = get_db_tables(require_services=True)
+    budgets_table = tables["BUDGETS"]
+    budget_columns = _resolve_budget_update_columns(budgets_table)
+    quoted_budgets_table = _quote_table_name(budgets_table)
+    budget_id_expr = _quote_identifier(budget_columns["budget_id_col"])
+    budget_account_code_expr = _quote_identifier(budget_columns["budget_account_code_col"])
+    budget_service_id_expr = _quote_identifier(budget_columns["budget_service_id_col"])
+    budget_month_expr = _quote_identifier(budget_columns["budget_month_col"])
+    budget_year_expr = _quote_identifier(budget_columns["budget_year_col"])
+    budget_sub_service_expr = _quote_identifier(budget_columns["budget_sub_service_col"])
+
+    budget_ids_for_lookup: list[str] = []
+    seen_budget_ids: set[str] = set()
+    for item in change_items + delete_items:
+        budget_id = str(item.get("budgetId") or "").strip()
+        if not budget_id or budget_id in seen_budget_ids:
+            continue
+        seen_budget_ids.add(budget_id)
+        budget_ids_for_lookup.append(budget_id)
+
+    existing_rows_by_budget_id: dict[str, dict[str, object]] = {}
+    if budget_ids_for_lookup:
+        placeholders = ", ".join(["%s"] * len(budget_ids_for_lookup))
+        existing_rows = fetch_all(
+            (
+                "SELECT "
+                f"{budget_id_expr} AS budgetId, "
+                f"{budget_account_code_expr} AS accountCode, "
+                f"{budget_service_id_expr} AS serviceId, "
+                f"{budget_month_expr} AS month, "
+                f"{budget_year_expr} AS year, "
+                f"{budget_sub_service_expr} AS subService "
+                f"FROM {quoted_budgets_table} "
+                f"WHERE {budget_id_expr} IN ({placeholders})"
+            ),
+            tuple(budget_ids_for_lookup),
+        )
+        for row in existing_rows:
+            budget_id = str(row.get("budgetId") or "").strip()
+            if not budget_id:
+                continue
+            existing_rows_by_budget_id[budget_id] = row
+
+    delete_budget_ids = {
+        str(item.get("budgetId") or "").strip()
+        for item in delete_items
+        if str(item.get("budgetId") or "").strip()
+    }
+
+    operations: list[dict[str, object]] = []
+    for change in change_items:
+        budget_id = str(change.get("budgetId") or "").strip()
+        if not budget_id:
+            continue
+        existing_row = existing_rows_by_budget_id.get(budget_id)
+        if not isinstance(existing_row, dict):
+            continue
+        unique_key = _normalize_budget_unique_key(
+            account_code=existing_row.get("accountCode"),
+            month=existing_row.get("month"),
+            year=existing_row.get("year"),
+            service_id=existing_row.get("serviceId"),
+            sub_service=change.get("subService"),
+        )
+        if unique_key is None:
+            continue
+        operations.append(
+            {
+                "type": "update",
+                "budgetId": budget_id,
+                "row": change.get("row"),
+                "key": unique_key,
+            }
+        )
+
+    for create in create_items:
+        unique_key = _normalize_budget_unique_key(
+            account_code=create.get("accountCode"),
+            month=create.get("month"),
+            year=create.get("year"),
+            service_id=create.get("serviceId"),
+            sub_service=create.get("subService"),
+        )
+        if unique_key is None:
+            continue
+        operations.append(
+            {
+                "type": "create",
+                "budgetId": "",
+                "row": create.get("row"),
+                "key": unique_key,
+            }
+        )
+
+    if not operations:
+        return {"duplicateKeys": []}
+
+    operations_by_key: dict[tuple[str, int, int, str, str], list[dict[str, object]]] = {}
+    for operation in operations:
+        operation_key = operation.get("key")
+        if not isinstance(operation_key, tuple):
+            continue
+        operations_by_key.setdefault(operation_key, []).append(operation)
+
+    duplicate_keys: list[dict[str, object]] = []
+    duplicate_fingerprints: set[tuple[tuple[str, int, int, str, str], str, str]] = set()
+
+    def _extract_rows(key_operations: list[dict[str, object]]) -> list[int]:
+        rows: list[int] = []
+        seen_rows: set[int] = set()
+        for operation in key_operations:
+            row_value = operation.get("row")
+            if isinstance(row_value, bool):
+                continue
+            if isinstance(row_value, int):
+                row_number = row_value
+            else:
+                try:
+                    row_number = int(str(row_value).strip())
+                except (TypeError, ValueError):
+                    continue
+            if row_number <= 0 or row_number in seen_rows:
+                continue
+            seen_rows.add(row_number)
+            rows.append(row_number)
+        rows.sort()
+        return rows
+
+    def _append_duplicate(
+        *,
+        unique_key: tuple[str, int, int, str, str],
+        source: str,
+        existing_budget_id: str = "",
+        rows: list[int] | None = None,
+    ) -> None:
+        fingerprint = (unique_key, source, existing_budget_id)
+        if fingerprint in duplicate_fingerprints:
+            return
+        duplicate_fingerprints.add(fingerprint)
+        normalized_rows = rows or []
+        duplicate_keys.append(
+            {
+                "accountCode": unique_key[0],
+                "month": unique_key[1],
+                "year": unique_key[2],
+                "serviceId": unique_key[3],
+                "subService": unique_key[4],
+                "source": source,
+                "existingBudgetId": existing_budget_id,
+                "rows": normalized_rows,
+            }
+        )
+
+    for unique_key, key_operations in operations_by_key.items():
+        unique_update_budget_ids = {
+            str(op.get("budgetId") or "").strip()
+            for op in key_operations
+            if str(op.get("budgetId") or "").strip()
+        }
+        create_count = sum(
+            1 for op in key_operations if not str(op.get("budgetId") or "").strip()
+        )
+        if create_count + len(unique_update_budget_ids) > 1:
+            _append_duplicate(
+                unique_key=unique_key,
+                source="request",
+                rows=_extract_rows(key_operations),
+            )
+
+    candidate_keys = list(operations_by_key.keys())
+    if candidate_keys:
+        where_clauses: list[str] = []
+        params: list[object] = []
+        for account_code, month_value, year_value, service_id, sub_service in candidate_keys:
+            where_clauses.append(
+                "("
+                f"{budget_account_code_expr} = %s AND "
+                f"{budget_month_expr} = %s AND "
+                f"{budget_year_expr} = %s AND "
+                f"{budget_service_id_expr} = %s AND "
+                f"{budget_sub_service_expr} = %s"
+                ")"
+            )
+            params.extend(
+                [account_code, month_value, year_value, service_id, sub_service]
+            )
+
+        existing_duplicate_rows = fetch_all(
+            (
+                "SELECT "
+                f"{budget_id_expr} AS budgetId, "
+                f"{budget_account_code_expr} AS accountCode, "
+                f"{budget_month_expr} AS month, "
+                f"{budget_year_expr} AS year, "
+                f"{budget_service_id_expr} AS serviceId, "
+                f"{budget_sub_service_expr} AS subService "
+                f"FROM {quoted_budgets_table} "
+                f"WHERE {' OR '.join(where_clauses)}"
+            ),
+            tuple(params),
+        )
+
+        for row in existing_duplicate_rows:
+            existing_budget_id = str(row.get("budgetId") or "").strip()
+            if not existing_budget_id or existing_budget_id in delete_budget_ids:
+                continue
+
+            unique_key = _normalize_budget_unique_key(
+                account_code=row.get("accountCode"),
+                month=row.get("month"),
+                year=row.get("year"),
+                service_id=row.get("serviceId"),
+                sub_service=row.get("subService"),
+            )
+            if unique_key is None:
+                continue
+
+            key_operations = operations_by_key.get(unique_key) or []
+            if not key_operations:
+                continue
+
+            unique_update_budget_ids = {
+                str(op.get("budgetId") or "").strip()
+                for op in key_operations
+                if str(op.get("budgetId") or "").strip()
+            }
+            create_count = sum(
+                1 for op in key_operations if not str(op.get("budgetId") or "").strip()
+            )
+
+            if existing_budget_id in unique_update_budget_ids and create_count == 0 and len(
+                unique_update_budget_ids
+            ) == 1:
+                continue
+
+            _append_duplicate(
+                unique_key=unique_key,
+                source="database",
+                existing_budget_id=existing_budget_id,
+                rows=_extract_rows(key_operations),
+            )
+
+    return {"duplicateKeys": duplicate_keys}
+
+
 def _build_history_insert_plan(
     history_columns: dict[str, str],
 ) -> tuple[list[str], list[str]]:

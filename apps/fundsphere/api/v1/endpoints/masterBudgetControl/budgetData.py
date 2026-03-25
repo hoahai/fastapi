@@ -14,6 +14,7 @@ from apps.fundsphere.api.v1.helpers.config import (
 from apps.fundsphere.api.v1.helpers.dbQueries import (
     get_master_budget_control_budget_data,
     update_master_budget_control_budget_data,
+    validate_master_budget_control_budget_duplicates,
     validate_master_budget_control_budget_refs,
 )
 from shared.ggSheet import (
@@ -684,6 +685,7 @@ def _parse_budget_data_sheet_rows(
 
             changed_items.append(
                 {
+                    "row": row_number,
                     "budgetId": budget_id,
                     "accountCode": account_code,
                     "serviceId": service_id,
@@ -747,6 +749,7 @@ def _parse_budget_data_sheet_rows(
 
         create_items.append(
             {
+                "row": row_number,
                 "accountCode": account_code,
                 "serviceId": service_id,
                 "month": month_value,
@@ -914,7 +917,11 @@ def update_budget_data_route(request: Request):
         - `grossAmount` and `commission` are required on all write rows
         - `netAdjustment` is editable; blank values default to `0`
         - If budgetDataUpdateColumns.isRowChanged is configured, only flagged rows are processed
-        - If any row is invalid, no update/insert is executed
+        - Validates duplicate keys for `accountCode + month + year + serviceId + subService`
+          across request rows and existing budgets before write
+        - Validation errors are aggregated (row values, references, duplicates)
+          and returned together in one response
+        - If any validation fails, no update/insert is executed
         - After successful DB update/insert, the endpoint reloads
           budget data to sheet using updated cache buckets
     """
@@ -981,38 +988,16 @@ def update_budget_data_route(request: Request):
         is_delete_index=is_delete_index,
     )
 
+    scanned_row_count = len(sheet_rows)
+    validation_messages: list[str] = []
+    validation_errors: list[dict[str, object]] = []
+    has_non_duplicate_errors = False
+
     if row_errors:
         row_error_messages = _build_row_error_messages(row_errors)
-        error_message_parts = ["Validation failed. No rows were updated."]
-        if row_error_messages:
-            error_message_parts.extend(row_error_messages)
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "message": "; ".join(error_message_parts),
-                "messages": row_error_messages,
-                "errors": row_errors,
-            },
-        )
-
-    scanned_row_count = len(sheet_rows)
-    if not changed_rows and not create_rows and not delete_rows:
-        return {
-            "spreadsheetId": spreadsheet_id,
-            "sheetName": sheet_name,
-            "readRange": read_range,
-            "scannedRowCount": scanned_row_count,
-            "changedRowCount": 0,
-            "createdCandidateRowCount": 0,
-            "deletedCandidateRowCount": 0,
-            "updatedRowCount": 0,
-            "createdRowCount": 0,
-            "deletedRowCount": 0,
-            "historyRowCount": 0,
-            "createdBudgetIds": [],
-            "deletedBudgetIds": [],
-            "invalidRowCount": 0,
-        }
+        validation_messages.extend(row_error_messages)
+        validation_errors.extend(row_errors)
+        has_non_duplicate_errors = True
 
     ref_validation = validate_master_budget_control_budget_refs(
         budget_ids=[
@@ -1022,11 +1007,12 @@ def update_budget_data_route(request: Request):
         account_codes=[str(item.get("accountCode") or "").strip() for item in create_rows],
         service_ids=[str(item.get("serviceId") or "").strip() for item in create_rows],
     )
-    if (
+    has_ref_errors = bool(
         ref_validation.get("missingBudgetIds")
         or ref_validation.get("invalidAccountCodes")
         or ref_validation.get("invalidServiceIds")
-    ):
+    )
+    if has_ref_errors:
         ref_error_messages: list[str] = []
         ref_errors: list[dict[str, object]] = []
         missing_budget_ids = ref_validation.get("missingBudgetIds") or []
@@ -1065,16 +1051,130 @@ def update_budget_data_route(request: Request):
                 }
             )
 
-        ref_message_parts = ["Validation failed. No rows were updated."]
-        ref_message_parts.extend(ref_error_messages)
+        validation_messages.extend(ref_error_messages)
+        validation_errors.extend(ref_errors)
+        has_non_duplicate_errors = True
+
+    duplicate_validation = validate_master_budget_control_budget_duplicates(
+        changes=changed_rows,
+        creates=create_rows,
+        deletes=delete_rows,
+    )
+    duplicate_keys = duplicate_validation.get("duplicateKeys") or []
+    if duplicate_keys:
+        budget_id_to_rows: dict[str, list[int]] = {}
+        for offset, row_values in enumerate(sheet_rows):
+            row_number = start_row + offset
+            budget_id_value = str(
+                _extract_cell_value(row_values, column_indexes["budgetId"]) or ""
+            ).strip()
+            if not budget_id_value:
+                continue
+            budget_id_to_rows.setdefault(budget_id_value, []).append(row_number)
+
+        duplicate_errors: list[dict[str, object]] = []
+        duplicated_rows_set: set[int] = set()
+        for duplicate in duplicate_keys:
+            account_code = str(duplicate.get("accountCode") or "").strip()
+            month_value = duplicate.get("month")
+            year_value = duplicate.get("year")
+            service_id = str(duplicate.get("serviceId") or "").strip()
+            sub_service = str(duplicate.get("subService") or "").strip()
+            source = str(duplicate.get("source") or "").strip()
+            existing_budget_id = str(duplicate.get("existingBudgetId") or "").strip()
+            duplicate_rows_raw = duplicate.get("rows")
+            duplicate_rows = (
+                [int(row) for row in duplicate_rows_raw if isinstance(row, int)]
+                if isinstance(duplicate_rows_raw, list)
+                else []
+            )
+            if source == "database" and existing_budget_id:
+                for row_number in budget_id_to_rows.get(existing_budget_id, []):
+                    if row_number not in duplicate_rows:
+                        duplicate_rows.append(row_number)
+                duplicate_rows.sort()
+            for row in duplicate_rows:
+                duplicated_rows_set.add(row)
+            duplicate_errors.append(
+                {
+                    "field": "budgetUniqueKey",
+                    "message": "Duplicated budget rows found",
+                    "key": {
+                        "accountCode": account_code,
+                        "month": month_value,
+                        "year": year_value,
+                        "serviceId": service_id,
+                        "subService": sub_service,
+                    },
+                    "rows": duplicate_rows,
+                    "existingBudgetId": existing_budget_id,
+                    "source": source,
+                }
+            )
+
+        duplicated_rows = sorted(duplicated_rows_set)
+        row_numbers_text = ""
+        if len(duplicated_rows) == 1:
+            row_numbers_text = str(duplicated_rows[0])
+        elif len(duplicated_rows) == 2:
+            row_numbers_text = f"{duplicated_rows[0]} and {duplicated_rows[1]}"
+        elif len(duplicated_rows) >= 3:
+            leading = ", ".join(str(row) for row in duplicated_rows[:-1])
+            row_numbers_text = f"{leading}, and {duplicated_rows[-1]}"
+
+        message = (
+            f"Duplicated budget rows found: {row_numbers_text}"
+            if row_numbers_text
+            else "Duplicated budget rows found"
+        )
+        validation_messages.append(message)
+        validation_errors.extend(duplicate_errors)
+
+    if validation_errors:
+        unique_messages: list[str] = []
+        seen_messages: set[str] = set()
+        for message in validation_messages:
+            cleaned_message = str(message or "").strip()
+            if not cleaned_message or cleaned_message in seen_messages:
+                continue
+            seen_messages.add(cleaned_message)
+            unique_messages.append(cleaned_message)
+
+        response_message = "Validation failed. No rows were updated."
+        if unique_messages:
+            if has_non_duplicate_errors:
+                response_message = "; ".join([response_message] + unique_messages)
+            elif len(unique_messages) == 1:
+                response_message = unique_messages[0]
+            else:
+                response_message = "; ".join([response_message] + unique_messages)
+
         raise HTTPException(
             status_code=400,
             detail={
-                "message": "; ".join(ref_message_parts),
-                "messages": ref_error_messages,
-                "errors": ref_errors,
+                "message": response_message,
+                "messages": unique_messages,
+                "errors": validation_errors,
             },
         )
+
+    if not changed_rows and not create_rows and not delete_rows:
+        return {
+            "spreadsheetId": spreadsheet_id,
+            "sheetName": sheet_name,
+            "readRange": read_range,
+            "scannedRowCount": scanned_row_count,
+            "changedRowCount": 0,
+            "createdCandidateRowCount": 0,
+            "deletedCandidateRowCount": 0,
+            "updatedRowCount": 0,
+            "createdRowCount": 0,
+            "deletedRowCount": 0,
+            "historyRowCount": 0,
+            "createdBudgetIds": [],
+            "deletedBudgetIds": [],
+            "invalidRowCount": 0,
+        }
 
     try:
         update_result = update_master_budget_control_budget_data(
@@ -1085,6 +1185,27 @@ def update_budget_data_route(request: Request):
         )
     except Exception as exc:
         exc_text = str(exc)
+        if "Duplicate entry" in exc_text and "for key" in exc_text:
+            row_message = (
+                "Duplicate budget key detected for unique key "
+                "(accountCode + month + year + serviceId + subService)"
+            )
+            raise HTTPException(
+                status_code=400,
+                detail={
+                    "message": (
+                        "Validation failed. No rows were updated.; "
+                        f"{row_message}."
+                    ),
+                    "messages": [row_message],
+                    "errors": [
+                        {
+                            "field": "budgetUniqueKey",
+                            "message": row_message,
+                        }
+                    ],
+                },
+            ) from exc
         if delete_rows and "fk_changehistories_budget" in exc_text:
             row_message = (
                 "Delete is blocked by foreign key fk_changehistories_budget "
