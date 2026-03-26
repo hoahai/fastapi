@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import ast
+import json
 from datetime import datetime, date
 from contextvars import copy_context
 from zoneinfo import ZoneInfo
@@ -461,6 +463,69 @@ def _resolve_secret_candidate(raw_path: str) -> str | None:
     return None
 
 
+def _parse_mapping_value(raw_value: str) -> dict[str, object] | None:
+    text = str(raw_value).strip()
+    if not text:
+        return None
+
+    for parser in (json.loads, ast.literal_eval):
+        try:
+            parsed = parser(text)
+        except (TypeError, ValueError, SyntaxError, json.JSONDecodeError):
+            continue
+        if isinstance(parsed, dict):
+            return {str(key).strip().lower(): value for key, value in parsed.items()}
+
+    return None
+
+
+def _expand_secret_env_candidates(env_key: str, env_value: str) -> list[str]:
+    candidates: list[str] = []
+    text = str(env_value).strip()
+    if text:
+        candidates.append(text)
+
+    parsed = _parse_mapping_value(text)
+    if not isinstance(parsed, dict):
+        return candidates
+
+    lookup_keys = (
+        str(env_key).strip().lower(),
+        "google_application_credentials",
+        "json_key_file_path",
+    )
+    for key in lookup_keys:
+        candidate = parsed.get(key)
+        if isinstance(candidate, str) and candidate.strip():
+            candidates.append(candidate.strip())
+
+    deduped: list[str] = []
+    seen: set[str] = set()
+    for candidate in candidates:
+        if candidate in seen:
+            continue
+        seen.add(candidate)
+        deduped.append(candidate)
+
+    return deduped
+
+
+def _format_checked_env_value(value: str) -> str:
+    parsed = _parse_mapping_value(value)
+    if not isinstance(parsed, dict):
+        return value
+
+    display_values: list[str] = []
+    for key in ("google_application_credentials", "json_key_file_path"):
+        raw = parsed.get(key)
+        if isinstance(raw, str) and raw.strip():
+            display_values.append(f"{key}={raw.strip()}")
+
+    if display_values:
+        return "{ " + ", ".join(display_values) + " }"
+    return "{...}"
+
+
 def resolve_secret_path(
     env_var: str,
     filename: str,
@@ -472,10 +537,13 @@ def resolve_secret_path(
         env_value = get_env(key)
         if not env_value:
             continue
-        checked_env.append((key, str(env_value)))
-        resolved = _resolve_secret_candidate(str(env_value))
-        if resolved:
-            return resolved
+        env_value_text = str(env_value)
+        checked_env.append((key, _format_checked_env_value(env_value_text)))
+
+        for raw_candidate in _expand_secret_env_candidates(key, env_value_text):
+            resolved = _resolve_secret_candidate(raw_candidate)
+            if resolved:
+                return resolved
 
     for base in (Path("/etc/secrets"), LOCAL_SECRETS_DIR):
         candidate = base / filename

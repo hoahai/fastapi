@@ -16,10 +16,9 @@ from shared.utils import (
     get_current_period,
     run_parallel,
     run_parallel_flatten,
-    LOCAL_SECRETS_DIR,
+    resolve_secret_path,
 )
 from shared.tenant import get_env, TenantConfigError
-from pathlib import Path
 from shared.constants import (
     GGADS_MAX_UPDATES_PER_REQUEST,
     GGADS_MAX_PAUSED_CAMPAIGNS,
@@ -481,7 +480,7 @@ def _get_google_ads_nested_config() -> dict[str, object]:
     return {}
 
 
-def _get_google_ads_setting(
+def _get_nested_config_setting(
     nested_config: dict[str, object],
     *keys: str,
 ) -> str | None:
@@ -498,77 +497,42 @@ def get_client() -> GoogleAdsClient:
     Create and return a Google Ads client using tenant config.
     """
     nested_google_ads_config = _get_google_ads_nested_config()
-    developer_token = _get_google_ads_setting(
+    developer_token = _get_nested_config_setting(
         nested_google_ads_config,
         "developer_token",
     )
-    login_customer_id = _get_google_ads_setting(
+    login_customer_id = _get_nested_config_setting(
         nested_google_ads_config,
         "login_customer_id",
     )
-    json_key_file_path = _get_google_ads_setting(
-        nested_google_ads_config,
-        "json_key_file_path",
-    )
-    google_app_creds = _get_google_ads_setting(
-        nested_google_ads_config,
-        "GOOGLE_APPLICATION_CREDENTIALS",
-        "google_application_credentials",
-    )
-    use_proto_plus = _get_google_ads_setting(
+    use_proto_plus = _get_nested_config_setting(
         nested_google_ads_config,
         "use_proto_plus",
     ) or "true"
 
     missing: list[str] = []
     if not developer_token:
-        missing.append("developer_token")
+        missing.append("spendsphere.google_ads.developer_token")
     if not login_customer_id:
-        missing.append("login_customer_id")
-    if not json_key_file_path and not google_app_creds:
-        missing.append("json_key_file_path or GOOGLE_APPLICATION_CREDENTIALS")
+        missing.append("spendsphere.google_ads.login_customer_id")
     if missing:
         raise TenantConfigError(
             "Missing Google Ads tenant config keys: " + ", ".join(missing)
         )
 
-    def _resolve_key_path(raw_path: str) -> Path | None:
-        candidate = Path(raw_path)
-        if candidate.is_file():
-            return candidate
-        if not candidate.is_absolute():
-            candidate_str = str(candidate)
-            if candidate_str.startswith("etc/secrets/"):
-                abs_candidate = Path("/") / candidate
-                if abs_candidate.is_file():
-                    return abs_candidate
-            for base in (Path("/etc/secrets"), LOCAL_SECRETS_DIR):
-                alt = base / candidate_str
-                if alt.is_file():
-                    return alt
-        return None
-
-    key_path = None
-    tried: list[str] = []
-    for raw_path in (json_key_file_path, google_app_creds):
-        if not raw_path:
-            continue
-        tried.append(str(raw_path))
-        resolved = _resolve_key_path(str(raw_path))
-        if resolved is not None:
-            key_path = resolved
-            break
-
-    if key_path is None:
-        tried_display = ", ".join(tried) if tried else "(none)"
-        raise TenantConfigError(
-            "Google Ads json_key_file_path not found. Tried: " + tried_display
+    try:
+        key_path = resolve_secret_path(
+            "SPENDSPHERE_GOOGLE_ACCOUNTS",
+            "service-account.json",
+            fallback_env_vars=("google_accounts",),
         )
+    except RuntimeError as exc:
+        raise TenantConfigError(str(exc)) from exc
 
     config = {
         "developer_token": developer_token,
         "login_customer_id": login_customer_id,
-        "json_key_file_path": str(key_path),
+        "json_key_file_path": key_path,
         "use_proto_plus": str(use_proto_plus).lower()
         in {"1", "true", "yes", "on"},
     }

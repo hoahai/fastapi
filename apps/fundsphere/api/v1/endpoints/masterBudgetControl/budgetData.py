@@ -134,7 +134,11 @@ def _read_single_cell(
     cell_range: str,
 ) -> str:
     range_name = f"'{sheet_name}'!{cell_range}"
-    values = _read_sheet_values(spreadsheet_id=spreadsheet_id, range_name=range_name)
+    values = _read_sheet_values(
+        spreadsheet_id=spreadsheet_id,
+        range_name=range_name,
+        app_name="FundSphere",
+    )
     if not values or not isinstance(values[0], list) or not values[0]:
         return ""
     return str(values[0][0] or "").strip()
@@ -333,6 +337,7 @@ def _load_budget_data_to_sheet(
     _clear_sheet_values(
         spreadsheet_id=spreadsheet_id,
         range_name=clear_range,
+        app_name="FundSphere",
     )
     _clear_sheet_notes(
         spreadsheet_id=spreadsheet_id,
@@ -340,6 +345,7 @@ def _load_budget_data_to_sheet(
         start_col=start_col,
         start_row=start_row,
         end_col=end_col,
+        app_name="FundSphere",
     )
 
     # Reset delete flags right after clear (if isDelete column is configured),
@@ -370,6 +376,7 @@ def _load_budget_data_to_sheet(
                     start_row=data_start_row,
                     end_col=delete_col,
                     end_row=delete_end_row,
+                    app_name="FundSphere",
                 )
                 delete_write_range = (
                     f"'{sheet_name}'!{delete_col}{data_start_row}:{delete_col}{delete_end_row}"
@@ -378,6 +385,7 @@ def _load_budget_data_to_sheet(
                     spreadsheet_id=spreadsheet_id,
                     range_name=delete_write_range,
                     values=[[False] for _ in range(loaded_row_count)],
+                    app_name="FundSphere",
                     value_input_option="RAW",
                 )
         except Exception:
@@ -390,6 +398,7 @@ def _load_budget_data_to_sheet(
         spreadsheet_id=spreadsheet_id,
         range_name=write_range,
         values=values,
+        app_name="FundSphere",
         value_input_option="USER_ENTERED",
     )
 
@@ -978,6 +987,7 @@ def update_budget_data_route(request: Request):
     sheet_rows = _read_sheet_values(
         spreadsheet_id=spreadsheet_id,
         range_name=read_range,
+        app_name="FundSphere",
         value_render_option="UNFORMATTED_VALUE",
     )
     changed_rows, create_rows, delete_rows, row_errors = _parse_budget_data_sheet_rows(

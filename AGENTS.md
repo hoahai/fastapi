@@ -117,7 +117,17 @@ Do not introduce new environment loading mechanisms.
 ### Tenant Config Requirements
 
 **SpendSphere requires:** - `SERVICE_BUDGETS` - `SERVICE_MAPPING` -
-`ADTYPES` - `DB_TABLES` - `SPREADSHEETS` - `GOOGLE_ADS_NAMING`
+`ADTYPES` - `DB_TABLES` - `SPREADSHEETS` - `GOOGLE_ADS_NAMING` -
+`spendsphere.google_accounts` - `spendsphere.google_ads`
+
+**SpendSphere google_accounts structure:**
+- `spendsphere.google_accounts.json_key_file_path` or
+  `spendsphere.google_accounts.GOOGLE_APPLICATION_CREDENTIALS`
+
+**SpendSphere google_ads structure:**
+- `spendsphere.google_ads.developer_token`
+- `spendsphere.google_ads.login_customer_id`
+- `spendsphere.google_ads.use_proto_plus` (optional)
 
 **SPREADSHEETS structure (SpendSphere):**
 - `SPREADSHEETS.spendSphere.id`
@@ -141,7 +151,12 @@ Do not introduce new environment loading mechanisms.
 Monday) - `WEEK_BEFORE` - `WEEK_AFTER` - `POSITION_AREAS_ENUM` -
 `SCHEDULE_SECTIONS_ENUM` - `DB_TABLES` - `PDF` (optional)
 
-**FundSphere requires:** - `SPREADSHEETS` - `DB_TABLES`
+**FundSphere requires:** - `SPREADSHEETS` - `DB_TABLES` -
+`fundsphere.google_accounts`
+
+**FundSphere google_accounts structure:**
+- `fundsphere.google_accounts.json_key_file_path` or
+  `fundsphere.google_accounts.GOOGLE_APPLICATION_CREDENTIALS`
 
 **SPREADSHEETS structure (FundSphere):**
 - `SPREADSHEETS.masterBudgetControl.id`
@@ -627,7 +642,10 @@ Documentation rules:
 
 -   Google Sheets/Ads use a service account resolved by:
     -   `shared/utils.resolve_secret_path`
-    -   `GOOGLE_APPLICATION_CREDENTIALS`
+    -   app-scoped `GOOGLE_ACCOUNTS` object keys
+        (`SPENDSPHERE_GOOGLE_ACCOUNTS`, `FUNDSPHERE_GOOGLE_ACCOUNTS`)
+    -   fallback `google_accounts` object key
+    -   global `GOOGLE_APPLICATION_CREDENTIALS` / `json_key_file_path`
 -   `shared/ggSheet.py` is **not thread-safe**.
     -   Do not use it inside thread pools or background threads.
 -   `shared/ggSheet.py` also provides explicit write helpers:
@@ -1092,7 +1110,9 @@ Clean visual structure is mandatory for maintainability.
 
 -   Use `etc/secrets/tenant.template.yaml` as a starting point.
 
--   Configure `GOOGLE_APPLICATION_CREDENTIALS`.
+-   Configure app-scoped `google_accounts` in tenant config
+    (`spendsphere.google_accounts` and/or `fundsphere.google_accounts`)
+    or `GOOGLE_APPLICATION_CREDENTIALS`.
 
 -   Run:
 

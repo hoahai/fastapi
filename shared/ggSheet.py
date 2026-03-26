@@ -15,6 +15,18 @@ _ROW_BOUNDED_A1_RANGE_RE = re.compile(
     r"^\s*([A-Za-z]+)(\d+):([A-Za-z]+)(?:([0-9]+))?\s*$"
 )
 
+
+def _build_google_account_secret_lookup(
+    app_name: str | None,
+) -> tuple[str, tuple[str, ...]]:
+    cleaned_scope = re.sub(r"[^A-Za-z0-9]+", "", str(app_name or "").strip()).upper()
+    if not cleaned_scope:
+        return (
+            "GOOGLE_APPLICATION_CREDENTIALS",
+            ("json_key_file_path", "SPENDSPHERE_GOOGLE_ACCOUNTS", "FUNDSPHERE_GOOGLE_ACCOUNTS", "google_accounts"),
+        )
+    return (f"{cleaned_scope}_GOOGLE_ACCOUNTS", ("google_accounts",))
+
 # =====================================================
 # INTERNAL CLIENT (DO NOT USE THREADS)
 # =====================================================
@@ -22,6 +34,7 @@ _ROW_BOUNDED_A1_RANGE_RE = re.compile(
 def _get_sheets_service(
     *,
     scopes: list[str] | None = None,
+    app_name: str | None = None,
 ):
     """
     Create Google Sheets service.
@@ -29,10 +42,11 @@ def _get_sheets_service(
     IMPORTANT:
     - Must be called in a process that does NOT create threads
     """
+    env_var, fallback_env_vars = _build_google_account_secret_lookup(app_name)
     cred_path = resolve_secret_path(
-        "GOOGLE_APPLICATION_CREDENTIALS",
+        env_var,
         "service-account.json",
-        fallback_env_vars=("json_key_file_path",),
+        fallback_env_vars=fallback_env_vars,
     )
 
     credentials = service_account.Credentials.from_service_account_file(
@@ -51,12 +65,14 @@ def _get_sheets_service(
 def _read_sheet_raw(
     spreadsheet_id: str,
     range_name: str,
+    *,
+    app_name: str | None = None,
 ) -> list[dict]:
     """
     Low-level sheet reader.
     Returns raw rows as list[dict].
     """
-    service = _get_sheets_service()
+    service = _get_sheets_service(app_name=app_name)
 
     result = (
         service.spreadsheets()
@@ -82,12 +98,13 @@ def _read_sheet_values(
     spreadsheet_id: str,
     range_name: str,
     *,
+    app_name: str | None = None,
     value_render_option: str | None = None,
 ) -> list[list[object]]:
     """
     Read raw values from a sheet range without header mapping.
     """
-    service = _get_sheets_service()
+    service = _get_sheets_service(app_name=app_name)
     get_kwargs: dict[str, object] = {
         "spreadsheetId": spreadsheet_id,
         "range": range_name,
@@ -132,11 +149,12 @@ def _clear_sheet_notes(
     start_col: str,
     start_row: int,
     end_col: str,
+    app_name: str | None = None,
 ) -> dict:
     """
     Clear cell notes for a bounded column range from start_row to sheet end.
     """
-    service = _get_sheets_service(scopes=READWRITE_SCOPES)
+    service = _get_sheets_service(scopes=READWRITE_SCOPES, app_name=app_name)
     metadata = (
         service.spreadsheets()
         .get(
@@ -197,11 +215,13 @@ def _clear_sheet_notes(
 def _clear_sheet_values(
     spreadsheet_id: str,
     range_name: str,
+    *,
+    app_name: str | None = None,
 ) -> dict:
     """
     Clear values in the target range.
     """
-    service = _get_sheets_service(scopes=READWRITE_SCOPES)
+    service = _get_sheets_service(scopes=READWRITE_SCOPES, app_name=app_name)
     return (
         service.spreadsheets()
         .values()
@@ -222,11 +242,12 @@ def _set_checkbox_validation(
     start_row: int,
     end_col: str | None = None,
     end_row: int | None = None,
+    app_name: str | None = None,
 ) -> dict:
     """
     Apply checkbox data validation to the target range.
     """
-    service = _get_sheets_service(scopes=READWRITE_SCOPES)
+    service = _get_sheets_service(scopes=READWRITE_SCOPES, app_name=app_name)
     metadata = (
         service.spreadsheets()
         .get(
@@ -305,12 +326,13 @@ def _write_sheet_values(
     range_name: str,
     values: list[list[object]],
     *,
+    app_name: str | None = None,
     value_input_option: str = "USER_ENTERED",
 ) -> dict:
     """
     Write values to the target range.
     """
-    service = _get_sheets_service(scopes=READWRITE_SCOPES)
+    service = _get_sheets_service(scopes=READWRITE_SCOPES, app_name=app_name)
     return (
         service.spreadsheets()
         .values()

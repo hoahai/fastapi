@@ -160,6 +160,7 @@ def _write_rows_to_settings_range(
     _clear_sheet_values(
         spreadsheet_id=spreadsheet_id,
         range_name=clear_range,
+        app_name="FundSphere",
     )
 
     end_row = start_row + len(values) - 1
@@ -168,6 +169,7 @@ def _write_rows_to_settings_range(
         spreadsheet_id=spreadsheet_id,
         range_name=write_range,
         values=values,
+        app_name="FundSphere",
         value_input_option="USER_ENTERED",
     )
     return {

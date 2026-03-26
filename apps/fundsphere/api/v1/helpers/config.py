@@ -44,6 +44,7 @@ _REQUIRED_BUDGET_DATA_UPDATE_COLUMNS = (
     "accountCode",
     "serviceId",
 )
+_GOOGLE_ACCOUNTS_CONFIG_KEY_PREFIX = "fundsphere.google_accounts"
 
 _VALIDATED_TENANTS: set[str] = set()
 _VALIDATION_LOCK = threading.Lock()
@@ -84,6 +85,10 @@ def _get_db_tables_raw() -> str | None:
     )
 
 
+def _get_google_accounts_raw() -> str | None:
+    return get_app_scoped_env(APP_NAME, "GOOGLE_ACCOUNTS")
+
+
 def _normalize_entry(
     value: object,
     *,
@@ -99,6 +104,36 @@ def _normalize_entry(
 
     invalid.append(key_name)
     return {}
+
+
+def _validate_google_accounts_config(
+    parsed: dict,
+    *,
+    key_prefix: str,
+) -> tuple[list[str], list[str]]:
+    missing: list[str] = []
+    invalid: list[str] = []
+
+    normalized = {str(k).strip().lower(): v for k, v in parsed.items()}
+    json_key_file_path = normalized.get("json_key_file_path")
+    google_app_creds = normalized.get("google_application_credentials")
+    has_json_key_file_path = (
+        isinstance(json_key_file_path, str) and bool(json_key_file_path.strip())
+    )
+    has_google_app_creds = (
+        isinstance(google_app_creds, str) and bool(google_app_creds.strip())
+    )
+
+    if not has_json_key_file_path and not has_google_app_creds:
+        missing.append(
+            f"{key_prefix}.json_key_file_path|GOOGLE_APPLICATION_CREDENTIALS"
+        )
+    if json_key_file_path is not None and not has_json_key_file_path:
+        invalid.append(f"{key_prefix}.json_key_file_path")
+    if google_app_creds is not None and not has_google_app_creds:
+        invalid.append(f"{key_prefix}.GOOGLE_APPLICATION_CREDENTIALS")
+
+    return missing, invalid
 
 
 def _is_valid_spreadsheet_id(value: str) -> bool:
@@ -452,6 +487,25 @@ def validate_tenant_config(tenant_id: str | None = None) -> None:
                     missing.append(f"DB_TABLES.{key}")
             except TenantConfigValidationError:
                 invalid.append("DB_TABLES")
+
+        raw_google_accounts = _get_google_accounts_raw()
+        if raw_google_accounts is None or str(raw_google_accounts).strip() == "":
+            missing.append(_GOOGLE_ACCOUNTS_CONFIG_KEY_PREFIX)
+        else:
+            try:
+                parsed_google_accounts = _parse_raw_value(
+                    raw_google_accounts,
+                    "FUNDSPHERE_GOOGLE_ACCOUNTS",
+                    dict,
+                )
+                cfg_missing, cfg_invalid = _validate_google_accounts_config(
+                    parsed_google_accounts,
+                    key_prefix=_GOOGLE_ACCOUNTS_CONFIG_KEY_PREFIX,
+                )
+                missing.extend(cfg_missing)
+                invalid.extend(cfg_invalid)
+            except TenantConfigValidationError:
+                invalid.append(_GOOGLE_ACCOUNTS_CONFIG_KEY_PREFIX)
 
         if missing or invalid:
             raise TenantConfigValidationError(

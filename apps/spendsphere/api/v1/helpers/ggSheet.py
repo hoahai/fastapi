@@ -47,6 +47,7 @@ def _get_sheet_data(
     data = _read_sheet_raw(
         spreadsheet_id=sheet["spreadsheet_id"],
         range_name=sheet["range_name"],
+        app_name="SpendSphere",
     )
     set_google_sheet_cache(name, data, config_hash=config_hash)
     return data

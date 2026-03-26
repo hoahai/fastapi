@@ -90,6 +90,7 @@ def _get_monthly_budget_sheet_rows(
         rows = _read_sheet_raw(
             spreadsheet_id=spreadsheet_id,
             range_name=range_name,
+            app_name="SpendSphere",
         )
     except HttpError as exc:
         if "unable to parse range" not in str(exc).lower():
@@ -542,6 +543,7 @@ def sync_nucar_master_budget_sheet(
     _clear_sheet_values(
         spreadsheet_id=spreadsheet_id,
         range_name=clear_range,
+        app_name="SpendSphere",
     )
 
     if rows:
@@ -552,6 +554,7 @@ def sync_nucar_master_budget_sheet(
             spreadsheet_id=spreadsheet_id,
             range_name=write_range,
             values=values,
+            app_name="SpendSphere",
             value_input_option="USER_ENTERED",
         )
 
