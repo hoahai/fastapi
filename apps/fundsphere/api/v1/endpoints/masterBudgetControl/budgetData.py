@@ -56,6 +56,7 @@ _BUDGET_DATA_HEADER = [
     "commission",
     "netAdjustment",
     "note",
+    "changeNote",
     "changeHistories",
 ]
 _EDITABLE_FIELDS = ("subService", "grossAmount", "commission", "netAdjustment", "note")
@@ -69,6 +70,7 @@ _REQUIRED_UPDATE_COLUMN_KEYS = (
     "commission",
     "netAdjustment",
     "note",
+    "changeNote",
     "accountCode",
     "serviceId",
 )
@@ -287,6 +289,7 @@ def _build_budget_data_values(rows: list[dict]) -> list[list[object]]:
                 _to_sheet_number(row.get("commission"), scale=4),
                 _to_sheet_number(row.get("netAdjustment"), scale=2),
                 str(row.get("note") or "").strip(),
+                "",
                 str(row.get("changeHistories") or "").strip(),
             ]
         )
@@ -571,6 +574,10 @@ def _parse_budget_data_sheet_rows(
             column_indexes["netAdjustment"],
         )
         note_cell = _extract_cell_value(row_values, column_indexes["note"])
+        change_note_cell = _extract_cell_value(
+            row_values,
+            column_indexes["changeNote"],
+        )
         account_code_cell = _extract_cell_value(
             row_values,
             column_indexes["accountCode"],
@@ -602,6 +609,7 @@ def _parse_budget_data_sheet_rows(
         year_value = _coerce_int(year_cell)
         sub_service = str(sub_service_cell or "").strip()
         note = str(note_cell or "").strip()
+        change_note = str(change_note_cell or "").strip()
         account_code = str(account_code_cell or "").strip().upper()
         service_id = str(service_id_cell or "").strip()
 
@@ -615,7 +623,12 @@ def _parse_budget_data_sheet_rows(
                     }
                 )
                 continue
-            delete_items.append({"budgetId": budget_id})
+            delete_items.append(
+                {
+                    "budgetId": budget_id,
+                    "changeNote": change_note,
+                }
+            )
             continue
 
         gross_amount = _parse_decimal_text(
@@ -705,6 +718,7 @@ def _parse_budget_data_sheet_rows(
                     "commission": commission,
                     "netAdjustment": net_adjustment,
                     "note": note,
+                    "changeNote": change_note,
                     "diffs": diffs,
                 }
             )
@@ -768,6 +782,7 @@ def _parse_budget_data_sheet_rows(
                 "commission": commission,
                 "netAdjustment": net_adjustment,
                 "note": note,
+                "changeNote": change_note,
                 "diffs": [
                     {"field": "subService", "oldValue": "", "newValue": sub_service},
                     {"field": "grossAmount", "oldValue": "", "newValue": gross_amount},
@@ -818,7 +833,7 @@ def load_budget_data_route():
     fetch matching budgets from DB, and overwrite the budget-data output range.
 
     Example request:
-        POST /api/fundsphere/v1/budgetData/load
+        POST /api/fundsphere/v1/masterBudgetControl/budgetData/load
         Header: X-Tenant-Id: acme
 
     Example response:
@@ -833,8 +848,8 @@ def load_budget_data_route():
             "sheetName": "0.2 Budget Data",
             "accountSelectionRange": "'0.2 Budget Data'!A2",
             "periodSelectionRange": "'0.2 Budget Data'!A3",
-            "clearRange": "'0.2 Budget Data'!A5:L",
-            "writeRange": "'0.2 Budget Data'!A5:L31",
+            "clearRange": "'0.2 Budget Data'!A5:M",
+            "writeRange": "'0.2 Budget Data'!A5:M31",
             "selectedAccountCodes": ["ACH", "AFS"],
             "selectedPeriods": ["3/2026", "4/2026"],
             "dbRowCount": 26,
@@ -876,7 +891,7 @@ def update_budget_data_route(request: Request):
     then refresh the budget-data sheet using current sheet selections.
 
     Example request:
-        POST /api/fundsphere/v1/budgetData/update
+        POST /api/fundsphere/v1/masterBudgetControl/budgetData/update
         Header: X-Tenant-Id: acme
 
     Example response:
@@ -889,7 +904,7 @@ def update_budget_data_route(request: Request):
           "data": {
             "spreadsheetId": "1IQQ0vPOwB_8ngST0EbnfCUDcMo5T9Kp7ApGHdrSO_6M",
             "sheetName": "0.2 Budget Data",
-            "readRange": "'0.2 Budget Data'!A6:X",
+            "readRange": "'0.2 Budget Data'!A6:Y",
             "scannedRowCount": 22,
             "changedRowCount": 5,
             "createdCandidateRowCount": 2,
@@ -916,11 +931,13 @@ def update_budget_data_route(request: Request):
           DB_TABLES.budgets, and DB_TABLES.changeHistories
         - Reads configured budgetDataUpdateReadRange from budgetDataSheetName
         - Uses budgetDataUpdateColumns mapping to resolve all read columns
+        - Uses `budgetDataUpdateColumns.changeNote` as optional history note text
+          for each update/create/delete row
         - `originalSig` must follow key-value format:
           "subService=...|grossAmount=...|commission=...|netAdjustment=...|note=..."
         - New budget create rows are supported when:
           `budgetId` is empty, `originalSig` is empty, and
-          `accountCode` (col N), `serviceId` (col T), `year`, `month` are provided
+          `accountCode` (col O), `serviceId` (col U), `year`, `month` are provided
         - Existing budget delete rows are supported when:
           `budgetId` is present and `budgetDataUpdateColumns.isDelete` column is true
         - `grossAmount` and `commission` are required on all write rows

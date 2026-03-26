@@ -575,9 +575,9 @@ Documentation rules:
 
 -   Routes live under `/api/fundsphere/v1`.
 -   Current endpoint:
-    - `POST /api/fundsphere/v1/settings/accounts`
+    - `POST /api/fundsphere/v1/masterBudgetControl/settings/accounts`
       (supports optional query `fresh_data=true`)
-    - `POST /api/fundsphere/v1/settings/services`
+    - `POST /api/fundsphere/v1/masterBudgetControl/settings/services`
       (supports optional query `fresh_data=true`)
 -   Tenant sheet config source:
     - `SPREADSHEETS.masterBudgetControl.id`
@@ -592,7 +592,7 @@ Documentation rules:
     - `DB_TABLES.departments`
     - `DB_TABLES.budgets`
     - `DB_TABLES.changeHistories`
-    - `DB_TABLES.services` (required for `/settings/services`)
+    - `DB_TABLES.services` (required for `/masterBudgetControl/settings/services`)
 -   Settings accounts sync behavior:
     - Pulls account rows from `DB_TABLES.accounts`
     - Reads `DB_TABLES.accounts` with cache-first behavior using

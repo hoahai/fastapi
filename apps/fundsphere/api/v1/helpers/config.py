@@ -41,6 +41,7 @@ _REQUIRED_BUDGET_DATA_UPDATE_COLUMNS = (
     "commission",
     "netAdjustment",
     "note",
+    "changeNote",
     "accountCode",
     "serviceId",
 )

@@ -200,15 +200,15 @@ def sync_settings_accounts_route(
     masterBudgetControl settings range in Google Sheets.
 
     Example request:
-        POST /api/fundsphere/v1/settings/accounts
+        POST /api/fundsphere/v1/masterBudgetControl/settings/accounts
         Header: X-Tenant-Id: acme
 
     Example request (fresh DB read):
-        POST /api/fundsphere/v1/settings/accounts?fresh_data=true
+        POST /api/fundsphere/v1/masterBudgetControl/settings/accounts?fresh_data=true
         Header: X-Tenant-Id: acme
 
     Example request (active accounts only):
-        POST /api/fundsphere/v1/settings/accounts?active_only=true
+        POST /api/fundsphere/v1/masterBudgetControl/settings/accounts?active_only=true
         Header: X-Tenant-Id: acme
 
     Example response:
@@ -282,11 +282,11 @@ def sync_settings_services_route(
     configured masterBudgetControl services settings range in Google Sheets.
 
     Example request:
-        POST /api/fundsphere/v1/settings/services
+        POST /api/fundsphere/v1/masterBudgetControl/settings/services
         Header: X-Tenant-Id: acme
 
     Example request (fresh DB read):
-        POST /api/fundsphere/v1/settings/services?fresh_data=true
+        POST /api/fundsphere/v1/masterBudgetControl/settings/services?fresh_data=true
         Header: X-Tenant-Id: acme
 
     Example response:

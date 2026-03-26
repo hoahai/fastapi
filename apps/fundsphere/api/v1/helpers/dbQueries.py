@@ -1637,6 +1637,10 @@ def _get_budget_change_history_summary_map(
         available,
         _BUDGET_CHANGE_HISTORY_CHANGED_BY_CANDIDATES,
     )
+    note_col = _resolve_column_name(
+        available,
+        _BUDGET_CHANGE_HISTORY_NOTE_CANDIDATES,
+    )
     created_at_col = _resolve_column_name(
         available,
         _BUDGET_CHANGE_HISTORY_CREATED_AT_CANDIDATES,
@@ -1667,6 +1671,7 @@ def _get_budget_change_history_summary_map(
     old_data_expr = _quote_identifier(old_data_col)
     new_data_expr = _quote_identifier(new_data_col)
     changed_by_expr = _quote_identifier(changed_by_col)
+    note_expr = _quote_identifier(note_col) if note_col else "NULL"
     created_at_expr = _quote_identifier(created_at_col)
 
     select_parts = [
@@ -1676,6 +1681,7 @@ def _get_budget_change_history_summary_map(
         f"{old_data_expr} AS oldData",
         f"{new_data_expr} AS newData",
         f"{changed_by_expr} AS changedBy",
+        f"{note_expr} AS note",
         f"{created_at_expr} AS dateCreated",
     ]
 
@@ -1743,7 +1749,10 @@ def _get_budget_change_history_summary_map(
             )
 
         date_label = _format_history_date_label(row.get("dateCreated"))
-        line = f"{date_label} {line_body}".strip() if date_label else line_body
+        line = f"{date_label}: {line_body}".strip() if date_label else line_body
+        history_note = str(row.get("note") or "").strip()
+        if history_note:
+            line = f"{line} - {history_note}"
         budget_to_lines.setdefault(budget_id, []).append(line)
 
     summary_map: dict[str, str] = {}
@@ -1921,11 +1930,10 @@ def apply_budget_mutations_with_history(
     now = datetime.utcnow()
     normalized_source_action = str(source_action or "").strip() or "system"
     normalized_changed_by = str(changed_by or "").strip() or normalized_source_action
-    normalized_change_note = (
-        str(change_note).strip()
-        if change_note is not None
-        else normalized_source_action
-    )
+    normalized_change_note: str | None = None
+    if change_note is not None:
+        cleaned_change_note = str(change_note).strip()
+        normalized_change_note = cleaned_change_note or None
 
     def _work(cursor) -> dict[str, object]:
         history_rows: list[tuple] = []
@@ -1940,6 +1948,9 @@ def apply_budget_mutations_with_history(
             budget_id = str(delete.get("budgetId") or "").strip()
             if not budget_id:
                 continue
+            delete_change_note = (
+                str(delete.get("changeNote") or "").strip() or normalized_change_note
+            )
 
             cursor.execute(select_existing_budget_query, (budget_id,))
             existing_row = cursor.fetchone()
@@ -2033,7 +2044,7 @@ def apply_budget_mutations_with_history(
                 "old_data": json.dumps(delete_old_data, ensure_ascii=False),
                 "new_data": None,
                 "changed_by": normalized_changed_by,
-                "note": normalized_change_note,
+                "note": delete_change_note,
             }
             budget_change_history_rows.append(
                 tuple(
@@ -2046,6 +2057,9 @@ def apply_budget_mutations_with_history(
             budget_id = str(change.get("budgetId") or "").strip()
             if not budget_id:
                 continue
+            change_note_value = (
+                str(change.get("changeNote") or "").strip() or normalized_change_note
+            )
 
             sub_service = str(change.get("subService") or "").strip()
             gross_amount = _to_decimal(change.get("grossAmount"), scale=2)
@@ -2138,7 +2152,7 @@ def apply_budget_mutations_with_history(
                 "old_data": json.dumps(old_data_map, ensure_ascii=False),
                 "new_data": json.dumps(new_data_map, ensure_ascii=False),
                 "changed_by": normalized_changed_by,
-                "note": normalized_change_note,
+                "note": change_note_value,
             }
             budget_change_history_rows.append(
                 tuple(
@@ -2155,6 +2169,9 @@ def apply_budget_mutations_with_history(
             service_id = str(create.get("serviceId") or "").strip()
             month_value = int(create.get("month") or 0)
             year_value = int(create.get("year") or 0)
+            create_change_note = (
+                str(create.get("changeNote") or "").strip() or normalized_change_note
+            )
             sub_service = str(create.get("subService") or "").strip()
             gross_amount = _to_decimal(create.get("grossAmount"), scale=2)
             commission = _to_decimal(create.get("commission"), scale=4)
@@ -2304,7 +2321,7 @@ def apply_budget_mutations_with_history(
                 "old_data": json.dumps(create_old_data, ensure_ascii=False),
                 "new_data": json.dumps(create_new_data, ensure_ascii=False),
                 "changed_by": normalized_changed_by,
-                "note": normalized_change_note,
+                "note": create_change_note,
             }
             budget_change_history_rows.append(
                 tuple(
@@ -2398,5 +2415,4 @@ def update_master_budget_control_budget_data(
         deletes=deletes,
         changed_by=changed_by,
         source_action="budgetData.update",
-        change_note="budgetData.update",
     )
