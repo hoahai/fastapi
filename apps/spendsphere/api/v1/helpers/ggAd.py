@@ -1,5 +1,7 @@
 # api/v1/helpers/ggAd.py
 
+import ast
+import json
 import re
 import calendar
 import time
@@ -456,15 +458,67 @@ def _build_channel_type_to_adtype_map(adtypes: dict) -> dict[str, str]:
 # =====================
 
 
+def _parse_google_ads_config(raw_value: str | None) -> dict[str, object]:
+    if raw_value is None or str(raw_value).strip() == "":
+        return {}
+
+    text = str(raw_value).strip()
+    parsers = (json.loads, ast.literal_eval)
+    for parser in parsers:
+        try:
+            parsed = parser(text)
+        except (TypeError, ValueError, SyntaxError, json.JSONDecodeError):
+            continue
+        if isinstance(parsed, dict):
+            return parsed
+    return {}
+
+
+def _get_google_ads_nested_config() -> dict[str, object]:
+    parsed = _parse_google_ads_config(get_env("SPENDSPHERE_GOOGLE_ADS"))
+    if parsed:
+        return parsed
+    return {}
+
+
+def _get_google_ads_setting(
+    nested_config: dict[str, object],
+    *keys: str,
+) -> str | None:
+    for key in keys:
+        nested = nested_config.get(key)
+        if nested is not None and str(nested).strip() != "":
+            return str(nested).strip()
+
+    return None
+
+
 def get_client() -> GoogleAdsClient:
     """
     Create and return a Google Ads client using tenant config.
     """
-    developer_token = get_env("developer_token")
-    login_customer_id = get_env("login_customer_id")
-    json_key_file_path = get_env("json_key_file_path")
-    google_app_creds = get_env("GOOGLE_APPLICATION_CREDENTIALS")
-    use_proto_plus = get_env("use_proto_plus", "true")
+    nested_google_ads_config = _get_google_ads_nested_config()
+    developer_token = _get_google_ads_setting(
+        nested_google_ads_config,
+        "developer_token",
+    )
+    login_customer_id = _get_google_ads_setting(
+        nested_google_ads_config,
+        "login_customer_id",
+    )
+    json_key_file_path = _get_google_ads_setting(
+        nested_google_ads_config,
+        "json_key_file_path",
+    )
+    google_app_creds = _get_google_ads_setting(
+        nested_google_ads_config,
+        "GOOGLE_APPLICATION_CREDENTIALS",
+        "google_application_credentials",
+    )
+    use_proto_plus = _get_google_ads_setting(
+        nested_google_ads_config,
+        "use_proto_plus",
+    ) or "true"
 
     missing: list[str] = []
     if not developer_token:

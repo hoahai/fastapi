@@ -24,6 +24,8 @@ _REQUIRED_DB_TABLE_KEYS = {
 _GOOGLE_ADS_NAMING_SECTIONS = ("account", "campaign")
 _GOOGLE_ADS_ACCOUNT_OVERRIDE_SCOPES = ("byId", "byName")
 _DEFAULT_GOOGLE_ADS_INACTIVE_PREFIXES = ("zzz.",)
+_GOOGLE_ADS_CONFIG_KEY_PREFIX = "spendsphere.google_ads"
+
 
 def _require_env_value(key: str) -> str:
     raw = get_env(key)
@@ -76,6 +78,10 @@ def _get_spreadsheets_raw() -> str | None:
         or get_env("SPREADSHEETS")
         or get_env("spreadsheets")
     )
+
+
+def _get_google_ads_raw() -> str | None:
+    return get_app_scoped_env(APP_NAME, "GOOGLE_ADS")
 
 
 def _to_bool(value: object) -> bool | None:
@@ -340,6 +346,51 @@ def _should_require_custom_spreadsheets() -> bool:
     return _to_bool(normalized.get("budget_managements")) is True
 
 
+def _validate_google_ads_client_config(
+    parsed: dict,
+    *,
+    key_prefix: str,
+) -> tuple[list[str], list[str]]:
+    missing: list[str] = []
+    invalid: list[str] = []
+
+    normalized = {str(k).strip().lower(): v for k, v in parsed.items()}
+
+    developer_token = normalized.get("developer_token")
+    if developer_token is None:
+        missing.append(f"{key_prefix}.developer_token")
+    elif not isinstance(developer_token, str) or not developer_token.strip():
+        invalid.append(f"{key_prefix}.developer_token")
+
+    login_customer_id = normalized.get("login_customer_id")
+    if login_customer_id is None:
+        missing.append(f"{key_prefix}.login_customer_id")
+    elif not isinstance(login_customer_id, str) or not login_customer_id.strip():
+        invalid.append(f"{key_prefix}.login_customer_id")
+
+    json_key_file_path = normalized.get("json_key_file_path")
+    google_app_creds = normalized.get("google_application_credentials")
+    has_json_key_file_path = (
+        isinstance(json_key_file_path, str) and bool(json_key_file_path.strip())
+    )
+    has_google_app_creds = (
+        isinstance(google_app_creds, str) and bool(google_app_creds.strip())
+    )
+    if not has_json_key_file_path and not has_google_app_creds:
+        missing.append(
+            f"{key_prefix}.json_key_file_path|GOOGLE_APPLICATION_CREDENTIALS"
+        )
+    if json_key_file_path is not None and not has_json_key_file_path:
+        invalid.append(f"{key_prefix}.json_key_file_path")
+    if google_app_creds is not None and not has_google_app_creds:
+        invalid.append(f"{key_prefix}.GOOGLE_APPLICATION_CREDENTIALS")
+
+    if "use_proto_plus" in normalized and _to_bool(normalized.get("use_proto_plus")) is None:
+        invalid.append(f"{key_prefix}.use_proto_plus")
+
+    return missing, invalid
+
+
 def _parse_spendsphere_sheets(
     parsed: dict,
     *,
@@ -550,6 +601,24 @@ def validate_tenant_config(tenant_id: str | None = None) -> None:
                 missing.extend(exc.missing)
                 invalid.extend(exc.invalid)
 
+        def _check_google_ads_client_config() -> None:
+            raw = _get_google_ads_raw()
+            if raw is None or str(raw).strip() == "":
+                missing.append(_GOOGLE_ADS_CONFIG_KEY_PREFIX)
+                return
+            try:
+                parsed = _parse_raw_value(raw, "SPENDSPHERE_GOOGLE_ADS", dict)
+            except TenantConfigValidationError:
+                invalid.append(_GOOGLE_ADS_CONFIG_KEY_PREFIX)
+                return
+
+            cfg_missing, cfg_invalid = _validate_google_ads_client_config(
+                parsed,
+                key_prefix=_GOOGLE_ADS_CONFIG_KEY_PREFIX,
+            )
+            missing.extend(cfg_missing)
+            invalid.extend(cfg_invalid)
+
         def _check_budget_warning_threshold() -> None:
             raw = get_env("BUDGET_WARNING_THRESHOLD")
             if raw is None or str(raw).strip() == "":
@@ -570,6 +639,7 @@ def validate_tenant_config(tenant_id: str | None = None) -> None:
         _check_db_tables()
         _check_spreadsheets(require_custom_sheets=require_custom_sheets)
         _check_google_ads_naming()
+        _check_google_ads_client_config()
         _check_budget_warning_threshold()
 
         if missing or invalid:
