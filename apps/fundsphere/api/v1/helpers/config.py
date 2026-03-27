@@ -191,9 +191,16 @@ def _parse_fundsphere_sheet_settings(
     require_services_range: bool = False,
     require_budget_data: bool = False,
     require_budget_data_update: bool = False,
+    require_net_spend: bool = False,
 ) -> tuple[dict[str, object], list[str], list[str]]:
     missing: list[str] = []
     invalid: list[str] = []
+    require_master_budget_control = (
+        require_accounts_range
+        or require_services_range
+        or require_budget_data
+        or require_budget_data_update
+    )
 
     normalized = {str(k).strip().lower(): v for k, v in parsed.items()}
     master_budget_control_entry = _normalize_entry(
@@ -210,8 +217,10 @@ def _parse_fundsphere_sheet_settings(
         )
 
     if not master_budget_control_entry:
-        missing.append(f"{key_prefix}.masterBudgetControl")
-        return {}, missing, invalid
+        if require_master_budget_control:
+            missing.append(f"{key_prefix}.masterBudgetControl")
+            return {}, missing, invalid
+        master_budget_control_entry = {}
 
     spreadsheet_id = str(master_budget_control_entry.get("id", "")).strip()
     sheet_name = str(
@@ -249,98 +258,143 @@ def _parse_fundsphere_sheet_settings(
     budget_data_update_columns = master_budget_control_entry.get(
         "budgetdataupdatecolumns"
     )
-
-    if not spreadsheet_id:
-        missing.append(f"{key_prefix}.masterBudgetControl.id")
-    elif not _is_valid_spreadsheet_id(spreadsheet_id):
-        invalid.append(f"{key_prefix}.masterBudgetControl.id")
-
-    if not sheet_name and (require_accounts_range or require_services_range):
-        missing.append(f"{key_prefix}.masterBudgetControl.settingsSheetName")
-
-    if require_accounts_range:
-        if not accounts_range:
-            missing.append(f"{key_prefix}.masterBudgetControl.settingAccountsRange")
-        elif not _SETTINGS_RANGE_RE.fullmatch(accounts_range):
-            invalid.append(f"{key_prefix}.masterBudgetControl.settingAccountsRange")
-
-    if require_services_range:
-        if not services_range:
-            missing.append(f"{key_prefix}.masterBudgetControl.settingServicesRange")
-        elif not _SETTINGS_RANGE_RE.fullmatch(services_range):
-            invalid.append(f"{key_prefix}.masterBudgetControl.settingServicesRange")
-
-    if require_budget_data:
-        if not budget_data_sheet_name:
-            missing.append(f"{key_prefix}.masterBudgetControl.budgetDataSheetName")
-        if not budget_data_account_selection_range:
-            missing.append(
-                f"{key_prefix}.masterBudgetControl.budgetDataAccountSelectionRange"
-            )
-        elif not _CELL_RANGE_RE.fullmatch(budget_data_account_selection_range):
-            invalid.append(
-                f"{key_prefix}.masterBudgetControl.budgetDataAccountSelectionRange"
-            )
-        if not budget_data_period_selection_range:
-            missing.append(
-                f"{key_prefix}.masterBudgetControl.budgetDataPeriodSelectionRange"
-            )
-        elif not _CELL_RANGE_RE.fullmatch(budget_data_period_selection_range):
-            invalid.append(
-                f"{key_prefix}.masterBudgetControl.budgetDataPeriodSelectionRange"
-            )
-        if not budget_data_output_range:
-            missing.append(f"{key_prefix}.masterBudgetControl.budgetDataOutputRange")
-        elif not _SETTINGS_RANGE_RE.fullmatch(budget_data_output_range):
-            invalid.append(f"{key_prefix}.masterBudgetControl.budgetDataOutputRange")
-
-    parsed_budget_data_update_columns: dict[str, str] = {}
-    if require_budget_data_update:
-        if not budget_data_sheet_name:
-            missing.append(f"{key_prefix}.masterBudgetControl.budgetDataSheetName")
-        if not budget_data_update_read_range:
-            missing.append(
-                f"{key_prefix}.masterBudgetControl.budgetDataUpdateReadRange"
-            )
-        elif not _SETTINGS_RANGE_RE.fullmatch(budget_data_update_read_range):
-            invalid.append(
-                f"{key_prefix}.masterBudgetControl.budgetDataUpdateReadRange"
-            )
-
-        parsed_budget_data_update_columns = _parse_budget_data_update_columns(
-            budget_data_update_columns,
-            key_prefix=f"{key_prefix}.masterBudgetControl",
-            missing=missing,
+    net_spend_entry = _normalize_entry(
+        normalized.get("netspend"),
+        key_name=f"{key_prefix}.netSpend",
+        invalid=invalid,
+    )
+    if not net_spend_entry:
+        net_spend_entry = _normalize_entry(
+            master_budget_control_entry.get("netspend"),
+            key_name=f"{key_prefix}.masterBudgetControl.netSpend",
             invalid=invalid,
         )
+    net_spend_spreadsheet_id = str(net_spend_entry.get("id") or "").strip()
+    net_spend_sheet_name = str(net_spend_entry.get("budgetdatasheetname") or "").strip()
+    net_spend_data_range = str(net_spend_entry.get("budgetdataoutputrange") or "").strip()
+    net_spend_sync_options_entry = _normalize_entry(
+        normalized.get("netspendsyncoptions"),
+        key_name=f"{key_prefix}.netSpendSyncOptions",
+        invalid=invalid,
+    )
+    net_spend_period = str(net_spend_sync_options_entry.get("period") or "").strip()
+
+    parsed_budget_data_update_columns: dict[str, str] = {}
+    if require_master_budget_control:
+        if not spreadsheet_id:
+            missing.append(f"{key_prefix}.masterBudgetControl.id")
+        elif not _is_valid_spreadsheet_id(spreadsheet_id):
+            invalid.append(f"{key_prefix}.masterBudgetControl.id")
+
+        if not sheet_name and (require_accounts_range or require_services_range):
+            missing.append(f"{key_prefix}.masterBudgetControl.settingsSheetName")
+
+        if require_accounts_range:
+            if not accounts_range:
+                missing.append(f"{key_prefix}.masterBudgetControl.settingAccountsRange")
+            elif not _SETTINGS_RANGE_RE.fullmatch(accounts_range):
+                invalid.append(f"{key_prefix}.masterBudgetControl.settingAccountsRange")
+
+        if require_services_range:
+            if not services_range:
+                missing.append(f"{key_prefix}.masterBudgetControl.settingServicesRange")
+            elif not _SETTINGS_RANGE_RE.fullmatch(services_range):
+                invalid.append(f"{key_prefix}.masterBudgetControl.settingServicesRange")
+
+        if require_budget_data:
+            if not budget_data_sheet_name:
+                missing.append(f"{key_prefix}.masterBudgetControl.budgetDataSheetName")
+            if not budget_data_account_selection_range:
+                missing.append(
+                    f"{key_prefix}.masterBudgetControl.budgetDataAccountSelectionRange"
+                )
+            elif not _CELL_RANGE_RE.fullmatch(budget_data_account_selection_range):
+                invalid.append(
+                    f"{key_prefix}.masterBudgetControl.budgetDataAccountSelectionRange"
+                )
+            if not budget_data_period_selection_range:
+                missing.append(
+                    f"{key_prefix}.masterBudgetControl.budgetDataPeriodSelectionRange"
+                )
+            elif not _CELL_RANGE_RE.fullmatch(budget_data_period_selection_range):
+                invalid.append(
+                    f"{key_prefix}.masterBudgetControl.budgetDataPeriodSelectionRange"
+                )
+            if not budget_data_output_range:
+                missing.append(f"{key_prefix}.masterBudgetControl.budgetDataOutputRange")
+            elif not _SETTINGS_RANGE_RE.fullmatch(budget_data_output_range):
+                invalid.append(f"{key_prefix}.masterBudgetControl.budgetDataOutputRange")
+
+        if require_budget_data_update:
+            if not budget_data_sheet_name:
+                missing.append(f"{key_prefix}.masterBudgetControl.budgetDataSheetName")
+            if not budget_data_update_read_range:
+                missing.append(
+                    f"{key_prefix}.masterBudgetControl.budgetDataUpdateReadRange"
+                )
+            elif not _SETTINGS_RANGE_RE.fullmatch(budget_data_update_read_range):
+                invalid.append(
+                    f"{key_prefix}.masterBudgetControl.budgetDataUpdateReadRange"
+                )
+
+            parsed_budget_data_update_columns = _parse_budget_data_update_columns(
+                budget_data_update_columns,
+                key_prefix=f"{key_prefix}.masterBudgetControl",
+                missing=missing,
+                invalid=invalid,
+            )
+
+    if require_net_spend and not net_spend_entry:
+        missing.append(f"{key_prefix}.netSpend")
+    if require_net_spend or net_spend_entry:
+        if not net_spend_spreadsheet_id:
+            missing.append(f"{key_prefix}.netSpend.id")
+        elif not _is_valid_spreadsheet_id(net_spend_spreadsheet_id):
+            invalid.append(f"{key_prefix}.netSpend.id")
+
+        if not net_spend_sheet_name:
+            missing.append(f"{key_prefix}.netSpend.budgetDataSheetName")
+
+        if not net_spend_data_range:
+            missing.append(f"{key_prefix}.netSpend.budgetDataOutputRange")
+        elif not _SETTINGS_RANGE_RE.fullmatch(net_spend_data_range):
+            invalid.append(f"{key_prefix}.netSpend.budgetDataOutputRange")
 
     if missing or invalid:
         return {}, missing, invalid
 
-    settings: dict[str, object] = {
-        "spreadsheet_id": spreadsheet_id,
-        "sheet_name": sheet_name,
-    }
-    if accounts_range:
-        settings["accounts_range"] = accounts_range
-    if services_range:
-        settings["services_range"] = services_range
-    if budget_data_sheet_name:
-        settings["budget_data_sheet_name"] = budget_data_sheet_name
-    if budget_data_account_selection_range:
-        settings["budget_data_account_selection_range"] = (
-            budget_data_account_selection_range
-        )
-    if budget_data_period_selection_range:
-        settings["budget_data_period_selection_range"] = (
-            budget_data_period_selection_range
-        )
-    if budget_data_output_range:
-        settings["budget_data_output_range"] = budget_data_output_range
-    if budget_data_update_read_range:
-        settings["budget_data_update_read_range"] = budget_data_update_read_range
-    if parsed_budget_data_update_columns:
-        settings["budget_data_update_columns"] = parsed_budget_data_update_columns
+    settings: dict[str, object] = {}
+    if require_master_budget_control:
+        settings["spreadsheet_id"] = spreadsheet_id
+        settings["sheet_name"] = sheet_name
+        if accounts_range:
+            settings["accounts_range"] = accounts_range
+        if services_range:
+            settings["services_range"] = services_range
+        if budget_data_sheet_name:
+            settings["budget_data_sheet_name"] = budget_data_sheet_name
+        if budget_data_account_selection_range:
+            settings["budget_data_account_selection_range"] = (
+                budget_data_account_selection_range
+            )
+        if budget_data_period_selection_range:
+            settings["budget_data_period_selection_range"] = (
+                budget_data_period_selection_range
+            )
+        if budget_data_output_range:
+            settings["budget_data_output_range"] = budget_data_output_range
+        if budget_data_update_read_range:
+            settings["budget_data_update_read_range"] = budget_data_update_read_range
+        if parsed_budget_data_update_columns:
+            settings["budget_data_update_columns"] = parsed_budget_data_update_columns
+    if net_spend_spreadsheet_id:
+        settings["net_spend_spreadsheet_id"] = net_spend_spreadsheet_id
+    if net_spend_sheet_name:
+        settings["net_spend_sheet_name"] = net_spend_sheet_name
+    if net_spend_data_range:
+        settings["net_spend_data_range"] = net_spend_data_range
+    if net_spend_sync_options_entry:
+        settings["net_spend_period"] = net_spend_period
     return settings, missing, invalid
 
 
@@ -355,6 +409,7 @@ def _get_fundsphere_sheet_settings(
     require_services_range: bool = False,
     require_budget_data: bool = False,
     require_budget_data_update: bool = False,
+    require_net_spend: bool = False,
 ) -> dict[str, object]:
     raw = _get_spreadsheets_raw()
     if raw is None or str(raw).strip() == "":
@@ -368,6 +423,7 @@ def _get_fundsphere_sheet_settings(
         require_services_range=require_services_range,
         require_budget_data=require_budget_data,
         require_budget_data_update=require_budget_data_update,
+        require_net_spend=require_net_spend,
     )
     if missing or invalid:
         raise TenantConfigValidationError(
@@ -401,6 +457,13 @@ def get_fundsphere_budget_data_update_settings() -> dict[str, object]:
     return _get_fundsphere_sheet_settings(
         require_accounts_range=False,
         require_budget_data_update=True,
+    )
+
+
+def get_fundsphere_net_spend_settings() -> dict[str, object]:
+    return _get_fundsphere_sheet_settings(
+        require_accounts_range=False,
+        require_net_spend=True,
     )
 
 

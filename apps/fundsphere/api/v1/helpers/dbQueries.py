@@ -291,6 +291,10 @@ def _resolve_budget_data_columns(
         department_columns,
         _DEPARTMENT_CODE_CANDIDATES,
     )
+    department_name_col = _resolve_column_name(
+        department_columns,
+        _DEPARTMENT_NAME_CANDIDATES,
+    )
     department_listing_order_col = _resolve_column_name(
         department_columns,
         _DEPARTMENT_LISTING_ORDER_CANDIDATES,
@@ -337,6 +341,8 @@ def _resolve_budget_data_columns(
         missing.append("services.departmentCode")
     if not department_code_col:
         missing.append("departments.code")
+    if not department_name_col:
+        missing.append("departments.departmentName")
     if not department_listing_order_col:
         missing.append("departments.depListingOrder")
     if not budget_id_col:
@@ -371,6 +377,7 @@ def _resolve_budget_data_columns(
         "service_name_col": service_name_col or "",
         "service_department_code_col": service_department_code_col or "",
         "department_code_col": department_code_col or "",
+        "department_name_col": department_name_col or "",
         "department_listing_order_col": department_listing_order_col or "",
         "budget_id_col": budget_id_col or "",
         "budget_account_code_col": budget_account_code_col or "",
@@ -1006,6 +1013,104 @@ def get_master_budget_control_budget_data(
     return combined_rows
 
 
+def get_master_budget_control_net_spend_data(
+    *,
+    month: int,
+    year: int,
+) -> list[dict]:
+    tables = get_db_tables(require_services=True)
+    accounts_table = tables["ACCOUNTS"]
+    budgets_table = tables["BUDGETS"]
+    services_table = tables["SERVICES"]
+    departments_table = tables["DEPARTMENTS"]
+
+    columns = _resolve_budget_data_columns(
+        accounts_table=accounts_table,
+        budgets_table=budgets_table,
+        services_table=services_table,
+        departments_table=departments_table,
+    )
+    quoted_accounts_table = _quote_table_name(accounts_table)
+    quoted_budgets_table = _quote_table_name(budgets_table)
+    quoted_services_table = _quote_table_name(services_table)
+    quoted_departments_table = _quote_table_name(departments_table)
+
+    account_code_expr = _quote_identifier(columns["account_code_col"])
+    account_name_expr = _quote_identifier(columns["account_name_col"])
+    service_id_expr = _quote_identifier(columns["service_id_col"])
+    service_name_expr = _quote_identifier(columns["service_name_col"])
+    service_department_code_expr = _quote_identifier(columns["service_department_code_col"])
+    department_code_expr = _quote_identifier(columns["department_code_col"])
+    department_name_expr = _quote_identifier(columns["department_name_col"])
+    budget_account_code_expr = _quote_identifier(columns["budget_account_code_col"])
+    budget_id_expr = _quote_identifier(columns["budget_id_col"])
+    budget_service_id_expr = _quote_identifier(columns["budget_service_id_col"])
+    budget_month_expr = _quote_identifier(columns["budget_month_col"])
+    budget_year_expr = _quote_identifier(columns["budget_year_col"])
+    budget_sub_service_expr = _quote_identifier(columns["budget_sub_service_col"])
+    budget_gross_amount_expr = _quote_identifier(columns["budget_gross_amount_col"])
+    budget_commission_expr = _quote_identifier(columns["budget_commission_col"])
+    budget_net_adjustment_expr = _quote_identifier(columns["budget_net_adjustment_col"])
+
+    account_columns = _load_table_columns(accounts_table)
+    service_columns = _load_table_columns(services_table)
+    account_active_col = _resolve_column_name(account_columns, _ACTIVE_CANDIDATES)
+    service_active_col = _resolve_column_name(service_columns, _ACTIVE_CANDIDATES)
+
+    account_active_join = (
+        f" AND a.{_quote_identifier(account_active_col)} = 1"
+        if account_active_col
+        else ""
+    )
+    service_active_where = (
+        f" AND s.{_quote_identifier(service_active_col)} = 1"
+        if service_active_col
+        else ""
+    )
+
+    query = (
+        "SELECT "
+        "nb.accountCode AS accountCode, "
+        "nb.accountName AS accountName, "
+        f"s.{service_id_expr} AS serviceId, "
+        f"s.{service_name_expr} AS serviceName, "
+        "nb.subService AS subService, "
+        f"d.{department_name_expr} AS departmentName, "
+        "COALESCE(nb.budgetId, '') AS budgetId, "
+        "COALESCE(nb.grossAmount, 0) AS grossAmount, "
+        "COALESCE(nb.commission, 0) AS commission, "
+        "COALESCE(nb.netAdjustment, 0) AS netAdjustment, "
+        "%s AS month, "
+        "%s AS year "
+        f"FROM {quoted_services_table} s "
+        f"INNER JOIN {quoted_departments_table} d "
+        f"ON s.{service_department_code_expr} = d.{department_code_expr} "
+        "LEFT JOIN ("
+        "SELECT "
+        f"b.{budget_service_id_expr} AS serviceId, "
+        f"a.{account_code_expr} AS accountCode, "
+        f"a.{account_name_expr} AS accountName, "
+        f"b.{budget_sub_service_expr} AS subService, "
+        f"COALESCE(b.{budget_id_expr}, '') AS budgetId, "
+        f"COALESCE(b.{budget_gross_amount_expr}, 0) AS grossAmount, "
+        f"COALESCE(b.{budget_commission_expr}, 0) AS commission, "
+        f"COALESCE(b.{budget_net_adjustment_expr}, 0) AS netAdjustment "
+        f"FROM {quoted_budgets_table} b "
+        f"LEFT JOIN {quoted_accounts_table} a "
+        f"ON b.{budget_account_code_expr} = a.{account_code_expr}"
+        f"{account_active_join} "
+        f"WHERE b.{budget_month_expr} = %s "
+        f"AND b.{budget_year_expr} = %s"
+        ") nb "
+        f"ON nb.serviceId = s.{service_id_expr} "
+        f"WHERE d.{department_code_expr} IN ('DIGM', 'SOCM', 'SEO')"
+        f"{service_active_where} "
+        "ORDER BY accountCode ASC, departmentName ASC, serviceName ASC"
+    )
+
+    return fetch_all(query, (month, year, month, year))
+
+
 def validate_master_budget_control_budget_refs(
     *,
     budget_ids: list[str],
@@ -1015,6 +1120,7 @@ def validate_master_budget_control_budget_refs(
     tables = get_db_tables(require_services=True)
     accounts_table = tables["ACCOUNTS"]
     services_table = tables["SERVICES"]
+    departments_table = tables["DEPARTMENTS"]
     budgets_table = tables["BUDGETS"]
 
     missing_budget_ids: list[str] = []
@@ -1045,49 +1151,87 @@ def validate_master_budget_control_budget_refs(
                 missing_budget_ids.append(budget_id)
 
     if account_codes:
-        account_code_col, _account_name_col, _active_col = _resolve_accounts_columns(
-            accounts_table
+        existing_account_codes: set[str] = set()
+        account_cache_ttl_seconds = get_shared_cache_ttl_seconds(
+            key="db_accounts_ttl_time",
+            default_seconds=_DEFAULT_DB_READ_CACHE_TTL_SECONDS,
+            app_name=_APP_NAME,
         )
-        quoted_accounts_table = _quote_table_name(accounts_table)
-        account_code_expr = _quote_identifier(account_code_col)
-        placeholders = ", ".join(["%s"] * len(account_codes))
-        rows = fetch_all(
-            (
-                "SELECT "
-                f"{account_code_expr} AS accountCode "
-                f"FROM {quoted_accounts_table} "
-                f"WHERE {account_code_expr} IN ({placeholders})"
-            ),
-            tuple(account_codes),
+        account_cache_key = _build_accounts_cache_key(accounts_table)
+        cached_account_rows, account_cache_hit = get_tenant_shared_cache_value(
+            bucket=_SHARED_DB_READ_CACHE_BUCKET,
+            cache_key=account_cache_key,
+            ttl_seconds=account_cache_ttl_seconds,
         )
-        existing_account_codes = {
-            str(row.get("accountCode") or "").strip().upper()
-            for row in rows
-            if str(row.get("accountCode") or "").strip()
-        }
+        if account_cache_hit and _is_valid_cached_rows(cached_account_rows):
+            for row in cached_account_rows:
+                account_code = str(row.get("accountCode") or "").strip().upper()
+                if account_code:
+                    existing_account_codes.add(account_code)
+        else:
+            account_code_col, _account_name_col, _active_col = _resolve_accounts_columns(
+                accounts_table
+            )
+            quoted_accounts_table = _quote_table_name(accounts_table)
+            account_code_expr = _quote_identifier(account_code_col)
+            placeholders = ", ".join(["%s"] * len(account_codes))
+            rows = fetch_all(
+                (
+                    "SELECT "
+                    f"{account_code_expr} AS accountCode "
+                    f"FROM {quoted_accounts_table} "
+                    f"WHERE {account_code_expr} IN ({placeholders})"
+                ),
+                tuple(account_codes),
+            )
+            existing_account_codes = {
+                str(row.get("accountCode") or "").strip().upper()
+                for row in rows
+                if str(row.get("accountCode") or "").strip()
+            }
+
         for account_code in account_codes:
             if account_code.upper() not in existing_account_codes:
                 invalid_account_codes.append(account_code)
 
     if service_ids:
-        service_id_col, _service_name_col = _resolve_service_identity_columns(services_table)
-        quoted_services_table = _quote_table_name(services_table)
-        service_id_expr = _quote_identifier(service_id_col)
-        placeholders = ", ".join(["%s"] * len(service_ids))
-        rows = fetch_all(
-            (
-                "SELECT "
-                f"{service_id_expr} AS serviceId "
-                f"FROM {quoted_services_table} "
-                f"WHERE {service_id_expr} IN ({placeholders})"
-            ),
-            tuple(service_ids),
+        existing_service_ids: set[str] = set()
+        services_cache_ttl_seconds = get_shared_cache_ttl_seconds(
+            key="db_services_ttl_time",
+            default_seconds=_DEFAULT_DB_READ_CACHE_TTL_SECONDS,
+            app_name=_APP_NAME,
         )
-        existing_service_ids = {
-            str(row.get("serviceId") or "").strip()
-            for row in rows
-            if str(row.get("serviceId") or "").strip()
-        }
+        services_cache_key = _build_services_cache_key(services_table, departments_table)
+        cached_service_rows, services_cache_hit = get_tenant_shared_cache_value(
+            bucket=_SHARED_DB_READ_CACHE_BUCKET,
+            cache_key=services_cache_key,
+            ttl_seconds=services_cache_ttl_seconds,
+        )
+        if services_cache_hit and _is_valid_cached_rows(cached_service_rows):
+            for row in cached_service_rows:
+                service_id = str(row.get("serviceId") or "").strip()
+                if service_id:
+                    existing_service_ids.add(service_id)
+        else:
+            service_id_col, _service_name_col = _resolve_service_identity_columns(services_table)
+            quoted_services_table = _quote_table_name(services_table)
+            service_id_expr = _quote_identifier(service_id_col)
+            placeholders = ", ".join(["%s"] * len(service_ids))
+            rows = fetch_all(
+                (
+                    "SELECT "
+                    f"{service_id_expr} AS serviceId "
+                    f"FROM {quoted_services_table} "
+                    f"WHERE {service_id_expr} IN ({placeholders})"
+                ),
+                tuple(service_ids),
+            )
+            existing_service_ids = {
+                str(row.get("serviceId") or "").strip()
+                for row in rows
+                if str(row.get("serviceId") or "").strip()
+            }
+
         for service_id in service_ids:
             if service_id not in existing_service_ids:
                 invalid_service_ids.append(service_id)

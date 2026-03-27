@@ -5,7 +5,7 @@ from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import re
 from zoneinfo import ZoneInfo
 
-from fastapi import APIRouter, HTTPException, Request
+from fastapi import APIRouter, HTTPException, Query, Request
 
 from apps.fundsphere.api.v1.helpers.config import (
     get_fundsphere_budget_data_sheet_settings,
@@ -486,6 +486,16 @@ def _parse_decimal_text(
         default_quantized = default_dec_value.quantize(precision, rounding=ROUND_HALF_UP)
         return f"{default_quantized:.{scale}f}"
 
+    if isinstance(value, str):
+        errors.append(
+            {
+                "row": row_number,
+                "field": field_name,
+                "message": f"{field_name} must be a number, not text",
+            }
+        )
+        return None
+
     normalized = cleaned.replace(",", "")
     try:
         dec_value = Decimal(normalized)
@@ -654,7 +664,22 @@ def _parse_budget_data_sheet_rows(
             required=False,
             default_if_blank="0",
         )
-        if gross_amount is None or commission is None or net_adjustment is None:
+        note_has_pipe = "|" in note
+        if note_has_pipe:
+            errors.append(
+                {
+                    "row": row_number,
+                    "field": "note",
+                    "message": "note must not contain |",
+                }
+            )
+
+        if (
+            gross_amount is None
+            or commission is None
+            or net_adjustment is None
+            or note_has_pipe
+        ):
             continue
 
         if budget_id:
@@ -827,13 +852,22 @@ def _build_row_error_messages(errors: list[dict[str, object]]) -> list[str]:
 
 
 @router.post("/load", summary="Load FundSphere budget data from DB to sheet")
-def load_budget_data_route():
+def load_budget_data_route(
+    fresh_data: bool = Query(
+        False,
+        description="When true, bypass shared cache and pull fresh DB rows before writing sheet.",
+    ),
+):
     """
     Read selected account codes and periods from the configured budget-data sheet,
     fetch matching budgets from DB, and overwrite the budget-data output range.
 
     Example request:
         POST /api/fundsphere/v1/masterBudgetControl/budgetData/load
+        Header: X-Tenant-Id: acme
+
+    Example request (fresh DB read):
+        POST /api/fundsphere/v1/masterBudgetControl/budgetData/load?fresh_data=true
         Header: X-Tenant-Id: acme
 
     Example response:
@@ -873,13 +907,14 @@ def load_budget_data_route():
           "Atzenhoffer Chevrolet (ACH), Academy Ford Sales (AFS)"
         - Uses cache-first DB read for selected account/period budget data
           (TTL from `fundsphere.CACHE.db_budget_data_ttl_time`, fallback 300s)
+        - Set fresh_data=true to bypass cache and refresh from DB
         - Period selection cell accepts comma-separated M/YYYY or MM/YYYY values,
           for example "3/2026, 4/2026"
         - When period selection cell is empty, all months (1..12) of current tenant year are used
     """
     return _load_budget_data_to_sheet(
         sheet_settings=get_fundsphere_budget_data_sheet_settings(),
-        refresh_budget_data=False,
+        refresh_budget_data=fresh_data,
     )
 
 
@@ -941,7 +976,9 @@ def update_budget_data_route(request: Request):
         - Existing budget delete rows are supported when:
           `budgetId` is present and `budgetDataUpdateColumns.isDelete` column is true
         - `grossAmount` and `commission` are required on all write rows
+        - `grossAmount`, `commission`, and `netAdjustment` must be numeric cells (not text)
         - `netAdjustment` is editable; blank values default to `0`
+        - `note` must not contain `|` (pipe) character
         - If budgetDataUpdateColumns.isRowChanged is configured, only flagged rows are processed
         - Validates duplicate keys for `accountCode + month + year + serviceId + subService`
           across request rows and existing budgets before write
