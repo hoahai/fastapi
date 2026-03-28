@@ -192,6 +192,7 @@ def _parse_fundsphere_sheet_settings(
     require_budget_data: bool = False,
     require_budget_data_update: bool = False,
     require_net_spend: bool = False,
+    require_master_budget_sheet: bool = False,
 ) -> tuple[dict[str, object], list[str], list[str]]:
     missing: list[str] = []
     invalid: list[str] = []
@@ -200,6 +201,7 @@ def _parse_fundsphere_sheet_settings(
         or require_services_range
         or require_budget_data
         or require_budget_data_update
+        or require_master_budget_sheet
     )
 
     normalized = {str(k).strip().lower(): v for k, v in parsed.items()}
@@ -278,6 +280,45 @@ def _parse_fundsphere_sheet_settings(
         invalid=invalid,
     )
     net_spend_period = str(net_spend_sync_options_entry.get("period") or "").strip()
+    master_budget_entry = _normalize_entry(
+        normalized.get("masterbudget"),
+        key_name=f"{key_prefix}.masterBudget",
+        invalid=invalid,
+    )
+    master_budget_sheet_name = str(master_budget_entry.get("budgetdatasheetname") or "").strip()
+    master_budget_data_range = str(master_budget_entry.get("budgetdataoutputrange") or "").strip()
+    master_budget_sync_options_entry = _normalize_entry(
+        master_budget_control_entry.get("masterbudgetsyncoptions"),
+        key_name=f"{key_prefix}.masterBudgetControl.masterBudgetSyncOptions",
+        invalid=invalid,
+    )
+    master_budget_sync_account_codes = str(
+        master_budget_sync_options_entry.get("accountcodes") or ""
+    ).strip()
+    raw_master_budget_sync_account_code_limit = master_budget_sync_options_entry.get(
+        "accountcodelmit"
+    )
+    master_budget_sync_account_code_limit = 10
+    if raw_master_budget_sync_account_code_limit not in (None, ""):
+        try:
+            master_budget_sync_account_code_limit = int(
+                str(raw_master_budget_sync_account_code_limit).strip()
+            )
+        except (TypeError, ValueError):
+            invalid.append(
+                f"{key_prefix}.masterBudgetControl.masterBudgetSyncOptions.accountCodeLmit"
+            )
+            master_budget_sync_account_code_limit = 10
+        else:
+            if master_budget_sync_account_code_limit <= 0:
+                invalid.append(
+                    f"{key_prefix}.masterBudgetControl.masterBudgetSyncOptions.accountCodeLmit"
+                )
+                master_budget_sync_account_code_limit = 10
+    master_budget_sync_year = str(master_budget_sync_options_entry.get("year") or "").strip()
+    master_budget_sheet_ids_range = str(
+        master_budget_control_entry.get("settongsmasterbudgetsheetidsrange") or ""
+    ).strip()
 
     parsed_budget_data_update_columns: dict[str, str] = {}
     if require_master_budget_control:
@@ -286,7 +327,9 @@ def _parse_fundsphere_sheet_settings(
         elif not _is_valid_spreadsheet_id(spreadsheet_id):
             invalid.append(f"{key_prefix}.masterBudgetControl.id")
 
-        if not sheet_name and (require_accounts_range or require_services_range):
+        if not sheet_name and (
+            require_accounts_range or require_services_range or require_master_budget_sheet
+        ):
             missing.append(f"{key_prefix}.masterBudgetControl.settingsSheetName")
 
         if require_accounts_range:
@@ -344,6 +387,38 @@ def _parse_fundsphere_sheet_settings(
                 invalid=invalid,
             )
 
+        if require_master_budget_sheet:
+            if not master_budget_entry:
+                missing.append(f"{key_prefix}.masterBudget")
+            if not master_budget_sheet_name:
+                missing.append(f"{key_prefix}.masterBudget.budgetDataSheetName")
+            if not master_budget_data_range:
+                missing.append(f"{key_prefix}.masterBudget.budgetDataOutputRange")
+            elif not _SETTINGS_RANGE_RE.fullmatch(master_budget_data_range):
+                invalid.append(f"{key_prefix}.masterBudget.budgetDataOutputRange")
+            if not master_budget_sync_account_codes:
+                missing.append(
+                    f"{key_prefix}.masterBudgetControl.masterBudgetSyncOptions.accountCodes"
+                )
+            elif not _CELL_RANGE_RE.fullmatch(master_budget_sync_account_codes):
+                invalid.append(
+                    f"{key_prefix}.masterBudgetControl.masterBudgetSyncOptions.accountCodes"
+                )
+            if not master_budget_sync_year:
+                missing.append(f"{key_prefix}.masterBudgetControl.masterBudgetSyncOptions.year")
+            elif not _CELL_RANGE_RE.fullmatch(master_budget_sync_year):
+                invalid.append(
+                    f"{key_prefix}.masterBudgetControl.masterBudgetSyncOptions.year"
+                )
+            if not master_budget_sheet_ids_range:
+                missing.append(
+                    f"{key_prefix}.masterBudgetControl.settongsMasterBudgetSheetIdsRange"
+                )
+            elif not _SETTINGS_RANGE_RE.fullmatch(master_budget_sheet_ids_range):
+                invalid.append(
+                    f"{key_prefix}.masterBudgetControl.settongsMasterBudgetSheetIdsRange"
+                )
+
     if require_net_spend and not net_spend_entry:
         missing.append(f"{key_prefix}.netSpend")
     if require_net_spend or net_spend_entry:
@@ -387,6 +462,17 @@ def _parse_fundsphere_sheet_settings(
             settings["budget_data_update_read_range"] = budget_data_update_read_range
         if parsed_budget_data_update_columns:
             settings["budget_data_update_columns"] = parsed_budget_data_update_columns
+        if require_master_budget_sheet:
+            settings["master_budget_sheet_name"] = master_budget_sheet_name
+            settings["master_budget_data_range"] = master_budget_data_range
+            settings["master_budget_sync_account_codes_cell"] = (
+                master_budget_sync_account_codes
+            )
+            settings["master_budget_sync_account_code_limit"] = (
+                master_budget_sync_account_code_limit
+            )
+            settings["master_budget_sync_year_cell"] = master_budget_sync_year
+            settings["master_budget_sheet_ids_range"] = master_budget_sheet_ids_range
     if net_spend_spreadsheet_id:
         settings["net_spend_spreadsheet_id"] = net_spend_spreadsheet_id
     if net_spend_sheet_name:
@@ -410,6 +496,7 @@ def _get_fundsphere_sheet_settings(
     require_budget_data: bool = False,
     require_budget_data_update: bool = False,
     require_net_spend: bool = False,
+    require_master_budget_sheet: bool = False,
 ) -> dict[str, object]:
     raw = _get_spreadsheets_raw()
     if raw is None or str(raw).strip() == "":
@@ -424,6 +511,7 @@ def _get_fundsphere_sheet_settings(
         require_budget_data=require_budget_data,
         require_budget_data_update=require_budget_data_update,
         require_net_spend=require_net_spend,
+        require_master_budget_sheet=require_master_budget_sheet,
     )
     if missing or invalid:
         raise TenantConfigValidationError(
@@ -464,6 +552,13 @@ def get_fundsphere_net_spend_settings() -> dict[str, object]:
     return _get_fundsphere_sheet_settings(
         require_accounts_range=False,
         require_net_spend=True,
+    )
+
+
+def get_fundsphere_master_budget_sheet_settings() -> dict[str, object]:
+    return _get_fundsphere_sheet_settings(
+        require_accounts_range=False,
+        require_master_budget_sheet=True,
     )
 
 

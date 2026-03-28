@@ -3,7 +3,8 @@ from __future__ import annotations
 from decimal import Decimal
 import re
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, Body, HTTPException
+from pydantic import BaseModel
 
 from apps.fundsphere.api.v1.helpers.config import get_fundsphere_net_spend_settings
 from apps.fundsphere.api.v1.helpers.dbQueries import get_master_budget_control_net_spend_data
@@ -20,6 +21,16 @@ from shared.ggSheet import (
 # ============================================================
 
 router = APIRouter(prefix="/netSpend")
+
+
+# ============================================================
+# REQUEST MODELS
+# ============================================================
+
+
+class NetSpendLoadRequest(BaseModel):
+    month: int | None = None
+    year: int | None = None
 
 
 # ============================================================
@@ -116,19 +127,70 @@ def _resolve_period_from_config(period_value: object) -> tuple[int, int] | None:
     )
 
 
+def _resolve_period_from_params(
+    *,
+    month: int | None,
+    year: int | None,
+) -> tuple[int, int] | None:
+    using_params = month is not None or year is not None
+    if not using_params:
+        return None
+
+    if month is None or year is None:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "month and year must be provided together",
+                "requiredFields": ["month", "year"],
+            },
+        )
+
+    if month < 1 or month > 12:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Invalid month",
+                "value": month,
+                "expected": "1..12",
+            },
+        )
+    if year < 1000 or year > 9999:
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Invalid year",
+                "value": year,
+                "expected": "4-digit year, for example 2026",
+            },
+        )
+
+    return month, year
+
+
 # ============================================================
 # ROUTES
 # ============================================================
 
 
 @router.post("/load", summary="Load FundSphere net spend data from DB to sheet")
-def load_net_spend_route():
+def load_net_spend_route(
+    body: NetSpendLoadRequest | None = Body(default=None),
+):
     """
     Load net spend data for a specific period from DB and overwrite the configured
     net spend output range in Google Sheets.
 
     Example request:
         POST /api/fundsphere/v1/masterBudgetControl/netSpend/load
+        Header: X-Tenant-Id: taaa
+
+    Example request (use request body, skip netSpendSyncOptions.period):
+        POST /api/fundsphere/v1/masterBudgetControl/netSpend/load
+        Body:
+          {
+            "month": 3,
+            "year": 2026
+          }
         Header: X-Tenant-Id: taaa
 
     Example response:
@@ -174,6 +236,9 @@ def load_net_spend_route():
         - Tenant config must include SPREADSHEETS.netSpend.budgetDataSheetName
         - Tenant config must include SPREADSHEETS.netSpend.budgetDataOutputRange
         - Reads target period from SPREADSHEETS.netSpendSyncOptions.period
+        - Optional request body fields `month` + `year` can be used to bypass
+          SPREADSHEETS.netSpendSyncOptions.period
+        - `month` and `year` must be provided together when using request body
         - If netSpendSyncOptions.period is empty, no sheet/DB action is executed
         - Supported period formats: 1/2026 or 01/2026
         - Only one period is accepted (comma-separated values are not allowed)
@@ -187,11 +252,17 @@ def load_net_spend_route():
     spreadsheet_id = str(settings["net_spend_spreadsheet_id"])
     sheet_name = str(settings["net_spend_sheet_name"])
     data_range = str(settings["net_spend_data_range"])
-    resolved_period = _resolve_period_from_config(settings.get("net_spend_period"))
+    body_month = body.month if body is not None else None
+    body_year = body.year if body is not None else None
+    resolved_period = _resolve_period_from_params(month=body_month, year=body_year)
+    period_source = "body" if resolved_period is not None else "config"
+    if resolved_period is None:
+        resolved_period = _resolve_period_from_config(settings.get("net_spend_period"))
     if resolved_period is None:
         return {
             "spreadsheetId": spreadsheet_id,
             "sheetName": sheet_name,
+            "periodSource": "config",
             "skipped": True,
             "reason": "netSpendSyncOptions.period is empty",
             "dbRowCount": 0,
@@ -238,6 +309,7 @@ def load_net_spend_route():
     return {
         "spreadsheetId": spreadsheet_id,
         "sheetName": sheet_name,
+        "periodSource": period_source,
         "clearRange": clear_range,
         "writeRange": write_range,
         "month": month,

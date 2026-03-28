@@ -2,6 +2,7 @@ from fastapi import APIRouter
 
 from apps.fundsphere.api.v1.endpoints.masterBudgetControl import (
     budgetData,
+    masterBudget,
     netSpend,
     settings,
 )
@@ -19,6 +20,11 @@ router.include_router(
 )
 router.include_router(
     budgetData.router,
+    prefix="/masterBudgetControl",
+    tags=["fundsphere"],
+)
+router.include_router(
+    masterBudget.router,
     prefix="/masterBudgetControl",
     tags=["fundsphere"],
 )

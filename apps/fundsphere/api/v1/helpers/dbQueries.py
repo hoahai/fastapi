@@ -1013,6 +1013,130 @@ def get_master_budget_control_budget_data(
     return combined_rows
 
 
+def get_master_budget_control_master_budget_sheet_data(
+    *,
+    account_code: str,
+    year: int,
+    refresh_cache: bool = False,
+) -> list[dict]:
+    _ = refresh_cache
+    normalized_account_code = str(account_code or "").strip().upper()
+    rows_by_account = get_master_budget_control_master_budget_sheet_data_by_accounts(
+        account_codes=[normalized_account_code],
+        year=year,
+        refresh_cache=False,
+    )
+    return rows_by_account.get(normalized_account_code, [])
+
+
+def get_master_budget_control_master_budget_sheet_data_by_accounts(
+    *,
+    account_codes: list[str],
+    year: int,
+    refresh_cache: bool = False,
+) -> dict[str, list[dict]]:
+    _ = refresh_cache
+    try:
+        normalized_year = int(year)
+    except (TypeError, ValueError):
+        normalized_year = 0
+
+    normalized_accounts: list[str] = []
+    seen_accounts: set[str] = set()
+    for account_code in account_codes:
+        normalized_account_code = str(account_code or "").strip().upper()
+        if not normalized_account_code or normalized_account_code in seen_accounts:
+            continue
+        seen_accounts.add(normalized_account_code)
+        normalized_accounts.append(normalized_account_code)
+
+    if not normalized_accounts or normalized_year <= 0:
+        return {}
+
+    tables = get_db_tables(require_services=True)
+    accounts_table = tables["ACCOUNTS"]
+    budgets_table = tables["BUDGETS"]
+    services_table = tables["SERVICES"]
+    departments_table = tables["DEPARTMENTS"]
+    columns = _resolve_budget_data_columns(
+        accounts_table=accounts_table,
+        budgets_table=budgets_table,
+        services_table=services_table,
+        departments_table=departments_table,
+    )
+    quoted_accounts_table = _quote_table_name(accounts_table)
+    quoted_budgets_table = _quote_table_name(budgets_table)
+    quoted_services_table = _quote_table_name(services_table)
+    quoted_departments_table = _quote_table_name(departments_table)
+
+    account_code_expr = _quote_identifier(columns["account_code_col"])
+    account_name_expr = _quote_identifier(columns["account_name_col"])
+    service_id_expr = _quote_identifier(columns["service_id_col"])
+    service_name_expr = _quote_identifier(columns["service_name_col"])
+    service_department_code_expr = _quote_identifier(
+        columns["service_department_code_col"]
+    )
+    department_code_expr = _quote_identifier(columns["department_code_col"])
+    department_listing_order_expr = _quote_identifier(
+        columns["department_listing_order_col"]
+    )
+    budget_account_code_expr = _quote_identifier(columns["budget_account_code_col"])
+    budget_service_id_expr = _quote_identifier(columns["budget_service_id_col"])
+    budget_year_expr = _quote_identifier(columns["budget_year_col"])
+    budget_month_expr = _quote_identifier(columns["budget_month_col"])
+    budget_sub_service_expr = _quote_identifier(columns["budget_sub_service_col"])
+    budget_gross_amount_expr = _quote_identifier(columns["budget_gross_amount_col"])
+    budget_commission_expr = _quote_identifier(columns["budget_commission_col"])
+    budget_net_adjustment_expr = _quote_identifier(
+        columns["budget_net_adjustment_col"]
+    )
+    budget_note_expr = _quote_identifier(columns["budget_note_col"])
+
+    account_placeholders = ", ".join(["%s"] * len(normalized_accounts))
+    query = (
+        "SELECT "
+        f"UPPER(b.{budget_account_code_expr}) AS accountCode, "
+        f"a.{account_name_expr} AS accountName, "
+        f"b.{budget_year_expr} AS year, "
+        f"b.{budget_month_expr} AS month, "
+        f"d.{department_listing_order_expr} AS depListingOrder, "
+        f"s.{service_name_expr} AS serviceName, "
+        f"COALESCE(b.{budget_sub_service_expr}, '') AS subService, "
+        f"COALESCE(b.{budget_gross_amount_expr}, 0) AS grossAmount, "
+        f"COALESCE(b.{budget_commission_expr}, 0) AS commission, "
+        f"COALESCE(b.{budget_net_adjustment_expr}, 0) AS netAdjustment, "
+        f"COALESCE(b.{budget_note_expr}, '') AS note "
+        f"FROM {quoted_services_table} s "
+        f"INNER JOIN {quoted_departments_table} d "
+        f"ON s.{service_department_code_expr} = d.{department_code_expr} "
+        f"INNER JOIN {quoted_budgets_table} b "
+        f"ON s.{service_id_expr} = b.{budget_service_id_expr} "
+        f"INNER JOIN {quoted_accounts_table} a "
+        f"ON b.{budget_account_code_expr} = a.{account_code_expr} "
+        f"WHERE UPPER(b.{budget_account_code_expr}) IN ({account_placeholders}) "
+        f"AND b.{budget_year_expr} = %s "
+        f"ORDER BY b.{budget_account_code_expr} ASC, "
+        f"a.{account_name_expr} ASC, "
+        f"b.{budget_year_expr} DESC, "
+        f"b.{budget_month_expr} DESC, "
+        f"d.{department_listing_order_expr} ASC, "
+        f"s.{service_name_expr} ASC, "
+        f"b.{budget_sub_service_expr} ASC"
+    )
+    query_params: tuple[object, ...] = tuple(normalized_accounts + [normalized_year])
+    fetched_rows = fetch_all(query, query_params)
+
+    result_map: dict[str, list[dict]] = {account_code: [] for account_code in normalized_accounts}
+    for row in fetched_rows:
+        account_code = str(row.get("accountCode") or "").strip().upper()
+        if account_code not in result_map:
+            continue
+        row.pop("depListingOrder", None)
+        result_map[account_code].append(row)
+
+    return result_map
+
+
 def get_master_budget_control_net_spend_data(
     *,
     month: int,
