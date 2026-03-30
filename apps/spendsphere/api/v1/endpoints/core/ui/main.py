@@ -58,10 +58,14 @@ from apps.spendsphere.api.v1.helpers.ggAd import (
 )
 from apps.spendsphere.api.v1.helpers.ggSheet import get_active_period, get_rollovers
 from apps.spendsphere.api.v1.helpers.spendsphereHelpers import require_account_code
+from shared.constants import BUDGET_LESS_THAN_SPEND_TOLERANCE
 from shared.tenant import get_timezone
 from shared.utils import get_current_period, run_parallel
 
 router = APIRouter()
+BUDGET_LESS_THAN_SPEND_TOLERANCE_DECIMAL = Decimal(
+    str(BUDGET_LESS_THAN_SPEND_TOLERANCE)
+)
 
 
 def _run_budget_update(customer_id: str, updates: list[dict]) -> dict:
@@ -586,7 +590,8 @@ def _validate_ui_update_budget_spend_rules(
             )
             * (allocation / Decimal("100"))
         )
-        if allocated_before_accel < spent:
+        shortfall = spent - allocated_before_accel
+        if shortfall > BUDGET_LESS_THAN_SPEND_TOLERANCE_DECIMAL:
             errors.append(
                 {
                     "field": "updatedAllocations",
@@ -598,7 +603,7 @@ def _validate_ui_update_budget_spend_rules(
                     "spent": float(spent.quantize(Decimal("0.01"))),
                     "message": (
                         "Update is not allowed because allocated budget before "
-                        "acceleration is lower than spent"
+                        "acceleration is lower than spent by more than $0.50"
                     ),
                 }
             )
@@ -1780,6 +1785,13 @@ def update_ui_allocations_rollbreaks(
 
     Note: Google Ads budget/status mutations run only when the payload
     month/year match the current period.
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - `accountCode`, `month`, and `year` are required
+        - Update is blocked only when allocated budget before acceleration is lower
+          than spent by more than $0.50
 
     Example response:
         {

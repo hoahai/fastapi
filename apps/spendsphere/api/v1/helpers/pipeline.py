@@ -40,6 +40,7 @@ from apps.spendsphere.api.v1.helpers.spendsphereHelpers import (
     get_google_ads_campaigns_cache_entries,
     get_google_ads_clients_cache_entry,
 )
+from shared.constants import BUDGET_LESS_THAN_SPEND_TOLERANCE
 from shared.email import send_google_ads_result_email
 from shared.logger import get_logger
 from shared.tenant import get_timezone
@@ -50,6 +51,9 @@ from shared.utils import get_current_period, run_parallel
 # =========================================================
 
 logger = get_logger("SpendSphere")
+BUDGET_LESS_THAN_SPEND_TOLERANCE_DECIMAL = Decimal(
+    str(BUDGET_LESS_THAN_SPEND_TOLERANCE)
+)
 
 # =========================================================
 # HELPERS
@@ -426,8 +430,12 @@ def _collect_budget_allocation_and_spend_issues(
             except Exception:
                 allocated_budget_amount = None
 
+        shortfall_amount: Decimal | None = None
+        if allocated_budget_amount is not None:
+            shortfall_amount = spend - allocated_budget_amount
         has_budget_less_than_spend = (
-            allocated_budget_amount is not None and allocated_budget_amount < spend
+            shortfall_amount is not None
+            and shortfall_amount > BUDGET_LESS_THAN_SPEND_TOLERANCE_DECIMAL
         )
 
         acceleration_multiplier = _to_decimal(
@@ -573,7 +581,7 @@ def _collect_budget_allocation_and_spend_issues(
                     "warningCode": "BUDGET_LESS_THAN_SPEND",
                     "error": (
                         "Allocated budget (before acceleration) is lower than spend "
-                        f"({budget_display} < {spend_display})."
+                        f"by more than $0.50 ({budget_display} < {spend_display})."
                     ),
                 }
             )

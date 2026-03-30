@@ -20,6 +20,7 @@ GGADS_MAX_PAUSED_CAMPAIGNS = 50
 GGADS_MIN_BUDGET = 0.01  # must be > 0
 GGADS_MAX_BUDGET_MULTIPLIER = 10  # prevent 10× / 100× spikes
 GGADS_MIN_BUDGET_DELTA = 0.50  # skip small changes unless forcing 0.00/0.01
+BUDGET_LESS_THAN_SPEND_TOLERANCE = 0.50  # allow small spend-over-allocation drift
 GGADS_MUTATION_MAX_ATTEMPTS = 3  # initial attempt + retries for transient errors
 GGADS_MUTATION_RETRY_INITIAL_BACKOFF_SECONDS = 1.0
 GGADS_MUTATION_RETRY_MAX_BACKOFF_SECONDS = 8.0
