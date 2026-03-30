@@ -1990,31 +1990,21 @@ def _get_budget_change_history_summary_map(
                     new_value = _normalize_history_value(new_data.get(field_name))
                     change_entries.append(f"{field_name} ({new_value})")
             line_body = (
-                f"{changed_by} created budget {', '.join(change_entries)}"
+                f"{changed_by} create budget {', '.join(change_entries)}"
                 if change_entries
-                else f"{changed_by} created budget"
+                else f"{changed_by} create budget"
             )
         elif action_type == "DELETE":
-            if changed_fields:
-                for field_name in changed_fields:
-                    old_value = _normalize_history_value(old_data.get(field_name))
-                    change_entries.append(f"{field_name} ({old_value})")
-            line_body = (
-                f"{changed_by} deleted budget {', '.join(change_entries)}"
-                if change_entries
-                else f"{changed_by} deleted budget"
-            )
+            line_body = f"{changed_by} delete budget"
         else:
             if changed_fields:
                 for field_name in changed_fields:
                     old_value = _normalize_history_value(old_data.get(field_name))
                     new_value = _normalize_history_value(new_data.get(field_name))
                     change_entries.append(f"{field_name}({old_value} -> {new_value})")
-            line_body = (
-                f"{changed_by} changed {', '.join(change_entries)}"
-                if change_entries
-                else f"{changed_by} changed budget"
-            )
+                line_body = f"{changed_by} change budget {', '.join(change_entries)}"
+            else:
+                line_body = f"{changed_by} add change history"
 
         date_label = _format_history_date_label(row.get("dateCreated"))
         line = f"{date_label}: {line_body}".strip() if date_label else line_body
