@@ -56,7 +56,7 @@ _BUDGET_DATA_HEADER = [
     "commission",
     "netAdjustment",
     "note",
-    "changeNote",
+    "changeReason",
     "changeHistories",
 ]
 _EDITABLE_FIELDS = ("subService", "grossAmount", "commission", "netAdjustment", "note")
@@ -551,10 +551,15 @@ def _parse_budget_data_sheet_rows(
             else ""
         )
         is_delete = _is_row_changed_flag_true(delete_value)
+        change_note_cell = _extract_cell_value(
+            row_values,
+            column_indexes["changeNote"],
+        )
+        change_note = str(change_note_cell or "").strip()
 
         if is_row_changed_index is not None and not is_delete:
             row_changed_value = _extract_cell_value(row_values, is_row_changed_index)
-            if not _is_row_changed_flag_true(row_changed_value):
+            if not _is_row_changed_flag_true(row_changed_value) and not change_note:
                 continue
 
         original_sig_cell = _extract_cell_value(
@@ -584,10 +589,6 @@ def _parse_budget_data_sheet_rows(
             column_indexes["netAdjustment"],
         )
         note_cell = _extract_cell_value(row_values, column_indexes["note"])
-        change_note_cell = _extract_cell_value(
-            row_values,
-            column_indexes["changeNote"],
-        )
         account_code_cell = _extract_cell_value(
             row_values,
             column_indexes["accountCode"],
@@ -619,7 +620,6 @@ def _parse_budget_data_sheet_rows(
         year_value = _coerce_int(year_cell)
         sub_service = str(sub_service_cell or "").strip()
         note = str(note_cell or "").strip()
-        change_note = str(change_note_cell or "").strip()
         account_code = str(account_code_cell or "").strip().upper()
         service_id = str(service_id_cell or "").strip()
 
@@ -727,7 +727,7 @@ def _parse_budget_data_sheet_rows(
                     }
                 )
 
-            if not diffs:
+            if not diffs and not change_note:
                 continue
 
             changed_items.append(
@@ -966,8 +966,10 @@ def update_budget_data_route(request: Request):
           DB_TABLES.budgets, and DB_TABLES.changeHistories
         - Reads configured budgetDataUpdateReadRange from budgetDataSheetName
         - Uses budgetDataUpdateColumns mapping to resolve all read columns
-        - Uses `budgetDataUpdateColumns.changeNote` as optional history note text
-          for each update/create/delete row
+        - Uses `budgetDataUpdateColumns.changeNote` (sheet label may be `changeReason`)
+          as optional history note text for each update/create/delete row
+        - Existing rows with no editable-field changes are still accepted when
+          `changeNote/changeReason` is provided, and create a history-only event
         - `originalSig` must follow key-value format:
           "subService=...|grossAmount=...|commission=...|netAdjustment=...|note=..."
         - New budget create rows are supported when:
@@ -979,7 +981,8 @@ def update_budget_data_route(request: Request):
         - `grossAmount`, `commission`, and `netAdjustment` must be numeric cells (not text)
         - `netAdjustment` is editable; blank values default to `0`
         - `note` must not contain `|` (pipe) character
-        - If budgetDataUpdateColumns.isRowChanged is configured, only flagged rows are processed
+        - If budgetDataUpdateColumns.isRowChanged is configured, only flagged rows are processed,
+          except rows with non-empty `changeNote/changeReason` which are also processed
         - Validates duplicate keys for `accountCode + month + year + serviceId + subService`
           across request rows and existing budgets before write
         - Validation errors are aggregated (row values, references, duplicates)

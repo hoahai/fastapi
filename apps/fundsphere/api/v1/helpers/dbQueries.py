@@ -2334,36 +2334,72 @@ def apply_budget_mutations_with_history(
             commission = _to_decimal(change.get("commission"), scale=4)
             net_adjustment = _to_decimal(change.get("netAdjustment"), scale=2)
             note = str(change.get("note") or "").strip()
-
-            update_params: list[object] = [
-                sub_service,
-                gross_amount,
-                commission,
-                net_adjustment,
-                note,
-                budget_id,
-            ]
-            cursor.execute(
-                update_query,
-                tuple(update_params),
-            )
-            if int(cursor.rowcount or 0) <= 0:
-                raise ValueError(f"Budget not found for update: {budget_id}")
-            update_bucket = _normalize_budget_bucket(
-                account_code=change.get("accountCode"),
-                month=change.get("month"),
-                year=change.get("year"),
-            )
-            if update_bucket:
-                affected_buckets.add(update_bucket)
-
-            updated_budget_ids.append(budget_id)
-
             diffs = change.get("diffs")
             if not isinstance(diffs, list) or not diffs:
-                continue
-            diffs = [diff for diff in diffs if isinstance(diff, dict)]
-            if not diffs:
+                diffs = []
+            else:
+                diffs = [diff for diff in diffs if isinstance(diff, dict)]
+            has_field_diffs = bool(diffs)
+
+            history_account_code = str(change.get("accountCode") or "").strip() or None
+            history_service_id = str(change.get("serviceId") or "").strip() or None
+            history_month: object = change.get("month")
+            history_year: object = change.get("year")
+            history_sub_service = sub_service
+            history_gross_amount = gross_amount
+            history_commission = commission
+            history_net_adjustment = net_adjustment
+            history_note = note
+
+            if has_field_diffs:
+                update_params: list[object] = [
+                    sub_service,
+                    gross_amount,
+                    commission,
+                    net_adjustment,
+                    note,
+                    budget_id,
+                ]
+                cursor.execute(
+                    update_query,
+                    tuple(update_params),
+                )
+                if int(cursor.rowcount or 0) <= 0:
+                    raise ValueError(f"Budget not found for update: {budget_id}")
+                update_bucket = _normalize_budget_bucket(
+                    account_code=change.get("accountCode"),
+                    month=change.get("month"),
+                    year=change.get("year"),
+                )
+                if update_bucket:
+                    affected_buckets.add(update_bucket)
+
+                updated_budget_ids.append(budget_id)
+            elif change_note_value:
+                cursor.execute(select_existing_budget_query, (budget_id,))
+                existing_row = cursor.fetchone()
+                if not existing_row:
+                    raise ValueError(f"Budget not found for update: {budget_id}")
+                existing_account_code = str(existing_row[0] or "").strip().upper()
+                existing_month_value = _to_int(existing_row[1], default=0)
+                existing_year_value = _to_int(existing_row[2], default=0)
+                existing_service_id = str(existing_row[3] or "").strip()
+                existing_sub_service = str(existing_row[5] or "").strip()
+                existing_gross_amount = _to_decimal(existing_row[6], scale=2)
+                existing_commission = _to_decimal(existing_row[7], scale=4)
+                existing_net_adjustment = _to_decimal(existing_row[8], scale=2)
+                existing_note = str(existing_row[9] or "").strip()
+
+                history_account_code = existing_account_code or None
+                history_service_id = existing_service_id or None
+                history_month = existing_month_value if existing_month_value > 0 else None
+                history_year = existing_year_value if existing_year_value > 0 else None
+                history_sub_service = existing_sub_service
+                history_gross_amount = existing_gross_amount
+                history_commission = existing_commission
+                history_net_adjustment = existing_net_adjustment
+                history_note = existing_note
+            else:
                 continue
 
             for diff in diffs:
@@ -2384,19 +2420,19 @@ def apply_budget_mutations_with_history(
                     "updated_at": now,
                     "tenant_id": tenant_id,
                     "changed_by": normalized_changed_by,
-                    "account_code": str(change.get("accountCode") or "").strip() or None,
-                    "service_id": str(change.get("serviceId") or "").strip() or None,
-                    "month": change.get("month"),
-                    "year": change.get("year"),
+                    "account_code": history_account_code,
+                    "service_id": history_service_id,
+                    "month": history_month,
+                    "year": history_year,
                 }
                 history_rows.append(tuple(value_map.get(key) for key in history_semantics))
 
             new_data_map: dict[str, object] = {
-                "subService": sub_service,
-                "grossAmount": f"{gross_amount:.2f}",
-                "commission": f"{commission:.4f}",
-                "netAdjustment": f"{net_adjustment:.2f}",
-                "note": note,
+                "subService": history_sub_service,
+                "grossAmount": f"{history_gross_amount:.2f}",
+                "commission": f"{history_commission:.4f}",
+                "netAdjustment": f"{history_net_adjustment:.2f}",
+                "note": history_note,
             }
             old_data_map: dict[str, object] = dict(new_data_map)
             changed_fields: list[str] = []
