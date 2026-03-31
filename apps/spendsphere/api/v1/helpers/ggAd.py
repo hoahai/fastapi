@@ -23,6 +23,7 @@ from shared.constants import (
     GGADS_MAX_UPDATES_PER_REQUEST,
     GGADS_MAX_PAUSED_CAMPAIGNS,
     GGADS_MIN_BUDGET,
+    GGADS_MIN_SPIKE_WARNING_BUDGET,
     GGADS_MAX_BUDGET_MULTIPLIER,
     GGADS_ALLOWED_CAMPAIGN_STATUSES,
     GGADS_MUTATION_MAX_ATTEMPTS,
@@ -1488,15 +1489,18 @@ def validate_updates(
                         if new_amount_dec <= expected_daily:
                             multiplier_display = f"{GGADS_MAX_BUDGET_MULTIPLIER}x"
                             expected_daily_display = f"${float(expected_daily):,.2f}"
-                            r["validationWarningCode"] = (
-                                "BUDGET_SPIKE_WITHIN_EXPECTED_DAILY"
-                            )
-                            r["validationWarning"] = (
-                                "Budget spike exceeds the allowed multiplier "
-                                f"({multiplier_display}); update allowed within expected "
-                                f"daily budget ({expected_daily_display})."
-                            )
-                            r["expectedDaily"] = float(expected_daily)
+                            if new_amount_dec >= Decimal(
+                                str(GGADS_MIN_SPIKE_WARNING_BUDGET)
+                            ):
+                                r["validationWarningCode"] = (
+                                    "BUDGET_SPIKE_WITHIN_EXPECTED_DAILY"
+                                )
+                                r["validationWarning"] = (
+                                    "Budget spike exceeds the allowed multiplier "
+                                    f"({multiplier_display}); update allowed within expected "
+                                    f"daily budget ({expected_daily_display})."
+                                )
+                                r["expectedDaily"] = float(expected_daily)
                         else:
                             raise ValueError("Budget spike exceeds allowed multiplier")
                     else:

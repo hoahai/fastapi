@@ -40,7 +40,10 @@ from apps.spendsphere.api.v1.helpers.spendsphereHelpers import (
     get_google_ads_campaigns_cache_entries,
     get_google_ads_clients_cache_entry,
 )
-from shared.constants import BUDGET_LESS_THAN_SPEND_TOLERANCE
+from shared.constants import (
+    ADTYPE_ALLOCATION_TOTAL_TOLERANCE_PERCENT,
+    BUDGET_LESS_THAN_SPEND_TOLERANCE,
+)
 from shared.email import send_google_ads_result_email
 from shared.logger import get_logger
 from shared.tenant import get_timezone
@@ -53,6 +56,9 @@ from shared.utils import get_current_period, run_parallel
 logger = get_logger("SpendSphere")
 BUDGET_LESS_THAN_SPEND_TOLERANCE_DECIMAL = Decimal(
     str(BUDGET_LESS_THAN_SPEND_TOLERANCE)
+)
+ADTYPE_ALLOCATION_TOTAL_TOLERANCE_DECIMAL = Decimal(
+    str(ADTYPE_ALLOCATION_TOTAL_TOLERANCE_PERCENT)
 )
 
 # =========================================================
@@ -706,7 +712,8 @@ def _collect_ad_type_allocation_total_warnings(
         if not isinstance(total_allocation, Decimal):
             total_allocation = _to_decimal(total_allocation) or Decimal("0")
         normalized_total = total_allocation.quantize(quantize_factor)
-        if normalized_total == expected_total:
+        total_delta = (normalized_total - expected_total).copy_abs()
+        if total_delta <= ADTYPE_ALLOCATION_TOTAL_TOLERANCE_DECIMAL:
             continue
 
         period_key = f"{year:04d}-{month:02d}"
@@ -723,7 +730,9 @@ def _collect_ad_type_allocation_total_warnings(
                 "warningCode": "ADTYPE_ALLOCATION_TOTAL_NOT_100",
                 "error": (
                     f"Total allocation ({float(normalized_total):,.2f}%) for "
-                    f"{ad_type_code} must equal 100%."
+                    f"{ad_type_code} must be within "
+                    f"{float(expected_total - ADTYPE_ALLOCATION_TOTAL_TOLERANCE_DECIMAL):,.2f}% "
+                    f"to {float(expected_total + ADTYPE_ALLOCATION_TOTAL_TOLERANCE_DECIMAL):,.2f}%."
                 ),
             }
         )
