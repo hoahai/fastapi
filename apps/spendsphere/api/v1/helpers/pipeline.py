@@ -39,6 +39,7 @@ from apps.spendsphere.api.v1.helpers.spendsphereHelpers import (
     get_google_ads_budgets_cache_entries,
     get_google_ads_campaigns_cache_entries,
     get_google_ads_clients_cache_entry,
+    sync_google_ads_warning_states,
 )
 from shared.constants import (
     ADTYPE_ALLOCATION_TOTAL_TOLERANCE_PERCENT,
@@ -369,6 +370,36 @@ def _maybe_filter_google_ads_warnings(
         return {}
     if use_cache:
         return filter_cached_google_ads_warnings(warnings_by_customer)
+    return warnings_by_customer
+
+
+def _merge_warnings_by_customer(
+    destination: dict[str, list[dict]],
+    source: dict[str, list[dict]],
+) -> None:
+    for raw_customer_id, warnings in source.items():
+        customer_id = str(raw_customer_id).strip()
+        if not customer_id or not isinstance(warnings, list):
+            continue
+        for warning in warnings:
+            if isinstance(warning, dict):
+                destination.setdefault(customer_id, []).append(warning)
+
+
+def _extract_warnings_from_mutation_results(
+    mutation_results: list[dict],
+) -> dict[str, list[dict]]:
+    warnings_by_customer: dict[str, list[dict]] = {}
+    for result in mutation_results:
+        customer_id = str(result.get("customerId", "")).strip()
+        if not customer_id:
+            continue
+        warnings = result.get("warnings") or []
+        if not isinstance(warnings, list):
+            continue
+        for warning in warnings:
+            if isinstance(warning, dict):
+                warnings_by_customer.setdefault(customer_id, []).append(warning)
     return warnings_by_customer
 
 
@@ -1239,6 +1270,10 @@ def run_google_ads_budget_pipeline(
             api_name="google_ads_mutation",
         )
 
+    current_warnings_by_customer: dict[str, list[dict]] = (
+        _extract_warnings_from_mutation_results(mutation_results)
+    )
+
     _filter_existing_mutation_warnings(
         mutation_results=mutation_results,
         use_cache=not refresh_google_ads_caches,
@@ -1254,6 +1289,9 @@ def run_google_ads_budget_pipeline(
             budget_payloads=budget_payloads,
             threshold=budget_warning_threshold,
         )
+        _merge_warnings_by_customer(
+            current_warnings_by_customer, threshold_warnings_by_customer
+        )
         threshold_warnings_by_customer = _maybe_filter_google_ads_warnings(
             threshold_warnings_by_customer,
             use_cache=not refresh_google_ads_caches,
@@ -1268,6 +1306,7 @@ def run_google_ads_budget_pipeline(
         rows=results,
         planned_new_amounts=planned_budget_amounts,
     )
+    _merge_warnings_by_customer(current_warnings_by_customer, budget_warnings)
     budget_warnings = _maybe_filter_google_ads_warnings(
         budget_warnings,
         use_cache=not refresh_google_ads_caches,
@@ -1291,6 +1330,7 @@ def run_google_ads_budget_pipeline(
         month=current_period["month"],
         year=current_period["year"],
     )
+    _merge_warnings_by_customer(current_warnings_by_customer, ad_type_allocation_warnings)
     ad_type_allocation_warnings = _maybe_filter_google_ads_warnings(
         ad_type_allocation_warnings,
         use_cache=not refresh_google_ads_caches,
@@ -1299,6 +1339,7 @@ def run_google_ads_budget_pipeline(
         mutation_results=mutation_results,
         warnings_by_customer=ad_type_allocation_warnings,
     )
+    sync_google_ads_warning_states(current_warnings_by_customer)
 
     # =====================================================
     # 5. Aggregate results

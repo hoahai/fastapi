@@ -43,6 +43,8 @@ _GOOGLE_ADS_CLIENTS_CACHE_TTL_ENV = "SPENDSPHERE_GOOGLE_ADS_CLIENTS_CACHE_TTL_SE
 _GOOGLE_ADS_CLIENTS_CACHE_TTL_FALLBACK_ENV = "ttl_time"
 _DEFAULT_SPENDSPHERE_CACHE_TTL_SECONDS = 86400
 _DEFAULT_GOOGLE_ADS_ISSUE_CACHE_TTL_SECONDS = 28800
+_DEFAULT_GOOGLE_ADS_WARNING_RESOLVE_SECONDS = 7200
+_WARNING_FINGERPRINT_PREFIX = "warning::"
 _DEFAULT_GOOGLE_ADS_RESOURCE_CACHE_TTL_SECONDS = 300
 _DEFAULT_SERVICES_CACHE_TTL_SECONDS = 86400
 _DEFAULT_GOOGLE_ADS_SPENT_CACHE_TTL_SECONDS = 300
@@ -456,6 +458,13 @@ def get_google_ads_warning_cache_ttl_seconds() -> int:
     return value
 
 
+def get_google_ads_warning_resolve_seconds() -> int:
+    value = _get_cache_override(("google_ads_warnings_resolve_seconds",))
+    if value is None:
+        return _DEFAULT_GOOGLE_ADS_WARNING_RESOLVE_SECONDS
+    return value
+
+
 def _normalize_campaign_names_for_issue_cache(raw: object) -> list[str]:
     if not isinstance(raw, list):
         return []
@@ -519,6 +528,249 @@ def _build_google_ads_issue_fingerprint(
     return hashlib.sha256(encoded.encode("utf-8")).hexdigest()
 
 
+def _build_google_ads_warning_stable_fingerprint(
+    *,
+    customer_id: str,
+    warning: dict,
+) -> str | None:
+    warning_code = str(warning.get("warningCode", "")).strip().upper()
+    budget_id = str(warning.get("budgetId", "")).strip()
+    account_code = standardize_account_code(warning.get("accountCode")) or ""
+    campaign_id = str(warning.get("campaignId", "")).strip()
+    ad_type_code = str(warning.get("adTypeCode", "")).strip().upper()
+    month = str(warning.get("month", "")).strip()
+    year = str(warning.get("year", "")).strip()
+    campaign_names = _normalize_campaign_names_for_issue_cache(
+        warning.get("campaignNames")
+    )
+
+    if not (
+        warning_code
+        or budget_id
+        or campaign_id
+        or account_code
+        or ad_type_code
+        or month
+        or year
+        or campaign_names
+    ):
+        return None
+
+    payload = {
+        "issueType": "WARNING",
+        "customerId": customer_id,
+        "warningCode": warning_code,
+        "budgetId": budget_id,
+        "campaignId": campaign_id,
+        "accountCode": account_code,
+        "adTypeCode": ad_type_code,
+        "month": month,
+        "year": year,
+        "campaignNames": campaign_names,
+    }
+    encoded = json.dumps(payload, sort_keys=True, separators=(",", ":"))
+    digest = hashlib.sha256(encoded.encode("utf-8")).hexdigest()
+    return f"{_WARNING_FINGERPRINT_PREFIX}{digest}"
+
+
+def _normalize_warning_cache_entry(
+    *,
+    entry: object,
+    now: datetime,
+    today_key: str,
+    ttl_seconds: int,
+) -> dict[str, object] | None:
+    if not isinstance(entry, dict):
+        return None
+
+    updated_at = _parse_cache_datetime(entry.get("updated_at"))
+    if updated_at is None:
+        return None
+
+    cached_day = str(entry.get("date", "")).strip()
+    if not cached_day:
+        cached_day = updated_at.date().isoformat()
+    if cached_day != today_key:
+        return None
+
+    if ttl_seconds > 0 and (now - updated_at).total_seconds() > ttl_seconds:
+        return None
+
+    status = str(entry.get("status", "")).strip().lower()
+    if status not in {"active", "resolved"}:
+        status = "active"
+
+    normalized: dict[str, object] = {
+        "updated_at": updated_at.isoformat(),
+        "date": today_key,
+        "status": status,
+    }
+
+    for key in ("first_seen_at", "last_seen_at", "resolve_candidate_at", "resolved_at"):
+        value = _parse_cache_datetime(entry.get(key))
+        if value is not None:
+            normalized[key] = value.isoformat()
+
+    return normalized
+
+
+def _split_warning_and_other_issue_entries(
+    tenant_entry: dict[str, object] | None,
+) -> tuple[dict[str, object], dict[str, object]]:
+    if not isinstance(tenant_entry, dict):
+        return {}, {}
+
+    warning_entries: dict[str, object] = {}
+    other_entries: dict[str, object] = {}
+    for fingerprint, entry in tenant_entry.items():
+        if (
+            isinstance(fingerprint, str)
+            and fingerprint.startswith(_WARNING_FINGERPRINT_PREFIX)
+        ):
+            warning_entries[fingerprint] = entry
+        else:
+            other_entries[fingerprint] = entry
+    return warning_entries, other_entries
+
+
+def _load_active_warning_entries(
+    *,
+    warning_entries: dict[str, object],
+    now: datetime,
+    today_key: str,
+    ttl_seconds: int,
+) -> dict[str, dict[str, object]]:
+    active_entries: dict[str, dict[str, object]] = {}
+    for fingerprint, entry in warning_entries.items():
+        if not isinstance(fingerprint, str):
+            continue
+        normalized = _normalize_warning_cache_entry(
+            entry=entry,
+            now=now,
+            today_key=today_key,
+            ttl_seconds=ttl_seconds,
+        )
+        if normalized is not None:
+            active_entries[fingerprint] = normalized
+    return active_entries
+
+
+def _upsert_warning_active_entry(
+    *,
+    entries: dict[str, dict[str, object]],
+    fingerprint: str,
+    now_iso: str,
+    today_key: str,
+) -> None:
+    previous = entries.get(fingerprint)
+    first_seen_at = now_iso
+    if isinstance(previous, dict):
+        prior_first_seen = _parse_cache_datetime(previous.get("first_seen_at"))
+        if prior_first_seen is not None:
+            first_seen_at = prior_first_seen.isoformat()
+    entries[fingerprint] = {
+        "updated_at": now_iso,
+        "date": today_key,
+        "status": "active",
+        "first_seen_at": first_seen_at,
+        "last_seen_at": now_iso,
+    }
+
+
+def _filter_cached_google_ads_warnings_with_state(
+    warnings_by_customer: dict[str, list[dict]],
+    *,
+    tenant_id: str | None = None,
+) -> dict[str, list[dict]]:
+    if not warnings_by_customer:
+        return {}
+
+    ttl_seconds = get_google_ads_warning_cache_ttl_seconds()
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+    now = datetime.now(ZoneInfo(get_timezone()))
+    now_iso = now.isoformat()
+    today_key = now.date().isoformat()
+
+    filtered: dict[str, list[dict]] = {}
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+        warnings_cache = root.get(_GOOGLE_ADS_WARNINGS_KEY)
+        if not isinstance(warnings_cache, dict):
+            warnings_cache = {}
+
+        tenant_entry = warnings_cache.get(tenant_key)
+        warning_entries_raw, other_issue_entries = _split_warning_and_other_issue_entries(
+            tenant_entry
+        )
+        warning_entries = _load_active_warning_entries(
+            warning_entries=warning_entries_raw,
+            now=now,
+            today_key=today_key,
+            ttl_seconds=ttl_seconds,
+        )
+        previous_warning_entries, _ = _split_warning_and_other_issue_entries(tenant_entry)
+        cache_changed = warning_entries != previous_warning_entries
+
+        for raw_customer_id, warnings in warnings_by_customer.items():
+            customer_id = str(raw_customer_id).strip()
+            if not customer_id or not isinstance(warnings, list):
+                continue
+            seen_in_call: set[str] = set()
+            for warning in warnings:
+                if not isinstance(warning, dict):
+                    continue
+                fingerprint = _build_google_ads_warning_stable_fingerprint(
+                    customer_id=customer_id,
+                    warning=warning,
+                )
+                if not fingerprint:
+                    filtered.setdefault(customer_id, []).append(warning)
+                    continue
+                if fingerprint in seen_in_call:
+                    continue
+                seen_in_call.add(fingerprint)
+
+                existing = warning_entries.get(fingerprint)
+                existing_status = ""
+                if isinstance(existing, dict):
+                    existing_status = str(existing.get("status", "")).strip().lower()
+
+                if existing_status == "active":
+                    _upsert_warning_active_entry(
+                        entries=warning_entries,
+                        fingerprint=fingerprint,
+                        now_iso=now_iso,
+                        today_key=today_key,
+                    )
+                    cache_changed = True
+                    continue
+
+                filtered.setdefault(customer_id, []).append(warning)
+                _upsert_warning_active_entry(
+                    entries=warning_entries,
+                    fingerprint=fingerprint,
+                    now_iso=now_iso,
+                    today_key=today_key,
+                )
+                cache_changed = True
+
+        if cache_changed:
+            merged_entries: dict[str, object] = dict(other_issue_entries)
+            if warning_entries:
+                merged_entries.update(warning_entries)
+            if merged_entries:
+                warnings_cache[tenant_key] = merged_entries
+            else:
+                warnings_cache.pop(tenant_key, None)
+            root[_GOOGLE_ADS_WARNINGS_KEY] = warnings_cache
+            _write_cache_root(cache_store, root)
+
+    return filtered
+
+
 def _filter_cached_google_ads_issues(
     issues_by_customer: dict[str, list[dict]],
     *,
@@ -550,11 +802,17 @@ def _filter_cached_google_ads_issues(
         if not isinstance(tenant_entry, dict):
             tenant_entry = {}
 
-        active_fingerprints: dict[str, dict[str, str]] = {}
+        active_fingerprints: dict[str, dict[str, object]] = {}
         for fingerprint, entry in tenant_entry.items():
             if not isinstance(fingerprint, str):
                 continue
             if not isinstance(entry, dict):
+                continue
+            if (
+                issue_kind == "FAILURE"
+                and fingerprint.startswith(_WARNING_FINGERPRINT_PREFIX)
+            ):
+                active_fingerprints[fingerprint] = dict(entry)
                 continue
             updated_at = _parse_cache_datetime(entry.get("updated_at"))
             if updated_at is None:
@@ -611,11 +869,143 @@ def filter_cached_google_ads_warnings(
     *,
     tenant_id: str | None = None,
 ) -> dict[str, list[dict]]:
-    return _filter_cached_google_ads_issues(
+    return _filter_cached_google_ads_warnings_with_state(
         warnings_by_customer,
         tenant_id=tenant_id,
-        issue_kind="WARNING",
     )
+
+
+def sync_google_ads_warning_states(
+    current_warnings_by_customer: dict[str, list[dict]],
+    *,
+    tenant_id: str | None = None,
+) -> None:
+    ttl_seconds = get_google_ads_warning_cache_ttl_seconds()
+    resolve_after_seconds = get_google_ads_warning_resolve_seconds()
+
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+    now = datetime.now(ZoneInfo(get_timezone()))
+    now_iso = now.isoformat()
+    today_key = now.date().isoformat()
+
+    current_fingerprints: set[str] = set()
+    for raw_customer_id, warnings in current_warnings_by_customer.items():
+        customer_id = str(raw_customer_id).strip()
+        if not customer_id or not isinstance(warnings, list):
+            continue
+        for warning in warnings:
+            if not isinstance(warning, dict):
+                continue
+            fingerprint = _build_google_ads_warning_stable_fingerprint(
+                customer_id=customer_id,
+                warning=warning,
+            )
+            if fingerprint:
+                current_fingerprints.add(fingerprint)
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+        warnings_cache = root.get(_GOOGLE_ADS_WARNINGS_KEY)
+        if not isinstance(warnings_cache, dict):
+            warnings_cache = {}
+
+        tenant_entry = warnings_cache.get(tenant_key)
+        warning_entries_raw, other_issue_entries = _split_warning_and_other_issue_entries(
+            tenant_entry
+        )
+        warning_entries = _load_active_warning_entries(
+            warning_entries=warning_entries_raw,
+            now=now,
+            today_key=today_key,
+            ttl_seconds=ttl_seconds,
+        )
+        previous_warning_entries, _ = _split_warning_and_other_issue_entries(tenant_entry)
+        cache_changed = warning_entries != previous_warning_entries
+
+        for fingerprint in current_fingerprints:
+            previous = warning_entries.get(fingerprint)
+            first_seen_at = now_iso
+            if isinstance(previous, dict):
+                prior_first_seen = _parse_cache_datetime(previous.get("first_seen_at"))
+                if prior_first_seen is not None:
+                    first_seen_at = prior_first_seen.isoformat()
+
+            next_entry = {
+                "updated_at": now_iso,
+                "date": today_key,
+                "status": "active",
+                "first_seen_at": first_seen_at,
+                "last_seen_at": now_iso,
+            }
+            if warning_entries.get(fingerprint) != next_entry:
+                warning_entries[fingerprint] = next_entry
+                cache_changed = True
+
+        for fingerprint, entry in list(warning_entries.items()):
+            if fingerprint in current_fingerprints:
+                continue
+            if not isinstance(entry, dict):
+                warning_entries.pop(fingerprint, None)
+                cache_changed = True
+                continue
+
+            status = str(entry.get("status", "")).strip().lower() or "active"
+            resolve_candidate = _parse_cache_datetime(entry.get("resolve_candidate_at"))
+            if status != "resolved" and resolve_after_seconds <= 0:
+                next_entry = {
+                    **entry,
+                    "updated_at": now_iso,
+                    "date": today_key,
+                    "status": "resolved",
+                    "resolved_at": now_iso,
+                    "resolve_candidate_at": now_iso,
+                }
+                if warning_entries.get(fingerprint) != next_entry:
+                    warning_entries[fingerprint] = next_entry
+                    cache_changed = True
+                continue
+
+            if status == "resolved":
+                continue
+
+            if resolve_candidate is None:
+                next_entry = {
+                    **entry,
+                    "updated_at": now_iso,
+                    "date": today_key,
+                    "resolve_candidate_at": now_iso,
+                }
+                if warning_entries.get(fingerprint) != next_entry:
+                    warning_entries[fingerprint] = next_entry
+                    cache_changed = True
+                continue
+
+            if (now - resolve_candidate).total_seconds() < resolve_after_seconds:
+                continue
+
+            next_entry = {
+                **entry,
+                "updated_at": now_iso,
+                "date": today_key,
+                "status": "resolved",
+                "resolved_at": now_iso,
+            }
+            if warning_entries.get(fingerprint) != next_entry:
+                warning_entries[fingerprint] = next_entry
+                cache_changed = True
+
+        if cache_changed:
+            merged_entries: dict[str, object] = dict(other_issue_entries)
+            if warning_entries:
+                merged_entries.update(warning_entries)
+            if merged_entries:
+                warnings_cache[tenant_key] = merged_entries
+            else:
+                warnings_cache.pop(tenant_key, None)
+            root[_GOOGLE_ADS_WARNINGS_KEY] = warnings_cache
+            _write_cache_root(cache_store, root)
 
 
 def filter_cached_google_ads_failures(
