@@ -54,6 +54,22 @@ def _normalize_path(path: str | None) -> str:
     return path.rstrip("/")
 
 
+def _should_summarize_response_body_for_logging(request: Request) -> bool:
+    path = _normalize_path(request.url.path or "")
+    return path.endswith("/reports/budgets/pdf")
+
+
+def _extract_filename_from_content_disposition(value: str | None) -> str | None:
+    text = str(value or "").strip()
+    if not text:
+        return None
+    match = re.search(r'filename\*?=(?:"?)([^\";]+)', text, flags=re.IGNORECASE)
+    if not match:
+        return None
+    name = str(match.group(1) or "").strip().strip('"').strip("'")
+    return name or None
+
+
 def _normalize_public_paths(paths: object) -> set[str]:
     if isinstance(paths, str):
         values = [paths]
@@ -171,6 +187,13 @@ def _wrap_response_payload(
         media_type=response.media_type,
         background=response.background,
     )
+
+    if _should_summarize_response_body_for_logging(request):
+        file_name = _extract_filename_from_content_disposition(
+            response.headers.get("content-disposition")
+        )
+        response_body_out = file_name
+        return response, response_body_out
 
     if response_body:
         if response_json is not None:

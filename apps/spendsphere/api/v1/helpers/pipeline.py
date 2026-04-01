@@ -1064,6 +1064,10 @@ def build_transform_rows_for_period(
             "year": resolved_year,
         },
         "rows": rows,
+        "budgets": budgets,
+        "campaigns": campaigns,
+        "costs": costs,
+        "accelerations": active_accelerations,
         "allocations": allocations,
     }
 

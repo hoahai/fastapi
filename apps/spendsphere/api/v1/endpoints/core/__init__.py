@@ -1,6 +1,7 @@
 from apps.spendsphere.api.v1.endpoints.core import (
     accelerations,
     allocations,
+    budgetReports,
     budgets,
     caches,
     echo,
@@ -14,6 +15,7 @@ from apps.spendsphere.api.v1.endpoints.core import (
 __all__ = [
     "accelerations",
     "allocations",
+    "budgetReports",
     "budgets",
     "caches",
     "echo",
