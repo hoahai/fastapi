@@ -14,6 +14,7 @@ from apps.spendsphere.api.v1.helpers.accountCodes import (
 from apps.spendsphere.api.v1.helpers.campaignRules import (
     DEFAULT_INACTIVE_PREFIXES,
     has_any_active_campaign,
+    is_campaign_status_mutation_allowed,
     should_filter_row,
 )
 from apps.spendsphere.api.v1.helpers.dataTransform import (
@@ -1212,6 +1213,31 @@ def run_google_ads_budget_pipeline(
             if not updates:
                 continue
 
+            executable_updates: list[dict] = []
+            skipped_warnings: list[dict] = []
+            for update in updates:
+                if is_campaign_status_mutation_allowed(update):
+                    executable_updates.append(update)
+                    continue
+
+                channel_type = str(update.get("channelType") or "").strip().upper() or "UNKNOWN"
+                campaign_name = str(update.get("campaignName") or "").strip()
+                warning = {
+                    "campaignId": update.get("campaignId"),
+                    "campaignNames": [campaign_name] if campaign_name else [],
+                    "accountCode": update.get("accountCode"),
+                    "oldStatus": update.get("oldStatus"),
+                    "newStatus": update.get("newStatus"),
+                    "channelType": channel_type,
+                    "trigger": channel_type,
+                    "warningCode": "CAMPAIGN_STATUS_MUTATE_NOT_ALLOWED",
+                    "error": (
+                        "Skipped campaign status update because Google Ads API does not "
+                        f"allow mutating {channel_type} campaigns."
+                    ),
+                }
+                skipped_warnings.append({k: v for k, v in warning.items() if v is not None})
+
             account_code = next(
                 (u.get("accountCode") for u in updates if u.get("accountCode")),
                 None,
@@ -1224,8 +1250,9 @@ def run_google_ads_budget_pipeline(
                     "operation": "update_campaign_statuses",
                     "summary": {
                         "total": len(updates),
-                        "succeeded": len(updates),
+                        "succeeded": len(executable_updates),
                         "failed": 0,
+                        "warnings": len(skipped_warnings),
                     },
                     "successes": [
                         {
@@ -1233,9 +1260,10 @@ def run_google_ads_budget_pipeline(
                             "oldStatus": u.get("oldStatus"),
                             "newStatus": u.get("newStatus"),
                         }
-                        for u in updates
+                        for u in executable_updates
                     ],
                     "failures": [],
+                    "warnings": skipped_warnings,
                 }
             )
     else:

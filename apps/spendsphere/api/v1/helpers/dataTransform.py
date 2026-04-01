@@ -379,6 +379,7 @@ def group_campaigns_by_budget(
             "campaignId": c.get("campaignId"),
             "campaignName": c.get("campaignName"),
             "status": c.get("status"),
+            "channelType": c.get("channelType"),
         }
         if include_transform_results:
             campaign_entry["cost"] = cost_lookup.get(
@@ -448,6 +449,7 @@ def group_campaigns_by_budget(
                 "campaignId": campaign_id,
                 "campaignName": campaign_name,
                 "status": c.get("status"),
+                "channelType": c.get("channelType"),
                 **(
                     {
                         "cost": cost_lookup.get(
@@ -958,6 +960,7 @@ def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
                 customer_updates[str(campaign["campaignId"])] = {
                     "campaignId": campaign["campaignId"],
                     "campaignName": campaign.get("campaignName"),
+                    "channelType": campaign.get("channelType"),
                     "oldStatus": campaign_status,
                     "newStatus": expected_status,
                     "accountCode": row.get("accountCode"),

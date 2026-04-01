@@ -32,6 +32,9 @@ from shared.constants import (
 )
 from shared.logger import get_logger
 from apps.spendsphere.api.v1.helpers.accountCodes import standardize_account_code
+from apps.spendsphere.api.v1.helpers.campaignRules import (
+    is_campaign_status_mutation_allowed,
+)
 from apps.spendsphere.api.v1.helpers.config import (
     get_adtypes,
     get_google_ads_inactive_prefixes,
@@ -1800,6 +1803,34 @@ def update_campaign_statuses(
             inactive_prefixes=inactive_prefixes,
         )
     ]
+    warnings: list[dict] = []
+
+    mutable_updates: list[dict] = []
+    for update in filtered_updates:
+        if is_campaign_status_mutation_allowed(update):
+            mutable_updates.append(update)
+            continue
+
+        channel_type = str(update.get("channelType") or "").strip().upper() or "UNKNOWN"
+        new_status_value = update.get("newStatus", update.get("status"))
+        campaign_name = str(update.get("campaignName") or "").strip()
+        warning_message = (
+            "Skipped campaign status update because Google Ads API does not allow "
+            f"mutating {channel_type} campaigns."
+        )
+        warning = {
+            "campaignId": update.get("campaignId"),
+            "campaignNames": [campaign_name] if campaign_name else [],
+            "accountCode": standardize_account_code(update.get("accountCode")),
+            "oldStatus": update.get("oldStatus"),
+            "newStatus": str(new_status_value).upper() if new_status_value else None,
+            "channelType": channel_type,
+            "trigger": channel_type,
+            "warningCode": "CAMPAIGN_STATUS_MUTATE_NOT_ALLOWED",
+            "error": warning_message,
+        }
+        warnings.append({k: v for k, v in warning.items() if v is not None})
+
     if not filtered_updates:
         account_code = next(
             (
@@ -1817,14 +1848,40 @@ def update_campaign_statuses(
                 "total": 0,
                 "succeeded": 0,
                 "failed": 0,
+                "warnings": 0,
             },
             "successes": [],
             "failures": [],
+            "warnings": [],
+        }
+
+    if not mutable_updates:
+        account_code = next(
+            (
+                standardize_account_code(r.get("accountCode"))
+                for r in filtered_updates
+                if standardize_account_code(r.get("accountCode"))
+            ),
+            None,
+        )
+        return {
+            "customerId": customer_id,
+            "accountCode": account_code,
+            "operation": "update_campaign_statuses",
+            "summary": {
+                "total": len(filtered_updates),
+                "succeeded": 0,
+                "failed": 0,
+                "warnings": len(warnings),
+            },
+            "successes": [],
+            "failures": [],
+            "warnings": warnings,
         }
 
     valid, invalid = validate_updates(
         customer_id=customer_id,
-        updates=filtered_updates,
+        updates=mutable_updates,
         mode="campaign_status",
     )
     account_code = next(
@@ -1845,9 +1902,11 @@ def update_campaign_statuses(
                 "total": len(filtered_updates),
                 "succeeded": 0,
                 "failed": len(invalid),
+                "warnings": len(warnings),
             },
             "successes": [],
             "failures": invalid,
+            "warnings": warnings,
         }
 
     client = get_client()
@@ -1939,7 +1998,9 @@ def update_campaign_statuses(
             "total": len(filtered_updates),
             "succeeded": len(successes),
             "failed": len(failures),
+            "warnings": len(warnings),
         },
         "successes": successes,
         "failures": failures,
+        "warnings": warnings,
     }

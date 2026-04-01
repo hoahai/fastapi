@@ -3,6 +3,7 @@ from typing import Mapping
 TOUCHABLE_CAMPAIGN_STATUSES = {"ENABLED", "PAUSED"}
 REMOVED_CAMPAIGN_STATUS = "REMOVED"
 DEFAULT_INACTIVE_PREFIXES = ("zzz.", "zzz_")
+STATUS_MUTATION_BLOCKED_CHANNEL_TYPES = {"VIDEO"}
 
 
 def get_campaign_status(campaign: Mapping[str, object]) -> str:
@@ -22,6 +23,17 @@ def is_inactive_campaign_name(
 
 def should_include_campaign_in_row(campaign: Mapping[str, object]) -> bool:
     return get_campaign_status(campaign) != REMOVED_CAMPAIGN_STATUS
+
+
+def get_campaign_channel_type(campaign: Mapping[str, object]) -> str:
+    return str(campaign.get("channelType") or "").strip().upper()
+
+
+def is_campaign_status_mutation_allowed(campaign: Mapping[str, object]) -> bool:
+    channel_type = get_campaign_channel_type(campaign)
+    if not channel_type:
+        return True
+    return channel_type not in STATUS_MUTATION_BLOCKED_CHANNEL_TYPES
 
 
 def has_any_active_campaign(

@@ -338,6 +338,9 @@ Documentation rules:
         0.01`; otherwise `PAUSED`.
     -   Campaigns with names prefixed by any
         `GOOGLE_ADS_NAMING.inactivePrefixes` value are never status-updated.
+    -   Campaigns with blocked mutation channel types (currently `VIDEO`)
+        are never status-updated via Google Ads API mutation and are
+        emitted as warnings instead of failures.
     -   Campaign is updated only when current status differs from
         `expected_status`.
 -   Budget amount update rule (stricter than campaign status):
@@ -390,6 +393,12 @@ Documentation rules:
         -   Grouping is derived from transformed budget rows and includes only
             rows with valid `budgetId`.
         -   Does not block updates; warning is added to mutation result.
+    -   `CAMPAIGN_STATUS_MUTATE_NOT_ALLOWED` warning:
+        -   Triggered when a campaign status mutation is skipped due to
+            blocked channel type policy (for example `VIDEO`).
+        -   Includes campaign-level metadata (`campaignId`, `oldStatus`,
+            `newStatus`, `trigger`/`channelType`) for alerting and logs.
+        -   Does not block other mutations; warning is added to mutation result.
     -   Shared row-level skip conditions for the two warnings above:
         -   Skipped when budget has no linked campaigns.
         -   Skipped when all linked campaigns are `PAUSED`.
@@ -411,6 +420,11 @@ Documentation rules:
         -   Row-detail warnings are logged in `Google Ads pipeline warnings`.
         -   Separate summary log `Google Ads spend without allocation warnings`
             is removed to avoid duplicate warning-count logs in Axiom.
+    -   Google Ads alert email behavior:
+        -   Alert aggregation includes both budget and campaign-status
+            mutation failures/warnings (not budget-only).
+        -   Issue titles are entity-aware (budget vs campaign) to avoid
+            ambiguous `Unknown`/`None` failure rendering.
 -   Execution mode:
     -   `dryRun=true`: no Google Ads mutations; returns simulated
         mutation result structure.

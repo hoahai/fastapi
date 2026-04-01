@@ -142,30 +142,28 @@ def build_google_ads_alert_email(
     app_label = "SpendSphere"
 
     mutation_results = full_report.get("mutation_results") or []
-    budget_failures: list[dict] = []
-    budget_warnings: list[dict] = []
-    campaign_status_total = 0
-    campaign_status_failed = 0
+    mutation_failures: list[dict] = []
+    mutation_warnings: list[dict] = []
+    operation_labels: list[str] = []
 
     for r in mutation_results:
-        operation = r.get("operation")
-        summary = r.get("summary") or {}
-        if operation == "update_campaign_statuses":
-            campaign_status_total += int(summary.get("total", 0) or 0)
-            campaign_status_failed += int(summary.get("failed", 0) or 0)
-            continue
-        if operation != "update_budgets":
-            continue
-
+        operation = str(r.get("operation") or "").strip()
+        if operation and operation not in operation_labels:
+            operation_labels.append(operation)
         account_code = r.get("accountCode")
         for item in r.get("failures") or []:
-            budget_failures.append(_normalize_budget_issue(item, account_code))
+            mutation_failures.append(
+                _normalize_budget_issue(item, account_code, operation=operation)
+            )
         for item in r.get("warnings") or []:
-            budget_warnings.append(_normalize_budget_issue(item, account_code))
+            mutation_warnings.append(
+                _normalize_budget_issue(item, account_code, operation=operation)
+            )
 
-    budget_warnings = _merge_budget_issues_for_display(budget_warnings)
+    mutation_warnings = _merge_issues_for_display(mutation_warnings)
+    mutation_failures = _merge_issues_for_display(mutation_failures)
 
-    campaign_status_summary = "update_campaign_statuses"
+    campaign_status_summary = ", ".join(operation_labels) if operation_labels else "N/A"
 
     def _issue_lines(issues: list[dict]) -> list[str]:
         lines: list[str] = []
@@ -214,14 +212,14 @@ def build_google_ads_alert_email(
         f"- Warnings: {warning_count}",
     ]
 
-    if budget_warnings:
+    if mutation_warnings:
         text_lines.append("")
         text_lines.append("Warnings (grouped by account):")
-        text_lines.extend(_issue_lines_grouped_by_account(budget_warnings))
-    if budget_failures:
+        text_lines.extend(_issue_lines_grouped_by_account(mutation_warnings))
+    if mutation_failures:
         text_lines.append("")
         text_lines.append("Failures (grouped by account):")
-        text_lines.extend(_issue_lines_grouped_by_account(budget_failures))
+        text_lines.extend(_issue_lines_grouped_by_account(mutation_failures))
 
     text_lines.append("")
     text_lines.append("=" * 60)
@@ -299,8 +297,8 @@ def build_google_ads_alert_email(
             "dry_run": esc(dry_run),
             "campaign_status_summary": esc(campaign_status_summary),
             "stats_html": stats_html,
-            "failures_html": _html_issue_list_grouped_by_account(budget_failures),
-            "warnings_html": _html_issue_list_grouped_by_account(budget_warnings),
+            "failures_html": _html_issue_list_grouped_by_account(mutation_failures),
+            "warnings_html": _html_issue_list_grouped_by_account(mutation_warnings),
         }
     )
 
@@ -318,15 +316,24 @@ def _html_stat_card(label: str, value: int, text_color: str, bg_color: str) -> s
     )
 
 
-def _normalize_budget_issue(issue: object, fallback_account: str | None) -> dict:
+def _normalize_budget_issue(
+    issue: object,
+    fallback_account: str | None,
+    *,
+    operation: str | None = None,
+) -> dict:
     if not isinstance(issue, dict):
         return {
             "account_code": fallback_account or "Unknown",
             "campaign_names": ["Unknown Campaign"],
             "budget_id": "Unknown",
+            "campaign_id": None,
+            "entity_type": "unknown",
+            "entity_id": "Unknown",
             "current_amount": None,
             "new_amount": None,
             "message": str(issue),
+            "operation": operation or None,
             "error_code": None,
             "error_type": None,
             "error_enum": None,
@@ -347,15 +354,41 @@ def _normalize_budget_issue(issue: object, fallback_account: str | None) -> dict
         campaign_names_list = [str(n).strip() for n in campaign_names if str(n).strip()]
     else:
         campaign_names_list = []
+
+    budget_id = issue.get("budgetId")
+    campaign_id = issue.get("campaignId")
+    campaign_name = str(issue.get("campaignName") or "").strip()
+    if campaign_name and campaign_name not in campaign_names_list:
+        campaign_names_list.append(campaign_name)
+    if not campaign_names_list and campaign_id:
+        campaign_names_list = [f"Campaign {campaign_id}"]
     if not campaign_names_list:
         campaign_names_list = ["Unknown Campaign"]
 
-    budget_id = issue.get("budgetId") or "Unknown"
+    operation_name = str(operation or "").strip().lower()
+    if campaign_id and (operation_name == "update_campaign_statuses" or not budget_id):
+        entity_type = "campaign"
+        entity_id = str(campaign_id)
+    else:
+        entity_type = "budget"
+        entity_id = str(budget_id) if budget_id is not None else "Unknown"
+
     current_amount = issue.get("currentAmount")
     if current_amount is None:
         current_amount = issue.get("oldAmount")
     new_amount = issue.get("newAmount")
-    message = issue.get("error") or issue.get("message") or "Unknown"
+    message = issue.get("error") or issue.get("message")
+    error_details = issue.get("errorDetails")
+    if message in (None, "") and isinstance(error_details, list):
+        for detail in error_details:
+            if not isinstance(detail, dict):
+                continue
+            detail_message = detail.get("error") or detail.get("message")
+            if detail_message not in (None, ""):
+                message = detail_message
+                break
+    if message in (None, ""):
+        message = "Unknown"
     error_code = issue.get("errorCode")
     if error_code is None:
         error_code = issue.get("warningCode")
@@ -369,17 +402,20 @@ def _normalize_budget_issue(issue: object, fallback_account: str | None) -> dict
     retryable = issue.get("retryable")
     attempt = issue.get("attempt")
     max_attempts = issue.get("maxAttempts")
-    error_details = issue.get("errorDetails")
     if not isinstance(error_details, list):
         error_details = None
 
     return {
         "account_code": str(account_code),
         "campaign_names": campaign_names_list,
-        "budget_id": str(budget_id),
+        "budget_id": str(budget_id) if budget_id is not None else "Unknown",
+        "campaign_id": str(campaign_id) if campaign_id is not None else None,
+        "entity_type": entity_type,
+        "entity_id": entity_id,
         "current_amount": current_amount,
         "new_amount": new_amount,
         "message": str(message),
+        "operation": operation or None,
         "error_code": str(error_code).strip() if error_code is not None else None,
         "error_type": str(error_type).strip() if error_type is not None else None,
         "error_enum": str(error_enum).strip() if error_enum is not None else None,
@@ -399,6 +435,20 @@ def _format_issue_title(issue: dict, *, include_account: bool = True) -> str:
     if code.upper() == "ADTYPE_ALLOCATION_TOTAL_NOT_100":
         ad_type_code = _resolve_issue_ad_type_code(issue)
         return f"{code}\nAd type code: {ad_type_code}"
+
+    entity_type = str(issue.get("entity_type") or "").strip().lower()
+    if entity_type == "campaign":
+        campaign_id = str(issue.get("campaign_id") or issue.get("entity_id") or "Unknown")
+        campaign_names = issue.get("campaign_names") or [f"Campaign {campaign_id}"]
+        if isinstance(campaign_names, list):
+            campaigns = ",".join(
+                str(name).strip() for name in campaign_names if str(name).strip()
+            )
+        else:
+            campaigns = str(campaign_names)
+        if not campaigns:
+            campaigns = f"Campaign {campaign_id}"
+        return f"{code}\n{campaign_id}: {campaigns}"
 
     campaign_names = issue.get("campaign_names") or ["Unknown Campaign"]
     if isinstance(campaign_names, list):
@@ -539,14 +589,21 @@ def _get_issue_messages(issue: dict) -> list[str]:
     return [message or "Unknown"]
 
 
-def _merge_budget_issues_for_display(issues: list[dict]) -> list[dict]:
-    merged: dict[tuple[str, str], dict] = {}
-    order: list[tuple[str, str]] = []
+def _merge_issues_for_display(issues: list[dict]) -> list[dict]:
+    merged: dict[tuple[str, str, str, str], dict] = {}
+    order: list[tuple[str, str, str, str]] = []
 
     for issue in issues:
         account_code = str(issue.get("account_code") or "Unknown")
-        budget_id = str(issue.get("budget_id") or "Unknown")
-        key = (account_code, budget_id)
+        entity_type = str(issue.get("entity_type") or "unknown").strip().lower()
+        entity_id = str(
+            issue.get("entity_id")
+            or issue.get("campaign_id")
+            or issue.get("budget_id")
+            or "Unknown"
+        )
+        issue_code = _resolve_issue_code(issue).upper()
+        key = (account_code, entity_type, entity_id, issue_code)
         message = str(issue.get("message") or "Unknown").strip() or "Unknown"
 
         if key not in merged:
