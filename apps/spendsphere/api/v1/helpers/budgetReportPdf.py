@@ -17,19 +17,24 @@ _COLOR_DEFAULT = (0, 0, 0)
 _COLOR_YELLOW = (194, 137, 0)
 _COLOR_GREEN = (0, 128, 0)
 _COLOR_RED = (196, 0, 0)
+_COLOR_BRIGHT_YELLOW = (255, 255, 0)
 _BORDER_COLOR = (214, 214, 214)
 # Approximation of rgba(51, 119, 255, 0.15) on white background.
 _HEADER_BG_COLOR = (224, 235, 255)
 _TYPE_SUMMARY_BG_COLOR = (239, 245, 255)
 _SECTION_BG_COLOR = (51, 119, 255)
 _SECTION_TEXT_COLOR = (255, 255, 255)
+_DAILY_BUDGET_ALERT_BG_COLOR = (153, 0, 255)  # #9900ff
+_DAILY_BUDGET_ALERT_THRESHOLD = Decimal("500")
+_PERCENT_SPENT_BENCHMARK_BG_COLOR = (246, 171, 31)  # #f6ab1f
+_PERCENT_SPENT_BENCHMARK_TEXT_COLOR = (226, 82, 30)  # #e2521e
 _TABLE_COLUMNS: list[tuple[str, str, float, str]] = [
     ("type", "Type", 11.0, "L"),
     ("adTypeBudget", "Master Budget", 18.0, "L"),
     ("budgetId", "BudgetId", 20.0, "L"),
     ("campaigns", "Campaigns", 46.0, "L"),
-    ("allocation", "Allocation", 16.0, "R"),
     ("spent", "Spent", 19.0, "R"),
+    ("allocation", "Allocation", 16.0, "R"),
     ("allocatedBudget", "Allocated Budget", 22.0, "R"),
     ("dailyBudget", "Daily Budget", 20.0, "R"),
     ("percentSpent", "% Spent", 19.0, "R"),
@@ -139,17 +144,30 @@ def _metric_text_color(value: Decimal | None) -> tuple[int, int, int]:
     return _COLOR_RED
 
 
+def _should_highlight_daily_budget_cell(row_data: dict[str, object]) -> bool:
+    daily_budget = _to_decimal(row_data.get("_dailyBudgetValue"), default=None)
+    current_budget = _to_decimal(row_data.get("_currentBudgetValue"), default=None)
+    return bool(
+        (daily_budget is not None and daily_budget > _DAILY_BUDGET_ALERT_THRESHOLD)
+        or (current_budget is not None and current_budget > _DAILY_BUDGET_ALERT_THRESHOLD)
+    )
+
+
 def _cell_text_color(key: str, row_data: dict[str, object], *, is_header: bool) -> tuple[int, int, int]:
     if is_header:
         return _SECTION_BG_COLOR
     if bool(row_data.get("_isSummaryRow")):
         return _COLOR_DEFAULT
     if key == "dailyBudget":
+        if _should_highlight_daily_budget_cell(row_data):
+            return _COLOR_BRIGHT_YELLOW
         daily_budget = _to_decimal(row_data.get("_dailyBudgetValue"), default=None)
         if daily_budget is not None and daily_budget <= Decimal("0"):
             return _COLOR_RED
         return _COLOR_DEFAULT
     if key == "percentSpent":
+        if _is_percent_spent_over_benchmark(row_data):
+            return _PERCENT_SPENT_BENCHMARK_TEXT_COLOR
         return _metric_text_color(
             _to_decimal(row_data.get("_percentSpentValue"), default=None)
         )
@@ -160,6 +178,14 @@ def _cell_text_color(key: str, row_data: dict[str, object], *, is_header: bool) 
 
 def _append_bold(style: str) -> str:
     return style if "B" in style else f"{style}B"
+
+
+def _is_percent_spent_over_benchmark(row_data: dict[str, object]) -> bool:
+    percent_value = _to_decimal(row_data.get("_percentSpentValue"), default=None)
+    benchmark = _to_decimal(row_data.get("_percentSpentBenchmark"), default=None)
+    if percent_value is None or benchmark is None:
+        return False
+    return percent_value > benchmark
 
 
 def _cell_base_style(
@@ -174,7 +200,11 @@ def _cell_base_style(
         return style
     if bool(row_data.get("_isSummaryRow")):
         return _append_bold(style)
+    if key == "dailyBudget" and _should_highlight_daily_budget_cell(row_data):
+        return _append_bold(style)
     if key in {"percentSpent", "pacing"}:
+        if key == "percentSpent" and _is_percent_spent_over_benchmark(row_data):
+            return _append_bold(style)
         metric_value = _to_decimal(
             row_data.get("_percentSpentValue" if key == "percentSpent" else "_pacingValue"),
             default=None,
@@ -482,6 +512,9 @@ def _build_summary_row(
         pacing = (spent_total / total_mtd_max_spendable * Decimal("100")).quantize(
             Decimal("0.01")
         )
+    percent_spent_benchmark = (
+        (Decimal(str(as_of_day)) / Decimal(str(days_in_month))) * Decimal("100")
+    ).quantize(Decimal("0.01"))
 
     allocated_display = _format_currency(allocated_after_total_value)
     allocation_display = (
@@ -508,8 +541,10 @@ def _build_summary_row(
         "_allocatedStyledLines": None,
         "_adTypeBudgetStyledLines": None,
         "_dailyBudgetValue": daily_budget_avg_value,
+        "_currentBudgetValue": None,
         "_dailyBudgetMismatch": False,
         "_percentSpentValue": percent_spent,
+        "_percentSpentBenchmark": percent_spent_benchmark,
         "_pacingValue": pacing,
         "_campaignStatusRank": 2,
         "_allocatedSort": float(allocated_after_total_value) if allocated_after_total_value is not None else None,
@@ -537,6 +572,9 @@ def _build_report_groups(
     if not isinstance(rows, list):
         return groups
     as_of_day, days_in_month = _resolve_as_of_day(month=month, year=year)
+    percent_spent_benchmark = (
+        (Decimal(str(as_of_day)) / Decimal(str(days_in_month))) * Decimal("100")
+    ).quantize(Decimal("0.01"))
 
     for row in rows:
         if not isinstance(row, dict):
@@ -663,8 +701,10 @@ def _build_report_groups(
                 "_adTypeBudgetStyledLines": ad_type_budget_styled_lines,
                 "_dailyBudgetStyledLines": daily_budget_styled_lines,
                 "_dailyBudgetValue": daily_budget,
+                "_currentBudgetValue": current_budget,
                 "_dailyBudgetMismatch": daily_budget_mismatch,
                 "_percentSpentValue": percent_spent_value,
+                "_percentSpentBenchmark": percent_spent_benchmark,
                 "_pacingValue": pacing_value,
                 "_campaignStatusRank": campaign_status_rank,
                 "_allocatedSort": float(allocated_after) if allocated_after is not None else None,
@@ -1002,14 +1042,15 @@ def _draw_table_row(
     x = pdf.l_margin
     table_columns = _get_table_columns(pdf)
     is_summary = bool(row_data.get("_isSummaryRow")) and not is_header
+    row_fill_color: tuple[int, int, int] | None = None
     if is_header:
-        pdf.set_fill_color(*_HEADER_BG_COLOR)
+        row_fill_color = _HEADER_BG_COLOR
     elif is_summary:
         summary_kind = str(row_data.get("_summaryKind", "")).strip().lower()
         if summary_kind == "type":
-            pdf.set_fill_color(*_TYPE_SUMMARY_BG_COLOR)
+            row_fill_color = _TYPE_SUMMARY_BG_COLOR
         else:
-            pdf.set_fill_color(*_HEADER_BG_COLOR)
+            row_fill_color = _HEADER_BG_COLOR
     pdf.set_draw_color(*_BORDER_COLOR)
 
     for idx, (key, _label, width, align) in enumerate(table_columns):
@@ -1028,7 +1069,24 @@ def _draw_table_row(
         if key == "adTypeBudget" and not is_header and ad_type_budget_cell_height is not None:
             cell_height = ad_type_budget_cell_height
 
-        fill = is_header or is_summary
+        cell_fill_color = row_fill_color
+        if (
+            key == "dailyBudget"
+            and not is_header
+            and not is_summary
+            and _should_highlight_daily_budget_cell(row_data)
+        ):
+            cell_fill_color = _DAILY_BUDGET_ALERT_BG_COLOR
+        if (
+            key == "percentSpent"
+            and not is_header
+            and not is_summary
+            and _is_percent_spent_over_benchmark(row_data)
+        ):
+            cell_fill_color = _PERCENT_SPENT_BENCHMARK_BG_COLOR
+        fill = cell_fill_color is not None
+        if cell_fill_color is not None:
+            pdf.set_fill_color(*cell_fill_color)
         pdf.rect(x, y, width, cell_height, style="DF" if fill else "D")
 
         base_style = "B" if is_header else ""
