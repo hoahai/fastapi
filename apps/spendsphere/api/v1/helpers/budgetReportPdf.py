@@ -7,10 +7,11 @@ from zoneinfo import ZoneInfo
 
 from fpdf import FPDF
 
+from shared.constants import GGADS_MIN_BUDGET, GGADS_MIN_BUDGET_DELTA
 from shared.tenant import get_timezone
 
 _FONT_FAMILY = "Helvetica"
-_TITLE_TEXT = "BUDGETS REPORTS"
+_TITLE_TEXT = "Budget OverView"
 _LARGE_RANK = 10**9
 _COLOR_DEFAULT = (0, 0, 0)
 _COLOR_YELLOW = (194, 137, 0)
@@ -101,10 +102,29 @@ def _format_allocation(value: Decimal | None) -> str:
     return f"{float(value):,.2f}%"
 
 
-def _money_differs(left: Decimal | None, right: Decimal | None) -> bool:
-    if left is None or right is None:
+def _should_mark_daily_budget_mismatch(
+    daily_budget: Decimal | None,
+    current_budget: Decimal | None,
+) -> bool:
+    """
+    Mirror Google Ads budget-update delta logic so report markers match
+    real update behavior.
+    """
+    if daily_budget is None or current_budget is None:
         return False
-    return left.quantize(Decimal("0.01")) != right.quantize(Decimal("0.01"))
+
+    min_budget = Decimal(str(GGADS_MIN_BUDGET))
+    min_delta = Decimal(str(GGADS_MIN_BUDGET_DELTA))
+    amount_to_set = min_budget if daily_budget <= Decimal("0") else daily_budget
+
+    if amount_to_set == current_budget:
+        return False
+
+    if amount_to_set not in (Decimal("0"), min_budget):
+        if (amount_to_set - current_budget).copy_abs() <= min_delta:
+            return False
+
+    return True
 
 
 def _metric_text_color(value: Decimal | None) -> tuple[int, int, int]:
@@ -571,7 +591,7 @@ def _build_report_groups(
         current_budget = _to_decimal(row.get("budgetAmount"), default=None)
         daily_budget_display = _format_currency(daily_budget)
         daily_budget_mismatch = (
-            _money_differs(daily_budget, current_budget)
+            _should_mark_daily_budget_mismatch(daily_budget, current_budget)
             if is_current_period
             else False
         )

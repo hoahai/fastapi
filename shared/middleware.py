@@ -56,7 +56,7 @@ def _normalize_path(path: str | None) -> str:
 
 def _should_summarize_response_body_for_logging(request: Request) -> bool:
     path = _normalize_path(request.url.path or "")
-    return path.endswith("/reports/budgets/pdf")
+    return path.endswith("/reports/budgetOverview")
 
 
 def _extract_filename_from_content_disposition(value: str | None) -> str | None:

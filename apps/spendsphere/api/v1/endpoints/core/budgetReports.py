@@ -61,7 +61,7 @@ def _to_cache_safe_rows(rows: list[dict]) -> list[dict]:
 
 
 @router.get(
-    "/reports/budgets/pdf",
+    "/reports/budgetOverview",
     summary="Generate budget PDF report by period",
     description=(
         "Generates a portrait PDF report grouped by account code using SpendSphere "
@@ -79,14 +79,14 @@ def get_budgets_report_pdf(
     The report is grouped by account and includes spend, allocation, acceleration, and pacing metrics.
 
     Example request:
-        GET /api/spendsphere/v1/reports/budgets/pdf?month=1&year=2026
+        GET /api/spendsphere/v1/reports/budgetOverview?month=1&year=2026
 
     Example request (cache bypass):
-        GET /api/spendsphere/v1/reports/budgets/pdf?month=1&year=2026&fresh_data=true
+        GET /api/spendsphere/v1/reports/budgetOverview?month=1&year=2026&fresh_data=true
 
     Example response:
         Content-Type: application/pdf
-        Content-Disposition: attachment; filename="spendsphere-budgets-reports-nucar-01-2026-260401091200.pdf"
+        Content-Disposition: attachment; filename="SpendSphere Budget Overview - nucar2601 - 2604010912.pdf"
         <binary pdf content>
 
     Requirements:
@@ -225,10 +225,10 @@ def get_budgets_report_pdf(
         is_current_period=is_current_period,
     )
 
+    period_token = f"{tenant_token}{resolved_year % 100:02d}{resolved_month:02d}"
+    timestamp_token = datetime.now(ZoneInfo(get_timezone())).strftime("%y%m%d%H%M")
     filename = (
-        f"spendsphere-budgets-reports-"
-        f"{tenant_token}-{resolved_month:02d}-{resolved_year:04d}-"
-        f"{datetime.now(ZoneInfo(get_timezone())).strftime('%y%m%d%H%M%S')}.pdf"
+        f"SpendSphere Budget Overview - {period_token} - {timestamp_token}.pdf"
     )
     headers = {"Content-Disposition": f'attachment; filename="{filename}"'}
     return Response(content=pdf_bytes, media_type="application/pdf", headers=headers)
