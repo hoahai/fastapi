@@ -3,6 +3,7 @@ from __future__ import annotations
 import calendar
 from datetime import datetime
 from decimal import Decimal, InvalidOperation
+from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from fpdf import FPDF
@@ -28,6 +29,13 @@ _DAILY_BUDGET_ALERT_BG_COLOR = (153, 0, 255)  # #9900ff
 _DAILY_BUDGET_ALERT_THRESHOLD = Decimal("500")
 _PERCENT_SPENT_BENCHMARK_BG_COLOR = (246, 171, 31)  # #f6ab1f
 _PERCENT_SPENT_BENCHMARK_TEXT_COLOR = (226, 82, 30)  # #e2521e
+_LOGO_CANDIDATE_PATHS = (
+    Path(__file__).resolve().parents[5] / "static" / "spensphere_logo.png",
+    Path(__file__).resolve().parents[5] / "static" / "spendsphere_logo.png",
+)
+_LOGO_WIDTH_MM = 30.0
+_LOGO_HEIGHT_MM = 6.46
+_LOGO_TITLE_GAP_MM = 1.0
 _TABLE_COLUMNS: list[tuple[str, str, float, str]] = [
     ("type", "Type", 11.0, "L"),
     ("adTypeBudget", "Master Budget", 18.0, "L"),
@@ -62,6 +70,13 @@ def _get_table_columns(pdf: FPDF) -> list[tuple[str, str, float, str]]:
         (key, label, width * scale, align)
         for key, label, width, align in _TABLE_COLUMNS
     ]
+
+
+def _get_logo_path() -> Path | None:
+    for path in _LOGO_CANDIDATE_PATHS:
+        if path.exists():
+            return path
+    return None
 
 
 def _safe_text(value: object) -> str:
@@ -771,6 +786,22 @@ def _draw_title_block(
     month: int,
     year: int,
 ) -> None:
+    start_y = pdf.get_y()
+    logo_path = _get_logo_path()
+    if logo_path is not None:
+        logo_x = (pdf.w - _LOGO_WIDTH_MM) / 2
+        try:
+            pdf.image(
+                str(logo_path),
+                x=logo_x,
+                y=start_y,
+                w=_LOGO_WIDTH_MM,
+                h=_LOGO_HEIGHT_MM,
+            )
+            pdf.set_y(start_y + _LOGO_HEIGHT_MM + _LOGO_TITLE_GAP_MM)
+        except Exception:
+            pdf.set_y(start_y)
+
     now = datetime.now(ZoneInfo(get_timezone()))
     generated_at = f"{now.month}/{now.day}/{now.year} {now.strftime('%H:%M:%S')}"
     subtitle = (
