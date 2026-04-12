@@ -58,6 +58,9 @@ from apps.spendsphere.api.v1.helpers.ggAd import (
 )
 from apps.spendsphere.api.v1.helpers.ggSheet import get_active_period, get_rollovers
 from apps.spendsphere.api.v1.helpers.spendsphereHelpers import require_account_code
+from apps.spendsphere.api.v1.helpers.videoCampaignStatusSheet import (
+    sync_video_campaign_status_updates,
+)
 from shared.constants import BUDGET_LESS_THAN_SPEND_TOLERANCE
 from shared.tenant import get_timezone
 from shared.utils import get_current_period, run_parallel
@@ -1157,6 +1160,10 @@ def _get_ui_context_with_mutations(
             if mutation_tasks
             else []
         )
+        sync_video_campaign_status_updates(
+            mutation_results=mutation_results,
+            source="ui_update",
+        )
 
         if return_new_data and mutation_tasks:
             budgets = get_ggad_budgets([account], refresh_cache=refresh_budgets)
@@ -1785,6 +1792,12 @@ def update_ui_allocations_rollbreaks(
 
     Note: Google Ads budget/status mutations run only when the payload
     month/year match the current period.
+    Note: When `SPREADSHEETS.spendSphere.videoCampaignStatusUpdate`
+    (or `videoCampaignStatusUpdateSheet`) is configured, blocked VIDEO
+    campaign status updates are appended to that sheet.
+    Note: First-seen blocked VIDEO warnings are deferred to sheet/cache.
+    A warning is emitted only on later runs if the matching sheet request
+    remains unresolved.
 
     Requirements:
         - Requires X-Tenant-Id header

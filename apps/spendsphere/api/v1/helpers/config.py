@@ -449,6 +449,12 @@ def _parse_spendsphere_sheets(
         or spend_sphere_entry.get("activepriodsheetname")
         or ""
     ).strip()
+    spend_sphere_video_campaign_status_update = str(
+        spend_sphere_entry.get("videocampaignstatusupdate")
+        or spend_sphere_entry.get("videocampaignstatusupdatesheet")
+        or spend_sphere_entry.get("videocampaignstatusupdatesheetname")
+        or ""
+    ).strip()
 
     if not spend_sphere_id:
         missing.append(f"{key_prefix}.spendSphere.id")
@@ -491,6 +497,11 @@ def _parse_spendsphere_sheets(
         sheets["active_period"] = {
             "spreadsheet_id": spend_sphere_id,
             "range_name": spend_sphere_active_name,
+        }
+    if spend_sphere_id and spend_sphere_video_campaign_status_update:
+        sheets["video_campaign_status_update"] = {
+            "spreadsheet_id": spend_sphere_id,
+            "range_name": spend_sphere_video_campaign_status_update,
         }
 
     if digital_ad_center_id:

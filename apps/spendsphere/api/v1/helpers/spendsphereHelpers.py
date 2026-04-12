@@ -36,6 +36,7 @@ _GOOGLE_ADS_CAMPAIGNS_KEY = "google_ads_campaigns"
 _GOOGLE_ADS_SPENT_KEY = "google_ads_spent"
 _GOOGLE_ADS_WARNINGS_KEY = "google_ads_warnings"
 _GOOGLE_SHEETS_KEY = "google_sheets"
+_VIDEO_CAMPAIGN_STATUS_REQUESTS_KEY = "video_campaign_status_requests"
 _BUDGET_MANAGEMENTS_KEY = "budget_managements"
 _BUDGET_MANAGEMENT_RECOMMENDED_KEY = "budget_management_recommended"
 _SERVICES_KEY = "services"
@@ -48,6 +49,7 @@ _WARNING_FINGERPRINT_PREFIX = "warning::"
 _DEFAULT_GOOGLE_ADS_RESOURCE_CACHE_TTL_SECONDS = 300
 _DEFAULT_SERVICES_CACHE_TTL_SECONDS = 86400
 _DEFAULT_GOOGLE_ADS_SPENT_CACHE_TTL_SECONDS = 300
+_DEFAULT_VIDEO_CAMPAIGN_STATUS_REQUESTS_CACHE_TTL_SECONDS = 604800
 _DEFAULT_BUDGET_MANAGEMENT_RECOMMENDED_CACHE_TTL_SECONDS = 300
 _BUDGET_MANAGEMENTS_CACHE_KEY_PREFIX = "budget_managements::"
 _BUDGET_MANAGEMENTS_CACHE_KEY_PREFIX_LEGACY = "budget_managements_table_data::"
@@ -62,6 +64,7 @@ _SPENDSPHERE_CACHE_KEYS = (
     _GOOGLE_ADS_SPENT_KEY,
     _GOOGLE_ADS_WARNINGS_KEY,
     _GOOGLE_SHEETS_KEY,
+    _VIDEO_CAMPAIGN_STATUS_REQUESTS_KEY,
     _BUDGET_MANAGEMENTS_KEY,
     _BUDGET_MANAGEMENT_RECOMMENDED_KEY,
     _SERVICES_KEY,
@@ -243,6 +246,10 @@ def _load_cache_root(cache_store: FileCache) -> dict[str, object]:
     if not isinstance(google_sheets, dict):
         google_sheets = {}
 
+    video_campaign_status_requests = root.get(_VIDEO_CAMPAIGN_STATUS_REQUESTS_KEY)
+    if not isinstance(video_campaign_status_requests, dict):
+        video_campaign_status_requests = {}
+
     budget_managements = root.get(_BUDGET_MANAGEMENTS_KEY)
     if not isinstance(budget_managements, dict):
         budget_managements = {}
@@ -263,6 +270,9 @@ def _load_cache_root(cache_store: FileCache) -> dict[str, object]:
     normalized_root[_GOOGLE_ADS_SPENT_KEY] = google_ads_spent
     normalized_root[_GOOGLE_ADS_WARNINGS_KEY] = google_ads_warnings
     normalized_root[_GOOGLE_SHEETS_KEY] = google_sheets
+    normalized_root[_VIDEO_CAMPAIGN_STATUS_REQUESTS_KEY] = (
+        video_campaign_status_requests
+    )
     normalized_root[_BUDGET_MANAGEMENTS_KEY] = budget_managements
     normalized_root[_BUDGET_MANAGEMENT_RECOMMENDED_KEY] = budget_management_recommended
     normalized_root[_SERVICES_KEY] = services
@@ -448,6 +458,13 @@ def get_services_cache_ttl_seconds() -> int:
     value = _get_cache_override(("services_ttl_time",))
     if value is None:
         return _DEFAULT_SERVICES_CACHE_TTL_SECONDS
+    return value
+
+
+def get_video_campaign_status_requests_cache_ttl_seconds() -> int:
+    value = _get_cache_override(("video_campaign_status_requests_ttl_time",))
+    if value is None:
+        return _DEFAULT_VIDEO_CAMPAIGN_STATUS_REQUESTS_CACHE_TTL_SECONDS
     return value
 
 
@@ -1063,6 +1080,7 @@ def cleanup_stale_cache_entries(
         "google_ads_spent": 0,
         "google_ads_warnings": 0,
         "google_sheets": 0,
+        "video_campaign_status_requests": 0,
         "budget_management": 0,
         "services": 0,
     }
@@ -1351,6 +1369,32 @@ def cleanup_stale_cache_entries(
                 else:
                     sheets_cache.pop(tenant_key, None)
                 root[_GOOGLE_SHEETS_KEY] = sheets_cache
+
+        video_status_requests_cache = root.get(_VIDEO_CAMPAIGN_STATUS_REQUESTS_KEY)
+        if isinstance(video_status_requests_cache, dict):
+            tenant_entry = video_status_requests_cache.get(tenant_key)
+            if isinstance(tenant_entry, dict):
+                ttl_seconds = get_video_campaign_status_requests_cache_ttl_seconds()
+                for request_id in list(tenant_entry.keys()):
+                    entry = tenant_entry.get(request_id)
+                    should_remove = not isinstance(entry, dict)
+                    if not should_remove:
+                        updated_at = _parse_cache_datetime(entry.get("updated_at"))
+                        if ttl_seconds > 0:
+                            should_remove = (
+                                updated_at is None
+                                or (now - updated_at).total_seconds() > ttl_seconds
+                            )
+                    if should_remove:
+                        tenant_entry.pop(request_id, None)
+                        removed["video_campaign_status_requests"] += 1
+                        changed = True
+                if tenant_entry:
+                    video_status_requests_cache[tenant_key] = tenant_entry
+                else:
+                    video_status_requests_cache.pop(tenant_key, None)
+                    changed = True
+                root[_VIDEO_CAMPAIGN_STATUS_REQUESTS_KEY] = video_status_requests_cache
 
         services_cache = root.get(_SERVICES_KEY)
         if isinstance(services_cache, dict):
@@ -1643,6 +1687,295 @@ def set_google_ads_campaigns_cache(
         if not (isinstance(existing_campaigns, list) and existing_campaigns == campaigns):
             _remove_budget_management_table_cache_keys(root, tenant_key=tenant_key)
         _write_cache_root(cache_store, root)
+
+
+def clear_google_ads_campaigns_cache_entries(
+    account_codes: list[str] | str | None,
+    *,
+    tenant_id: str | None = None,
+) -> int:
+    codes = _normalize_account_codes(account_codes)
+    if not codes:
+        return 0
+
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+        campaigns_cache = root.get(_GOOGLE_ADS_CAMPAIGNS_KEY)
+        if not isinstance(campaigns_cache, dict):
+            return 0
+
+        tenant_entry = campaigns_cache.get(tenant_key)
+        if not isinstance(tenant_entry, dict):
+            return 0
+
+        removed = 0
+        for code in codes:
+            if code in tenant_entry:
+                tenant_entry.pop(code, None)
+                removed += 1
+
+        if removed <= 0:
+            return 0
+
+        if tenant_entry:
+            campaigns_cache[tenant_key] = tenant_entry
+        else:
+            campaigns_cache.pop(tenant_key, None)
+        root[_GOOGLE_ADS_CAMPAIGNS_KEY] = campaigns_cache
+        _remove_budget_management_table_cache_keys(root, tenant_key=tenant_key)
+        _write_cache_root(cache_store, root)
+        return removed
+
+
+def _normalize_video_campaign_status_request_entry(
+    request_id: str,
+    entry: object,
+    *,
+    now: datetime,
+    ttl_seconds: int,
+) -> dict[str, object] | None:
+    if not request_id or not isinstance(entry, dict):
+        return None
+
+    updated_at = _parse_cache_datetime(entry.get("updated_at"))
+    if ttl_seconds > 0:
+        if updated_at is None or (now - updated_at).total_seconds() > ttl_seconds:
+            return None
+
+    customer_id = str(entry.get("customerId", "")).strip()
+    campaign_id = str(entry.get("campaignId", "")).strip()
+    new_status = str(entry.get("newStatus", "")).strip().upper()
+    if not customer_id or not campaign_id or not new_status:
+        return None
+
+    status = str(entry.get("status", "")).strip().lower()
+    if status not in {"pending", "resolved"}:
+        status = "pending"
+
+    normalized: dict[str, object] = {
+        "requestId": request_id,
+        "status": status,
+        "customerId": customer_id,
+        "campaignId": campaign_id,
+        "newStatus": new_status,
+        "accountCode": standardize_account_code(entry.get("accountCode")) or "",
+        "source": str(entry.get("source", "")).strip(),
+        "createdAt": str(entry.get("createdAt", "")).strip() or now.isoformat(),
+        "updated_at": updated_at.isoformat() if updated_at else now.isoformat(),
+    }
+
+    resolved_at = str(entry.get("resolvedAt", "")).strip()
+    if resolved_at:
+        normalized["resolvedAt"] = resolved_at
+
+    result = str(entry.get("result", "")).strip()
+    if result:
+        normalized["result"] = result
+
+    return normalized
+
+
+def get_video_campaign_status_requests_cache_entries(
+    *,
+    tenant_id: str | None = None,
+) -> dict[str, dict[str, object]]:
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+    now = datetime.now(ZoneInfo(get_timezone()))
+    ttl_seconds = get_video_campaign_status_requests_cache_ttl_seconds()
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+        bucket = root.get(_VIDEO_CAMPAIGN_STATUS_REQUESTS_KEY)
+        if not isinstance(bucket, dict):
+            return {}
+
+        tenant_entry = bucket.get(tenant_key)
+        if not isinstance(tenant_entry, dict):
+            return {}
+
+        normalized: dict[str, dict[str, object]] = {}
+        changed = False
+        for raw_request_id in list(tenant_entry.keys()):
+            request_id = str(raw_request_id).strip()
+            normalized_entry = _normalize_video_campaign_status_request_entry(
+                request_id,
+                tenant_entry.get(raw_request_id),
+                now=now,
+                ttl_seconds=ttl_seconds,
+            )
+            if normalized_entry is None:
+                tenant_entry.pop(raw_request_id, None)
+                changed = True
+                continue
+            normalized[request_id] = normalized_entry
+            if tenant_entry.get(raw_request_id) != normalized_entry:
+                tenant_entry[request_id] = normalized_entry
+                if request_id != raw_request_id:
+                    tenant_entry.pop(raw_request_id, None)
+                changed = True
+
+        if changed:
+            if tenant_entry:
+                bucket[tenant_key] = tenant_entry
+            else:
+                bucket.pop(tenant_key, None)
+            root[_VIDEO_CAMPAIGN_STATUS_REQUESTS_KEY] = bucket
+            _write_cache_root(cache_store, root)
+
+        return normalized
+
+
+def list_pending_video_campaign_status_requests(
+    *,
+    tenant_id: str | None = None,
+) -> list[dict[str, object]]:
+    entries = get_video_campaign_status_requests_cache_entries(tenant_id=tenant_id)
+    pending: list[dict[str, object]] = []
+    for entry in entries.values():
+        if str(entry.get("status", "")).strip().lower() != "pending":
+            continue
+        pending.append(dict(entry))
+    return pending
+
+
+def upsert_video_campaign_status_requests(
+    requests: list[dict[str, object]],
+    *,
+    tenant_id: str | None = None,
+) -> int:
+    if not requests:
+        return 0
+
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+    now = datetime.now(ZoneInfo(get_timezone()))
+    now_iso = now.isoformat()
+    updated = 0
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+        bucket = root.get(_VIDEO_CAMPAIGN_STATUS_REQUESTS_KEY)
+        if not isinstance(bucket, dict):
+            bucket = {}
+        tenant_entry = bucket.get(tenant_key)
+        if not isinstance(tenant_entry, dict):
+            tenant_entry = {}
+
+        for request in requests:
+            request_id = str(request.get("requestId", "")).strip()
+            customer_id = str(request.get("customerId", "")).strip()
+            campaign_id = str(request.get("campaignId", "")).strip()
+            new_status = str(request.get("newStatus", "")).strip().upper()
+            if not request_id or not customer_id or not campaign_id or not new_status:
+                continue
+
+            existing_entry = tenant_entry.get(request_id)
+            existing_created_at = (
+                str(existing_entry.get("createdAt", "")).strip()
+                if isinstance(existing_entry, dict)
+                else ""
+            )
+            entry = {
+                "requestId": request_id,
+                "status": str(request.get("status", "pending")).strip().lower()
+                or "pending",
+                "customerId": customer_id,
+                "campaignId": campaign_id,
+                "newStatus": new_status,
+                "accountCode": standardize_account_code(request.get("accountCode")) or "",
+                "source": str(request.get("source", "")).strip(),
+                "createdAt": str(request.get("createdAt", "")).strip()
+                or existing_created_at
+                or now_iso,
+                "updated_at": now_iso,
+            }
+            if entry["status"] not in {"pending", "resolved"}:
+                entry["status"] = "pending"
+
+            result = str(request.get("result", "")).strip()
+            if result:
+                entry["result"] = result
+            elif isinstance(existing_entry, dict):
+                existing_result = str(existing_entry.get("result", "")).strip()
+                if existing_result:
+                    entry["result"] = existing_result
+
+            resolved_at = str(request.get("resolvedAt", "")).strip()
+            if resolved_at:
+                entry["resolvedAt"] = resolved_at
+            elif isinstance(existing_entry, dict):
+                existing_resolved_at = str(existing_entry.get("resolvedAt", "")).strip()
+                if existing_resolved_at:
+                    entry["resolvedAt"] = existing_resolved_at
+
+            tenant_entry[request_id] = entry
+            updated += 1
+
+        if updated <= 0:
+            return 0
+
+        bucket[tenant_key] = tenant_entry
+        root[_VIDEO_CAMPAIGN_STATUS_REQUESTS_KEY] = bucket
+        _write_cache_root(cache_store, root)
+        return updated
+
+
+def resolve_video_campaign_status_requests(
+    resolved_requests: list[dict[str, object]],
+    *,
+    tenant_id: str | None = None,
+) -> int:
+    if not resolved_requests:
+        return 0
+
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+    now_iso = datetime.now(ZoneInfo(get_timezone())).isoformat()
+    updated = 0
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+        bucket = root.get(_VIDEO_CAMPAIGN_STATUS_REQUESTS_KEY)
+        if not isinstance(bucket, dict):
+            return 0
+        tenant_entry = bucket.get(tenant_key)
+        if not isinstance(tenant_entry, dict):
+            return 0
+
+        for item in resolved_requests:
+            request_id = str(item.get("requestId", "")).strip()
+            if not request_id:
+                continue
+            existing_entry = tenant_entry.get(request_id)
+            if not isinstance(existing_entry, dict):
+                continue
+
+            existing_entry["status"] = "resolved"
+            existing_entry["updated_at"] = now_iso
+            existing_entry["resolvedAt"] = (
+                str(item.get("resolvedAt", "")).strip() or now_iso
+            )
+            result = str(item.get("result", "")).strip()
+            if result:
+                existing_entry["result"] = result
+            tenant_entry[request_id] = existing_entry
+            updated += 1
+
+        if updated <= 0:
+            return 0
+
+        bucket[tenant_key] = tenant_entry
+        root[_VIDEO_CAMPAIGN_STATUS_REQUESTS_KEY] = bucket
+        _write_cache_root(cache_store, root)
+        return updated
 
 
 def get_google_ads_spent_cache_entries(

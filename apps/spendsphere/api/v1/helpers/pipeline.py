@@ -42,6 +42,9 @@ from apps.spendsphere.api.v1.helpers.spendsphereHelpers import (
     get_google_ads_clients_cache_entry,
     sync_google_ads_warning_states,
 )
+from apps.spendsphere.api.v1.helpers.videoCampaignStatusSheet import (
+    sync_video_campaign_status_updates,
+)
 from shared.constants import (
     ADTYPE_ALLOCATION_TOTAL_TOLERANCE_PERCENT,
     BUDGET_LESS_THAN_SPEND_TOLERANCE,
@@ -1301,6 +1304,11 @@ def run_google_ads_budget_pipeline(
             tasks=tasks,
             api_name="google_ads_mutation",
         )
+
+    sync_video_campaign_status_updates(
+        mutation_results=mutation_results,
+        source="updates_budget_pipeline",
+    )
 
     current_warnings_by_customer: dict[str, list[dict]] = (
         _extract_warnings_from_mutation_results(mutation_results)

@@ -38,6 +38,9 @@ class GoogleAdsUpdateRequest(BaseModel):
 @router.post("/updates/budget")
 def update_google_ads(request_payload: GoogleAdsUpdateRequest):
     """
+    Run SpendSphere Google Ads budget and campaign-status updates for the
+    requested account scope.
+
     Example request:
         POST /api/spendsphere/v1/updates/budget
         {
@@ -87,6 +90,16 @@ def update_google_ads(request_payload: GoogleAdsUpdateRequest):
           "mutation_results": [],
           "transform_results": []
         }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - When `SPREADSHEETS.spendSphere.videoCampaignStatusUpdate`
+          (or `videoCampaignStatusUpdateSheet`) is configured, blocked
+          VIDEO campaign status updates are appended to that sheet.
+        - First-seen blocked VIDEO warnings are deferred to sheet/cache.
+          A warning is emitted only on later runs if the matching sheet
+          request remains unresolved.
     """
     if should_validate_account_codes(request_payload.accountCodes):
         validate_account_codes(
@@ -143,6 +156,8 @@ def update_google_ads_async(
     request: Request,
 ):
     """
+    Queue an asynchronous SpendSphere Google Ads update job.
+
     Example request:
         POST /api/spendsphere/v1/updates/budgetAsync
         {
@@ -162,6 +177,16 @@ def update_google_ads_async(
     Background behavior:
         - Returns immediately after queuing the job.
         - Full pipeline result is produced by the background task and logged.
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - When `SPREADSHEETS.spendSphere.videoCampaignStatusUpdate`
+          (or `videoCampaignStatusUpdateSheet`) is configured, blocked
+          VIDEO campaign status updates are appended to that sheet.
+        - First-seen blocked VIDEO warnings are deferred to sheet/cache.
+          A warning is emitted only on later runs if the matching sheet
+          request remains unresolved.
     """
     if should_validate_account_codes(request_payload.accountCodes):
         validate_account_codes(
