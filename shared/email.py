@@ -8,12 +8,55 @@ import urllib.request
 
 from shared.utils import load_env
 from shared.tenant import get_env
+from shared.logger import get_logger, set_log_app_scope, reset_log_app_scope
 
 # =========================================================
 # ENV
 # =========================================================
 
 load_env()
+_EMAIL_LOGGER = get_logger("email")
+
+
+def _normalize_email_recipients(
+    *,
+    to_addresses: list[str] | None,
+    fallback_raw: object,
+) -> list[str]:
+    if isinstance(to_addresses, list):
+        return [str(email).strip() for email in to_addresses if str(email).strip()]
+    return [e.strip() for e in str(fallback_raw).split(",") if e.strip()]
+
+
+def _log_email_api_error_to_axiom(
+    *,
+    error: str,
+    app_name: str | None,
+    subject: str,
+    to_addresses: list[str],
+) -> None:
+    app_scope_token = None
+    try:
+        if app_name:
+            app_scope_token = set_log_app_scope(app_name)
+        _EMAIL_LOGGER.error(
+            "Email API call failed",
+            extra={
+                "extra_fields": {
+                    "event": "email_api_error",
+                    "error": error,
+                    "subject": subject,
+                    "to": to_addresses,
+                    "app_scope": app_name,
+                }
+            },
+        )
+    except Exception:
+        # Never crash app because logging failed
+        pass
+    finally:
+        if app_scope_token is not None:
+            reset_log_app_scope(app_scope_token)
 
 
 # =========================================================
@@ -28,6 +71,9 @@ def send_google_ads_result_email(
     html: str | None = None,
     attachments: list[dict] | None = None,
     app_name: str | None = None,
+    to_addresses: list[str] | None = None,
+    force_api_error: bool = False,
+    log_to_axiom_on_error: bool = True,
     return_response: bool = False,
     return_payload: bool = False,
 ):
@@ -35,89 +81,115 @@ def send_google_ads_result_email(
     Send Google Ads mutation result email using Zoho Mail API.
     """
 
-    access_token = _get_zoho_access_token()
-    account_id = get_env("ZOHO_ACCOUNT_ID")
-    mail_base_url = str(
-        get_env(
-            "ZOHO_MAIL_BASE_URL",
-            "https://mail.zoho.com",
+    app_scope_token = None
+    email_to: list[str] = []
+    try:
+        if app_name:
+            app_scope_token = set_log_app_scope(app_name)
+
+        access_token = _get_zoho_access_token()
+        account_id = get_env("ZOHO_ACCOUNT_ID")
+        mail_base_url = str(
+            get_env(
+                "ZOHO_MAIL_BASE_URL",
+                "https://mail.zoho.com",
+            )
+            or ""
+        ).strip()
+        mail_base_url = (
+            mail_base_url.rstrip("/") if mail_base_url else "https://mail.zoho.com"
         )
-        or ""
-    ).strip()
-    mail_base_url = mail_base_url.rstrip("/") if mail_base_url else "https://mail.zoho.com"
-    email_from = str(
-        get_env(
-            "EMAIL_FROM",
-            "noreply@theautoadagency.com",
+        if force_api_error:
+            mail_base_url = "http://127.0.0.1:9"
+        email_from = str(
+            get_env(
+                "EMAIL_FROM",
+                "noreply@theautoadagency.com",
+            )
+            or ""
+        ).strip()
+        email_to_raw = get_env(
+            "EMAIL_TO",
+            "hai@theautoadagency.com",
         )
-        or ""
-    ).strip()
-    email_to_raw = get_env(
-        "EMAIL_TO",
-        "hai@theautoadagency.com",
-    )
-    email_to = [e.strip() for e in str(email_to_raw).split(",") if e.strip()]
+        email_to = _normalize_email_recipients(
+            to_addresses=to_addresses,
+            fallback_raw=email_to_raw,
+        )
 
-    if not account_id:
-        raise RuntimeError("ZOHO_ACCOUNT_ID is not configured")
-    if not email_from:
-        raise RuntimeError("EMAIL_FROM is not configured")
-    if not email_to:
-        raise RuntimeError("EMAIL_TO is not configured")
+        if not account_id:
+            raise RuntimeError("ZOHO_ACCOUNT_ID is not configured")
+        if not email_from:
+            raise RuntimeError("EMAIL_FROM is not configured")
+        if not email_to:
+            raise RuntimeError("EMAIL_TO is not configured")
 
-    subject_value = subject
+        subject_value = subject
+        from_value = email_from
+        to_value = ",".join(email_to)
 
-    from_value = email_from
-    to_value = ",".join(email_to)
+        payload: dict[str, object] = {
+            "fromAddress": from_value,
+            "toAddress": to_value,
+            "subject": subject_value,
+            "content": html if html is not None else body,
+            "mailFormat": "html" if html is not None else "plaintext",
+        }
+        if attachments:
+            _validate_zoho_attachments(attachments)
+            payload["attachments"] = attachments
 
-    payload: dict[str, object] = {
-        "fromAddress": from_value,
-        "toAddress": to_value,
-        "subject": subject_value,
-        "content": html if html is not None else body,
-        "mailFormat": "html" if html is not None else "plaintext",
-    }
-    if attachments:
-        _validate_zoho_attachments(attachments)
-        payload["attachments"] = attachments
-
-    data = json.dumps(payload).encode("utf-8")
-    req = urllib.request.Request(
-        f"{mail_base_url}/api/accounts/{account_id}/messages",
-        data=data,
-        method="POST",
-        headers={
-            "Content-Type": "application/json",
-            "Accept": "application/json",
-            "Authorization": f"Zoho-oauthtoken {access_token}",
-        },
-    )
-
-    if return_payload:
-        return {
-            "payload": payload,
-            "headers": {
+        data = json.dumps(payload).encode("utf-8")
+        req = urllib.request.Request(
+            f"{mail_base_url}/api/accounts/{account_id}/messages",
+            data=data,
+            method="POST",
+            headers={
                 "Content-Type": "application/json",
                 "Accept": "application/json",
-                "Authorization": "Zoho-oauthtoken [redacted]",
+                "Authorization": f"Zoho-oauthtoken {access_token}",
             },
-        }
+        )
 
-    try:
-        with urllib.request.urlopen(req, timeout=15) as resp:
-            body_bytes = resp.read()
-            response_text = body_bytes.decode("utf-8") if body_bytes else ""
-            if resp.status >= 400:
-                raise RuntimeError(
-                    f"Zoho Mail API error {resp.status}: {response_text}"
-                )
-            if return_response:
-                return {"status": resp.status, "body": response_text}
-    except urllib.error.HTTPError as exc:
-        error_body = exc.read().decode("utf-8") if exc.fp else str(exc)
-        raise RuntimeError(f"Zoho Mail API error {exc.code}: {error_body}") from exc
-    except urllib.error.URLError as exc:
-        raise RuntimeError(f"Zoho Mail connection error: {exc.reason}") from exc
+        if return_payload:
+            return {
+                "payload": payload,
+                "headers": {
+                    "Content-Type": "application/json",
+                    "Accept": "application/json",
+                    "Authorization": "Zoho-oauthtoken [redacted]",
+                },
+            }
+
+        try:
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                body_bytes = resp.read()
+                response_text = body_bytes.decode("utf-8") if body_bytes else ""
+                if resp.status >= 400:
+                    raise RuntimeError(
+                        f"Zoho Mail API error {resp.status}: {response_text}"
+                    )
+                if return_response:
+                    return {"status": resp.status, "body": response_text}
+        except urllib.error.HTTPError as exc:
+            error_body = exc.read().decode("utf-8") if exc.fp else str(exc)
+            raise RuntimeError(
+                f"Zoho Mail API error {exc.code}: {error_body}"
+            ) from exc
+        except urllib.error.URLError as exc:
+            raise RuntimeError(f"Zoho Mail connection error: {exc.reason}") from exc
+    except Exception as exc:
+        if log_to_axiom_on_error:
+            _log_email_api_error_to_axiom(
+                error=str(exc),
+                app_name=app_name,
+                subject=subject,
+                to_addresses=email_to,
+            )
+        raise
+    finally:
+        if app_scope_token is not None:
+            reset_log_app_scope(app_scope_token)
 
 
 _ZOHO_ACCESS_TOKEN: str | None = None

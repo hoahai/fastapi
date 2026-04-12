@@ -276,6 +276,16 @@ Documentation rules:
         provided
     -   Clears sheet tab `'2.3 Master Budget Data'` range `A9:C` before
         writing new rows starting at row `9`
+-   SpendSphere test routes (core echo):
+    -   `POST /api/spendsphere/v1/echo/test-email` supports
+        `force_api_error=true` to intentionally fail Zoho mail API calls
+        and verify email-failure logging to Axiom.
+    -   `POST /api/spendsphere/v1/echo/test-email` catches email-send
+        failures and returns HTTP `502` from the route (instead of
+        propagating unhandled exceptions).
+    -   `POST /api/spendsphere/v1/echo/test-axiom` supports
+        `force_error=true` to intentionally fail Axiom ingest and verify
+        fallback email alerts.
 -   Cache file `caches.json` holds SpendSphere cache data.
 -   TTL and refresh rules are documented in `CACHE.md`.
 -   File-based caching may not be safe for multi-instance deployments

@@ -144,6 +144,257 @@ def _get_axiom_level() -> int:
     level = logging.getLevelName(level_name)
     return level if isinstance(level, int) else logging.INFO
 
+
+def _level_name_to_level_no(level_name: str) -> int:
+    normalized = str(level_name or "").strip().upper()
+    mapping = {
+        "CRITICAL": logging.CRITICAL,
+        "FATAL": logging.CRITICAL,
+        "ERROR": logging.ERROR,
+        "WARNING": logging.WARNING,
+        "WARN": logging.WARNING,
+        "INFO": logging.INFO,
+        "DEBUG": logging.DEBUG,
+        "TRACE": 5,
+    }
+    return mapping.get(normalized, logging.INFO)
+
+
+def _level_no_to_otel_severity_number(level_no: int) -> int:
+    if level_no >= logging.CRITICAL:
+        return 21
+    if level_no >= logging.ERROR:
+        return 17
+    if level_no >= logging.WARNING:
+        return 13
+    if level_no >= logging.INFO:
+        return 9
+    if level_no >= logging.DEBUG:
+        return 5
+    return 1
+
+
+def _level_no_to_status_code(level_no: int) -> str:
+    if level_no >= logging.ERROR:
+        return "ERROR"
+    if level_no >= logging.WARNING:
+        return "WARN"
+    return "OK"
+
+
+def _build_severity_fields(
+    *,
+    level_name: str,
+    level_no: int | None = None,
+) -> dict[str, object]:
+    normalized_level_name = str(level_name or "").strip().upper() or "INFO"
+    resolved_level_no = (
+        int(level_no)
+        if isinstance(level_no, int)
+        else _level_name_to_level_no(normalized_level_name)
+    )
+    severity_number = _level_no_to_otel_severity_number(resolved_level_no)
+    status_code = _level_no_to_status_code(resolved_level_no)
+    return {
+        "level": normalized_level_name,
+        "@level": normalized_level_name,
+        "severity": normalized_level_name,
+        "@severity": normalized_level_name,
+        "severityText": normalized_level_name,
+        "severityNumber": severity_number,
+        "status.code": status_code,
+    }
+
+
+AXIOM_FAILURE_FALLBACK_EMAIL = "truonghoahai@gmail.com"
+AXIOM_FAILURE_ALERT_COOLDOWN_SECONDS = 300.0
+_AXIOM_FAILURE_ALERTS: dict[str, float] = {}
+_AXIOM_FAILURE_ALERTS_LOCK = threading.Lock()
+
+
+def _post_axiom_batch(
+    *,
+    token: str,
+    dataset: str,
+    api_url: str,
+    items: list[dict],
+) -> None:
+    url = f"{api_url}/v1/datasets/{dataset}/ingest"
+    data = json.dumps(items).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={
+            "Authorization": f"Bearer {token}",
+            "Content-Type": "application/json",
+            "User-Agent": "fastapi-logger",
+        },
+        method="POST",
+    )
+
+    with urllib.request.urlopen(req, timeout=5) as response:
+        response.read()
+
+
+def _build_axiom_failure_alert_key(
+    *,
+    app_scope: str | None,
+    dataset: str,
+    api_url: str,
+) -> str:
+    return f"{str(app_scope or '')}:{dataset}:{api_url}"
+
+
+def _should_send_axiom_failure_alert(
+    *,
+    key: str,
+    force: bool,
+) -> bool:
+    if force:
+        return True
+    now = time.monotonic()
+    with _AXIOM_FAILURE_ALERTS_LOCK:
+        last_sent = _AXIOM_FAILURE_ALERTS.get(key, 0.0)
+        if (now - last_sent) < AXIOM_FAILURE_ALERT_COOLDOWN_SECONDS:
+            return False
+        _AXIOM_FAILURE_ALERTS[key] = now
+    return True
+
+
+def _mark_axiom_failure_alert_sent(
+    *,
+    key: str,
+) -> None:
+    now = time.monotonic()
+    with _AXIOM_FAILURE_ALERTS_LOCK:
+        _AXIOM_FAILURE_ALERTS[key] = now
+
+
+def _send_axiom_failure_email(
+    *,
+    app_scope: str | None,
+    dataset: str,
+    api_url: str,
+    items: list[dict],
+    error: Exception,
+    force: bool = False,
+) -> None:
+    alert_key = _build_axiom_failure_alert_key(
+        app_scope=app_scope,
+        dataset=dataset,
+        api_url=api_url,
+    )
+    if not _should_send_axiom_failure_alert(key=alert_key, force=force):
+        return
+
+    sample = items[0] if items else {}
+    tenant_id = sample.get("tenant_id") if isinstance(sample, dict) else None
+    sample_message = sample.get("message") if isinstance(sample, dict) else None
+
+    subject = "[Axiom Error] Ingest fallback alert"
+    body_lines = [
+        "Axiom ingest failed. Fallback email alert was triggered.",
+        "",
+        f"App scope: {app_scope or 'unknown'}",
+        f"Tenant: {tenant_id or 'unknown'}",
+        f"Dataset: {dataset}",
+        f"API URL: {api_url}",
+        f"Batch size: {len(items)}",
+        f"Error: {str(error)}",
+    ]
+    if sample_message:
+        body_lines.append(f"Sample message: {sample_message}")
+    body = "\n".join(body_lines)
+
+    try:
+        from shared.email import send_google_ads_result_email
+
+        send_google_ads_result_email(
+            subject,
+            body,
+            to_addresses=[AXIOM_FAILURE_FALLBACK_EMAIL],
+            app_name=app_scope,
+            log_to_axiom_on_error=False,
+        )
+        _mark_axiom_failure_alert_sent(key=alert_key)
+    except Exception:
+        # Never crash app because of fallback alerts
+        pass
+
+
+def _build_test_axiom_event(
+    *,
+    message: str,
+    level: str,
+) -> dict:
+    severity_fields = _build_severity_fields(level_name=level)
+    event: dict[str, object] = {
+        "timestamp": datetime.now(CHICAGO_TZ).isoformat(),
+        "logger": "axiom-test",
+        "message": message,
+        "run_id": RUN_ID,
+    }
+    event.update(severity_fields)
+    event.update(_get_host_context())
+
+    tenant_id = get_tenant_id()
+    if tenant_id:
+        event["tenant_id"] = tenant_id
+
+    request_id = get_request_id()
+    if request_id:
+        event["request_id"] = request_id
+
+    return event
+
+
+def send_axiom_test_log(
+    *,
+    message: str,
+    level: str = "INFO",
+    force_error: bool = False,
+) -> dict[str, object]:
+    """
+    Send one synchronous test log to Axiom.
+    """
+    app_scope = get_log_app_scope()
+    enabled, token, dataset, api_url, _, _ = _get_axiom_config()
+    if not enabled:
+        raise RuntimeError("Axiom logging is not configured for this app scope")
+
+    target_api_url = api_url
+    if force_error:
+        target_api_url = "http://127.0.0.1:9"
+
+    item = _build_test_axiom_event(
+        message=message,
+        level=level,
+    )
+
+    try:
+        _post_axiom_batch(
+            token=token,
+            dataset=dataset,
+            api_url=target_api_url,
+            items=[item],
+        )
+        return {
+            "sent": True,
+            "dataset": dataset,
+            "apiUrl": target_api_url,
+            "forcedError": force_error,
+        }
+    except Exception as exc:
+        _send_axiom_failure_email(
+            app_scope=app_scope,
+            dataset=dataset,
+            api_url=target_api_url,
+            items=[item],
+            error=exc,
+            force=True,
+        )
+        raise RuntimeError(f"Axiom ingest failed: {str(exc)}") from exc
+
 # ======================================================
 # DURATION FORMATTER
 # ======================================================
@@ -171,13 +422,17 @@ def format_duration(seconds: float) -> str:
 
 class JsonFormatter(logging.Formatter):
     def format(self, record: logging.LogRecord) -> str:
+        severity_fields = _build_severity_fields(
+            level_name=record.levelname,
+            level_no=record.levelno,
+        )
         log: dict = {
             "timestamp": datetime.now(CHICAGO_TZ).isoformat(),
-            "level": record.levelname,
             "logger": record.name,
             "message": record.getMessage(),
             "run_id": RUN_ID,
         }
+        log.update(severity_fields)
 
         log.update(_get_host_context())
 
@@ -193,6 +448,10 @@ class JsonFormatter(logging.Formatter):
         if isinstance(extra_fields, dict):
             log.update(extra_fields)
 
+        # Keep canonical severity fields stable for Axiom highlighting,
+        # even if extra_fields contains custom level/severity keys.
+        log.update(severity_fields)
+
         return json.dumps(log, default=str)
 
 
@@ -204,11 +463,13 @@ class AxiomHandler(logging.Handler):
         api_url: str,
         batch_size: int,
         flush_seconds: float,
+        app_scope: str | None = None,
     ) -> None:
         super().__init__()
         self._token = token
         self._dataset = dataset
         self._api_url = api_url
+        self._app_scope = app_scope
         self._batch_size = max(1, batch_size)
         self._flush_seconds = max(0.5, flush_seconds)
         self._queue: queue.SimpleQueue[dict] = queue.SimpleQueue()
@@ -258,23 +519,21 @@ class AxiomHandler(logging.Handler):
                 last_flush = now
 
     def _send(self, items: list[dict]) -> None:
-        url = f"{self._api_url}/v1/datasets/{self._dataset}/ingest"
-        data = json.dumps(items).encode("utf-8")
-        req = urllib.request.Request(
-            url,
-            data=data,
-            headers={
-                "Authorization": f"Bearer {self._token}",
-                "Content-Type": "application/json",
-                "User-Agent": "fastapi-logger",
-            },
-            method="POST",
-        )
-
         try:
-            with urllib.request.urlopen(req, timeout=5) as response:
-                response.read()
-        except Exception:
+            _post_axiom_batch(
+                token=self._token,
+                dataset=self._dataset,
+                api_url=self._api_url,
+                items=items,
+            )
+        except Exception as exc:
+            _send_axiom_failure_email(
+                app_scope=self._app_scope,
+                dataset=self._dataset,
+                api_url=self._api_url,
+                items=items,
+                error=exc,
+            )
             # Never crash app because of logging
             pass
 
@@ -286,11 +545,12 @@ class AxiomRouterHandler(logging.Handler):
         self._lock = threading.Lock()
 
     def emit(self, record: logging.LogRecord) -> None:
+        app_scope = get_log_app_scope()
         enabled, token, dataset, api_url, batch_size, flush_seconds = _get_axiom_config()
         if not enabled:
             return
 
-        key = f"{token}:{dataset}:{api_url}:{batch_size}:{flush_seconds}"
+        key = f"{app_scope}:{token}:{dataset}:{api_url}:{batch_size}:{flush_seconds}"
         handler = self._handlers.get(key)
         if handler is None:
             with self._lock:
@@ -302,6 +562,7 @@ class AxiomRouterHandler(logging.Handler):
                         api_url=api_url,
                         batch_size=batch_size,
                         flush_seconds=flush_seconds,
+                        app_scope=app_scope,
                     )
                     handler.setFormatter(self.formatter or JsonFormatter())
                     handler.setLevel(_get_axiom_level())
