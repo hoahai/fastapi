@@ -414,23 +414,6 @@ def sync_video_campaign_status_updates(
                 rows=rows,
             )
 
-        logger.info(
-            "Video campaign status updates synced to sheet",
-            extra={
-                "extra_fields": {
-                    "spreadsheetId": spreadsheet_id,
-                    "sheetName": sheet_name,
-                    "rows": len(rows),
-                    "source": source,
-                    "newRequests": len(requests),
-                    "deferredWarnings": deferred_warnings,
-                    "duplicateSuppressedWarnings": duplicate_suppressed_warnings,
-                    "unresolvedPendingWarnings": unresolved_pending_warnings,
-                    "resolvedRequests": resolved_count,
-                    "clearedCampaignCacheEntries": cleared_campaign_cache_count,
-                }
-            },
-        )
     except Exception as exc:
         logger.error(
             "Failed to sync video campaign status updates to sheet",

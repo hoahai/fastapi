@@ -1597,6 +1597,47 @@ def set_google_ads_budgets_cache(
         _write_cache_root(cache_store, root)
 
 
+def clear_google_ads_budgets_cache_entries(
+    account_codes: list[str] | str | None,
+    *,
+    tenant_id: str | None = None,
+) -> int:
+    codes = _normalize_account_codes(account_codes)
+    if not codes:
+        return 0
+
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+        budgets_cache = root.get(_GOOGLE_ADS_BUDGETS_KEY)
+        if not isinstance(budgets_cache, dict):
+            return 0
+
+        tenant_entry = budgets_cache.get(tenant_key)
+        if not isinstance(tenant_entry, dict):
+            return 0
+
+        removed = 0
+        for code in codes:
+            if code in tenant_entry:
+                tenant_entry.pop(code, None)
+                removed += 1
+
+        if removed <= 0:
+            return 0
+
+        if tenant_entry:
+            budgets_cache[tenant_key] = tenant_entry
+        else:
+            budgets_cache.pop(tenant_key, None)
+        root[_GOOGLE_ADS_BUDGETS_KEY] = budgets_cache
+        _write_cache_root(cache_store, root)
+        return removed
+
+
 def get_google_ads_campaigns_cache_entries(
     account_codes: list[str] | None,
     *,

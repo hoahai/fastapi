@@ -35,6 +35,7 @@ from apps.spendsphere.api.v1.helpers.dbQueries import (
 )
 from apps.spendsphere.api.v1.helpers.ggSheet import get_active_period
 from apps.spendsphere.api.v1.helpers.spendsphereHelpers import (
+    clear_google_ads_budgets_cache_entries,
     filter_cached_google_ads_failures,
     filter_cached_google_ads_warnings,
     get_google_ads_budgets_cache_entries,
@@ -103,6 +104,48 @@ def _run_campaign_update(customer_id: str, updates: list[dict]) -> dict:
         customer_id=customer_id,
         updates=updates,
     )
+
+
+def _to_non_negative_int(value: object) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return 0
+    return max(parsed, 0)
+
+
+def _collect_budget_mutated_account_codes(
+    mutation_results: list[dict],
+    *,
+    customer_to_account_code: dict[str, str],
+) -> list[str]:
+    account_codes: set[str] = set()
+
+    for result in mutation_results:
+        if not isinstance(result, dict):
+            continue
+        if str(result.get("operation") or "").strip() != "update_budgets":
+            continue
+
+        summary = result.get("summary")
+        succeeded = 0
+        warnings = 0
+        if isinstance(summary, dict):
+            succeeded = _to_non_negative_int(summary.get("succeeded"))
+            warnings = _to_non_negative_int(summary.get("warnings"))
+        mutated_rows = succeeded + warnings
+        if mutated_rows <= 0:
+            continue
+
+        account_code = standardize_account_code(result.get("accountCode"))
+        if not account_code:
+            customer_id = str(result.get("customerId") or "").strip()
+            if customer_id:
+                account_code = customer_to_account_code.get(customer_id)
+        if account_code:
+            account_codes.add(account_code)
+
+    return sorted(account_codes)
 
 
 def _to_decimal(value: object) -> Decimal | None:
@@ -1125,6 +1168,12 @@ def run_google_ads_budget_pipeline(
             if (standardize_account_code(acc.get("accountCode")) or "")
             in account_code_filter
         ]
+    customer_to_account_code: dict[str, str] = {}
+    for account in accounts:
+        customer_id = str(account.get("id") or "").strip()
+        account_code = standardize_account_code(account.get("accountCode"))
+        if customer_id and account_code:
+            customer_to_account_code[customer_id] = account_code
 
     def _get_campaigns(rows: list[dict]) -> list[dict]:
         return get_ggad_campaigns(
@@ -1304,6 +1353,12 @@ def run_google_ads_budget_pipeline(
             tasks=tasks,
             api_name="google_ads_mutation",
         )
+        mutated_budget_account_codes = _collect_budget_mutated_account_codes(
+            mutation_results,
+            customer_to_account_code=customer_to_account_code,
+        )
+        if mutated_budget_account_codes:
+            clear_google_ads_budgets_cache_entries(mutated_budget_account_codes)
 
     sync_video_campaign_status_updates(
         mutation_results=mutation_results,
