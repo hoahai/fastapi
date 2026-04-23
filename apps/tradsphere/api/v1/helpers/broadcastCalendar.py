@@ -25,6 +25,31 @@ def _monday_of_week(target_date: date) -> date:
     return target_date - timedelta(days=target_date.weekday())
 
 
+def get_broadcast_weeks_in_range(
+    start_date: date | datetime | str,
+    end_date: date | datetime | str,
+) -> list[dict[str, date]]:
+    start_value = _coerce_to_date(start_date)
+    end_value = _coerce_to_date(end_date)
+    if start_value > end_value:
+        raise ValueError("startDate must be on or before endDate")
+
+    start_week = _monday_of_week(start_value)
+    end_week = _monday_of_week(end_value)
+
+    weeks: list[dict[str, date]] = []
+    cursor = start_week
+    while cursor <= end_week:
+        weeks.append(
+            {
+                "weekStart": cursor,
+                "weekEnd": cursor + timedelta(days=6),
+            }
+        )
+        cursor += timedelta(days=7)
+    return weeks
+
+
 def get_broadcast_calendar_info(given_date: date | datetime | str) -> dict[str, Any]:
     target_date = _coerce_to_date(given_date)
 

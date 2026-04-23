@@ -12,7 +12,9 @@ from apps.tradsphere.api.v1.helpers.config import get_validation_cache_ttl_secon
 from apps.tradsphere.api.v1.helpers.dbQueries import (
     get_all_contact_ids,
     get_all_delivery_method_ids,
+    get_all_est_nums,
     get_all_master_account_codes,
+    get_all_schedule_ids,
     get_all_station_codes,
     get_all_stations_contacts_ids,
     get_all_tradsphere_account_codes,
@@ -26,6 +28,8 @@ _STATION_CODES_CACHE_KEY = f"{_VALIDATION_CACHE_PREFIX}station_codes"
 _DELIVERY_METHOD_IDS_CACHE_KEY = f"{_VALIDATION_CACHE_PREFIX}delivery_method_ids"
 _CONTACT_IDS_CACHE_KEY = f"{_VALIDATION_CACHE_PREFIX}contact_ids"
 _STATIONS_CONTACT_IDS_CACHE_KEY = f"{_VALIDATION_CACHE_PREFIX}stations_contacts_ids"
+_EST_NUMS_CACHE_KEY = f"{_VALIDATION_CACHE_PREFIX}est_nums"
+_SCHEDULE_IDS_CACHE_KEY = f"{_VALIDATION_CACHE_PREFIX}schedule_ids"
 
 
 def _cache_ttl_seconds() -> int:
@@ -186,6 +190,49 @@ def ensure_stations_contact_ids_exist(ids: list[object]) -> list[int]:
         raise ValueError(
             f"Unknown stationsContacts id values: {', '.join(map(str, missing))}"
         )
+    return normalized
+
+
+def ensure_est_nums_exist(est_nums: list[object]) -> list[int]:
+    normalized = _normalize_int_values(est_nums, field="estNum")
+    if not normalized:
+        return normalized
+    valid_est_nums = {
+        int(item)
+        for item in _get_cached_values(
+            cache_key=_EST_NUMS_CACHE_KEY,
+            fetcher=get_all_est_nums,
+        )
+    }
+    missing = sorted([item for item in normalized if item not in valid_est_nums])
+    if missing:
+        raise ValueError(f"Unknown estNum values: {', '.join(map(str, missing))}")
+    return normalized
+
+
+def ensure_schedule_ids_exist(schedule_ids: list[object]) -> list[str]:
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for value in schedule_ids or []:
+        schedule_row_id = str(value or "").strip()
+        if not schedule_row_id or schedule_row_id in seen:
+            continue
+        seen.add(schedule_row_id)
+        normalized.append(schedule_row_id)
+    if not normalized:
+        return normalized
+
+    valid_ids = {
+        str(item or "").strip()
+        for item in _get_cached_values(
+            cache_key=_SCHEDULE_IDS_CACHE_KEY,
+            fetcher=get_all_schedule_ids,
+        )
+    }
+    valid_ids.discard("")
+    missing = sorted([item for item in normalized if item not in valid_ids])
+    if missing:
+        raise ValueError(f"Unknown schedule id values: {', '.join(missing)}")
     return normalized
 
 

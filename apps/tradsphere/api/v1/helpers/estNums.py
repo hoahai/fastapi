@@ -2,7 +2,10 @@ from __future__ import annotations
 
 from datetime import date
 
-from apps.tradsphere.api.v1.helpers.accountValidation import ensure_account_codes_exist
+from apps.tradsphere.api.v1.helpers.accountValidation import (
+    ensure_account_codes_exist,
+    invalidate_validation_cache,
+)
 from apps.tradsphere.api.v1.helpers.config import get_media_types
 from apps.tradsphere.api.v1.helpers.dbQueries import (
     get_est_nums,
@@ -144,6 +147,8 @@ def create_est_nums_data(payload: list[dict] | dict) -> dict[str, int]:
 
     ensure_account_codes_exist(account_codes)
     inserted = insert_est_nums(normalized_rows)
+    if inserted > 0:
+        invalidate_validation_cache()
     return {"inserted": inserted}
 
 
@@ -202,4 +207,6 @@ def modify_est_nums_data(payload: list[dict] | dict) -> dict[str, int]:
         ensure_account_codes_exist(account_codes_to_validate)
 
     updated = update_est_nums(normalized_rows)
+    if updated > 0:
+        invalidate_validation_cache()
     return {"updated": updated}

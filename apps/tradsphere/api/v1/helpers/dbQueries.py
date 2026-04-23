@@ -339,6 +339,523 @@ def update_est_nums(items: list[dict]) -> int:
     return run_transaction(_work)
 
 
+def get_schedules(
+    *,
+    ids: list[str] | None = None,
+    schedule_ids: list[str] | None = None,
+    est_nums: list[int] | None = None,
+    billing_codes: list[str] | None = None,
+    media_types: list[str] | None = None,
+    station_codes: list[str] | None = None,
+    broadcast_month: int | None = None,
+    broadcast_year: int | None = None,
+    start_date_from: str | None = None,
+    start_date_to: str | None = None,
+    end_date_from: str | None = None,
+    end_date_to: str | None = None,
+) -> list[dict]:
+    tables = get_db_tables()
+    schedules_table = _quote_table_name(tables["SCHEDULES"])
+
+    where_clauses: list[str] = []
+    params: list[object] = []
+
+    normalized_ids = [str(item or "").strip() for item in (ids or [])]
+    normalized_ids = [item for item in normalized_ids if item]
+    if normalized_ids:
+        placeholders = _build_in_placeholders(normalized_ids)
+        where_clauses.append(f"id IN ({placeholders})")
+        params.extend(normalized_ids)
+
+    normalized_schedule_ids = [str(item or "").strip() for item in (schedule_ids or [])]
+    normalized_schedule_ids = [item for item in normalized_schedule_ids if item]
+    if normalized_schedule_ids:
+        placeholders = _build_in_placeholders(normalized_schedule_ids)
+        where_clauses.append(f"scheduleId IN ({placeholders})")
+        params.extend(normalized_schedule_ids)
+
+    normalized_est_nums = [int(item) for item in (est_nums or [])]
+    if normalized_est_nums:
+        placeholders = _build_in_placeholders(normalized_est_nums)
+        where_clauses.append(f"estNum IN ({placeholders})")
+        params.extend(normalized_est_nums)
+
+    normalized_billing_codes = [str(item or "").strip() for item in (billing_codes or [])]
+    normalized_billing_codes = [item for item in normalized_billing_codes if item]
+    if normalized_billing_codes:
+        placeholders = _build_in_placeholders(normalized_billing_codes)
+        where_clauses.append(f"billingCode IN ({placeholders})")
+        params.extend(normalized_billing_codes)
+
+    normalized_media_types = [_normalize_media_type(item) for item in (media_types or [])]
+    normalized_media_types = [item for item in normalized_media_types if item]
+    if normalized_media_types:
+        placeholders = _build_in_placeholders(normalized_media_types)
+        where_clauses.append(f"UPPER(mediaType) IN ({placeholders})")
+        params.extend(normalized_media_types)
+
+    normalized_station_codes = [
+        _normalize_account_code(item) for item in (station_codes or [])
+    ]
+    normalized_station_codes = [item for item in normalized_station_codes if item]
+    if normalized_station_codes:
+        placeholders = _build_in_placeholders(normalized_station_codes)
+        where_clauses.append(f"UPPER(stationCode) IN ({placeholders})")
+        params.extend(normalized_station_codes)
+
+    if broadcast_month is not None:
+        where_clauses.append("broadcastMonth = %s")
+        params.append(int(broadcast_month))
+
+    if broadcast_year is not None:
+        where_clauses.append("broadcastYear = %s")
+        params.append(int(broadcast_year))
+
+    if start_date_from is not None:
+        where_clauses.append("startDate >= %s")
+        params.append(str(start_date_from))
+    if start_date_to is not None:
+        where_clauses.append("startDate <= %s")
+        params.append(str(start_date_to))
+    if end_date_from is not None:
+        where_clauses.append("endDate >= %s")
+        params.append(str(end_date_from))
+    if end_date_to is not None:
+        where_clauses.append("endDate <= %s")
+        params.append(str(end_date_to))
+
+    query = (
+        "SELECT "
+        "id, scheduleId, lineNum, estNum, billingCode, mediaType, stationCode, "
+        "broadcastMonth, broadcastYear, startDate, endDate, totalSpot, totalGross, rateGross, "
+        "length, runtime, programName, days, daypart, rtg, matchKey "
+        f"FROM {schedules_table}"
+    )
+    if where_clauses:
+        query += " WHERE " + " AND ".join(where_clauses)
+    query += " ORDER BY broadcastYear ASC, broadcastMonth ASC, startDate ASC, id ASC"
+    return fetch_all(query, tuple(params))
+
+
+def get_schedules_by_match_keys(match_keys: list[str]) -> list[dict]:
+    normalized_match_keys = [str(item or "").strip() for item in (match_keys or [])]
+    normalized_match_keys = [item for item in normalized_match_keys if item]
+    if not normalized_match_keys:
+        return []
+
+    tables = get_db_tables()
+    schedules_table = _quote_table_name(tables["SCHEDULES"])
+    placeholders = _build_in_placeholders(normalized_match_keys)
+    query = (
+        "SELECT id, matchKey "
+        f"FROM {schedules_table} "
+        f"WHERE matchKey IN ({placeholders})"
+    )
+    return fetch_all(query, tuple(normalized_match_keys))
+
+
+def insert_schedules(items: list[dict]) -> int:
+    if not items:
+        return 0
+    tables = get_db_tables()
+    schedules_table = _quote_table_name(tables["SCHEDULES"])
+    values: list[tuple[object, ...]] = []
+    for item in items:
+        schedule_row_id = str(item.get("id") or "").strip()
+        if not schedule_row_id:
+            raise ValueError("id is required")
+        schedule_business_id = str(item.get("scheduleId") or "").strip()
+        if not schedule_business_id:
+            raise ValueError("scheduleId is required")
+        line_num = item.get("lineNum")
+        if line_num is None:
+            raise ValueError("lineNum is required")
+        est_num = item.get("estNum")
+        if est_num is None:
+            raise ValueError("estNum is required")
+        billing_code = str(item.get("billingCode") or "").strip()
+        if not billing_code:
+            raise ValueError("billingCode is required")
+        media_type = _normalize_media_type(item.get("mediaType"))
+        if not media_type:
+            raise ValueError("mediaType is required")
+        station_code = _normalize_account_code(item.get("stationCode"))
+        if not station_code:
+            raise ValueError("stationCode is required")
+        broadcast_month = item.get("broadcastMonth")
+        if broadcast_month is None:
+            raise ValueError("broadcastMonth is required")
+        broadcast_year = item.get("broadcastYear")
+        if broadcast_year is None:
+            raise ValueError("broadcastYear is required")
+        start_date = str(item.get("startDate") or "").strip()
+        if not start_date:
+            raise ValueError("startDate is required")
+        end_date = str(item.get("endDate") or "").strip()
+        if not end_date:
+            raise ValueError("endDate is required")
+        total_spot = item.get("totalSpot")
+        if total_spot is None:
+            raise ValueError("totalSpot is required")
+        total_gross = item.get("totalGross")
+        if total_gross is None:
+            raise ValueError("totalGross is required")
+        rate_gross = item.get("rateGross")
+        if rate_gross is None:
+            raise ValueError("rateGross is required")
+        length = item.get("length")
+        if length is None:
+            raise ValueError("length is required")
+        runtime = str(item.get("runtime") or "").strip()
+        if not runtime:
+            raise ValueError("runtime is required")
+        days = str(item.get("days") or "").strip()
+        if not days:
+            raise ValueError("days is required")
+        daypart = str(item.get("daypart") or "").strip()
+        if not daypart:
+            raise ValueError("daypart is required")
+        match_key = str(item.get("matchKey") or "").strip()
+        if not match_key:
+            raise ValueError("matchKey is required")
+        values.append(
+            (
+                schedule_row_id,
+                schedule_business_id,
+                int(line_num),
+                int(est_num),
+                billing_code,
+                media_type,
+                station_code,
+                int(broadcast_month),
+                int(broadcast_year),
+                start_date,
+                end_date,
+                int(total_spot),
+                total_gross,
+                rate_gross,
+                int(length),
+                runtime,
+                str(item.get("programName") or "").strip() or None,
+                days,
+                daypart,
+                item.get("rtg"),
+                match_key,
+            )
+        )
+
+    query = (
+        f"INSERT INTO {schedules_table} "
+        "(id, scheduleId, lineNum, estNum, billingCode, mediaType, stationCode, broadcastMonth, broadcastYear, "
+        "startDate, endDate, totalSpot, totalGross, rateGross, length, runtime, programName, days, daypart, rtg, matchKey) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+        "ON DUPLICATE KEY UPDATE "
+        "scheduleId = VALUES(scheduleId), "
+        "lineNum = VALUES(lineNum), "
+        "estNum = VALUES(estNum), "
+        "billingCode = VALUES(billingCode), "
+        "mediaType = VALUES(mediaType), "
+        "stationCode = VALUES(stationCode), "
+        "broadcastMonth = VALUES(broadcastMonth), "
+        "broadcastYear = VALUES(broadcastYear), "
+        "startDate = VALUES(startDate), "
+        "endDate = VALUES(endDate), "
+        "totalSpot = VALUES(totalSpot), "
+        "totalGross = VALUES(totalGross), "
+        "rateGross = VALUES(rateGross), "
+        "length = VALUES(length), "
+        "runtime = VALUES(runtime), "
+        "programName = VALUES(programName), "
+        "days = VALUES(days), "
+        "daypart = VALUES(daypart), "
+        "rtg = VALUES(rtg), "
+        "matchKey = VALUES(matchKey)"
+    )
+    return execute_many(query, values)
+
+
+def update_schedules(items: list[dict]) -> int:
+    if not items:
+        return 0
+    tables = get_db_tables()
+    schedules_table = _quote_table_name(tables["SCHEDULES"])
+    statements: list[tuple[str, tuple[object, ...]]] = []
+    for item in items:
+        schedule_row_id = str(item.get("id") or "").strip()
+        if not schedule_row_id:
+            raise ValueError("id is required for schedules update")
+        fields: list[str] = []
+        params: list[object] = []
+
+        if "scheduleId" in item:
+            schedule_business_id = str(item.get("scheduleId") or "").strip()
+            if not schedule_business_id:
+                raise ValueError("scheduleId cannot be empty")
+            fields.append("scheduleId = %s")
+            params.append(schedule_business_id)
+        if "lineNum" in item:
+            line_num = item.get("lineNum")
+            if line_num is None:
+                raise ValueError("lineNum cannot be null")
+            fields.append("lineNum = %s")
+            params.append(int(line_num))
+        if "estNum" in item:
+            est_num = item.get("estNum")
+            if est_num is None:
+                raise ValueError("estNum cannot be null")
+            fields.append("estNum = %s")
+            params.append(int(est_num))
+        if "billingCode" in item:
+            billing_code = str(item.get("billingCode") or "").strip()
+            if not billing_code:
+                raise ValueError("billingCode cannot be empty")
+            fields.append("billingCode = %s")
+            params.append(billing_code)
+        if "mediaType" in item:
+            media_type = _normalize_media_type(item.get("mediaType"))
+            if not media_type:
+                raise ValueError("mediaType cannot be empty")
+            fields.append("mediaType = %s")
+            params.append(media_type)
+        if "stationCode" in item:
+            station_code = _normalize_account_code(item.get("stationCode"))
+            if not station_code:
+                raise ValueError("stationCode cannot be empty")
+            fields.append("stationCode = %s")
+            params.append(station_code)
+        if "broadcastMonth" in item:
+            broadcast_month = item.get("broadcastMonth")
+            if broadcast_month is None:
+                raise ValueError("broadcastMonth cannot be null")
+            fields.append("broadcastMonth = %s")
+            params.append(int(broadcast_month))
+        if "broadcastYear" in item:
+            broadcast_year = item.get("broadcastYear")
+            if broadcast_year is None:
+                raise ValueError("broadcastYear cannot be null")
+            fields.append("broadcastYear = %s")
+            params.append(int(broadcast_year))
+        if "startDate" in item:
+            start_date = str(item.get("startDate") or "").strip()
+            if not start_date:
+                raise ValueError("startDate cannot be empty")
+            fields.append("startDate = %s")
+            params.append(start_date)
+        if "endDate" in item:
+            end_date = str(item.get("endDate") or "").strip()
+            if not end_date:
+                raise ValueError("endDate cannot be empty")
+            fields.append("endDate = %s")
+            params.append(end_date)
+        if "totalSpot" in item:
+            total_spot = item.get("totalSpot")
+            if total_spot is None:
+                raise ValueError("totalSpot cannot be null")
+            fields.append("totalSpot = %s")
+            params.append(int(total_spot))
+        if "totalGross" in item:
+            total_gross = item.get("totalGross")
+            if total_gross is None:
+                raise ValueError("totalGross cannot be null")
+            fields.append("totalGross = %s")
+            params.append(total_gross)
+        if "rateGross" in item:
+            rate_gross = item.get("rateGross")
+            if rate_gross is None:
+                raise ValueError("rateGross cannot be null")
+            fields.append("rateGross = %s")
+            params.append(rate_gross)
+        if "length" in item:
+            length = item.get("length")
+            if length is None:
+                raise ValueError("length cannot be null")
+            fields.append("length = %s")
+            params.append(int(length))
+        if "runtime" in item:
+            runtime = str(item.get("runtime") or "").strip()
+            if not runtime:
+                raise ValueError("runtime cannot be empty")
+            fields.append("runtime = %s")
+            params.append(runtime)
+        if "programName" in item:
+            fields.append("programName = %s")
+            params.append(str(item.get("programName") or "").strip() or None)
+        if "days" in item:
+            days = str(item.get("days") or "").strip()
+            if not days:
+                raise ValueError("days cannot be empty")
+            fields.append("days = %s")
+            params.append(days)
+        if "daypart" in item:
+            daypart = str(item.get("daypart") or "").strip()
+            if not daypart:
+                raise ValueError("daypart cannot be empty")
+            fields.append("daypart = %s")
+            params.append(daypart)
+        if "rtg" in item:
+            fields.append("rtg = %s")
+            params.append(item.get("rtg"))
+        if "matchKey" in item:
+            match_key = str(item.get("matchKey") or "").strip()
+            if not match_key:
+                raise ValueError("matchKey cannot be empty")
+            fields.append("matchKey = %s")
+            params.append(match_key)
+
+        if not fields:
+            raise ValueError(f"No updatable fields provided for schedule id '{schedule_row_id}'")
+
+        params.append(schedule_row_id)
+        query = f"UPDATE {schedules_table} SET " + ", ".join(fields) + " WHERE id = %s"
+        statements.append((query, tuple(params)))
+
+    def _work(cursor) -> int:
+        updated = 0
+        for query, params in statements:
+            cursor.execute(query, params)
+            updated += int(cursor.rowcount or 0)
+        return updated
+
+    return run_transaction(_work)
+
+
+def get_schedule_weeks(
+    *,
+    ids: list[int] | None = None,
+    schedule_ids: list[str] | None = None,
+    week_start_from: str | None = None,
+    week_start_to: str | None = None,
+    week_end_from: str | None = None,
+    week_end_to: str | None = None,
+) -> list[dict]:
+    tables = get_db_tables()
+    schedules_weeks_table = _quote_table_name(tables["SCHEDULESWEEKS"])
+    where_clauses: list[str] = []
+    params: list[object] = []
+
+    normalized_ids = [int(item) for item in (ids or [])]
+    if normalized_ids:
+        placeholders = _build_in_placeholders(normalized_ids)
+        where_clauses.append(f"id IN ({placeholders})")
+        params.extend(normalized_ids)
+
+    normalized_schedule_ids = [str(item or "").strip() for item in (schedule_ids or [])]
+    normalized_schedule_ids = [item for item in normalized_schedule_ids if item]
+    if normalized_schedule_ids:
+        placeholders = _build_in_placeholders(normalized_schedule_ids)
+        where_clauses.append(f"scheduleId IN ({placeholders})")
+        params.extend(normalized_schedule_ids)
+
+    if week_start_from is not None:
+        where_clauses.append("weekStart >= %s")
+        params.append(str(week_start_from))
+    if week_start_to is not None:
+        where_clauses.append("weekStart <= %s")
+        params.append(str(week_start_to))
+    if week_end_from is not None:
+        where_clauses.append("weekEnd >= %s")
+        params.append(str(week_end_from))
+    if week_end_to is not None:
+        where_clauses.append("weekEnd <= %s")
+        params.append(str(week_end_to))
+
+    query = (
+        "SELECT id, scheduleId, weekStart, weekEnd, spots "
+        f"FROM {schedules_weeks_table}"
+    )
+    if where_clauses:
+        query += " WHERE " + " AND ".join(where_clauses)
+    query += " ORDER BY weekStart ASC, scheduleId ASC, id ASC"
+    return fetch_all(query, tuple(params))
+
+
+def insert_schedule_weeks(items: list[dict]) -> int:
+    if not items:
+        return 0
+    tables = get_db_tables()
+    schedules_weeks_table = _quote_table_name(tables["SCHEDULESWEEKS"])
+    values: list[tuple[object, ...]] = []
+    for item in items:
+        schedule_row_id = str(item.get("scheduleId") or "").strip()
+        if not schedule_row_id:
+            raise ValueError("scheduleId is required")
+        week_start = str(item.get("weekStart") or "").strip()
+        if not week_start:
+            raise ValueError("weekStart is required")
+        week_end = str(item.get("weekEnd") or "").strip()
+        if not week_end:
+            raise ValueError("weekEnd is required")
+        spots = item.get("spots")
+        if spots is None:
+            raise ValueError("spots is required")
+        values.append((schedule_row_id, week_start, week_end, int(spots)))
+
+    query = (
+        f"INSERT INTO {schedules_weeks_table} "
+        "(scheduleId, weekStart, weekEnd, spots) "
+        "VALUES (%s, %s, %s, %s) "
+        "ON DUPLICATE KEY UPDATE "
+        "weekEnd = VALUES(weekEnd), "
+        "spots = VALUES(spots)"
+    )
+    return execute_many(query, values)
+
+
+def update_schedule_weeks(items: list[dict]) -> int:
+    if not items:
+        return 0
+    tables = get_db_tables()
+    schedules_weeks_table = _quote_table_name(tables["SCHEDULESWEEKS"])
+    statements: list[tuple[str, tuple[object, ...]]] = []
+    for item in items:
+        week_row_id = item.get("id")
+        if week_row_id is None:
+            raise ValueError("id is required for schedule weeks update")
+        fields: list[str] = []
+        params: list[object] = []
+
+        if "scheduleId" in item:
+            schedule_row_id = str(item.get("scheduleId") or "").strip()
+            if not schedule_row_id:
+                raise ValueError("scheduleId cannot be empty")
+            fields.append("scheduleId = %s")
+            params.append(schedule_row_id)
+        if "weekStart" in item:
+            week_start = str(item.get("weekStart") or "").strip()
+            if not week_start:
+                raise ValueError("weekStart cannot be empty")
+            fields.append("weekStart = %s")
+            params.append(week_start)
+        if "weekEnd" in item:
+            week_end = str(item.get("weekEnd") or "").strip()
+            if not week_end:
+                raise ValueError("weekEnd cannot be empty")
+            fields.append("weekEnd = %s")
+            params.append(week_end)
+        if "spots" in item:
+            spots = item.get("spots")
+            if spots is None:
+                raise ValueError("spots cannot be null")
+            fields.append("spots = %s")
+            params.append(int(spots))
+
+        if not fields:
+            raise ValueError(f"No updatable fields provided for schedule week id '{week_row_id}'")
+
+        params.append(int(week_row_id))
+        query = f"UPDATE {schedules_weeks_table} SET " + ", ".join(fields) + " WHERE id = %s"
+        statements.append((query, tuple(params)))
+
+    def _work(cursor) -> int:
+        updated = 0
+        for query, params in statements:
+            cursor.execute(query, params)
+            updated += int(cursor.rowcount or 0)
+        return updated
+
+    return run_transaction(_work)
+
+
 def get_delivery_methods(*, ids: list[int] | None = None) -> list[dict]:
     tables = get_db_tables()
     delivery_methods_table = _quote_table_name(tables["DELIVERYMETHODS"])
@@ -1088,4 +1605,29 @@ def get_all_stations_contacts_ids() -> list[int]:
         if raw is None:
             continue
         out.append(int(raw))
+    return sorted(set(out))
+
+
+def get_all_est_nums() -> list[int]:
+    tables = get_db_tables()
+    est_nums_table = _quote_table_name(tables["ESTNUMS"])
+    rows = fetch_all(f"SELECT estNum FROM {est_nums_table}")
+    out: list[int] = []
+    for row in rows:
+        raw = row.get("estNum")
+        if raw is None:
+            continue
+        out.append(int(raw))
+    return sorted(set(out))
+
+
+def get_all_schedule_ids() -> list[str]:
+    tables = get_db_tables()
+    schedules_table = _quote_table_name(tables["SCHEDULES"])
+    rows = fetch_all(f"SELECT id FROM {schedules_table}")
+    out: list[str] = []
+    for row in rows:
+        schedule_row_id = str(row.get("id") or "").strip()
+        if schedule_row_id:
+            out.append(schedule_row_id)
     return sorted(set(out))

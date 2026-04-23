@@ -90,7 +90,16 @@
   - `GET /stations/deliveryMethods`
   - `POST /stations`
   - `PUT /stations`
+  - `POST /stations/deliveryMethods`
   - `PUT /stations/deliveryMethods`
+- Schedules + ScheduleWeeks:
+  - `GET /schedules`
+  - `POST /schedules`
+  - `PUT /schedules`
+  - `POST /schedules/import`
+  - `GET /schedules/weeks`
+  - `POST /schedules/weeks`
+  - `PUT /schedules/weeks`
 - Contacts + StationsContacts:
   - `GET /contacts`
   - `GET /contacts/byStationCodes`
