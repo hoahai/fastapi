@@ -7,7 +7,9 @@ from apps.tradsphere.api.v1.helpers.accountValidation import (
 )
 from apps.tradsphere.api.v1.helpers.config import get_media_types
 from apps.tradsphere.api.v1.helpers.dbQueries import (
+    get_contacts_by_station_codes,
     get_delivery_methods,
+    get_station_media_types,
     get_stations,
     insert_delivery_methods,
     insert_stations,
@@ -43,16 +45,6 @@ def _ensure_language(value: object) -> str:
     if not mapped:
         raise ValueError("language must be English/Spanish (or EN/ES)")
     return mapped
-
-
-def _normalize_language_filters(values: list[str] | None) -> list[str]:
-    normalized: list[str] = []
-    for value in values or []:
-        mapped = _LANGUAGE_VALUES.get(str(value or "").strip().upper())
-        if not mapped:
-            raise ValueError("languages values must be English/Spanish (or EN/ES)")
-        normalized.append(mapped.upper())
-    return list(dict.fromkeys(normalized))
 
 
 def _ensure_optional_text(
@@ -166,67 +158,206 @@ def _resolve_station_delivery_method_id(
     return delivery_method_id
 
 
-def _serialize_station_row(row: dict) -> dict:
+def _serialize_syscode_for_media_type(
+    media_type: object,
+    syscode: object,
+) -> object | None:
+    if str(media_type or "").strip().upper() != "CA":
+        return None
+    return syscode
+
+
+def _ensure_syscode_required_for_ca(
+    *,
+    media_type: str,
+    syscode: int | None,
+) -> None:
+    if media_type == "CA" and syscode is None:
+        raise ValueError("syscode is required when mediaType is CA")
+
+
+def _validate_syscode_for_media_type(
+    *,
+    media_type: str,
+    has_syscode_field: bool,
+    syscode: int | None,
+    require_syscode_for_ca: bool,
+) -> None:
+    if media_type == "CA":
+        if require_syscode_for_ca and not has_syscode_field:
+            raise ValueError("syscode is required when mediaType is CA")
+        if has_syscode_field:
+            _ensure_syscode_required_for_ca(media_type=media_type, syscode=syscode)
+        return
+    if has_syscode_field:
+        raise ValueError("syscode is only allowed when mediaType is CA")
+
+
+def _serialize_station_row(
+    row: dict,
+    *,
+    delivery_method_detail: bool,
+) -> dict:
     delivery_method_id = row.get("deliveryMethodId")
+    station: dict[str, object] = {
+        "code": row.get("code"),
+        "name": row.get("name"),
+        "affiliation": row.get("affiliation"),
+        "mediaType": row.get("mediaType"),
+        "language": row.get("language"),
+        "ownership": row.get("ownership"),
+        "deliveryMethodId": delivery_method_id,
+        "note": row.get("note"),
+    }
     delivery_method = None
     if delivery_method_id is not None:
         delivery_method = {
             "id": delivery_method_id,
             "name": row.get("deliveryMethodName"),
-            "url": row.get("deliveryMethodUrl"),
-            "username": row.get("deliveryMethodUsername"),
-            "deadline": row.get("deliveryMethodDeadline"),
-            "note": row.get("deliveryMethodNote"),
         }
-    return {
-        "code": row.get("code"),
-        "name": row.get("name"),
-        "affiliation": row.get("affiliation"),
-        "mediaType": row.get("mediaType"),
-        "syscode": row.get("syscode"),
-        "language": row.get("language"),
-        "ownership": row.get("ownership"),
-        "deliveryMethodId": delivery_method_id,
-        "note": row.get("note"),
-        "deliveryMethod": delivery_method,
-    }
+        if delivery_method_detail:
+            delivery_method["url"] = row.get("deliveryMethodUrl")
+            delivery_method["username"] = row.get("deliveryMethodUsername")
+            delivery_method["deadline"] = row.get("deliveryMethodDeadline")
+            delivery_method["note"] = row.get("deliveryMethodNote")
+    station["deliveryMethod"] = delivery_method
+
+    serialized_syscode = _serialize_syscode_for_media_type(
+        row.get("mediaType"),
+        row.get("syscode"),
+    )
+    if serialized_syscode is not None:
+        station["syscode"] = serialized_syscode
+    return station
+
+
+def _build_rep_contact_short_name(row: dict) -> str:
+    first_name = str(row.get("firstName") or "").strip()
+    last_name = str(row.get("lastName") or "").strip()
+    full_name = " ".join(part for part in [first_name, last_name] if part).strip()
+    return full_name
+
+
+def _build_station_contacts_map(
+    station_codes: list[str],
+    *,
+    contact_detail: bool,
+) -> dict[str, dict[str, list[object]]]:
+    normalized_codes = [str(code or "").strip().upper() for code in station_codes]
+    normalized_codes = [code for code in normalized_codes if code]
+    normalized_codes = list(dict.fromkeys(normalized_codes))
+    if not normalized_codes:
+        return {}
+
+    rows = get_contacts_by_station_codes(
+        station_codes=normalized_codes,
+        contact_types=[],
+    )
+    grouped: dict[str, dict[str, list[object]]] = {code: {} for code in normalized_codes}
+    for row in rows:
+        station_code = str(row.get("stationCode") or "").strip().upper()
+        if not station_code:
+            continue
+        contact_type = str(row.get("contactType") or "").strip().upper() or "UNKNOWN"
+        station_group = grouped.setdefault(station_code, {})
+        contact_bucket = station_group.setdefault(contact_type, [])
+        email = str(row.get("email") or "").strip()
+
+        if contact_type != "REP":
+            if email and email not in contact_bucket:
+                contact_bucket.append(email)
+            continue
+
+        if not contact_detail:
+            contact_bucket.append(
+                {
+                    "id": row.get("id"),
+                    "name": _build_rep_contact_short_name(row),
+                    "email": email,
+                }
+            )
+            continue
+
+        contact_bucket.append(
+            {
+                "id": row.get("id"),
+                "email": email,
+                "firstName": row.get("firstName"),
+                "lastName": row.get("lastName"),
+                "company": row.get("company"),
+                "jobTitle": row.get("jobTitle"),
+                "office": row.get("office"),
+                "cell": row.get("cell"),
+                "active": row.get("active"),
+                "note": row.get("note"),
+                "primaryContact": row.get("primaryContact"),
+                "contactTypeNote": row.get("contactTypeNote"),
+            }
+        )
+    return grouped
 
 
 def list_stations_data(
     *,
-    codes: list[str],
-    media_types: list[str] | None = None,
-    languages: list[str] | None = None,
+    codes: list[str] | None = None,
+    account_code: str | None = None,
+    est_num: int | None = None,
+    delivery_method_detail: bool = False,
+    contact_detail: bool = False,
 ) -> list[dict]:
-    if not codes:
-        raise ValueError("codes is required")
+    normalized_codes = [
+        str(code or "").strip().upper()
+        for code in (codes or [])
+        if str(code or "").strip()
+    ]
+    normalized_codes = list(dict.fromkeys(normalized_codes))
 
-    normalized_codes = [str(code or "").strip().upper() for code in codes if str(code or "").strip()]
-    if not normalized_codes:
-        raise ValueError("codes is required")
+    normalized_account_code = str(account_code or "").strip().upper()
 
-    normalized_media_types: list[str] = []
-    if media_types:
-        allowed = set(get_media_types())
-        for item in media_types:
-            media_type = str(item or "").strip().upper()
-            if not media_type:
-                continue
-            if media_type not in allowed:
-                raise ValueError(
-                    f"Invalid mediaType: {media_type}. Allowed values: {', '.join(sorted(allowed))}"
-                )
-            normalized_media_types.append(media_type)
-        normalized_media_types = list(dict.fromkeys(normalized_media_types))
+    normalized_est_num: int | None = None
+    if est_num is not None:
+        try:
+            parsed = int(est_num)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("estNum must be an unsigned integer") from exc
+        if parsed < 0 or parsed > 4294967295:
+            raise ValueError("estNum must be an unsigned integer")
+        normalized_est_num = parsed
 
-    normalized_languages = _normalize_language_filters(languages)
+    if (
+        not normalized_codes
+        and not normalized_account_code
+        and normalized_est_num is None
+    ):
+        raise ValueError(
+            "At least one of codes, accountCode, estNum is required"
+        )
 
     rows = get_stations(
         codes=normalized_codes,
-        media_types=normalized_media_types,
-        languages=normalized_languages,
+        account_codes=[normalized_account_code] if normalized_account_code else [],
+        est_nums=[normalized_est_num] if normalized_est_num is not None else [],
+        delivery_method_detail=delivery_method_detail,
     )
-    return [_serialize_station_row(row) for row in rows]
+    serialized_rows = [
+        _serialize_station_row(
+            row,
+            delivery_method_detail=delivery_method_detail,
+        )
+        for row in rows
+    ]
+    if serialized_rows:
+        station_contacts = _build_station_contacts_map(
+            [
+                str(item.get("code") or "").strip().upper()
+                for item in serialized_rows
+            ],
+            contact_detail=contact_detail,
+        )
+        for station in serialized_rows:
+            station_code = str(station.get("code") or "").strip().upper()
+            station["contacts"] = station_contacts.get(station_code, {})
+    return serialized_rows
 
 
 def list_delivery_methods_data(*, ids: list[int] | None = None) -> list[dict]:
@@ -259,6 +390,19 @@ def create_stations_data(payload: list[dict] | dict) -> dict[str, int]:
         code = str(row.get("code") or "").strip().upper()
         if not code:
             raise ValueError("code is required")
+        media_type = _ensure_media_type(row.get("mediaType"))
+        has_syscode_field = "syscode" in row
+        syscode = (
+            _ensure_optional_unsigned_int(row.get("syscode"), field="syscode")
+            if has_syscode_field
+            else None
+        )
+        _validate_syscode_for_media_type(
+            media_type=media_type,
+            has_syscode_field=has_syscode_field,
+            syscode=syscode,
+            require_syscode_for_ca=True,
+        )
         normalized_rows.append(
             {
                 "code": code,
@@ -268,8 +412,8 @@ def create_stations_data(payload: list[dict] | dict) -> dict[str, int]:
                     field="affiliation",
                     max_length=255,
                 ),
-                "mediaType": _ensure_media_type(row.get("mediaType")),
-                "syscode": _ensure_optional_unsigned_int(row.get("syscode"), field="syscode"),
+                "mediaType": media_type,
+                "syscode": syscode,
                 "language": _ensure_language(row.get("language")),
                 "ownership": _ensure_optional_text(
                     row.get("ownership"),
@@ -298,7 +442,8 @@ def modify_stations_data(payload: list[dict] | dict) -> dict[str, int]:
     if not rows:
         return {"updated": 0}
 
-    normalized_rows: list[dict] = []
+    prepared_rows: list[tuple[dict, str]] = []
+    station_codes: list[str] = []
     for row in rows:
         if not isinstance(row, dict):
             raise ValueError("Each stations item must be an object")
@@ -314,8 +459,19 @@ def modify_stations_data(payload: list[dict] | dict) -> dict[str, int]:
         code = str(row.get("code") or "").strip().upper()
         if not code:
             raise ValueError("code is required for stations update")
+        prepared_rows.append((row, code))
+        station_codes.append(code)
 
+    ensure_station_codes_exist(station_codes)
+    existing_media_types = get_station_media_types(codes=station_codes)
+
+    normalized_rows: list[dict] = []
+    for row, code in prepared_rows:
         item: dict[str, object] = {"code": code}
+        media_type: str | None = None
+        has_syscode_update = False
+        syscode: int | None = None
+        current_media_type = str(existing_media_types.get(code) or "").strip().upper()
         if "name" in row:
             item["name"] = _ensure_required_text(
                 row.get("name"),
@@ -329,11 +485,30 @@ def modify_stations_data(payload: list[dict] | dict) -> dict[str, int]:
                 max_length=255,
             )
         if "mediaType" in row:
-            item["mediaType"] = _ensure_media_type(row.get("mediaType"))
+            media_type = _ensure_media_type(row.get("mediaType"))
+            item["mediaType"] = media_type
         if "syscode" in row:
-            item["syscode"] = _ensure_optional_unsigned_int(
+            has_syscode_update = True
+            syscode = _ensure_optional_unsigned_int(
                 row.get("syscode"),
                 field="syscode",
+            )
+            item["syscode"] = syscode
+        if media_type is not None:
+            _validate_syscode_for_media_type(
+                media_type=media_type,
+                has_syscode_field=has_syscode_update,
+                syscode=syscode,
+                require_syscode_for_ca=True,
+            )
+        elif has_syscode_update:
+            if not current_media_type:
+                raise ValueError(f"Unable to resolve current mediaType for station '{code}'")
+            _validate_syscode_for_media_type(
+                media_type=current_media_type,
+                has_syscode_field=has_syscode_update,
+                syscode=syscode,
+                require_syscode_for_ca=False,
             )
         if "language" in row:
             item["language"] = _ensure_language(row.get("language"))
@@ -363,7 +538,6 @@ def modify_stations_data(payload: list[dict] | dict) -> dict[str, int]:
             raise ValueError(f"No updatable fields provided for station '{code}'")
         normalized_rows.append(item)
 
-    ensure_station_codes_exist([row["code"] for row in normalized_rows])
     updated = update_stations(normalized_rows)
     invalidate_validation_cache()
     return {"updated": updated}

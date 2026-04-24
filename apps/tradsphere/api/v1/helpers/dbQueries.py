@@ -3,11 +3,21 @@ from __future__ import annotations
 import re
 
 from shared.db import execute_many, fetch_all, run_transaction
+from shared.tenantDataCache import (
+    get_tenant_shared_cache_value,
+    set_tenant_shared_cache_value,
+)
 
-from apps.tradsphere.api.v1.helpers.config import get_db_tables
+from apps.tradsphere.api.v1.helpers.config import (
+    get_db_tables,
+    get_validation_cache_ttl_seconds,
+)
 
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_]+$")
+_WHITESPACE_RE = re.compile(r"\s+")
+_SCHEDULE_EXISTS_CACHE_BUCKET = "db_reads"
+_SCHEDULE_EXISTS_CACHE_PREFIX = "tradsphere_validation::schedule_has_estnum::"
 
 
 def _quote_identifier(name: str) -> str:
@@ -40,20 +50,35 @@ def _normalize_bool(value: object, *, default: bool = True) -> int:
     raise ValueError("active must be boolean-like")
 
 
+def _normalize_input_text(value: object) -> str:
+    text = str(value or "")
+    text = text.replace("\u00A0", " ")
+    return _WHITESPACE_RE.sub(" ", text).strip()
+
+
+def _normalize_optional_input_text(value: object) -> str | None:
+    text = _normalize_input_text(value)
+    return text or None
+
+
+def _normalize_compact_token(value: object) -> str:
+    return _normalize_input_text(value).replace(" ", "")
+
+
 def _normalize_account_code(value: object) -> str:
-    return str(value or "").strip().upper()
+    return _normalize_compact_token(value).upper()
 
 
 def _normalize_media_type(value: object) -> str:
-    return str(value or "").strip().upper()
+    return _normalize_compact_token(value).upper()
 
 
 def _normalize_contact_type(value: object) -> str:
-    return str(value or "").strip().upper()
+    return _normalize_compact_token(value).upper()
 
 
 def _normalize_email(value: object) -> str:
-    return str(value or "").strip().lower()
+    return _normalize_compact_token(value).lower()
 
 
 def _build_in_placeholders(values: list[object]) -> str:
@@ -114,18 +139,14 @@ def insert_accounts(items: list[dict]) -> int:
         account_code = _normalize_account_code(item.get("accountCode"))
         if not account_code:
             raise ValueError("accountCode is required")
-        billing_type = str(item.get("billingType") or "Calendar").strip() or "Calendar"
-        market = str(item.get("market") or "").strip() or None
-        note = str(item.get("note") or "").strip() or None
+        billing_type = _normalize_input_text(item.get("billingType") or "Calendar") or "Calendar"
+        market = _normalize_optional_input_text(item.get("market"))
+        note = _normalize_optional_input_text(item.get("note"))
         values.append((account_code, billing_type, market, note))
 
     query = (
         f"INSERT INTO {accounts_table} (accountCode, billingType, market, note) "
-        "VALUES (%s, %s, %s, %s) "
-        "ON DUPLICATE KEY UPDATE "
-        "billingType = VALUES(billingType), "
-        "market = VALUES(market), "
-        "note = VALUES(note)"
+        "VALUES (%s, %s, %s, %s)"
     )
     return execute_many(query, values)
 
@@ -146,19 +167,19 @@ def update_accounts(items: list[dict]) -> int:
         params: list[object] = []
 
         if "billingType" in item:
-            billing_type = str(item.get("billingType") or "").strip()
+            billing_type = _normalize_input_text(item.get("billingType"))
             if not billing_type:
                 raise ValueError("billingType cannot be empty")
             fields.append("billingType = %s")
             params.append(billing_type)
 
         if "market" in item:
-            market = str(item.get("market") or "").strip() or None
+            market = _normalize_optional_input_text(item.get("market"))
             fields.append("market = %s")
             params.append(market)
 
         if "note" in item:
-            note = str(item.get("note") or "").strip() or None
+            note = _normalize_optional_input_text(item.get("note"))
             fields.append("note = %s")
             params.append(note)
 
@@ -185,7 +206,6 @@ def get_est_nums(
     *,
     est_nums: list[int] | None = None,
     account_codes: list[str] | None = None,
-    media_types: list[str] | None = None,
 ) -> list[dict]:
     tables = get_db_tables()
     est_nums_table = _quote_table_name(tables["ESTNUMS"])
@@ -208,13 +228,6 @@ def get_est_nums(
         where_clauses.append(f"UPPER(accountCode) IN ({placeholders})")
         params.extend(normalized_account_codes)
 
-    normalized_media_types = [_normalize_media_type(item) for item in (media_types or [])]
-    normalized_media_types = [item for item in normalized_media_types if item]
-    if normalized_media_types:
-        placeholders = _build_in_placeholders(normalized_media_types)
-        where_clauses.append(f"UPPER(mediaType) IN ({placeholders})")
-        params.extend(normalized_media_types)
-
     query = (
         "SELECT estNum, accountCode, flightStart, flightEnd, mediaType, buyer, note "
         f"FROM {est_nums_table}"
@@ -223,6 +236,80 @@ def get_est_nums(
         query += " WHERE " + " AND ".join(where_clauses)
     query += " ORDER BY estNum ASC"
     return fetch_all(query, tuple(params))
+
+
+def get_scheduled_est_nums(est_nums: list[int]) -> set[int]:
+    normalized: list[int] = []
+    seen: set[int] = set()
+    for item in est_nums or []:
+        value = int(item)
+        if value in seen:
+            continue
+        seen.add(value)
+        normalized.append(value)
+    if not normalized:
+        return set()
+
+    ttl_seconds = max(int(get_validation_cache_ttl_seconds()), 0)
+    matched: set[int] = set()
+    cache_misses: list[int] = []
+
+    for est_num in normalized:
+        cache_key = f"{_SCHEDULE_EXISTS_CACHE_PREFIX}{est_num}"
+        cached_value, cache_hit = get_tenant_shared_cache_value(
+            bucket=_SCHEDULE_EXISTS_CACHE_BUCKET,
+            cache_key=cache_key,
+            ttl_seconds=ttl_seconds,
+        )
+        if not cache_hit:
+            cache_misses.append(est_num)
+            continue
+
+        exists = False
+        if isinstance(cached_value, bool):
+            exists = cached_value
+        elif isinstance(cached_value, (int, float)):
+            exists = bool(cached_value)
+        elif isinstance(cached_value, str):
+            exists = cached_value.strip().lower() in {"1", "true", "yes", "y", "on"}
+
+        if exists:
+            matched.add(est_num)
+
+    if not cache_misses:
+        return matched
+
+    tables = get_db_tables()
+    schedules_table = _quote_table_name(tables["SCHEDULES"])
+    chunk_size = 500
+    found_in_db: set[int] = set()
+
+    for start in range(0, len(cache_misses), chunk_size):
+        chunk = cache_misses[start : start + chunk_size]
+        placeholders = _build_in_placeholders(chunk)
+        query = (
+            "SELECT DISTINCT estNum "
+            f"FROM {schedules_table} "
+            f"WHERE estNum IN ({placeholders})"
+        )
+        rows = fetch_all(query, tuple(chunk))
+        for row in rows:
+            raw_value = row.get("estNum")
+            if raw_value is None:
+                continue
+            found_in_db.add(int(raw_value))
+
+    for est_num in cache_misses:
+        exists = est_num in found_in_db
+        set_tenant_shared_cache_value(
+            bucket=_SCHEDULE_EXISTS_CACHE_BUCKET,
+            cache_key=f"{_SCHEDULE_EXISTS_CACHE_PREFIX}{est_num}",
+            value=exists,
+        )
+        if exists:
+            matched.add(est_num)
+
+    return matched
 
 
 def insert_est_nums(items: list[dict]) -> int:
@@ -239,31 +326,24 @@ def insert_est_nums(items: list[dict]) -> int:
         account_code = _normalize_account_code(item.get("accountCode"))
         if not account_code:
             raise ValueError("accountCode is required")
-        flight_start = str(item.get("flightStart") or "").strip()
+        flight_start = _normalize_input_text(item.get("flightStart"))
         if not flight_start:
             raise ValueError("flightStart is required")
-        flight_end = str(item.get("flightEnd") or "").strip()
+        flight_end = _normalize_input_text(item.get("flightEnd"))
         if not flight_end:
             raise ValueError("flightEnd is required")
         media_type = _normalize_media_type(item.get("mediaType"))
         if not media_type:
             raise ValueError("mediaType is required")
-        buyer = str(item.get("buyer") or "").strip()
+        buyer = _normalize_input_text(item.get("buyer"))
         if not buyer:
             raise ValueError("buyer is required")
-        note = str(item.get("note") or "").strip() or None
+        note = _normalize_optional_input_text(item.get("note"))
         values.append((est_num, account_code, flight_start, flight_end, media_type, buyer, note))
 
     query = (
         f"INSERT INTO {est_nums_table} (estNum, accountCode, flightStart, flightEnd, mediaType, buyer, note) "
-        "VALUES (%s, %s, %s, %s, %s, %s, %s) "
-        "ON DUPLICATE KEY UPDATE "
-        "accountCode = VALUES(accountCode), "
-        "flightStart = VALUES(flightStart), "
-        "flightEnd = VALUES(flightEnd), "
-        "mediaType = VALUES(mediaType), "
-        "buyer = VALUES(buyer), "
-        "note = VALUES(note)"
+        "VALUES (%s, %s, %s, %s, %s, %s, %s)"
     )
     return execute_many(query, values)
 
@@ -298,21 +378,21 @@ def update_est_nums(items: list[dict]) -> int:
             params.append(media_type)
 
         if "flightStart" in item:
-            flight_start = str(item.get("flightStart") or "").strip()
+            flight_start = _normalize_input_text(item.get("flightStart"))
             if not flight_start:
                 raise ValueError("flightStart cannot be empty")
             fields.append("flightStart = %s")
             params.append(flight_start)
 
         if "flightEnd" in item:
-            flight_end = str(item.get("flightEnd") or "").strip()
+            flight_end = _normalize_input_text(item.get("flightEnd"))
             if not flight_end:
                 raise ValueError("flightEnd cannot be empty")
             fields.append("flightEnd = %s")
             params.append(flight_end)
 
         if "buyer" in item:
-            buyer = str(item.get("buyer") or "").strip()
+            buyer = _normalize_input_text(item.get("buyer"))
             if not buyer:
                 raise ValueError("buyer cannot be empty")
             fields.append("buyer = %s")
@@ -320,7 +400,7 @@ def update_est_nums(items: list[dict]) -> int:
 
         if "note" in item:
             fields.append("note = %s")
-            params.append(str(item.get("note") or "").strip() or None)
+            params.append(_normalize_optional_input_text(item.get("note")))
 
         if not fields:
             raise ValueError(f"No updatable fields provided for estNum '{est_num}'")
@@ -461,10 +541,10 @@ def insert_schedules(items: list[dict]) -> int:
     schedules_table = _quote_table_name(tables["SCHEDULES"])
     values: list[tuple[object, ...]] = []
     for item in items:
-        schedule_row_id = str(item.get("id") or "").strip()
+        schedule_row_id = _normalize_input_text(item.get("id"))
         if not schedule_row_id:
             raise ValueError("id is required")
-        schedule_business_id = str(item.get("scheduleId") or "").strip()
+        schedule_business_id = _normalize_input_text(item.get("scheduleId"))
         if not schedule_business_id:
             raise ValueError("scheduleId is required")
         line_num = item.get("lineNum")
@@ -473,7 +553,7 @@ def insert_schedules(items: list[dict]) -> int:
         est_num = item.get("estNum")
         if est_num is None:
             raise ValueError("estNum is required")
-        billing_code = str(item.get("billingCode") or "").strip()
+        billing_code = _normalize_input_text(item.get("billingCode"))
         if not billing_code:
             raise ValueError("billingCode is required")
         media_type = _normalize_media_type(item.get("mediaType"))
@@ -488,10 +568,10 @@ def insert_schedules(items: list[dict]) -> int:
         broadcast_year = item.get("broadcastYear")
         if broadcast_year is None:
             raise ValueError("broadcastYear is required")
-        start_date = str(item.get("startDate") or "").strip()
+        start_date = _normalize_input_text(item.get("startDate"))
         if not start_date:
             raise ValueError("startDate is required")
-        end_date = str(item.get("endDate") or "").strip()
+        end_date = _normalize_input_text(item.get("endDate"))
         if not end_date:
             raise ValueError("endDate is required")
         total_spot = item.get("totalSpot")
@@ -506,16 +586,16 @@ def insert_schedules(items: list[dict]) -> int:
         length = item.get("length")
         if length is None:
             raise ValueError("length is required")
-        runtime = str(item.get("runtime") or "").strip()
+        runtime = _normalize_input_text(item.get("runtime"))
         if not runtime:
             raise ValueError("runtime is required")
-        days = str(item.get("days") or "").strip()
+        days = _normalize_input_text(item.get("days"))
         if not days:
             raise ValueError("days is required")
-        daypart = str(item.get("daypart") or "").strip()
+        daypart = _normalize_input_text(item.get("daypart"))
         if not daypart:
             raise ValueError("daypart is required")
-        match_key = str(item.get("matchKey") or "").strip()
+        match_key = _normalize_input_text(item.get("matchKey"))
         if not match_key:
             raise ValueError("matchKey is required")
         values.append(
@@ -536,7 +616,7 @@ def insert_schedules(items: list[dict]) -> int:
                 rate_gross,
                 int(length),
                 runtime,
-                str(item.get("programName") or "").strip() or None,
+                _normalize_optional_input_text(item.get("programName")),
                 days,
                 daypart,
                 item.get("rtg"),
@@ -581,14 +661,14 @@ def update_schedules(items: list[dict]) -> int:
     schedules_table = _quote_table_name(tables["SCHEDULES"])
     statements: list[tuple[str, tuple[object, ...]]] = []
     for item in items:
-        schedule_row_id = str(item.get("id") or "").strip()
+        schedule_row_id = _normalize_input_text(item.get("id"))
         if not schedule_row_id:
             raise ValueError("id is required for schedules update")
         fields: list[str] = []
         params: list[object] = []
 
         if "scheduleId" in item:
-            schedule_business_id = str(item.get("scheduleId") or "").strip()
+            schedule_business_id = _normalize_input_text(item.get("scheduleId"))
             if not schedule_business_id:
                 raise ValueError("scheduleId cannot be empty")
             fields.append("scheduleId = %s")
@@ -606,7 +686,7 @@ def update_schedules(items: list[dict]) -> int:
             fields.append("estNum = %s")
             params.append(int(est_num))
         if "billingCode" in item:
-            billing_code = str(item.get("billingCode") or "").strip()
+            billing_code = _normalize_input_text(item.get("billingCode"))
             if not billing_code:
                 raise ValueError("billingCode cannot be empty")
             fields.append("billingCode = %s")
@@ -636,13 +716,13 @@ def update_schedules(items: list[dict]) -> int:
             fields.append("broadcastYear = %s")
             params.append(int(broadcast_year))
         if "startDate" in item:
-            start_date = str(item.get("startDate") or "").strip()
+            start_date = _normalize_input_text(item.get("startDate"))
             if not start_date:
                 raise ValueError("startDate cannot be empty")
             fields.append("startDate = %s")
             params.append(start_date)
         if "endDate" in item:
-            end_date = str(item.get("endDate") or "").strip()
+            end_date = _normalize_input_text(item.get("endDate"))
             if not end_date:
                 raise ValueError("endDate cannot be empty")
             fields.append("endDate = %s")
@@ -672,22 +752,22 @@ def update_schedules(items: list[dict]) -> int:
             fields.append("length = %s")
             params.append(int(length))
         if "runtime" in item:
-            runtime = str(item.get("runtime") or "").strip()
+            runtime = _normalize_input_text(item.get("runtime"))
             if not runtime:
                 raise ValueError("runtime cannot be empty")
             fields.append("runtime = %s")
             params.append(runtime)
         if "programName" in item:
             fields.append("programName = %s")
-            params.append(str(item.get("programName") or "").strip() or None)
+            params.append(_normalize_optional_input_text(item.get("programName")))
         if "days" in item:
-            days = str(item.get("days") or "").strip()
+            days = _normalize_input_text(item.get("days"))
             if not days:
                 raise ValueError("days cannot be empty")
             fields.append("days = %s")
             params.append(days)
         if "daypart" in item:
-            daypart = str(item.get("daypart") or "").strip()
+            daypart = _normalize_input_text(item.get("daypart"))
             if not daypart:
                 raise ValueError("daypart cannot be empty")
             fields.append("daypart = %s")
@@ -696,7 +776,7 @@ def update_schedules(items: list[dict]) -> int:
             fields.append("rtg = %s")
             params.append(item.get("rtg"))
         if "matchKey" in item:
-            match_key = str(item.get("matchKey") or "").strip()
+            match_key = _normalize_input_text(item.get("matchKey"))
             if not match_key:
                 raise ValueError("matchKey cannot be empty")
             fields.append("matchKey = %s")
@@ -776,13 +856,13 @@ def insert_schedule_weeks(items: list[dict]) -> int:
     schedules_weeks_table = _quote_table_name(tables["SCHEDULESWEEKS"])
     values: list[tuple[object, ...]] = []
     for item in items:
-        schedule_row_id = str(item.get("scheduleId") or "").strip()
+        schedule_row_id = _normalize_input_text(item.get("scheduleId"))
         if not schedule_row_id:
             raise ValueError("scheduleId is required")
-        week_start = str(item.get("weekStart") or "").strip()
+        week_start = _normalize_input_text(item.get("weekStart"))
         if not week_start:
             raise ValueError("weekStart is required")
-        week_end = str(item.get("weekEnd") or "").strip()
+        week_end = _normalize_input_text(item.get("weekEnd"))
         if not week_end:
             raise ValueError("weekEnd is required")
         spots = item.get("spots")
@@ -815,19 +895,19 @@ def update_schedule_weeks(items: list[dict]) -> int:
         params: list[object] = []
 
         if "scheduleId" in item:
-            schedule_row_id = str(item.get("scheduleId") or "").strip()
+            schedule_row_id = _normalize_input_text(item.get("scheduleId"))
             if not schedule_row_id:
                 raise ValueError("scheduleId cannot be empty")
             fields.append("scheduleId = %s")
             params.append(schedule_row_id)
         if "weekStart" in item:
-            week_start = str(item.get("weekStart") or "").strip()
+            week_start = _normalize_input_text(item.get("weekStart"))
             if not week_start:
                 raise ValueError("weekStart cannot be empty")
             fields.append("weekStart = %s")
             params.append(week_start)
         if "weekEnd" in item:
-            week_end = str(item.get("weekEnd") or "").strip()
+            week_end = _normalize_input_text(item.get("weekEnd"))
             if not week_end:
                 raise ValueError("weekEnd cannot be empty")
             fields.append("weekEnd = %s")
@@ -884,18 +964,18 @@ def insert_delivery_methods(items: list[dict]) -> int:
     delivery_methods_table = _quote_table_name(tables["DELIVERYMETHODS"])
     values: list[tuple[object, ...]] = []
     for item in items:
-        name = str(item.get("name") or "").strip()
+        name = _normalize_input_text(item.get("name"))
         if not name:
             raise ValueError("name is required")
-        url = str(item.get("url") or "").strip()
+        url = _normalize_input_text(item.get("url"))
         if not url:
             raise ValueError("url is required")
-        username = str(item.get("username") or "").strip()
+        username = _normalize_input_text(item.get("username"))
         if not username:
             raise ValueError("username is required")
-        deadline = str(item.get("deadline") or "").strip() or "10 AM"
+        deadline = _normalize_input_text(item.get("deadline") or "10 AM") or "10 AM"
         password = item.get("password")
-        note = str(item.get("note") or "").strip() or None
+        note = _normalize_optional_input_text(item.get("note"))
         values.append((name, url, username, password, deadline, note))
 
     query = (
@@ -912,63 +992,181 @@ def insert_delivery_methods(items: list[dict]) -> int:
 
 def get_stations(
     *,
-    codes: list[str],
-    media_types: list[str] | None = None,
-    languages: list[str] | None = None,
+    codes: list[str] | None = None,
+    account_codes: list[str] | None = None,
+    est_nums: list[int] | None = None,
+    delivery_method_detail: bool = True,
 ) -> list[dict]:
     tables = get_db_tables()
     stations_table = _quote_table_name(tables["STATIONS"])
     delivery_methods_table = _quote_table_name(tables["DELIVERYMETHODS"])
-    normalized_codes = [_normalize_account_code(code) for code in codes]
+    schedules_table = _quote_table_name(tables["SCHEDULES"])
+    est_nums_table = _quote_table_name(tables["ESTNUMS"])
+    normalized_codes = [_normalize_account_code(code) for code in (codes or [])]
     normalized_codes = [code for code in normalized_codes if code]
-    if not normalized_codes:
-        return []
 
     where_clauses: list[str] = []
     params: list[object] = []
 
-    code_placeholders = _build_in_placeholders(normalized_codes)
-    where_clauses.append(f"UPPER(s.code) IN ({code_placeholders})")
-    params.extend(normalized_codes)
+    if normalized_codes:
+        code_placeholders = _build_in_placeholders(normalized_codes)
+        where_clauses.append(f"UPPER(s.code) IN ({code_placeholders})")
+        params.extend(normalized_codes)
 
-    normalized_media_types = [_normalize_media_type(item) for item in (media_types or [])]
-    normalized_media_types = [item for item in normalized_media_types if item]
-    if normalized_media_types:
-        placeholders = _build_in_placeholders(normalized_media_types)
-        where_clauses.append(f"UPPER(s.mediaType) IN ({placeholders})")
-        params.extend(normalized_media_types)
+    normalized_account_codes = [
+        _normalize_account_code(item) for item in (account_codes or [])
+    ]
+    normalized_account_codes = [item for item in normalized_account_codes if item]
 
-    normalized_languages = [str(item or "").strip().upper() for item in (languages or [])]
-    normalized_languages = [item for item in normalized_languages if item]
-    if normalized_languages:
-        placeholders = _build_in_placeholders(normalized_languages)
-        where_clauses.append(f"UPPER(s.language) IN ({placeholders})")
-        params.extend(normalized_languages)
+    normalized_est_nums = [int(item) for item in (est_nums or [])]
 
-    query = (
-        "SELECT "
+    if normalized_est_nums or normalized_account_codes:
+        exists_clauses = ["UPPER(sc.stationCode) = UPPER(s.code)"]
+        exists_params: list[object] = []
+
+        if normalized_est_nums:
+            placeholders = _build_in_placeholders(normalized_est_nums)
+            exists_clauses.append(f"sc.estNum IN ({placeholders})")
+            exists_params.extend(normalized_est_nums)
+
+        exists_from = f"FROM {schedules_table} sc "
+        if normalized_account_codes:
+            placeholders = _build_in_placeholders(normalized_account_codes)
+            exists_from += f"JOIN {est_nums_table} en ON en.estNum = sc.estNum "
+            exists_clauses.append(f"UPPER(en.accountCode) IN ({placeholders})")
+            exists_params.extend(normalized_account_codes)
+
+        where_clauses.append(
+            "EXISTS (SELECT 1 "
+            + exists_from
+            + "WHERE "
+            + " AND ".join(exists_clauses)
+            + ")"
+        )
+        params.extend(exists_params)
+
+    if not where_clauses:
+        return []
+
+    select_fields = (
         "s.code AS code, "
         "s.name AS name, "
         "s.affiliation AS affiliation, "
         "s.mediaType AS mediaType, "
-        "s.syscode AS syscode, "
+        "CASE WHEN UPPER(s.mediaType) = 'CA' THEN s.syscode ELSE NULL END AS syscode, "
         "s.language AS language, "
         "s.ownership AS ownership, "
         "s.deliveryMethodId AS deliveryMethodId, "
         "s.note AS note, "
-        "d.name AS deliveryMethodName, "
-        "d.url AS deliveryMethodUrl, "
-        "d.username AS deliveryMethodUsername, "
-        "d.deadline AS deliveryMethodDeadline, "
-        "d.note AS deliveryMethodNote "
+        "d.name AS deliveryMethodName"
+    )
+    from_clause = (
         f"FROM {stations_table} s "
-        f"LEFT JOIN {delivery_methods_table} d "
-        "ON s.deliveryMethodId = d.id "
-        "WHERE "
+        f"LEFT JOIN {delivery_methods_table} d ON s.deliveryMethodId = d.id "
+    )
+    if delivery_method_detail:
+        select_fields += (
+            ", d.url AS deliveryMethodUrl, "
+            "d.username AS deliveryMethodUsername, "
+            "d.deadline AS deliveryMethodDeadline, "
+            "d.note AS deliveryMethodNote"
+        )
+
+    query = (
+        "SELECT "
+        + select_fields
+        + " "
+        + from_clause
+        + "WHERE "
         + " AND ".join(where_clauses)
         + " ORDER BY s.code ASC"
     )
     return fetch_all(query, tuple(params))
+
+
+def get_station_media_types(*, codes: list[str]) -> dict[str, str]:
+    normalized_codes = [_normalize_account_code(code) for code in (codes or [])]
+    normalized_codes = [code for code in normalized_codes if code]
+    if not normalized_codes:
+        return {}
+
+    tables = get_db_tables()
+    stations_table = _quote_table_name(tables["STATIONS"])
+    placeholders = _build_in_placeholders(normalized_codes)
+    query = (
+        "SELECT UPPER(code) AS code, UPPER(mediaType) AS mediaType "
+        f"FROM {stations_table} "
+        f"WHERE UPPER(code) IN ({placeholders})"
+    )
+    rows = fetch_all(query, tuple(normalized_codes))
+
+    mapped: dict[str, str] = {}
+    for row in rows:
+        code = str(row.get("code") or "").strip().upper()
+        media_type = str(row.get("mediaType") or "").strip().upper()
+        if not code or not media_type:
+            continue
+        mapped[code] = media_type
+    return mapped
+
+
+def get_station_account_codes(
+    *,
+    station_codes: list[str],
+    account_codes: list[str] | None = None,
+    est_nums: list[int] | None = None,
+) -> dict[str, list[str]]:
+    normalized_station_codes = [_normalize_account_code(code) for code in station_codes]
+    normalized_station_codes = [code for code in normalized_station_codes if code]
+    if not normalized_station_codes:
+        return {}
+
+    normalized_account_codes = [
+        _normalize_account_code(item) for item in (account_codes or [])
+    ]
+    normalized_account_codes = [item for item in normalized_account_codes if item]
+    normalized_est_nums = [int(item) for item in (est_nums or [])]
+
+    tables = get_db_tables()
+    schedules_table = _quote_table_name(tables["SCHEDULES"])
+    est_nums_table = _quote_table_name(tables["ESTNUMS"])
+
+    where_clauses: list[str] = []
+    params: list[object] = []
+
+    station_placeholders = _build_in_placeholders(normalized_station_codes)
+    where_clauses.append(f"UPPER(sc.stationCode) IN ({station_placeholders})")
+    params.extend(normalized_station_codes)
+
+    if normalized_est_nums:
+        placeholders = _build_in_placeholders(normalized_est_nums)
+        where_clauses.append(f"sc.estNum IN ({placeholders})")
+        params.extend(normalized_est_nums)
+
+    if normalized_account_codes:
+        placeholders = _build_in_placeholders(normalized_account_codes)
+        where_clauses.append(f"UPPER(en.accountCode) IN ({placeholders})")
+        params.extend(normalized_account_codes)
+
+    query = (
+        "SELECT DISTINCT "
+        "UPPER(sc.stationCode) AS stationCode, "
+        "UPPER(en.accountCode) AS accountCode "
+        f"FROM {schedules_table} sc "
+        f"JOIN {est_nums_table} en ON en.estNum = sc.estNum "
+        "WHERE " + " AND ".join(where_clauses) + " "
+        "ORDER BY stationCode ASC, accountCode ASC"
+    )
+    rows = fetch_all(query, tuple(params))
+
+    grouped: dict[str, list[str]] = {}
+    for row in rows:
+        station_code = str(row.get("stationCode") or "").strip().upper()
+        account_code = str(row.get("accountCode") or "").strip().upper()
+        if not station_code or not account_code:
+            continue
+        grouped.setdefault(station_code, []).append(account_code)
+    return grouped
 
 
 def insert_stations(items: list[dict]) -> int:
@@ -981,13 +1179,13 @@ def insert_stations(items: list[dict]) -> int:
         code = _normalize_account_code(item.get("code"))
         if not code:
             raise ValueError("code is required")
-        name = str(item.get("name") or "").strip()
+        name = _normalize_input_text(item.get("name"))
         if not name:
             raise ValueError("name is required")
         media_type = _normalize_media_type(item.get("mediaType"))
         if not media_type:
             raise ValueError("mediaType is required")
-        language = str(item.get("language") or "").strip()
+        language = _normalize_input_text(item.get("language"))
         if not language:
             raise ValueError("language is required")
         delivery_method_id = item.get("deliveryMethodId")
@@ -1002,13 +1200,13 @@ def insert_stations(items: list[dict]) -> int:
             (
                 code,
                 name,
-                str(item.get("affiliation") or "").strip() or None,
+                _normalize_optional_input_text(item.get("affiliation")),
                 media_type,
                 syscode,
                 language,
-                str(item.get("ownership") or "").strip() or None,
+                _normalize_optional_input_text(item.get("ownership")),
                 int(delivery_method_id),
-                str(item.get("note") or "").strip() or None,
+                _normalize_optional_input_text(item.get("note")),
             )
         )
 
@@ -1042,14 +1240,14 @@ def update_stations(items: list[dict]) -> int:
         fields: list[str] = []
         params: list[object] = []
         if "name" in item:
-            name = str(item.get("name") or "").strip()
+            name = _normalize_input_text(item.get("name"))
             if not name:
                 raise ValueError("name cannot be empty")
             fields.append("name = %s")
             params.append(name)
         if "affiliation" in item:
             fields.append("affiliation = %s")
-            params.append(str(item.get("affiliation") or "").strip() or None)
+            params.append(_normalize_optional_input_text(item.get("affiliation")))
         if "mediaType" in item:
             media_type = _normalize_media_type(item.get("mediaType"))
             if not media_type:
@@ -1068,14 +1266,14 @@ def update_stations(items: list[dict]) -> int:
                 fields.append("syscode = %s")
                 params.append(parsed_syscode)
         if "language" in item:
-            language = str(item.get("language") or "").strip()
+            language = _normalize_input_text(item.get("language"))
             if not language:
                 raise ValueError("language cannot be empty")
             fields.append("language = %s")
             params.append(language)
         if "ownership" in item:
             fields.append("ownership = %s")
-            params.append(str(item.get("ownership") or "").strip() or None)
+            params.append(_normalize_optional_input_text(item.get("ownership")))
         if "deliveryMethodId" in item:
             delivery_method_id = item.get("deliveryMethodId")
             if delivery_method_id is None:
@@ -1084,7 +1282,7 @@ def update_stations(items: list[dict]) -> int:
             params.append(int(delivery_method_id))
         if "note" in item:
             fields.append("note = %s")
-            params.append(str(item.get("note") or "").strip() or None)
+            params.append(_normalize_optional_input_text(item.get("note")))
         if not fields:
             raise ValueError(f"No updatable fields provided for station '{code}'")
         params.append(code)
@@ -1114,19 +1312,19 @@ def update_delivery_methods(items: list[dict]) -> int:
         fields: list[str] = []
         params: list[object] = []
         if "name" in item:
-            name = str(item.get("name") or "").strip()
+            name = _normalize_input_text(item.get("name"))
             if not name:
                 raise ValueError("name cannot be empty")
             fields.append("name = %s")
             params.append(name)
         if "url" in item:
-            url = str(item.get("url") or "").strip()
+            url = _normalize_input_text(item.get("url"))
             if not url:
                 raise ValueError("url cannot be empty")
             fields.append("url = %s")
             params.append(url)
         if "username" in item:
-            username = str(item.get("username") or "").strip()
+            username = _normalize_input_text(item.get("username"))
             if not username:
                 raise ValueError("username cannot be empty")
             fields.append("username = %s")
@@ -1135,14 +1333,14 @@ def update_delivery_methods(items: list[dict]) -> int:
             fields.append("password = %s")
             params.append(item.get("password"))
         if "deadline" in item:
-            deadline = str(item.get("deadline") or "").strip()
+            deadline = _normalize_input_text(item.get("deadline"))
             if not deadline:
                 raise ValueError("deadline cannot be empty")
             fields.append("deadline = %s")
             params.append(deadline)
         if "note" in item:
             fields.append("note = %s")
-            params.append(str(item.get("note") or "").strip() or None)
+            params.append(_normalize_optional_input_text(item.get("note")))
         if not fields:
             raise ValueError(
                 f"No updatable fields provided for delivery method id '{delivery_method_id}'"
@@ -1164,29 +1362,67 @@ def update_delivery_methods(items: list[dict]) -> int:
 def get_contacts(
     *,
     emails: list[str] | None = None,
+    name: str | None = None,
+    contact_type: str | None = None,
     active: bool | None = None,
 ) -> list[dict]:
     tables = get_db_tables()
     contacts_table = _quote_table_name(tables["CONTACTS"])
+    stations_contacts_table = _quote_table_name(tables["STATIONSCONTACTS"])
     where_clauses: list[str] = []
     params: list[object] = []
+
     normalized_emails = [_normalize_email(item) for item in (emails or [])]
     normalized_emails = [item for item in normalized_emails if item]
     if normalized_emails:
         placeholders = _build_in_placeholders(normalized_emails)
-        where_clauses.append(f"LOWER(email) IN ({placeholders})")
+        where_clauses.append(f"LOWER(c.email) IN ({placeholders})")
         params.extend(normalized_emails)
+
+    normalized_name = str(name or "").strip().lower()
+    if normalized_name:
+        like_value = f"%{normalized_name}%"
+        where_clauses.append(
+            "("
+            "LOWER(COALESCE(c.firstName, '')) LIKE %s "
+            "OR LOWER(COALESCE(c.lastName, '')) LIKE %s "
+            "OR LOWER(CONCAT_WS(' ', COALESCE(c.firstName, ''), COALESCE(c.lastName, ''))) LIKE %s"
+            ")"
+        )
+        params.extend([like_value, like_value, like_value])
+
+    normalized_contact_type = _normalize_contact_type(contact_type) if contact_type else ""
+    if normalized_contact_type:
+        where_clauses.append("UPPER(sc.contactType) = %s")
+        params.append(normalized_contact_type)
+
     if active is not None:
-        where_clauses.append("active = %s")
+        where_clauses.append("c.active = %s")
         params.append(1 if active else 0)
 
     query = (
-        "SELECT id, firstName, lastName, company, jobTitle, office, cell, email, active, note "
-        f"FROM {contacts_table}"
+        "SELECT "
+        "c.id AS id, "
+        "c.firstName AS firstName, "
+        "c.lastName AS lastName, "
+        "c.company AS company, "
+        "c.jobTitle AS jobTitle, "
+        "c.office AS office, "
+        "c.cell AS cell, "
+        "c.email AS email, "
+        "c.active AS active, "
+        "c.note AS note, "
+        "GROUP_CONCAT(DISTINCT UPPER(sc.stationCode) ORDER BY UPPER(sc.stationCode) SEPARATOR ',') "
+        "AS stationCodes "
+        f"FROM {contacts_table} c "
+        f"LEFT JOIN {stations_contacts_table} sc ON sc.contactId = c.id AND sc.active = 1"
     )
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
-    query += " ORDER BY id ASC"
+    query += (
+        " GROUP BY c.id, c.firstName, c.lastName, c.company, c.jobTitle, c.office, c.cell, "
+        "c.email, c.active, c.note ORDER BY c.id ASC"
+    )
     return fetch_all(query, tuple(params))
 
 
@@ -1255,25 +1491,25 @@ def insert_contacts(items: list[dict]) -> int:
     contacts_table = _quote_table_name(tables["CONTACTS"])
     values: list[tuple[object, ...]] = []
     for item in items:
-        email = str(item.get("email") or "").strip()
+        email = _normalize_email(item.get("email"))
         if not email:
             raise ValueError("email is required")
         first_name = item.get("firstName")
         if first_name is None:
             first_name = ""
         else:
-            first_name = str(first_name).strip()
+            first_name = _normalize_input_text(first_name)
         values.append(
             (
                 first_name,
-                str(item.get("lastName") or "").strip() or None,
-                str(item.get("company") or "").strip() or None,
-                str(item.get("jobTitle") or "").strip() or None,
-                str(item.get("office") or "").strip() or None,
-                str(item.get("cell") or "").strip() or None,
+                _normalize_optional_input_text(item.get("lastName")),
+                _normalize_optional_input_text(item.get("company")),
+                _normalize_optional_input_text(item.get("jobTitle")),
+                _normalize_optional_input_text(item.get("office")),
+                _normalize_optional_input_text(item.get("cell")),
                 email,
                 _normalize_bool(item.get("active"), default=True),
-                str(item.get("note") or "").strip() or None,
+                _normalize_optional_input_text(item.get("note")),
             )
         )
     query = (
@@ -1297,7 +1533,7 @@ def update_contacts(items: list[dict]) -> int:
         fields: list[str] = []
         params: list[object] = []
         if "email" in item:
-            email = str(item.get("email") or "").strip()
+            email = _normalize_email(item.get("email"))
             if not email:
                 raise ValueError("email cannot be empty")
             fields.append("email = %s")
@@ -1308,29 +1544,29 @@ def update_contacts(items: list[dict]) -> int:
             if first_name is None:
                 first_name = ""
             else:
-                first_name = str(first_name).strip()
+                first_name = _normalize_input_text(first_name)
             params.append(first_name)
         if "lastName" in item:
             fields.append("lastName = %s")
-            params.append(str(item.get("lastName") or "").strip() or None)
+            params.append(_normalize_optional_input_text(item.get("lastName")))
         if "company" in item:
             fields.append("company = %s")
-            params.append(str(item.get("company") or "").strip() or None)
+            params.append(_normalize_optional_input_text(item.get("company")))
         if "jobTitle" in item:
             fields.append("jobTitle = %s")
-            params.append(str(item.get("jobTitle") or "").strip() or None)
+            params.append(_normalize_optional_input_text(item.get("jobTitle")))
         if "office" in item:
             fields.append("office = %s")
-            params.append(str(item.get("office") or "").strip() or None)
+            params.append(_normalize_optional_input_text(item.get("office")))
         if "cell" in item:
             fields.append("cell = %s")
-            params.append(str(item.get("cell") or "").strip() or None)
+            params.append(_normalize_optional_input_text(item.get("cell")))
         if "active" in item:
             fields.append("active = %s")
             params.append(_normalize_bool(item.get("active"), default=True))
         if "note" in item:
             fields.append("note = %s")
-            params.append(str(item.get("note") or "").strip() or None)
+            params.append(_normalize_optional_input_text(item.get("note")))
         if not fields:
             raise ValueError(f"No updatable fields provided for contact id '{contact_id}'")
         params.append(int(contact_id))
@@ -1381,7 +1617,6 @@ def get_stations_contacts(
     ids: list[int] | None = None,
     station_codes: list[str] | None = None,
     contact_ids: list[int] | None = None,
-    contact_types: list[str] | None = None,
     active: bool | None = None,
 ) -> list[dict]:
     tables = get_db_tables()
@@ -1409,15 +1644,6 @@ def get_stations_contacts(
         placeholders = _build_in_placeholders(normalized_contact_ids)
         where_clauses.append(f"contactId IN ({placeholders})")
         params.extend(normalized_contact_ids)
-
-    normalized_contact_types = [
-        _normalize_contact_type(item) for item in (contact_types or [])
-    ]
-    normalized_contact_types = [item for item in normalized_contact_types if item]
-    if normalized_contact_types:
-        placeholders = _build_in_placeholders(normalized_contact_types)
-        where_clauses.append(f"UPPER(contactType) IN ({placeholders})")
-        params.extend(normalized_contact_types)
 
     if active is not None:
         where_clauses.append("active = %s")
@@ -1455,7 +1681,7 @@ def insert_stations_contacts(items: list[dict]) -> int:
                 int(contact_id),
                 contact_type,
                 _normalize_bool(item.get("primaryContact"), default=False),
-                item.get("note"),
+                _normalize_optional_input_text(item.get("note")),
                 _normalize_bool(item.get("active"), default=True),
             )
         )
@@ -1507,7 +1733,7 @@ def update_stations_contacts(items: list[dict]) -> int:
             params.append(_normalize_bool(item.get("primaryContact"), default=False))
         if "note" in item:
             fields.append("note = %s")
-            params.append(item.get("note"))
+            params.append(_normalize_optional_input_text(item.get("note")))
         if "active" in item:
             fields.append("active = %s")
             params.append(_normalize_bool(item.get("active"), default=True))

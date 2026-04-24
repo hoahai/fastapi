@@ -16,7 +16,7 @@ router = APIRouter(prefix="/accounts")
 def get_accounts_route(
     account_codes: list[str] | None = Query(None, alias="accountCodes"),
     account_code: list[str] | None = Query(None, alias="accountCode"),
-    active: bool | None = Query(None),
+    active: bool = Query(True),
 ):
     """
     Return TradSphere account-code mappings joined with master account metadata.
@@ -29,6 +29,9 @@ def get_accounts_route(
 
     Example request (multiple filters):
         GET /api/tradsphere/v1/accounts?accountCodes=TAAA,TBBB&active=true
+
+    Example request (include inactive TradSphere accounts):
+        GET /api/tradsphere/v1/accounts?active=false
 
     Example response:
         {
@@ -51,7 +54,9 @@ def get_accounts_route(
         - Requires valid API key
         - accountCodes/accountCode accept comma-separated values
         - Blank accountCodes/accountCode values return all rows
+        - active defaults to true
         - active=true filters by master Accounts.active = 1
+        - active=false disables the active filter and returns all TradSphere accounts
     """
     normalized_codes = parse_csv_values(account_codes, account_code, uppercase=True)
     try:
@@ -89,12 +94,23 @@ def create_accounts_route(
           "data": {"inserted": 2}
         }
 
+    Example error response (duplicate accountCode):
+        {
+          "meta": {"timestamp": "2026-04-22T17:00:00+07:00", "duration_ms": 2},
+          "error": {
+            "message": "Bad Request",
+            "detail": "accountCode values already exist in TradSphere accounts: TAAA"
+          }
+        }
+
     Requirements:
         - Requires X-Tenant-Id header
         - Requires valid API key
         - Payload accepts object or array of objects
         - accountCode is required for each item
-        - accountCode must exist in tenant-valid account-code lookup
+        - accountCode must exist in master Accounts
+        - accountCode must not already exist in TradSphere_Accounts (no upsert on POST)
+        - Duplicate accountCode values in payload are rejected with HTTP 400
         - billingType accepts Broadcast or Calendar (default Calendar)
         - market max length is 255
         - note max length is 2048
@@ -129,11 +145,21 @@ def update_accounts_route(
           "data": {"updated": 1}
         }
 
+    Example error response (accountCode not in TradSphere_Accounts):
+        {
+          "meta": {"timestamp": "2026-04-22T17:00:00+07:00", "duration_ms": 2},
+          "error": {
+            "message": "Bad Request",
+            "detail": "Unknown TradSphere accountCode values: TCCC"
+          }
+        }
+
     Requirements:
         - Requires X-Tenant-Id header
         - Requires valid API key
         - Payload accepts object or array of objects
         - accountCode is required per item
+        - accountCode must already exist in TradSphere_Accounts
         - At least one updatable field is required: billingType, market, note
         - billingType accepts Broadcast or Calendar
         - market max length is 255

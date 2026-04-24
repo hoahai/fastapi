@@ -18,16 +18,20 @@ router = APIRouter(prefix="/contacts")
 def get_contacts_route(
     emails: list[str] | None = Query(None, alias="emails"),
     email: list[str] | None = Query(None, alias="email"),
+    name: str | None = Query(None),
+    contact_types: str | None = Query(None, alias="contactTypes"),
+    contact_type: str | None = Query(None, alias="contactType"),
+    contact_type_lower: str | None = Query(None, alias="contacttype"),
     active: bool | None = Query(None),
 ):
     """
-    Return contact rows with optional email/active filters.
+    Return contact rows filtered by email, name, contact type, and/or active.
 
     Example request:
-        GET /api/tradsphere/v1/contacts
-
-    Example request (filtered):
         GET /api/tradsphere/v1/contacts?emails=ops@station.com,billing@station.com&active=true
+
+    Example request (by name/contact type):
+        GET /api/tradsphere/v1/contacts?name=ari&contactType=REP
 
     Example response:
         {
@@ -42,6 +46,7 @@ def get_contacts_route(
               "jobTitle": "Traffic Manager",
               "office": "+1-555-1000",
               "cell": "+1-555-2000",
+              "stationCodes": ["KABC", "WXYZ"],
               "active": 1,
               "note": "Preferred contact for logs"
             }
@@ -51,13 +56,46 @@ def get_contacts_route(
     Requirements:
         - Requires X-Tenant-Id header
         - Requires valid API key
+        - At least one filter is required: emails/email, name, contactType/contactTypes/contacttype, or active
         - emails/email accepts comma-separated values
-        - blank filter values return all for that filter
+        - contactType/contactTypes/contacttype accepts exactly one value
+        - contactType values must match tenant enum tradsphere.ENUMS.contactType
     """
     try:
         normalized_emails = parse_csv_values(emails, email, lowercase=True)
+        normalized_contact_types = parse_csv_values(
+            contact_types,
+            contact_type,
+            contact_type_lower,
+            uppercase=True,
+        )
+        if len(normalized_contact_types) > 1:
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "Only one contactType is allowed for /contacts. "
+                    "Use one of: contactType, contactTypes, or contacttype."
+                ),
+            )
+        normalized_name = str(name or "").strip() or None
+        if (
+            not normalized_emails
+            and not normalized_name
+            and not normalized_contact_types
+            and active is None
+        ):
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    "At least one filter is required: emails/email, name, "
+                    "contactType/contactTypes/contacttype, or active"
+                ),
+            )
+        normalized_contact_type = normalized_contact_types[0] if normalized_contact_types else None
         return list_contacts_data(
             emails=normalized_emails,
+            name=normalized_name,
+            contact_type=normalized_contact_type,
             active=active,
         )
     except ValueError as exc:
@@ -147,14 +185,24 @@ def create_contacts_route(
         [
           {
             "email": "ops@station.com",
-            "firstName": "Ari",
-            "lastName": "Nguyen",
+            "name": "Ari Nguyen",
             "company": "ABC Media",
             "jobTitle": "Traffic Manager",
             "office": "+1-555-1000",
             "cell": "+1-555-2000",
             "active": true,
             "note": "Preferred contact for logs"
+          }
+        ]
+
+    Example request (firstName/lastName take precedence over name):
+        POST /api/tradsphere/v1/contacts
+        [
+          {
+            "email": "ops@station.com",
+            "name": "Ignored Name",
+            "firstName": "Ari",
+            "lastName": "Nguyen"
           }
         ]
 
@@ -168,7 +216,12 @@ def create_contacts_route(
         - Requires X-Tenant-Id header
         - Requires valid API key
         - email is required per item
+        - email must be a valid email format
+        - Optional name is accepted and auto-parsed into firstName/lastName when firstName/lastName are not both provided
+        - If firstName and lastName are both provided, name is ignored
         - firstName defaults to empty string when omitted
+        - office/cell accept all-digit (10/11 digits) or US phone format
+        - office may include optional extension suffix like x1234; cell cannot include extension
         - office max length 35; cell max length 20
         - note max length 2048
         - Duplicate emails return HTTP 400 with duplicatedContacts details (payload + DB, case-insensitive)
@@ -216,10 +269,18 @@ def update_contacts_route(
         [
           {
             "id": 12,
-            "email": "traffic@station.com",
-            "jobTitle": "Traffic Lead",
-            "office": "+1-555-1200",
-            "active": true
+            "name": "Ari Tran"
+          }
+        ]
+
+    Example request (firstName/lastName take precedence over name):
+        PUT /api/tradsphere/v1/contacts
+        [
+          {
+            "id": 12,
+            "name": "Ignored Name",
+            "firstName": "Ari",
+            "lastName": "Nguyen"
           }
         ]
 
@@ -233,6 +294,11 @@ def update_contacts_route(
         - Requires X-Tenant-Id header
         - Requires valid API key
         - id is required per item
+        - email must be a valid email format when provided
+        - Optional name is accepted and auto-parsed into firstName/lastName when firstName/lastName are not both provided
+        - If firstName and lastName are both provided, name is ignored
+        - office/cell accept all-digit (10/11 digits) or US phone format when provided
+        - office may include optional extension suffix like x1234; cell cannot include extension
         - office max length 35; cell max length 20
         - note max length 2048
         - Duplicate emails return HTTP 400 with duplicatedContacts details (payload + DB, case-insensitive)

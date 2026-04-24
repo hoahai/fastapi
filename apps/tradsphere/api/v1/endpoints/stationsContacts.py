@@ -4,6 +4,7 @@ from fastapi import APIRouter, Body, HTTPException, Query
 
 from apps.tradsphere.api.v1.helpers.contacts import (
     create_stations_contacts_data,
+    deactivate_stations_contacts_data,
     list_stations_contacts_data,
     modify_stations_contacts_data,
 )
@@ -20,8 +21,6 @@ def get_stations_contacts_route(
     station_code: list[str] | None = Query(None, alias="stationCode"),
     contact_ids: list[str] | None = Query(None, alias="contactIds"),
     contact_id: list[str] | None = Query(None, alias="contactId"),
-    contact_types: list[str] | None = Query(None, alias="contactTypes"),
-    contact_type: list[str] | None = Query(None, alias="contactType"),
     active: bool | None = Query(None),
 ):
     """
@@ -31,7 +30,7 @@ def get_stations_contacts_route(
         GET /api/tradsphere/v1/contacts/stationsContacts
 
     Example request (filtered):
-        GET /api/tradsphere/v1/contacts/stationsContacts?stationCodes=KABC&contactIds=12&contactTypes=REP&active=true
+        GET /api/tradsphere/v1/contacts/stationsContacts?stationCodes=KABC&contactIds=12&active=true
 
     Example response:
         {
@@ -53,7 +52,7 @@ def get_stations_contacts_route(
         - Requires X-Tenant-Id header
         - Requires valid API key
         - ids/id, contactIds/contactId accept comma-separated integers
-        - stationCodes/stationCode and contactTypes/contactType accept comma-separated values
+        - stationCodes/stationCode accept comma-separated values
     """
     try:
         normalized_ids = parse_int_list(ids, row_id)
@@ -63,16 +62,10 @@ def get_stations_contacts_route(
             uppercase=True,
         )
         normalized_contact_ids = parse_int_list(contact_ids, contact_id)
-        normalized_contact_types = parse_csv_values(
-            contact_types,
-            contact_type,
-            uppercase=True,
-        )
         return list_stations_contacts_data(
             ids=normalized_ids,
             station_codes=normalized_station_codes,
             contact_ids=normalized_contact_ids,
-            contact_types=normalized_contact_types,
             active=active,
         )
     except ValueError as exc:
@@ -154,5 +147,39 @@ def update_stations_contacts_route(
     """
     try:
         return modify_stations_contacts_data(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put("/deactivate")
+def deactivate_stations_contacts_route(
+    ids: list[str] | None = Query(None, alias="ids"),
+    row_id: list[str] | None = Query(None, alias="id"),
+):
+    """
+    Deactivate one or many station-contact link rows by id.
+
+    Example request:
+        PUT /api/tradsphere/v1/contacts/stationsContacts/deactivate?ids=44,45,46
+
+    Example request (single id alias):
+        PUT /api/tradsphere/v1/contacts/stationsContacts/deactivate?id=44
+
+    Example response:
+        {
+          "meta": {"timestamp": "2026-04-22T17:00:00+07:00", "duration_ms": 2},
+          "data": {"updated": 3}
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - ids/id is required and accepts comma-separated integers
+        - All ids must exist in stationsContacts; unknown ids return HTTP 400
+        - Rows are deactivated by setting active = 0
+    """
+    try:
+        normalized_ids = parse_int_list(ids, row_id)
+        return deactivate_stations_contacts_data(ids=normalized_ids)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

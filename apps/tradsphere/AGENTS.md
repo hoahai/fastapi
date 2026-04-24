@@ -63,6 +63,51 @@
   - contact ids
   - stationsContacts ids
 
+## AccountCode Behavior Rules
+
+- Account-code normalization/validation remains local to TradSphere helpers (`helpers/accountValidation.py`).
+- `accountCode` values are normalized to uppercase for all reads/writes.
+- `TradSphere_Accounts` is the source of truth for TradSphere membership.
+- Master `Accounts` is only used for:
+  - onboarding validation in `POST /accounts` (code must exist in master)
+  - metadata join in `GET /accounts` (`name`, `logoUrl`, `active`)
+  - active filter in `GET /accounts` (`active=true` uses `Accounts.active = 1`)
+- `GET /accounts` must return only rows that exist in `TradSphere_Accounts` (never all master accounts).
+- `POST /accounts` is insert-only for TradSphere rows:
+  - duplicates in payload are `400`
+  - existing TradSphere rows are `400`
+  - no upsert
+- `PUT /accounts` is update-only for existing TradSphere rows:
+  - unknown `accountCode` in `TradSphere_Accounts` is `400`
+  - no implicit create/upsert
+- Non-accounts endpoints that validate `accountCode` (for example estNums/schedules) must validate against `TradSphere_Accounts`, not master `Accounts`.
+
+## Stations `syscode` Rules
+
+- `GET /stations` response masking rule:
+  - return `syscode` only when `mediaType = "CA"`
+  - for all other media types, omit `syscode` from the response payload
+  - supports query toggles:
+    - `deliveryMethodDetail` (default `false`) for delivery method detail level
+      - `true`: full deliveryMethod object (`id`, `name`, `url`, `username`, `deadline`, `note`)
+      - `false`: deliveryMethod returns only `id` and `name`
+    - `contactDetail` (default `false`) for REP contact detail level
+      - contacts are always grouped by `contactType`
+      - `REP`:
+        - `true`: full REP contact objects
+        - `false`: short REP objects `{id, name, email}`
+      - non-`REP`: always list of emails
+  - contacts come from active `stationsContacts` + active `contacts`
+- `POST /stations` validation rule:
+  - `syscode` must be an unsigned integer when provided
+  - when `mediaType = "CA"`, `syscode` is required
+  - when `mediaType != "CA"`, `syscode` is not allowed
+- `PUT /stations` validation rule:
+  - `syscode` must be an unsigned integer when provided
+  - when an item sets `mediaType = "CA"`, the same item must include `syscode`
+  - when an item sets `mediaType != "CA"`, the same item must not include `syscode`
+  - when `syscode` is updated without `mediaType`, existing station media type must be `CA`
+
 ## API Behavior Rules
 
 - Keep response envelope behavior consistent with app middleware stack.
@@ -97,6 +142,7 @@
   - `POST /schedules`
   - `PUT /schedules`
   - `POST /schedules/import`
+  - `POST /schedules/import/file`
   - `GET /schedules/weeks`
   - `POST /schedules/weeks`
   - `PUT /schedules/weeks`
@@ -116,13 +162,15 @@
 - Broadcast week is Monday-Sunday.
 - Broadcast month/year is assigned by the week-ending Sunday.
 - First week of broadcast month is the week containing Gregorian day 1.
+- Period filtering that depends on month/year/quarter (for example `GET /estNums`) must use broadcast-week overlap via `helpers/broadcastCalendar.py`, not Gregorian month-boundary checks.
+- For `GET /estNums`, when both `month` and `quarter` are provided, month-quarter consistency must be validated.
 - Supported `resultType` values:
-  - `Month`
-  - `Year`
-  - `Start Date`
-  - `End Date`
-  - `Num of Week`
-  - `FirstDate of Week`
-  - `LastDate of Week`
-  - `Week Num of Month`
-  - `Week Num of Year`
+  - `month`
+  - `year`
+  - `start_date`
+  - `end_date`
+  - `num_of_week`
+  - `firstdate_of_week`
+  - `lastdate_of_week`
+  - `week_num_of_month`
+  - `week_num_of_year`

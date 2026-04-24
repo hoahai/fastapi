@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from apps.tradsphere.api.v1.helpers.accountValidation import (
     ensure_contact_ids_exist,
     ensure_station_codes_exist,
@@ -20,6 +22,11 @@ from apps.tradsphere.api.v1.helpers.dbQueries import (
 
 _DUPLICATE_IN_PAYLOAD = "duplicate_in_payload"
 _EMAIL_ALREADY_EXISTS = "email_already_exists"
+_EMAIL_FORMAT_RE = re.compile(
+    r"^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$"
+)
+_OFFICE_EXT_RE = re.compile(r"^(?P<base>.+?)(?:\s*x(?P<ext>\d{1,6}))?$", re.IGNORECASE)
+_PHONE_ALLOWED_RE = re.compile(r"^[\d\s().+-]+$")
 
 
 class DuplicateContactsError(ValueError):
@@ -60,6 +67,8 @@ def _ensure_email(value: object, *, field: str = "email") -> str:
         raise ValueError(f"{field} is required")
     if len(text) > 255:
         raise ValueError(f"{field} must be <= 255 characters")
+    if not _EMAIL_FORMAT_RE.fullmatch(text):
+        raise ValueError(f"{field} must be a valid email format")
     return text
 
 
@@ -72,6 +81,87 @@ def _ensure_first_name(value: object, *, required: bool) -> str | None:
     if len(text) > 255:
         raise ValueError("firstName must be <= 255 characters")
     return text
+
+
+def _is_valid_us_phone_base(value: str) -> bool:
+    if not value:
+        return False
+    if not _PHONE_ALLOWED_RE.fullmatch(value):
+        return False
+    if value.count("+") > 1:
+        return False
+    if "+" in value and not value.strip().startswith("+"):
+        return False
+    digits = "".join(ch for ch in value if ch.isdigit())
+    if len(digits) == 10:
+        return True
+    return len(digits) == 11 and digits.startswith("1")
+
+
+def _ensure_phone(
+    value: object,
+    *,
+    field: str,
+    max_length: int,
+    allow_extension: bool,
+) -> str | None:
+    text = _ensure_optional_text(value, field=field, max_length=max_length)
+    if text is None:
+        return None
+
+    base = text
+    if allow_extension:
+        match = _OFFICE_EXT_RE.fullmatch(text)
+        if not match:
+            raise ValueError(f"{field} must be a US phone format; optional extension x####")
+        base = str(match.group("base") or "").strip()
+    elif re.search(r"\bx\d+\s*$", text, flags=re.IGNORECASE):
+        raise ValueError(f"{field} cannot include extension; use office for x####")
+
+    if not _is_valid_us_phone_base(base):
+        raise ValueError(f"{field} must be all digits (10/11) or valid US phone format")
+    return text
+
+
+def _parse_contact_name(value: object) -> tuple[str | None, str | None]:
+    text = str(value or "").strip()
+    if not text:
+        return None, None
+    parts = [part for part in text.split() if part]
+    if not parts:
+        return None, None
+    first_name = parts[0]
+    last_name = " ".join(parts[1:]) if len(parts) > 1 else None
+    return first_name, last_name
+
+
+def _resolve_contact_name_values(
+    row: dict,
+    *,
+    required_first_name: bool,
+) -> tuple[str | None, str | None]:
+    has_first_name = "firstName" in row
+    has_last_name = "lastName" in row
+    use_name_field = "name" in row and not (has_first_name and has_last_name)
+
+    parsed_first_name: str | None = None
+    parsed_last_name: str | None = None
+    if use_name_field:
+        parsed_first_name, parsed_last_name = _parse_contact_name(row.get("name"))
+
+    first_name_source: object = row.get("firstName") if has_first_name else parsed_first_name
+    last_name_source: object = row.get("lastName") if has_last_name else parsed_last_name
+
+    normalized_first_name = _ensure_first_name(
+        first_name_source,
+        required=required_first_name,
+    )
+    normalized_last_name = _ensure_optional_text(
+        last_name_source,
+        field="lastName",
+        max_length=255,
+    )
+    return normalized_first_name, normalized_last_name
 
 
 def _normalize_contact_type(value: object) -> str:
@@ -207,9 +297,24 @@ def _split_update_rows_and_duplicates(rows: list[dict]) -> tuple[list[dict], lis
 def list_contacts_data(
     *,
     emails: list[str] | None = None,
+    name: str | None = None,
+    contact_type: str | None = None,
     active: bool | None = None,
 ) -> list[dict]:
-    return get_contacts(emails=emails or [], active=active)
+    rows = get_contacts(
+        emails=emails or [],
+        name=name,
+        contact_type=_normalize_contact_type(contact_type) if contact_type else None,
+        active=active,
+    )
+    for row in rows:
+        station_codes = [
+            str(code or "").strip().upper()
+            for code in str(row.get("stationCodes") or "").split(",")
+            if str(code or "").strip()
+        ]
+        row["stationCodes"] = list(dict.fromkeys(station_codes))
+    return rows
 
 
 def list_contacts_by_station_codes_data(
@@ -268,15 +373,15 @@ def create_contacts_data(payload: list[dict] | dict) -> dict[str, int]:
         if not isinstance(row, dict):
             raise ValueError("Each contacts item must be an object")
         email = _ensure_email(row.get("email"))
+        first_name, last_name = _resolve_contact_name_values(
+            row,
+            required_first_name=True,
+        )
         normalized_rows.append(
             {
                 "email": email,
-                "firstName": _ensure_first_name(row.get("firstName"), required=True),
-                "lastName": _ensure_optional_text(
-                    row.get("lastName"),
-                    field="lastName",
-                    max_length=255,
-                ),
+                "firstName": first_name,
+                "lastName": last_name,
                 "company": _ensure_optional_text(
                     row.get("company"),
                     field="company",
@@ -287,15 +392,17 @@ def create_contacts_data(payload: list[dict] | dict) -> dict[str, int]:
                     field="jobTitle",
                     max_length=255,
                 ),
-                "office": _ensure_optional_text(
+                "office": _ensure_phone(
                     row.get("office"),
                     field="office",
                     max_length=35,
+                    allow_extension=True,
                 ),
-                "cell": _ensure_optional_text(
+                "cell": _ensure_phone(
                     row.get("cell"),
                     field="cell",
                     max_length=20,
+                    allow_extension=False,
                 ),
                 "active": row.get("active"),
                 "note": _ensure_optional_text(
@@ -329,17 +436,26 @@ def modify_contacts_data(payload: list[dict] | dict) -> dict[str, int]:
             raise ValueError("id is required for contacts update")
         item: dict[str, object] = {"id": int(row_id)}
         ids_to_validate.append(int(row_id))
+        has_first_name = "firstName" in row
+        has_last_name = "lastName" in row
+        use_name_field = "name" in row and not (has_first_name and has_last_name)
+
+        normalized_first_name: str | None = None
+        normalized_last_name: str | None = None
+        if has_first_name or has_last_name or use_name_field:
+            normalized_first_name, normalized_last_name = _resolve_contact_name_values(
+                row,
+                required_first_name=False,
+            )
+
         if "email" in row:
             item["email"] = _ensure_email(row.get("email"), field="email")
-        if "firstName" in row:
-            first_name = _ensure_first_name(row.get("firstName"), required=False)
-            item["firstName"] = first_name if first_name is not None else ""
-        if "lastName" in row:
-            item["lastName"] = _ensure_optional_text(
-                row.get("lastName"),
-                field="lastName",
-                max_length=255,
+        if has_first_name or use_name_field:
+            item["firstName"] = (
+                normalized_first_name if normalized_first_name is not None else ""
             )
+        if has_last_name or use_name_field:
+            item["lastName"] = normalized_last_name
         if "company" in row:
             item["company"] = _ensure_optional_text(
                 row.get("company"),
@@ -353,16 +469,18 @@ def modify_contacts_data(payload: list[dict] | dict) -> dict[str, int]:
                 max_length=255,
             )
         if "office" in row:
-            item["office"] = _ensure_optional_text(
+            item["office"] = _ensure_phone(
                 row.get("office"),
                 field="office",
                 max_length=35,
+                allow_extension=True,
             )
         if "cell" in row:
-            item["cell"] = _ensure_optional_text(
+            item["cell"] = _ensure_phone(
                 row.get("cell"),
                 field="cell",
                 max_length=20,
+                allow_extension=False,
             )
         if "active" in row:
             item["active"] = row.get("active")
@@ -391,7 +509,6 @@ def list_stations_contacts_data(
     ids: list[int] | None = None,
     station_codes: list[str] | None = None,
     contact_ids: list[int] | None = None,
-    contact_types: list[str] | None = None,
     active: bool | None = None,
 ) -> list[dict]:
     normalized_station_codes = [
@@ -399,14 +516,10 @@ def list_stations_contacts_data(
         for code in (station_codes or [])
         if str(code or "").strip()
     ]
-    normalized_contact_types = [
-        _normalize_contact_type(item) for item in (contact_types or [])
-    ]
     return get_stations_contacts(
         ids=ids or [],
         station_codes=normalized_station_codes,
         contact_ids=contact_ids or [],
-        contact_types=normalized_contact_types,
         active=active,
     )
 
@@ -566,6 +679,21 @@ def modify_stations_contacts_data(payload: list[dict] | dict) -> dict[str, int]:
         updated += update_stations_contacts(rows_to_deactivate)
     if rows_to_update:
         updated += update_stations_contacts(rows_to_update)
+
+    if updated > 0:
+        invalidate_validation_cache()
+    return {"updated": updated}
+
+
+def deactivate_stations_contacts_data(*, ids: list[int]) -> dict[str, int]:
+    normalized_ids = [int(item) for item in (ids or [])]
+    normalized_ids = list(dict.fromkeys(normalized_ids))
+    if not normalized_ids:
+        raise ValueError("ids is required")
+
+    ensure_stations_contact_ids_exist(normalized_ids)
+    rows_to_deactivate = [{"id": row_id, "active": False} for row_id in normalized_ids]
+    updated = update_stations_contacts(rows_to_deactivate)
 
     if updated > 0:
         invalidate_validation_cache()

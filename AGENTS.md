@@ -2,8 +2,8 @@
 
 ## Overview
 
--   This repo is a multi-tenant FastAPI service with three apps:
-    **SpendSphere**, **Shiftzy**, and **FundSphere**.
+-   This repo is a multi-tenant FastAPI service with four apps:
+    **SpendSphere**, **Shiftzy**, **FundSphere**, and **TradSphere**.
 -   The root app mounts all apps under `/api` and applies shared middleware
     (auth, tenant, logging).
 -   The system is strictly tenant-isolated and must maintain
@@ -19,6 +19,7 @@
 -   `apps/spendsphere/api/main.py` bootstraps SpendSphere (v1 + v2).
 -   `apps/shiftzy/api/main.py` bootstraps Shiftzy (v1).
 -   `apps/fundsphere/api/main.py` bootstraps FundSphere (v1).
+-   `apps/tradsphere/api/main.py` bootstraps TradSphere (v1).
 
 ### Example Full Routes
 
@@ -26,6 +27,7 @@
 -   SpendSphere v2: `/api/spendsphere/v2/...`
 -   Shiftzy v1: `/api/shiftzy/v1/...`
 -   FundSphere v1: `/api/fundsphere/v1/...`
+-   TradSphere v1: `/api/tradsphere/v1/...`
 
 ------------------------------------------------------------------------
 
@@ -39,7 +41,7 @@
 4.  `timing_middleware`
 
 -   App-level `response_envelope_middleware` runs inside each sub-app
-    stack (SpendSphere/Shiftzy/FundSphere).
+    stack (SpendSphere/Shiftzy/FundSphere/TradSphere).
 
 ### Response Envelope Format
 
@@ -85,6 +87,7 @@ All endpoints must respect this structure.
     -   `spendsphere.axiom_log`
     -   `shiftzy.axiom_log`
     -   `fundsphere.axiom_log`
+    -   `tradsphere.axiom_log`
 -   App `axiom_log` is optional:
     -   if `AXIOM_API_TOKEN` and `AXIOM_DATASET` are present for the
         current app, Axiom logging is enabled for that app
@@ -97,8 +100,9 @@ All endpoints must respect this structure.
 -   For tenant files that define multiple app sections, app validators
     resolve app-scoped config first (for example:
     `SPENDSPHERE_DB_TABLES`, `SPENDSPHERE_SPREADSHEETS`,
-    `SHIFTZY_DB_TABLES`, `FUNDSPHERE_DB_TABLES`) to avoid cross-app
-    key collisions on shared keys like `DB_TABLES` and `SPREADSHEETS`.
+    `SHIFTZY_DB_TABLES`, `FUNDSPHERE_DB_TABLES`,
+    `TRADSPHERE_DB_TABLES`) to avoid cross-app key collisions on shared
+    keys like `DB_TABLES` and `SPREADSHEETS`.
 
 Do not introduce new environment loading mechanisms.
 
@@ -153,6 +157,9 @@ Monday) - `WEEK_BEFORE` - `WEEK_AFTER` - `POSITION_AREAS_ENUM` -
 
 **FundSphere requires:** - `SPREADSHEETS` - `DB_TABLES` -
 `fundsphere.google_accounts`
+
+**TradSphere requires:** - `tradsphere` section - `DB_TABLES` -
+`ENUMS` - `CACHE` (optional overrides allowed; defaults exist)
 
 **FundSphere google_accounts structure:**
 - `fundsphere.google_accounts.json_key_file_path` or
@@ -659,6 +666,35 @@ Documentation rules:
     - Writes header row:
       `depListingOrder`, `departmentCode`, `departmentName`,
       `serviceId`, `serviceName`, `commission`
+
+### TradSphere
+
+-   Routes live under `/api/tradsphere/v1`.
+-   App-level tenant validation is mandatory:
+    - when tenant config does not include `tradsphere` section, TradSphere
+      routes must return `400`.
+-   Account-code behavior:
+    - `TradSphere_Accounts` is source of truth for TradSphere membership.
+    - Master `Accounts` is only for metadata (`name`, `logoUrl`, `active`)
+      and master-existence validation on `POST /accounts`.
+    - `GET /accounts` returns TradSphere rows only (joined master metadata),
+      never all master accounts.
+    - `GET /accounts` query `active` defaults to `true`; `active=true`
+      filters by master `Accounts.active = 1`.
+    - `POST /accounts` is insert-only (no upsert); duplicates are `400`.
+    - `PUT /accounts` is update-only; unknown TradSphere `accountCode` is `400`.
+    - Account-code normalization/validation stays local in
+      `apps/tradsphere/api/v1/helpers/accountValidation.py` (do not move to shared).
+-   Broadcast calendar behavior:
+    - Broadcast week is Monday-Sunday.
+    - Broadcast month/year comes from week-ending Sunday.
+    - `GET /broadcastCalendar` `resultType` values are
+      `month`, `year`, `start_date`, `end_date`, `num_of_week`,
+      `firstdate_of_week`, `lastdate_of_week`, `week_num_of_month`,
+      `week_num_of_year`.
+    - `GET /estNums` filters `year/month/quarter` must use broadcast-calendar
+      overlap semantics (via TradSphere broadcast helper), not Gregorian month
+      boundary checks.
 
 ------------------------------------------------------------------------
 

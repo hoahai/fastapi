@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 from apps.tradsphere.api.v1.helpers.accountValidation import (
-    ensure_account_codes_exist,
+    ensure_master_account_codes_exist,
+    ensure_tradsphere_account_codes_exist,
+    find_existing_tradsphere_account_codes,
     invalidate_validation_cache,
     require_account_code,
 )
@@ -52,10 +54,21 @@ def _normalize_optional_text(
     return text
 
 
+def _find_duplicate_account_codes(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for value in values:
+        if value in seen:
+            duplicates.add(value)
+            continue
+        seen.add(value)
+    return sorted(duplicates)
+
+
 def list_accounts(
     *,
     account_codes: list[str] | None = None,
-    active: bool | None = None,
+    active: bool = True,
 ) -> list[dict]:
     return get_accounts(account_codes=account_codes or [], active_only=bool(active))
 
@@ -89,8 +102,31 @@ def create_accounts(payload: list[dict] | dict) -> dict[str, int]:
         )
         requested_codes.append(account_code)
 
-    ensure_account_codes_exist(requested_codes)
-    inserted = insert_accounts(normalized_rows)
+    duplicate_codes_in_payload = _find_duplicate_account_codes(requested_codes)
+    if duplicate_codes_in_payload:
+        raise ValueError(
+            "Duplicate accountCode values in payload: "
+            + ", ".join(duplicate_codes_in_payload)
+        )
+
+    ensure_master_account_codes_exist(requested_codes)
+    existing_codes = find_existing_tradsphere_account_codes(requested_codes)
+    if existing_codes:
+        raise ValueError(
+            "accountCode values already exist in TradSphere accounts: "
+            + ", ".join(existing_codes)
+        )
+
+    try:
+        inserted = insert_accounts(normalized_rows)
+    except Exception as exc:
+        detail = str(exc).lower()
+        if "duplicate entry" in detail:
+            raise ValueError(
+                "accountCode values already exist in TradSphere accounts"
+            ) from exc
+        raise
+
     invalidate_validation_cache()
     return {"inserted": inserted}
 
@@ -130,7 +166,7 @@ def modify_accounts(payload: list[dict] | dict) -> dict[str, int]:
             )
         normalized_rows.append(item)
 
-    ensure_account_codes_exist(target_codes)
+    ensure_tradsphere_account_codes_exist(target_codes)
     updated = update_accounts(normalized_rows)
     invalidate_validation_cache()
     return {"updated": updated}

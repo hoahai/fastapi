@@ -96,7 +96,7 @@ LOCAL_SECRETS_DIR = LOCAL_ETC_DIR / "secrets"
 
 _TENANT_ENV_CACHE: dict[str, tuple[float, dict[str, float], dict[str, str]]] = {}
 _CACHE_LOCK = threading.Lock()
-_APP_SCOPED_ENV_SECTIONS = {"spendsphere", "shiftzy", "fundsphere"}
+_APP_SCOPED_ENV_SECTIONS = {"spendsphere", "shiftzy", "fundsphere", "tradsphere"}
 
 
 def normalize_tenant_id(raw: str) -> str:
@@ -164,7 +164,8 @@ def _flatten_env(data: dict[str, Any]) -> dict[str, str]:
                     app_axiom = sub_value
 
             # App-scoped Axiom settings (per-tenant, per-app):
-            # spendsphere.axiom_log.*, shiftzy.axiom_log.*, fundsphere.axiom_log.*
+            # spendsphere.axiom_log.*, shiftzy.axiom_log.*,
+            # fundsphere.axiom_log.*, tradsphere.axiom_log.*
             if isinstance(app_axiom, dict):
                 for axiom_key, axiom_value in app_axiom.items():
                     normalized_axiom_key = str(axiom_key).strip().upper()

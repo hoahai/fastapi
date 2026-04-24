@@ -18,11 +18,12 @@ def get_est_nums_route(
     est_num: list[str] | None = Query(None, alias="estNum"),
     account_codes: list[str] | None = Query(None, alias="accountCodes"),
     account_code: list[str] | None = Query(None, alias="accountCode"),
-    media_types: list[str] | None = Query(None, alias="mediaTypes"),
-    media_type: list[str] | None = Query(None, alias="mediaType"),
+    year: int | None = Query(None),
+    month: int | None = Query(None),
+    quarter: int | None = Query(None, alias="quarter"),
 ):
     """
-    Return TradSphere estimate-number rows with optional est/account/media filters.
+    Return TradSphere estimate-number rows with optional est/account filters.
 
     Example request:
         GET /api/tradsphere/v1/estNums
@@ -31,7 +32,10 @@ def get_est_nums_route(
         GET /api/tradsphere/v1/estNums?estNum=101&accountCode=TAAA
 
     Example request (comma-separated filters):
-        GET /api/tradsphere/v1/estNums?estNums=101,102&accountCodes=TAAA,TBBB&mediaTypes=TV,OTT
+        GET /api/tradsphere/v1/estNums?estNums=101,102&accountCodes=TAAA,TBBB
+
+    Example request (period filters):
+        GET /api/tradsphere/v1/estNums?year=2026&month=4&quarter=2
 
     Example response:
         {
@@ -44,7 +48,10 @@ def get_est_nums_route(
               "flightEnd": "2026-04-30",
               "mediaType": "TV",
               "buyer": "Elyse",
-              "note": "Prime time package"
+              "note": "Prime time package",
+              "hasSchedule": true,
+              "broadcastMonths": [4, 5],
+              "broadcastYears": [2026]
             }
           ]
         }
@@ -53,17 +60,28 @@ def get_est_nums_route(
         - Requires X-Tenant-Id header
         - Requires valid API key
         - estNums/estNum values must be unsigned integers
-        - estNums/estNum, accountCodes/accountCode, mediaTypes/mediaType accept comma-separated values
+        - estNums/estNum and accountCodes/accountCode accept comma-separated values
+        - mediaTypes/mediaType filter is not supported on this route
+        - response includes hasSchedule (true when at least one schedule exists for estNum)
+        - response includes broadcastMonths/broadcastYears derived from broadcast-week overlap of flightStart/flightEnd
+        - year/month/quarter filters use broadcast calendar semantics (broadcast week is Monday-Sunday, month/year from week-ending Sunday)
+        - year must be 1901-2155 when provided
+        - month must be 1-12 when provided
+        - quarter must be 1-4 when provided
+        - when month and quarter are both provided, month must belong to quarter
+        - when year is provided with month/quarter, filtering matches broadcast month/quarter within that broadcast year
+        - when month/quarter is provided without year, filtering matches any broadcast year where the flight includes that broadcast month/quarter
         - Blank filter lists are treated as no filter (returns all for that filter)
     """
     normalized_est_nums = parse_int_list(est_nums, est_num)
     normalized_account_codes = parse_csv_values(account_codes, account_code, uppercase=True)
-    normalized_media_types = parse_csv_values(media_types, media_type, uppercase=True)
     try:
         return list_est_nums_data(
             est_nums=normalized_est_nums,
             account_codes=normalized_account_codes,
-            media_types=normalized_media_types,
+            year=year,
+            month=month,
+            quarter=quarter,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -96,17 +114,28 @@ def create_est_nums_route(
           "data": {"inserted": 1}
         }
 
+    Example error response (duplicate estNum):
+        {
+          "meta": {"timestamp": "2026-04-22T17:00:00+07:00", "duration_ms": 2},
+          "error": {
+            "message": "Bad Request",
+            "detail": "estNum values already exist in TradSphere estNums: 101"
+          }
+        }
+
     Requirements:
         - Requires X-Tenant-Id header
         - Requires valid API key
         - Payload accepts object or array of objects
         - estNum, accountCode, flightStart, flightEnd, mediaType, buyer are required for each item
         - estNum must be unsigned integer
+        - Duplicate estNum values in payload are rejected with HTTP 400
+        - estNum must not already exist in TradSphere_EstNums (no upsert on POST)
         - flightStart/flightEnd must be ISO date YYYY-MM-DD
         - flightStart must be on or before flightEnd
         - buyer max length is 36
         - note max length is 2048
-        - accountCode must exist
+        - accountCode must exist in TradSphere_Accounts
         - mediaType must match tenant enum tradsphere.ENUMS.mediaType
     """
     try:
@@ -142,12 +171,22 @@ def update_est_nums_route(
           "data": {"updated": 1}
         }
 
+    Example error response (accountCode not in TradSphere_Accounts):
+        {
+          "meta": {"timestamp": "2026-04-22T17:00:00+07:00", "duration_ms": 2},
+          "error": {
+            "message": "Bad Request",
+            "detail": "Unknown TradSphere accountCode values: TCCC"
+          }
+        }
+
     Requirements:
         - Requires X-Tenant-Id header
         - Requires valid API key
         - Payload accepts object or array of objects
         - estNum is required per item
-        - accountCode/mediaType updates are validated when provided
+        - accountCode updates must exist in TradSphere_Accounts when provided; otherwise returns HTTP 400
+        - mediaType updates are validated when provided
         - flightStart/flightEnd must be ISO date YYYY-MM-DD when provided
         - when both flightStart and flightEnd are provided, flightStart must be on or before flightEnd
         - buyer max length is 36

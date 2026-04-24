@@ -23,7 +23,8 @@ from apps.tradsphere.api.v1.helpers.dbQueries import (
 
 _VALIDATION_CACHE_BUCKET = "db_reads"
 _VALIDATION_CACHE_PREFIX = "tradsphere_validation::"
-_ACCOUNT_CODES_CACHE_KEY = f"{_VALIDATION_CACHE_PREFIX}account_codes"
+_TRADSPHERE_ACCOUNT_CODES_CACHE_KEY = f"{_VALIDATION_CACHE_PREFIX}tradsphere_account_codes"
+_MASTER_ACCOUNT_CODES_CACHE_KEY = f"{_VALIDATION_CACHE_PREFIX}master_account_codes"
 _STATION_CODES_CACHE_KEY = f"{_VALIDATION_CACHE_PREFIX}station_codes"
 _DELIVERY_METHOD_IDS_CACHE_KEY = f"{_VALIDATION_CACHE_PREFIX}delivery_method_ids"
 _CONTACT_IDS_CACHE_KEY = f"{_VALIDATION_CACHE_PREFIX}contact_ids"
@@ -84,26 +85,55 @@ def normalize_account_codes(values: list[object] | None) -> list[str]:
     return normalized
 
 
-def _get_valid_account_codes() -> set[str]:
+def _get_tradsphere_account_codes() -> set[str]:
     tradsphere_codes = _get_cached_values(
-        cache_key=_ACCOUNT_CODES_CACHE_KEY,
-        fetcher=lambda: sorted(
-            set(get_all_tradsphere_account_codes()).union(get_all_master_account_codes())
-        ),
+        cache_key=_TRADSPHERE_ACCOUNT_CODES_CACHE_KEY,
+        fetcher=get_all_tradsphere_account_codes,
     )
     normalized = {str(item or "").strip().upper() for item in tradsphere_codes}
     normalized.discard("")
     return normalized
 
 
-def ensure_account_codes_exist(account_codes: list[object]) -> list[str]:
+def _get_master_account_codes() -> set[str]:
+    master_codes = _get_cached_values(
+        cache_key=_MASTER_ACCOUNT_CODES_CACHE_KEY,
+        fetcher=get_all_master_account_codes,
+    )
+    normalized = {str(item or "").strip().upper() for item in master_codes}
+    normalized.discard("")
+    return normalized
+
+
+def ensure_master_account_codes_exist(account_codes: list[object]) -> list[str]:
     normalized = normalize_account_codes(account_codes)
     if not normalized:
         return normalized
-    valid_codes = _get_valid_account_codes()
-    missing = sorted([code for code in normalized if code not in valid_codes])
+    master_codes = _get_master_account_codes()
+    missing = sorted([code for code in normalized if code not in master_codes])
     if missing:
-        raise ValueError(f"Unknown accountCode values: {', '.join(missing)}")
+        raise ValueError(f"Unknown master accountCode values: {', '.join(missing)}")
+    return normalized
+
+
+def find_existing_tradsphere_account_codes(account_codes: list[object]) -> list[str]:
+    normalized = normalize_account_codes(account_codes)
+    if not normalized:
+        return normalized
+    tradsphere_codes = _get_tradsphere_account_codes()
+    return sorted([code for code in normalized if code in tradsphere_codes])
+
+
+def ensure_tradsphere_account_codes_exist(account_codes: list[object]) -> list[str]:
+    normalized = normalize_account_codes(account_codes)
+    if not normalized:
+        return normalized
+    tradsphere_codes = _get_tradsphere_account_codes()
+    missing = sorted([code for code in normalized if code not in tradsphere_codes])
+    if missing:
+        raise ValueError(
+            "Unknown TradSphere accountCode values: " + ", ".join(missing)
+        )
     return normalized
 
 
