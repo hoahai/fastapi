@@ -2,74 +2,12 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from fastapi import APIRouter, Body, File, HTTPException, Query, UploadFile
+from fastapi import APIRouter, File, HTTPException, Query, UploadFile
 
 from apps.tradsphere.api.v1.helpers.schedulesImport import import_schedules_data
 
 router = APIRouter(prefix="/schedules/import")
 _ALLOWED_IMPORT_FILE_EXTENSIONS = {".txt"}
-
-
-@router.post("")
-def import_schedules_route(
-    payload: dict | str = Body(...),
-):
-    """
-    Import fixed-width schedule lines and upsert schedules + schedule-weeks.
-
-    Example request:
-        POST /api/tradsphere/v1/schedules/import
-        {
-          "content": "1904            2504-RL-MID    T KMID       110        250929251026    1    435.0000      369.75  30 4  0  1  0  0   25107:00PM-10:15PM                NFL: 10/6 CHIEFS V JAGUARS    MO                  O            ODM                                                                                                      1904             435.00SP                     SPAdults 35-64                                                              17.1    126238   0                      110"
-        }
-
-    Example request (lines array):
-        POST /api/tradsphere/v1/schedules/import
-        {
-          "lines": [
-            "1904            2504-RL-MID    T KMID       110        250929251026    1    435.0000      369.75  30 4  0  1  0  0   25107:00PM-10:15PM                NFL: 10/6 CHIEFS V JAGUARS    MO                  O            ODM                                                                                                      1904             435.00SP                     SPAdults 35-64                                                              17.1    126238   0                      110"
-          ]
-        }
-
-    Example response:
-        {
-          "meta": {"timestamp": "2026-04-23T10:00:00+07:00", "duration_ms": 10},
-          "data": {
-            "summary": {
-              "totalLines": 1,
-              "parsedLines": 1,
-              "schedulesUpserted": 1,
-              "scheduleWeeksUpserted": 4
-            }
-          }
-        }
-
-    Example error response (line-level week validation):
-        {
-          "meta": {"timestamp": "2026-04-23T10:00:00+07:00", "duration_ms": 2},
-          "error": {
-            "message": "Bad Request",
-            "detail": "line 7: w fields must be consecutive and complete for this date range: requires 2 week field(s): w1, w2 (out of range: w3, w4)"
-          }
-        }
-
-    Requirements:
-        - Requires X-Tenant-Id header
-        - Requires valid API key
-        - Payload accepts raw text string, or object with content/rawText/text, or object with lines array
-        - Blank lines are skipped by default (set skipBlankLines=false to keep them)
-        - File format must match legacy fixed-width STRATA export positions
-        - Schedule id is taken from fixed-width ScheduleID; when blank it is generated as M(lineNumber+99999)
-        - matchKey uses SHA-256(scheduleId|lineNum|estNum|startDate|endDate)
-        - Route upserts schedules first, then upserts schedule-weeks derived from NumofWeek + W1..W5
-        - Duplicate matchKey rows in the same file are deduped with last line values
-        - Week fields follow the same consecutive/complete week rule as POST /schedules based on startDate/endDate
-        - Validation errors include source line context (line N: <detail>)
-    """
-    try:
-        return import_schedules_data(payload)
-    except ValueError as exc:
-        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 def _decode_import_file_content(raw_content: bytes) -> str:
@@ -92,22 +30,22 @@ def _ensure_import_file_extension(filename: str | None) -> None:
         raise ValueError(f"Import file extension must be one of: {allowed}")
 
 
-@router.post("/file")
+@router.post("")
 async def import_schedules_file_route(
-    import_file: UploadFile = File(..., alias="file"),
+    import_files: list[UploadFile] = File(..., alias="file"),
     skip_blank_lines: bool = Query(True, alias="skipBlankLines"),
 ):
     """
     Import schedules from an uploaded fixed-width text file.
 
     Example request:
-        POST /api/tradsphere/v1/schedules/import/file
+        POST /api/tradsphere/v1/schedules/import
         Content-Type: multipart/form-data
         form-data:
           file=@"/path/to/strata-export.txt"
 
     Example request (keep blank lines):
-        POST /api/tradsphere/v1/schedules/import/file?skipBlankLines=false
+        POST /api/tradsphere/v1/schedules/import?skipBlankLines=false
         Content-Type: multipart/form-data
         form-data:
           file=@"/path/to/strata-export.txt"
@@ -117,6 +55,9 @@ async def import_schedules_file_route(
           "meta": {"timestamp": "2026-04-23T10:00:00+07:00", "duration_ms": 12},
           "data": {
             "summary": {
+              "linesSent": 3,
+              "importedNew": 2,
+              "updated": 1,
               "totalLines": 3,
               "parsedLines": 3,
               "schedulesUpserted": 3,
@@ -130,7 +71,7 @@ async def import_schedules_file_route(
           "meta": {"timestamp": "2026-04-23T10:00:00+07:00", "duration_ms": 2},
           "error": {
             "message": "Bad Request",
-            "detail": "line 2: EstNum is required"
+            "detail": "Missing required fields: EstNum (lines: 2, 4); DayPart (lines: 4)"
           }
         }
 
@@ -138,12 +79,24 @@ async def import_schedules_file_route(
         - Requires X-Tenant-Id header
         - Requires valid API key
         - Accepts multipart/form-data with file field name `file`
+        - Exactly one file is allowed; multiple `file` uploads return HTTP 400
         - File extension must be `.txt`
         - Uploaded file must be plain text in STRATA fixed-width format
+        - Import is rejected when any required fields are missing on any row; response includes missing field names and line numbers
+        - ClientBillingCode must match `YYQQ-ACCOUNTCODE-MARKETCODE` with quarter `01-04` (example: `2602-TAAA-AUS`)
+        - ClientBillingCode max length is 20 characters
+        - Summary includes `linesSent`, `importedNew`, and `updated` counts (based on deduped schedule matchKey rows)
         - Empty files are rejected with HTTP 400
         - skipBlankLines defaults to true
         - Uses the same parsing/upsert behavior as POST /api/tradsphere/v1/schedules/import
     """
+    if len(import_files) != 1:
+        raise HTTPException(
+            status_code=400,
+            detail="Exactly one file is allowed for import",
+        )
+    import_file = import_files[0]
+
     try:
         _ensure_import_file_extension(import_file.filename)
     except ValueError as exc:

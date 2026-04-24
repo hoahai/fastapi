@@ -11,19 +11,255 @@ from apps.tradsphere.api.v1.helpers.accountValidation import (
     ensure_station_codes_exist,
     invalidate_validation_cache,
 )
-from apps.tradsphere.api.v1.helpers.broadcastCalendar import get_broadcast_weeks_in_range
+from apps.tradsphere.api.v1.helpers.broadcastCalendar import (
+    get_broadcast_calendar_info,
+    get_broadcast_weeks_in_range,
+)
+from apps.tradsphere.api.v1.helpers.clientBillingCode import (
+    parse_client_billing_code,
+)
 from apps.tradsphere.api.v1.helpers.config import get_media_types
 from apps.tradsphere.api.v1.helpers.dbQueries import (
+    get_est_nums,
     get_schedules_by_match_keys,
     get_schedule_weeks,
     get_schedules,
+    get_station_media_types,
     insert_schedule_weeks,
     insert_schedules,
     update_schedule_weeks,
     update_schedules,
 )
+from shared.tenantDataCache import (
+    delete_tenant_shared_cache_values_by_prefix,
+    get_tenant_shared_cache_value,
+    set_tenant_shared_cache_value,
+)
 
 _MAX_SCHEDULE_WEEK_FIELDS = 5
+_PDF_SCHEDULE_CACHE_BUCKET = "db_reads"
+_PDF_SCHEDULE_CACHE_PREFIX = "tradsphere_pdf::schedules_data::"
+_PDF_SCHEDULE_CACHE_TTL_SECONDS = 60 * 60 * 24 * 90
+_PDF_SCHEDULE_CACHE_SCHEMA = "v1"
+_SCHEDULE_CREATE_REQUIRED_FIELDS: tuple[str, ...] = (
+    "scheduleId",
+    "lineNum",
+    "estNum",
+    "billingCode",
+    "mediaType",
+    "stationCode",
+    "broadcastMonth",
+    "broadcastYear",
+    "startDate",
+    "endDate",
+    "length",
+    "runtime",
+    "days",
+    "daypart",
+)
+
+
+def _build_pdf_schedule_cache_key(*, est_num: int) -> str:
+    return f"{_PDF_SCHEDULE_CACHE_PREFIX}{_PDF_SCHEDULE_CACHE_SCHEMA}::estnum::{int(est_num)}"
+
+
+def _parse_sort_date(value: object) -> date:
+    text = str(value or "").strip()
+    if not text:
+        return date.max
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError:
+        return date.max
+
+
+def _to_sort_decimal(value: object) -> Decimal:
+    text = str(value or "").strip()
+    if not text:
+        return Decimal("0")
+    try:
+        return Decimal(text)
+    except (InvalidOperation, ValueError):
+        return Decimal("0")
+
+
+def _to_sort_est_num(value: object) -> int:
+    text = str(value or "").strip()
+    if not text:
+        return 2_147_483_647
+    try:
+        return int(text)
+    except (TypeError, ValueError):
+        return 2_147_483_647
+
+
+def _vendor_sort_value(row: dict, station_names: dict[str, str]) -> str:
+    station_code = str(row.get("stationCode") or "").strip().upper()
+    station_name = str(station_names.get(station_code) or "").strip()
+    media_type = str(row.get("mediaType") or "").strip().upper()
+    if media_type in {"CA", "CABLE"}:
+        if station_code:
+            return f"CABLE ({station_code})"
+        return "CABLE"
+    if station_name and station_code:
+        return f"{station_name} ({station_code})".upper()
+    if station_name:
+        return station_name.upper()
+    return station_code.upper()
+
+
+def _sort_pdf_schedules_for_report(
+    schedules: list[dict],
+    station_names: dict[str, str],
+) -> list[dict]:
+    rows = [row for row in schedules if isinstance(row, dict)]
+
+    def _key(row: dict) -> tuple[object, ...]:
+        return (
+            _to_sort_est_num(row.get("estNum")),
+            _vendor_sort_value(row, station_names),
+            str(row.get("programName") or "").strip().upper(),
+            _parse_sort_date(row.get("startDate")),
+            _parse_sort_date(row.get("endDate")),
+            -_to_sort_decimal(row.get("rateGross")),
+            -_to_sort_decimal(row.get("rtg")),
+        )
+
+    return sorted(rows, key=_key)
+
+
+def _map_station_media_types_for_schedules(schedules: list[dict]) -> dict[str, str]:
+    station_codes = [
+        str(row.get("stationCode") or "").strip().upper()
+        for row in schedules
+        if isinstance(row, dict) and str(row.get("stationCode") or "").strip()
+    ]
+    station_codes = list(dict.fromkeys(station_codes))
+    if not station_codes:
+        return {}
+    return get_station_media_types(codes=station_codes)
+
+
+def _apply_station_media_types_to_schedules(
+    schedules: list[dict],
+    station_media_types: dict[str, str],
+) -> list[dict]:
+    normalized_media_types = {
+        str(code or "").strip().upper(): str(media_type or "").strip().upper()
+        for code, media_type in (station_media_types or {}).items()
+        if str(code or "").strip() and str(media_type or "").strip()
+    }
+    adjusted: list[dict] = []
+    for row in schedules:
+        if not isinstance(row, dict):
+            continue
+        next_row = dict(row)
+        station_code = str(next_row.get("stationCode") or "").strip().upper()
+        station_media_type = normalized_media_types.get(station_code)
+        if station_media_type:
+            next_row["mediaType"] = station_media_type
+        adjusted.append(next_row)
+    return adjusted
+
+
+def invalidate_pdf_schedule_cache() -> int:
+    return delete_tenant_shared_cache_values_by_prefix(
+        bucket=_PDF_SCHEDULE_CACHE_BUCKET,
+        cache_key_prefix=_PDF_SCHEDULE_CACHE_PREFIX,
+    )
+
+
+def _lookup_est_num_note(*, est_num: int) -> str:
+    rows = get_est_nums(est_nums=[int(est_num)])
+    for row in rows:
+        row_est_num = _to_sort_est_num(row.get("estNum"))
+        if row_est_num != int(est_num):
+            continue
+        return str(row.get("note") or "").strip()
+    return ""
+
+
+def get_pdf_schedule_data(*, est_num: int) -> dict[str, object]:
+    cache_key = _build_pdf_schedule_cache_key(est_num=est_num)
+    cached_value, cache_hit = get_tenant_shared_cache_value(
+        bucket=_PDF_SCHEDULE_CACHE_BUCKET,
+        cache_key=cache_key,
+        ttl_seconds=_PDF_SCHEDULE_CACHE_TTL_SECONDS,
+    )
+    if cache_hit and isinstance(cached_value, dict):
+        schedules = cached_value.get("schedules")
+        schedule_weeks = cached_value.get("scheduleWeeks")
+        station_names = cached_value.get("stationNames")
+        est_num_note = str(cached_value.get("estNumNote") or "").strip()
+        if (
+            isinstance(schedules, list)
+            and isinstance(schedule_weeks, list)
+            and isinstance(station_names, dict)
+        ):
+            normalized_station_names = {
+                str(key or "").strip().upper(): str(value or "").strip()
+                for key, value in station_names.items()
+                if str(key or "").strip()
+            }
+            station_media_types = _map_station_media_types_for_schedules(schedules)
+            schedules_for_report = _apply_station_media_types_to_schedules(
+                schedules,
+                station_media_types,
+            )
+            sorted_schedules = _sort_pdf_schedules_for_report(
+                schedules_for_report,
+                normalized_station_names,
+            )
+            if not est_num_note:
+                est_num_note = _lookup_est_num_note(est_num=int(est_num))
+            return {
+                "schedules": sorted_schedules,
+                "scheduleWeeks": schedule_weeks,
+                "stationNames": normalized_station_names,
+                "estNumNote": est_num_note,
+            }
+
+    schedules = list_schedules_data(est_nums=[int(est_num)])
+    schedule_ids = [
+        str(row.get("id") or "").strip()
+        for row in schedules
+        if isinstance(row, dict) and str(row.get("id") or "").strip()
+    ]
+    station_codes = [
+        str(row.get("stationCode") or "").strip().upper()
+        for row in schedules
+        if isinstance(row, dict) and str(row.get("stationCode") or "").strip()
+    ]
+    schedule_weeks: list[dict] = []
+    if schedule_ids:
+        schedule_weeks = list_schedule_weeks_data(schedule_ids=schedule_ids)
+
+    # Local import to avoid helper-module circular dependency at import time.
+    from apps.tradsphere.api.v1.helpers.stations import map_station_names_by_codes
+
+    station_names = map_station_names_by_codes(station_codes)
+    station_media_types = _map_station_media_types_for_schedules(schedules)
+    schedules_for_report = _apply_station_media_types_to_schedules(
+        schedules,
+        station_media_types,
+    )
+    est_num_note = _lookup_est_num_note(est_num=int(est_num))
+    sorted_schedules = _sort_pdf_schedules_for_report(
+        schedules_for_report,
+        station_names,
+    )
+    payload: dict[str, object] = {
+        "schedules": sorted_schedules,
+        "scheduleWeeks": schedule_weeks,
+        "stationNames": station_names,
+        "estNumNote": est_num_note,
+    }
+    set_tenant_shared_cache_value(
+        bucket=_PDF_SCHEDULE_CACHE_BUCKET,
+        cache_key=cache_key,
+        value=payload,
+    )
+    return payload
 
 
 def _ensure_list(payload: list[dict] | dict) -> list[dict]:
@@ -165,6 +401,48 @@ def _validate_date_range(
         raise ValueError(f"{start_field} must be on or before {end_field}")
 
 
+def _validate_date_within_broadcast_period(
+    *,
+    date_value: str,
+    date_field: str,
+    broadcast_month: int,
+    broadcast_year: int,
+) -> None:
+    info = get_broadcast_calendar_info(date_value)
+    date_broadcast_month = int(info["broadcastMonth"])
+    date_broadcast_year = int(info["broadcastYear"])
+    if (
+        date_broadcast_month != broadcast_month
+        or date_broadcast_year != broadcast_year
+    ):
+        raise ValueError(
+            f"{date_field} must be within broadcastMonth/broadcastYear "
+            f"{broadcast_month}/{broadcast_year} "
+            f"(resolved to {date_broadcast_month}/{date_broadcast_year})"
+        )
+
+
+def _validate_schedule_dates_within_broadcast_period(
+    *,
+    start_date: str,
+    end_date: str,
+    broadcast_month: int,
+    broadcast_year: int,
+) -> None:
+    _validate_date_within_broadcast_period(
+        date_value=start_date,
+        date_field="startDate",
+        broadcast_month=broadcast_month,
+        broadcast_year=broadcast_year,
+    )
+    _validate_date_within_broadcast_period(
+        date_value=end_date,
+        date_field="endDate",
+        broadcast_month=broadcast_month,
+        broadcast_year=broadcast_year,
+    )
+
+
 def _ensure_media_type(value: object, *, field: str = "mediaType") -> str:
     media_type = str(value or "").strip().upper()
     if not media_type:
@@ -211,6 +489,44 @@ def _resolve_row_label(row: dict, *, index: int) -> str:
         except (TypeError, ValueError):
             pass
     return f"item {index}"
+
+
+def _format_row_labels(labels: list[str]) -> str:
+    seen: set[str] = set()
+    ordered: list[str] = []
+    for label in labels:
+        normalized = str(label or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        ordered.append(normalized)
+    return ", ".join(ordered)
+
+
+def _validate_required_create_fields(rows: list[dict]) -> None:
+    missing_by_field: dict[str, list[str]] = {}
+
+    for index, row in enumerate(rows, start=1):
+        row_label = _resolve_row_label(row, index=index)
+        for field_name in _SCHEDULE_CREATE_REQUIRED_FIELDS:
+            value = row.get(field_name)
+            if value is None:
+                missing_by_field.setdefault(field_name, []).append(row_label)
+                continue
+            if isinstance(value, str) and not value.strip():
+                missing_by_field.setdefault(field_name, []).append(row_label)
+
+    if not missing_by_field:
+        return
+
+    details: list[str] = []
+    for field_name in _SCHEDULE_CREATE_REQUIRED_FIELDS:
+        labels = missing_by_field.get(field_name)
+        if not labels:
+            continue
+        details.append(f"{field_name} (rows: {_format_row_labels(labels)})")
+
+    raise ValueError("Missing required fields: " + "; ".join(details))
 
 
 def _extract_unknown_values(detail: str, *, prefix: str) -> list[str]:
@@ -350,6 +666,14 @@ def _build_week_rows_for_schedule(
     return out
 
 
+def _compute_total_spot_from_week_spots(week_spots: list[int]) -> int:
+    return int(sum(int(value) for value in week_spots))
+
+
+def _compute_total_gross_value(*, total_spot: int, rate_gross: str) -> str:
+    return str(Decimal(total_spot) * Decimal(rate_gross))
+
+
 def list_schedules_data(
     *,
     ids: list[str] | None = None,
@@ -430,7 +754,18 @@ def list_schedules_data(
 def create_schedules_data(payload: list[dict] | dict) -> dict[str, int]:
     rows = _ensure_list(payload)
     if not rows:
-        return {"inserted": 0, "scheduleWeeksUpserted": 0}
+        return {
+            "inserted": 0,
+            "scheduleWeeksUpserted": 0,
+            "insertedNew": 0,
+            "updatedExisting": 0,
+            "dedupedRows": 0,
+        }
+
+    for index, row in enumerate(rows, start=1):
+        if not isinstance(row, dict):
+            raise ValueError(f"item {index}: Each schedules item must be an object")
+    _validate_required_create_fields(rows)
 
     normalized_rows: list[dict] = []
     est_nums_to_validate: list[int] = []
@@ -438,9 +773,6 @@ def create_schedules_data(payload: list[dict] | dict) -> dict[str, int]:
     station_codes_to_validate: list[str] = []
     station_code_labels: dict[str, str] = {}
     for index, row in enumerate(rows, start=1):
-        if not isinstance(row, dict):
-            raise ValueError(f"item {index}: Each schedules item must be an object")
-
         row_label = _resolve_row_label(row, index=index)
         try:
             schedule_row_id = row.get("id")
@@ -491,16 +823,21 @@ def create_schedules_data(payload: list[dict] | dict) -> dict[str, int]:
                 end_date=end_date,
             )
 
+            billing_code = parse_client_billing_code(
+                _ensure_required_text(
+                    row.get("billingCode"),
+                    field="billingCode",
+                    max_length=20,
+                ),
+                field="billingCode",
+            )["normalized"]
+
             normalized_row = {
                 "id": schedule_row_id_text,
                 "scheduleId": schedule_business_id,
                 "lineNum": line_num,
                 "estNum": est_num,
-                "billingCode": _ensure_required_text(
-                    row.get("billingCode"),
-                    field="billingCode",
-                    max_length=20,
-                ),
+                "billingCode": billing_code,
                 "mediaType": _ensure_media_type(row.get("mediaType")),
                 "stationCode": station_code,
                 "broadcastMonth": _ensure_unsigned_int(
@@ -573,6 +910,20 @@ def create_schedules_data(payload: list[dict] | dict) -> dict[str, int]:
                 "_weekSpots": week_spots,
                 "_rowLabel": row_label,
             }
+            broadcast_month = int(normalized_row["broadcastMonth"])
+            broadcast_year = int(normalized_row["broadcastYear"])
+            _validate_schedule_dates_within_broadcast_period(
+                start_date=start_date,
+                end_date=end_date,
+                broadcast_month=broadcast_month,
+                broadcast_year=broadcast_year,
+            )
+            total_spot = _compute_total_spot_from_week_spots(week_spots)
+            normalized_row["totalSpot"] = total_spot
+            normalized_row["totalGross"] = _compute_total_gross_value(
+                total_spot=total_spot,
+                rate_gross=str(normalized_row["rateGross"]),
+            )
             normalized_row["matchKey"] = _compute_match_key(
                 schedule_id=schedule_business_id,
                 line_num=line_num,
@@ -667,12 +1018,17 @@ def create_schedules_data(payload: list[dict] | dict) -> dict[str, int]:
             )
         )
 
-    has_new_schedule_rows = any(
-        match_key not in existing_id_by_match_key
-        for match_key in deduped_rows_by_match_key
+    deduped_match_keys = set(deduped_rows_by_match_key.keys())
+    existing_match_keys = set(existing_id_by_match_key.keys())
+    updated_existing = sum(
+        1 for match_key in deduped_match_keys if match_key in existing_match_keys
     )
+    inserted_new = len(deduped_match_keys) - updated_existing
+    has_new_schedule_rows = inserted_new > 0
 
     inserted = insert_schedules(schedules_payload)
+    if schedules_payload:
+        invalidate_pdf_schedule_cache()
     weeks_upserted = 0
     if inserted > 0:
         invalidate_validation_cache()
@@ -681,7 +1037,13 @@ def create_schedules_data(payload: list[dict] | dict) -> dict[str, int]:
             invalidate_validation_cache()
         weeks_result = create_schedule_weeks_data(schedule_weeks_payload)
         weeks_upserted = int(weeks_result.get("inserted") or 0)
-    return {"inserted": inserted, "scheduleWeeksUpserted": weeks_upserted}
+    return {
+        "inserted": inserted,
+        "scheduleWeeksUpserted": weeks_upserted,
+        "insertedNew": int(inserted_new),
+        "updatedExisting": int(updated_existing),
+        "dedupedRows": int(len(deduped_rows_by_match_key)),
+    }
 
 
 def modify_schedules_data(payload: list[dict] | dict) -> dict[str, int]:
@@ -720,11 +1082,14 @@ def modify_schedules_data(payload: list[dict] | dict) -> dict[str, int]:
             item: dict[str, object] = {"id": schedule_row_id}
 
             if "billingCode" in row:
-                item["billingCode"] = _ensure_required_text(
-                    row.get("billingCode"),
+                item["billingCode"] = parse_client_billing_code(
+                    _ensure_required_text(
+                        row.get("billingCode"),
+                        field="billingCode",
+                        max_length=20,
+                    ),
                     field="billingCode",
-                    max_length=20,
-                )
+                )["normalized"]
             if "mediaType" in row:
                 item["mediaType"] = _ensure_media_type(row.get("mediaType"))
             if "stationCode" in row:
@@ -852,7 +1217,82 @@ def modify_schedules_data(payload: list[dict] | dict) -> dict[str, int]:
                         ) from exc
             raise
 
+    existing_rows = get_schedules(ids=schedule_ids_to_validate)
+    existing_by_id = {
+        str(row.get("id") or "").strip(): row
+        for row in existing_rows
+        if str(row.get("id") or "").strip()
+    }
+    schedule_week_rows = get_schedule_weeks(schedule_ids=schedule_ids_to_validate)
+    total_spot_by_schedule_id: dict[str, int] = {}
+    for week_row in schedule_week_rows:
+        schedule_row_id = str(week_row.get("scheduleId") or "").strip()
+        if not schedule_row_id:
+            continue
+        spots = _ensure_unsigned_int(
+            week_row.get("spots"),
+            field="spots",
+            required=False,
+            minimum=0,
+            maximum=4294967295,
+        )
+        total_spot_by_schedule_id[schedule_row_id] = (
+            int(total_spot_by_schedule_id.get(schedule_row_id, 0)) + int(spots or 0)
+        )
+
+    for item in normalized_rows:
+        schedule_row_id = str(item.get("id") or "").strip()
+        row_label = schedule_id_labels.get(schedule_row_id, f"id '{schedule_row_id}'")
+        existing = existing_by_id.get(schedule_row_id)
+        if not isinstance(existing, dict):
+            raise ValueError(f"{row_label}: Unknown schedule id '{schedule_row_id}'")
+
+        try:
+            effective_broadcast_month = _ensure_unsigned_int(
+                item.get("broadcastMonth", existing.get("broadcastMonth")),
+                field="broadcastMonth",
+                required=True,
+                minimum=1,
+                maximum=12,
+            )
+            assert effective_broadcast_month is not None
+            effective_broadcast_year = _ensure_year(
+                item.get("broadcastYear", existing.get("broadcastYear")),
+                field="broadcastYear",
+            )
+            effective_start_date = _ensure_required_date(
+                existing.get("startDate"),
+                field="startDate",
+            )
+            effective_end_date = _ensure_required_date(
+                existing.get("endDate"),
+                field="endDate",
+            )
+            _validate_schedule_dates_within_broadcast_period(
+                start_date=effective_start_date,
+                end_date=effective_end_date,
+                broadcast_month=effective_broadcast_month,
+                broadcast_year=effective_broadcast_year,
+            )
+
+            effective_rate_gross = _ensure_decimal(
+                item.get("rateGross", existing.get("rateGross")),
+                field="rateGross",
+                required=True,
+            )
+            assert effective_rate_gross is not None
+            total_spot = int(total_spot_by_schedule_id.get(schedule_row_id, 0))
+            item["totalSpot"] = total_spot
+            item["totalGross"] = _compute_total_gross_value(
+                total_spot=total_spot,
+                rate_gross=effective_rate_gross,
+            )
+        except ValueError as exc:
+            raise ValueError(f"{row_label}: {exc}") from exc
+
     updated = update_schedules(normalized_rows)
+    if normalized_rows:
+        invalidate_pdf_schedule_cache()
     if updated > 0:
         invalidate_validation_cache()
     return {"updated": updated}
@@ -930,6 +1370,8 @@ def create_schedule_weeks_data(payload: list[dict] | dict) -> dict[str, int]:
 
     ensure_schedule_ids_exist(schedule_ids_to_validate)
     inserted = insert_schedule_weeks(normalized_rows)
+    if inserted > 0:
+        invalidate_pdf_schedule_cache()
     return {"inserted": inserted}
 
 
@@ -1003,4 +1445,6 @@ def modify_schedule_weeks_data(payload: list[dict] | dict) -> dict[str, int]:
         )
 
     updated = update_schedule_weeks(normalized_rows)
+    if updated > 0:
+        invalidate_pdf_schedule_cache()
     return {"updated": updated}

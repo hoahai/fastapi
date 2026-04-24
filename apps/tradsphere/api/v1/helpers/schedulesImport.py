@@ -3,11 +3,28 @@ from __future__ import annotations
 from datetime import date
 from decimal import Decimal, InvalidOperation
 
+from apps.tradsphere.api.v1.helpers.clientBillingCode import (
+    parse_client_billing_code,
+)
 from apps.tradsphere.api.v1.helpers.schedules import create_schedules_data
 
 
 _MAX_LINE_NUM = 9999
 _MAX_NUM_OF_WEEK = 5
+_REQUIRED_IMPORT_FIELDS: tuple[tuple[str, int, int], ...] = (
+    ("EstNum", 1, 10),
+    ("ClientBillingCode", 17, 15),
+    ("VendorCode", 34, 10),
+    ("LineNum", 44, 4),
+    ("StartDate", 56, 6),
+    ("EndDate", 62, 6),
+    ("Length", 97, 4),
+    ("Year", 118, 2),
+    ("Month", 120, 2),
+    ("Runtime", 122, 30),
+    ("Days", 182, 20),
+    ("DayPart", 343, 23),
+)
 
 
 def _slice(line: str, start: int, length: int) -> str:
@@ -133,6 +150,72 @@ def _parse_media_type(raw: str) -> str:
     return "RA"
 
 
+def _format_line_numbers(line_numbers: list[int]) -> str:
+    ordered = sorted(set(int(number) for number in line_numbers))
+    return ", ".join(str(number) for number in ordered)
+
+
+def _validate_client_billing_code_format(
+    raw: str,
+    *,
+    line_no: int,
+) -> tuple[str, str]:
+    parsed = parse_client_billing_code(
+        raw,
+        field=f"line {line_no}: ClientBillingCode",
+    )
+    return parsed["normalized"], parsed["accountCode"]
+
+
+def _validate_required_import_fields(raw_lines: list[tuple[int, str]]) -> None:
+    missing_by_field: dict[str, list[int]] = {}
+
+    for line_no, line in raw_lines:
+        for field_name, start, length in _REQUIRED_IMPORT_FIELDS:
+            if not _slice(line, start, length).strip():
+                missing_by_field.setdefault(field_name, []).append(line_no)
+
+    if not missing_by_field:
+        return
+
+    ordered_fields = [field for field, _, _ in _REQUIRED_IMPORT_FIELDS]
+    details: list[str] = []
+    for field_name in ordered_fields:
+        line_numbers = missing_by_field.get(field_name)
+        if not line_numbers:
+            continue
+        details.append(
+            f"{field_name} (lines: {_format_line_numbers(line_numbers)})"
+        )
+
+    raise ValueError("Missing required fields: " + "; ".join(details))
+
+
+def _validate_client_billing_codes(raw_lines: list[tuple[int, str]]) -> None:
+    invalid_lines: list[int] = []
+    for line_no, line in raw_lines:
+        raw_billing_code = _slice(line, 17, 15)
+        if not str(raw_billing_code).strip():
+            continue
+        try:
+            _validate_client_billing_code_format(
+                raw_billing_code,
+                line_no=line_no,
+            )
+        except ValueError:
+            invalid_lines.append(line_no)
+
+    if not invalid_lines:
+        return
+
+    raise ValueError(
+        "Invalid ClientBillingCode format at lines: "
+        f"{_format_line_numbers(invalid_lines)}. Expected "
+        "YYQQ-ACCOUNTCODE-MARKETCODE with quarter 01-04 "
+        "(example: 2602-TAAA-AUS)"
+    )
+
+
 def _parse_lines(payload: dict | str) -> list[tuple[int, str]]:
     skip_blank_lines = True
     lines: list[str]
@@ -185,12 +268,16 @@ def _parse_schedule_line(
         line_no=line_no,
         required=True,
     )
-    billing_code = _trim_text(
+    billing_code_raw = _trim_text(
         _slice(line, 17, 15),
         field="ClientBillingCode",
         line_no=line_no,
         required=True,
         max_length=20,
+    )
+    billing_code, _account_code = _validate_client_billing_code_format(
+        billing_code_raw,
+        line_no=line_no,
     )
     station_code = _trim_text(
         _slice(line, 34, 10),
@@ -381,6 +468,8 @@ def _parse_schedule_line(
 
 def import_schedules_data(payload: dict | str) -> dict:
     raw_lines = _parse_lines(payload)
+    _validate_required_import_fields(raw_lines)
+    _validate_client_billing_codes(raw_lines)
     parsed_rows = [
         _parse_schedule_line(line_no=line_no, line=line)
         for line_no, line in raw_lines
@@ -395,6 +484,9 @@ def import_schedules_data(payload: dict | str) -> dict:
 
     return {
         "summary": {
+            "linesSent": len(raw_lines),
+            "importedNew": int(schedules_result.get("insertedNew") or 0),
+            "updated": int(schedules_result.get("updatedExisting") or 0),
             "totalLines": len(raw_lines),
             "parsedLines": len(parsed_rows),
             "schedulesUpserted": int(schedules_result.get("inserted") or 0),

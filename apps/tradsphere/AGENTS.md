@@ -142,7 +142,6 @@
   - `POST /schedules`
   - `PUT /schedules`
   - `POST /schedules/import`
-  - `POST /schedules/import/file`
   - `GET /schedules/weeks`
   - `POST /schedules/weeks`
   - `PUT /schedules/weeks`

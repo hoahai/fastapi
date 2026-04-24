@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query, Request
+from fastapi.responses import Response
 
 from apps.tradsphere.api.v1.helpers.queryParsing import (
     parse_csv_values,
@@ -9,9 +10,11 @@ from apps.tradsphere.api.v1.helpers.queryParsing import (
 )
 from apps.tradsphere.api.v1.helpers.schedules import (
     create_schedules_data,
+    get_pdf_schedule_data,
     list_schedules_data,
     modify_schedules_data,
 )
+from apps.tradsphere.api.v1.helpers.schedulesPdf import build_schedules_pdf
 
 router = APIRouter(prefix="/schedules")
 
@@ -73,8 +76,7 @@ def get_schedules_route(
               "programName": "Morning News",
               "days": "MTWTF",
               "daypart": "AM",
-              "rtg": "1.25",
-              "matchKey": "d9f6e0..."
+              "rtg": "1.25"
             }
           ]
         }
@@ -122,6 +124,95 @@ def get_schedules_route(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except HTTPException:
         raise
+
+
+@router.get("/pdf")
+def get_schedules_pdf_route(
+    request: Request,
+    est_num: int | None = Query(None, alias="estNum", ge=0),
+    est_num_legacy: int | None = Query(None, alias="estnum", ge=0),
+    mode: str = Query("compact", alias="mode"),
+    billing_type: str = Query("Calendar", alias="billingType"),
+):
+    """
+    Generate and download a schedules PDF report for one estimate number.
+
+    Example request:
+        GET /api/tradsphere/v1/schedules/pdf?estNum=1001
+
+    Example request (detail mode):
+        GET /api/tradsphere/v1/schedules/pdf?estNum=1001&mode=detail
+
+    Example request (broadcast billing):
+        GET /api/tradsphere/v1/schedules/pdf?estNum=1001&billingType=Broadcast
+
+    Example response:
+        HTTP 200
+        Content-Type: application/pdf
+        Content-Disposition: attachment; filename="tradsphere-schedules-estnum-1001-compact.pdf"
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - estNum is required and must be >= 0 (`estnum` is accepted as legacy alias)
+        - mode supports `compact` (default) or `detail`
+        - billingType supports `Calendar` (default) or `Broadcast`
+        - schedule data for this report is cached per tenant+estNum for 3 months
+        - cache is invalidated when schedules/schedule-weeks upsert routes modify data
+        - compact mode columns: vendor(station name), startDate, endDate, week spot columns, total spot, total gross
+        - compact mode week header uses 2 rows: month groups on top and week-start labels below
+        - detail mode columns: vendor, days, startDate, endDate, DP, programName, rtg, rate, week spot columns, total spot, total gross
+        - detail mode returns raw schedule rows (no grouping)
+    """
+    try:
+        resolved_est_num = est_num if est_num is not None else est_num_legacy
+        if resolved_est_num is None:
+            raise ValueError("estNum is required")
+        if (
+            est_num is not None
+            and est_num_legacy is not None
+            and int(est_num) != int(est_num_legacy)
+        ):
+            raise ValueError("estNum and estnum must match when both are provided")
+
+        normalized_mode = str(mode or "").strip().lower() or "compact"
+        if normalized_mode not in {"compact", "detail"}:
+            raise ValueError("mode must be one of: compact, detail")
+
+        cached_data = get_pdf_schedule_data(est_num=int(resolved_est_num))
+        schedules = cached_data.get("schedules")
+        if not isinstance(schedules, list):
+            schedules = []
+        schedule_weeks = cached_data.get("scheduleWeeks")
+        if not isinstance(schedule_weeks, list):
+            schedule_weeks = []
+        station_names = cached_data.get("stationNames")
+        if not isinstance(station_names, dict):
+            station_names = {}
+        est_num_note = str(cached_data.get("estNumNote") or "").strip()
+
+        tenant_id = getattr(request.state, "tenant_id", None) or request.headers.get(
+            "x-tenant-id"
+        )
+        pdf_bytes = build_schedules_pdf(
+            est_num=int(resolved_est_num),
+            est_num_note=est_num_note,
+            schedules=schedules,
+            mode=normalized_mode,
+            schedule_weeks=schedule_weeks,
+            station_names=station_names,
+            billing_type=billing_type,
+            tenant_id=str(tenant_id or ""),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    filename = f"tradsphere-schedules-estnum-{resolved_est_num}-{normalized_mode}.pdf"
+    return Response(
+        content=pdf_bytes,
+        media_type="application/pdf",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
 
 
 @router.post("")
@@ -177,14 +268,30 @@ def create_schedules_route(
           }
         }
 
+    Example error response (missing required fields):
+        {
+          "meta": {"timestamp": "2026-04-23T10:00:00+07:00", "duration_ms": 1},
+          "error": {
+            "message": "Bad Request",
+            "detail": "Missing required fields: billingCode (rows: item 1, item 3); daypart (rows: item 2)"
+          }
+        }
+
     Requirements:
         - Requires X-Tenant-Id header
         - Requires valid API key
         - Payload accepts object or array of objects
         - scheduleId, lineNum, estNum, billingCode, mediaType, stationCode, broadcastMonth, broadcastYear, startDate, endDate, length, runtime, days, daypart are required
+        - If any required fields are missing in any payload row, request is rejected and error includes affected rows
+        - billingCode must match `YYQQ-ACCOUNTCODE-MARKETCODE` (example: `2602-TAAA-AUS`)
+        - billingCode quarter segment must be `01`-`04`
+        - billingCode max length is 20 characters
         - id is optional; if omitted, UUID is auto-generated
+        - startDate and endDate must resolve to the provided broadcastMonth/broadcastYear (broadcast calendar week-ending Sunday semantics)
         - w1..w5 are optional; when provided they are upserted into /schedules/weeks using startDate-based weekly buckets
         - If any w field is provided, w fields must be complete and consecutive for the date range (for example: 4 broadcast weeks requires w1,w2,w3,w4)
+        - totalSpot is computed by server as sum(w1..w5); when no w fields are provided, totalSpot is 0
+        - totalGross is computed by server as totalSpot * rateGross
         - Validation errors include item context (item N: <detail>)
         - estNum and stationCode must exist
         - matchKey is auto-generated as SHA-256(scheduleId|lineNum|estNum|startDate|endDate)
@@ -236,6 +343,9 @@ def update_schedules_route(
         - stationCode updates are validated when provided
         - scheduleId, lineNum, estNum, startDate, endDate are immutable in PUT
         - matchKey is system-generated and cannot be updated
+        - If broadcastMonth/broadcastYear is updated, the existing startDate/endDate must still resolve to that broadcast period (broadcast calendar week-ending Sunday semantics)
+        - totalSpot is recomputed by server as sum(spots) from /schedules/weeks for each schedule id
+        - totalGross is recomputed by server as totalSpot * effective rateGross (incoming rateGross when provided, otherwise stored rateGross)
         - Validation errors include item context (item N: <detail>)
     """
     try:

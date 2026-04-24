@@ -3,6 +3,11 @@ from __future__ import annotations
 import re
 
 from shared.db import execute_many, fetch_all, run_transaction
+from shared.normalization import (
+    normalize_compact_token as _normalize_compact_token,
+    normalize_input_text as _normalize_input_text,
+    normalize_optional_input_text as _normalize_optional_input_text,
+)
 from shared.tenantDataCache import (
     get_tenant_shared_cache_value,
     set_tenant_shared_cache_value,
@@ -15,7 +20,6 @@ from apps.tradsphere.api.v1.helpers.config import (
 
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_]+$")
-_WHITESPACE_RE = re.compile(r"\s+")
 _SCHEDULE_EXISTS_CACHE_BUCKET = "db_reads"
 _SCHEDULE_EXISTS_CACHE_PREFIX = "tradsphere_validation::schedule_has_estnum::"
 
@@ -48,21 +52,6 @@ def _normalize_bool(value: object, *, default: bool = True) -> int:
         if text in {"0", "false", "no", "n", "off"}:
             return 0
     raise ValueError("active must be boolean-like")
-
-
-def _normalize_input_text(value: object) -> str:
-    text = str(value or "")
-    text = text.replace("\u00A0", " ")
-    return _WHITESPACE_RE.sub(" ", text).strip()
-
-
-def _normalize_optional_input_text(value: object) -> str | None:
-    text = _normalize_input_text(value)
-    return text or None
-
-
-def _normalize_compact_token(value: object) -> str:
-    return _normalize_input_text(value).replace(" ", "")
 
 
 def _normalize_account_code(value: object) -> str:
@@ -508,7 +497,7 @@ def get_schedules(
         "SELECT "
         "id, scheduleId, lineNum, estNum, billingCode, mediaType, stationCode, "
         "broadcastMonth, broadcastYear, startDate, endDate, totalSpot, totalGross, rateGross, "
-        "length, runtime, programName, days, daypart, rtg, matchKey "
+        "length, runtime, programName, days, daypart, rtg "
         f"FROM {schedules_table}"
     )
     if where_clauses:

@@ -297,6 +297,31 @@ def _build_station_contacts_map(
     return grouped
 
 
+def map_station_names_by_codes(codes: list[str] | None = None) -> dict[str, str]:
+    normalized_codes = [
+        str(code or "").strip().upper()
+        for code in (codes or [])
+        if str(code or "").strip()
+    ]
+    normalized_codes = list(dict.fromkeys(normalized_codes))
+    if not normalized_codes:
+        return {}
+
+    rows = get_stations(
+        codes=normalized_codes,
+        account_codes=[],
+        est_nums=[],
+        delivery_method_detail=False,
+    )
+    mapped: dict[str, str] = {}
+    for row in rows:
+        code = str(row.get("code") or "").strip().upper()
+        if not code:
+            continue
+        mapped[code] = str(row.get("name") or "").strip()
+    return mapped
+
+
 def list_stations_data(
     *,
     codes: list[str] | None = None,

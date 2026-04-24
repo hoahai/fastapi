@@ -182,6 +182,35 @@ def _validate_month_quarter_consistency(
         )
 
 
+def _validate_required_filters(
+    *,
+    est_nums: list[int] | None,
+    account_codes: list[str] | None,
+    year: int | None,
+    month: int | None,
+    quarter: int | None,
+) -> None:
+    if month is not None and year is None:
+        raise ValueError("month filter requires year")
+    if quarter is not None and year is None:
+        raise ValueError("quarter filter requires year")
+
+    has_filter = any(
+        (
+            bool(est_nums),
+            bool(account_codes),
+            year is not None,
+            month is not None and year is not None,
+            quarter is not None and year is not None,
+        )
+    )
+    if not has_filter:
+        raise ValueError(
+            "At least one filter is required: accountCodes, estNums, year, "
+            "month+year, or quarter+year"
+        )
+
+
 def _coerce_db_date(value: object, *, field: str) -> date:
     if isinstance(value, datetime):
         return value.date()
@@ -243,6 +272,49 @@ def _build_broadcast_months_years_for_range(
     return months, years
 
 
+def _sort_est_num_rows(rows: list[dict]) -> list[dict]:
+    def _primary_year(row: dict) -> int:
+        broadcast_years_raw = row.get("broadcastYears")
+        if isinstance(broadcast_years_raw, list):
+            normalized: list[int] = []
+            for year in broadcast_years_raw:
+                try:
+                    normalized.append(int(year))
+                except (TypeError, ValueError):
+                    continue
+            if normalized:
+                return min(normalized)
+        try:
+            return _coerce_db_date(row.get("flightStart"), field="flightStart").year
+        except ValueError:
+            return 0
+
+    def _account_code(row: dict) -> str:
+        return str(row.get("accountCode") or "").strip().upper()
+
+    def _flight_start_month(row: dict) -> int:
+        try:
+            return _coerce_db_date(row.get("flightStart"), field="flightStart").month
+        except ValueError:
+            return 13
+
+    def _est_num(row: dict) -> int:
+        try:
+            return int(row.get("estNum"))
+        except (TypeError, ValueError):
+            return 4294967296
+
+    return sorted(
+        rows,
+        key=lambda row: (
+            -_primary_year(row),
+            _account_code(row),
+            _flight_start_month(row),
+            _est_num(row),
+        ),
+    )
+
+
 def list_est_nums_data(
     *,
     est_nums: list[int] | None = None,
@@ -254,6 +326,13 @@ def list_est_nums_data(
     validated_year = _ensure_optional_year(year)
     validated_month = _ensure_optional_month(month)
     validated_quarter = _ensure_optional_quarter(quarter)
+    _validate_required_filters(
+        est_nums=est_nums,
+        account_codes=account_codes,
+        year=validated_year,
+        month=validated_month,
+        quarter=validated_quarter,
+    )
     _validate_month_quarter_consistency(
         month=validated_month,
         quarter=validated_quarter,
@@ -334,7 +413,7 @@ def list_est_nums_data(
         row["broadcastMonths"] = months
         row["broadcastYears"] = years
 
-    return final_rows
+    return _sort_est_num_rows(final_rows)
 
 
 def create_est_nums_data(payload: list[dict] | dict) -> dict[str, int]:

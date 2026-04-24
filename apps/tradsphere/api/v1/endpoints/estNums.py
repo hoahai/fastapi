@@ -23,10 +23,10 @@ def get_est_nums_route(
     quarter: int | None = Query(None, alias="quarter"),
 ):
     """
-    Return TradSphere estimate-number rows with optional est/account filters.
+    Return TradSphere estimate-number rows with filters and deterministic sorting.
 
     Example request:
-        GET /api/tradsphere/v1/estNums
+        GET /api/tradsphere/v1/estNums?year=2026
 
     Example request (estNum + accountCode):
         GET /api/tradsphere/v1/estNums?estNum=101&accountCode=TAAA
@@ -59,22 +59,29 @@ def get_est_nums_route(
     Requirements:
         - Requires X-Tenant-Id header
         - Requires valid API key
+        - At least one filter is required: accountCodes/accountCode, estNums/estNum, year, month+year, or quarter+year
         - estNums/estNum values must be unsigned integers
         - estNums/estNum and accountCodes/accountCode accept comma-separated values
         - mediaTypes/mediaType filter is not supported on this route
+        - month requires year
+        - quarter requires year
         - response includes hasSchedule (true when at least one schedule exists for estNum)
         - response includes broadcastMonths/broadcastYears derived from broadcast-week overlap of flightStart/flightEnd
+        - response is sorted by: primary broadcast year DESC (uses lowest year when row spans multiple years), accountCode ASC, flightStart month ASC, estNum ASC
         - year/month/quarter filters use broadcast calendar semantics (broadcast week is Monday-Sunday, month/year from week-ending Sunday)
         - year must be 1901-2155 when provided
         - month must be 1-12 when provided
         - quarter must be 1-4 when provided
         - when month and quarter are both provided, month must belong to quarter
         - when year is provided with month/quarter, filtering matches broadcast month/quarter within that broadcast year
-        - when month/quarter is provided without year, filtering matches any broadcast year where the flight includes that broadcast month/quarter
-        - Blank filter lists are treated as no filter (returns all for that filter)
+        - Blank list filters are treated as no filter for that specific list
     """
     normalized_est_nums = parse_int_list(est_nums, est_num)
-    normalized_account_codes = parse_csv_values(account_codes, account_code, uppercase=True)
+    normalized_account_codes = parse_csv_values(
+        account_codes,
+        account_code,
+        uppercase=True,
+    )
     try:
         return list_est_nums_data(
             est_nums=normalized_est_nums,
