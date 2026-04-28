@@ -7,6 +7,8 @@ from apps.spendsphere.api.main import app as spendsphere_app
 from apps.shiftzy.api.main import app as shiftzy_app
 from apps.fundsphere.api.main import app as fundsphere_app
 from apps.tradsphere.api.main import app as tradsphere_app
+from apps.opssphere.api.main import app as opssphere_app
+from apps.opssphere.public.router import router as opssphere_public_router
 from apps.spendsphere.api.v1.helpers.config import (
     validate_tenant_config as validate_spendsphere_tenant_config,
 )
@@ -18,6 +20,9 @@ from apps.fundsphere.api.v1.helpers.config import (
 )
 from apps.tradsphere.api.v1.helpers.config import (
     validate_tenant_config as validate_tradsphere_tenant_config,
+)
+from apps.opssphere.api.helpers.config import (
+    validate_tenant_config as validate_opssphere_tenant_config,
 )
 from shared.exceptionHandlers import register_exception_handlers
 from shared.middleware import (
@@ -39,6 +44,7 @@ app.state.tenant_validator_registry = [
     (("/api/shiftzy",), "Shiftzy", validate_shiftzy_tenant_config),
     (("/api/fundsphere",), "FundSphere", validate_fundsphere_tenant_config),
     (("/api/tradsphere",), "TradSphere", validate_tradsphere_tenant_config),
+    (("/api/opssphere",), "OpsSphere", validate_opssphere_tenant_config),
 ]
 app.middleware("http")(timing_middleware)
 app.middleware("http")(api_key_auth_middleware)
@@ -51,6 +57,8 @@ app.mount("/api/spendsphere", spendsphere_app)
 app.mount("/api/shiftzy", shiftzy_app)
 app.mount("/api/fundsphere", fundsphere_app)
 app.mount("/api/tradsphere", tradsphere_app)
+app.mount("/api/opssphere", opssphere_app)
+app.include_router(opssphere_public_router)
 
 
 @app.get("/")

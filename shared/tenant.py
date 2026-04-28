@@ -96,7 +96,13 @@ LOCAL_SECRETS_DIR = LOCAL_ETC_DIR / "secrets"
 
 _TENANT_ENV_CACHE: dict[str, tuple[float, dict[str, float], dict[str, str]]] = {}
 _CACHE_LOCK = threading.Lock()
-_APP_SCOPED_ENV_SECTIONS = {"spendsphere", "shiftzy", "fundsphere", "tradsphere"}
+_APP_SCOPED_ENV_SECTIONS = {
+    "spendsphere",
+    "shiftzy",
+    "fundsphere",
+    "tradsphere",
+    "opssphere",
+}
 
 
 def normalize_tenant_id(raw: str) -> str:
