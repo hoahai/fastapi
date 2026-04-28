@@ -67,6 +67,7 @@ def get_est_nums_route(
         - quarter requires year
         - response includes hasSchedule (true when at least one schedule exists for estNum)
         - response includes broadcastMonths/broadcastYears derived from broadcast-week overlap of flightStart/flightEnd
+        - for Calendar billing accounts, trailing overlap week (when flightEnd is a cross-month week end) is excluded from broadcastMonths/broadcastYears
         - response is sorted by: primary broadcast year DESC (uses lowest year when row spans multiple years), accountCode ASC, flightStart month ASC, estNum ASC
         - year/month/quarter filters use broadcast calendar semantics (broadcast week is Monday-Sunday, month/year from week-ending Sunday)
         - year must be 1901-2155 when provided

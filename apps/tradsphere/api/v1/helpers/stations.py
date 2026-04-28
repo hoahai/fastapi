@@ -327,6 +327,7 @@ def list_stations_data(
     codes: list[str] | None = None,
     account_code: str | None = None,
     est_num: int | None = None,
+    station_name: str | None = None,
     delivery_method_detail: bool = False,
     contact_detail: bool = False,
 ) -> list[dict]:
@@ -338,6 +339,7 @@ def list_stations_data(
     normalized_codes = list(dict.fromkeys(normalized_codes))
 
     normalized_account_code = str(account_code or "").strip().upper()
+    normalized_station_name = str(station_name or "").strip()
 
     normalized_est_num: int | None = None
     if est_num is not None:
@@ -353,15 +355,17 @@ def list_stations_data(
         not normalized_codes
         and not normalized_account_code
         and normalized_est_num is None
+        and not normalized_station_name
     ):
         raise ValueError(
-            "At least one of codes, accountCode, estNum is required"
+            "At least one of codes, accountCode, estNum, name is required"
         )
 
     rows = get_stations(
         codes=normalized_codes,
         account_codes=[normalized_account_code] if normalized_account_code else [],
         est_nums=[normalized_est_num] if normalized_est_num is not None else [],
+        station_name=normalized_station_name,
         delivery_method_detail=delivery_method_detail,
     )
     serialized_rows = [

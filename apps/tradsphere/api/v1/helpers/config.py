@@ -18,6 +18,7 @@ APP_NAME = "TradSphere"
 APP_ENV_PREFIX = "TRADSPHERE"
 _DB_TABLE_RE = re.compile(r"^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*$")
 _DEFAULT_DB_VALIDATION_TTL_SECONDS = 300
+_DEFAULT_DB_READ_TTL_SECONDS = 300
 
 _DEFAULT_DB_TABLES = {
     "ACCOUNTS": "TradSphere_Accounts",
@@ -198,6 +199,14 @@ def get_validation_cache_ttl_seconds() -> int:
     )
 
 
+def get_db_read_cache_ttl_seconds(*, key: str | None = None) -> int:
+    return get_shared_cache_ttl_seconds(
+        key=key or "db_read_ttl_time",
+        default_seconds=_DEFAULT_DB_READ_TTL_SECONDS,
+        app_name=APP_NAME,
+    )
+
+
 def validate_tenant_config(tenant_id: str | None = None) -> None:
     tenant_id = tenant_id or get_tenant_id()
     if not tenant_id:
@@ -229,6 +238,11 @@ def validate_tenant_config(tenant_id: str | None = None) -> None:
                 _ = get_validation_cache_ttl_seconds()
             except Exception:
                 invalid.append("tradsphere.CACHE.db_validation_ttl_time")
+
+            try:
+                _ = get_db_read_cache_ttl_seconds()
+            except Exception:
+                invalid.append("tradsphere.CACHE.db_read_ttl_time")
 
         if missing or invalid:
             raise TenantConfigValidationError(

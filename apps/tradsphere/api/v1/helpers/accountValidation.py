@@ -23,6 +23,7 @@ from apps.tradsphere.api.v1.helpers.dbQueries import (
 
 _VALIDATION_CACHE_BUCKET = "db_reads"
 _VALIDATION_CACHE_PREFIX = "tradsphere_validation::"
+_DB_READ_CACHE_PREFIX = "tradsphere_db_reads::"
 _TRADSPHERE_ACCOUNT_CODES_CACHE_KEY = f"{_VALIDATION_CACHE_PREFIX}tradsphere_account_codes"
 _MASTER_ACCOUNT_CODES_CACHE_KEY = f"{_VALIDATION_CACHE_PREFIX}master_account_codes"
 _STATION_CODES_CACHE_KEY = f"{_VALIDATION_CACHE_PREFIX}station_codes"
@@ -60,10 +61,15 @@ def _get_cached_values(
 
 
 def invalidate_validation_cache() -> int:
-    return delete_tenant_shared_cache_values_by_prefix(
+    removed_validation_cache = delete_tenant_shared_cache_values_by_prefix(
         bucket=_VALIDATION_CACHE_BUCKET,
         cache_key_prefix=_VALIDATION_CACHE_PREFIX,
     )
+    removed_db_read_cache = delete_tenant_shared_cache_values_by_prefix(
+        bucket=_VALIDATION_CACHE_BUCKET,
+        cache_key_prefix=_DB_READ_CACHE_PREFIX,
+    )
+    return int(removed_validation_cache) + int(removed_db_read_cache)
 
 
 def require_account_code(value: object, *, field: str = "accountCode") -> str:

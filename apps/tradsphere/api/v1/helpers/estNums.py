@@ -9,6 +9,7 @@ from apps.tradsphere.api.v1.helpers.accountValidation import (
 from apps.tradsphere.api.v1.helpers.broadcastCalendar import (
     get_broadcast_weeks_in_range,
 )
+from apps.tradsphere.api.v1.helpers.accounts import list_accounts
 from apps.tradsphere.api.v1.helpers.config import get_media_types
 from apps.tradsphere.api.v1.helpers.dbQueries import (
     get_est_nums,
@@ -16,6 +17,69 @@ from apps.tradsphere.api.v1.helpers.dbQueries import (
     insert_est_nums,
     update_est_nums,
 )
+
+
+def _normalize_billing_type(value: object | None) -> str:
+    normalized = str(value or "").strip().upper()
+    if normalized in {"CALENDAR", "BROADCAST"}:
+        return normalized
+    return ""
+
+
+def _build_account_billing_type_map(account_codes: list[str]) -> dict[str, str]:
+    normalized_codes = [
+        str(code or "").strip().upper()
+        for code in account_codes
+        if str(code or "").strip()
+    ]
+    normalized_codes = list(dict.fromkeys(normalized_codes))
+    if not normalized_codes:
+        return {}
+
+    account_rows = list_accounts(
+        account_codes=normalized_codes,
+        active=False,
+    )
+    mapped: dict[str, str] = {}
+    for row in account_rows:
+        account_code = str(row.get("accountCode") or "").strip().upper()
+        if not account_code:
+            continue
+        mapped[account_code] = _normalize_billing_type(row.get("billingType"))
+    return mapped
+
+
+def _adjust_calendar_trailing_overlap_week(
+    *,
+    weeks: list[dict[str, date]],
+    flight_end: date,
+) -> list[dict[str, date]]:
+    if len(weeks) <= 1:
+        return weeks
+    last_week = weeks[-1]
+    week_start = last_week["weekStart"]
+    week_end = last_week["weekEnd"]
+    if week_end != flight_end:
+        return weeks
+    if week_start.year == week_end.year and week_start.month == week_end.month:
+        return weeks
+    return weeks[:-1]
+
+
+def get_est_num_broadcast_weeks(
+    *,
+    flight_start: date,
+    flight_end: date,
+    billing_type: str | None = None,
+) -> list[dict[str, date]]:
+    weeks = get_broadcast_weeks_in_range(flight_start, flight_end)
+    normalized_billing_type = _normalize_billing_type(billing_type)
+    if normalized_billing_type == "BROADCAST":
+        return weeks
+    return _adjust_calendar_trailing_overlap_week(
+        weeks=weeks,
+        flight_end=flight_end,
+    )
 
 
 def _ensure_list(payload: list[dict] | dict) -> list[dict]:
@@ -229,11 +293,16 @@ def _row_matches_broadcast_period(
     *,
     flight_start: date,
     flight_end: date,
+    billing_type: str | None,
     year: int | None,
     month: int | None,
     quarter: int | None,
 ) -> bool:
-    weeks = get_broadcast_weeks_in_range(flight_start, flight_end)
+    weeks = get_est_num_broadcast_weeks(
+        flight_start=flight_start,
+        flight_end=flight_end,
+        billing_type=billing_type,
+    )
     for week in weeks:
         week_end = week["weekEnd"]
         broadcast_year = week_end.year
@@ -253,8 +322,13 @@ def _build_broadcast_months_years_for_range(
     *,
     flight_start: date,
     flight_end: date,
+    billing_type: str | None,
 ) -> tuple[list[int], list[int]]:
-    weeks = get_broadcast_weeks_in_range(flight_start, flight_end)
+    weeks = get_est_num_broadcast_weeks(
+        flight_start=flight_start,
+        flight_end=flight_end,
+        billing_type=billing_type,
+    )
     months_seen: set[int] = set()
     years_seen: set[int] = set()
     months: list[int] = []
@@ -342,6 +416,13 @@ def list_est_nums_data(
         est_nums=est_nums or [],
         account_codes=account_codes or [],
     )
+    billing_type_by_account = _build_account_billing_type_map(
+        [
+            str(row.get("accountCode") or "").strip().upper()
+            for row in rows
+            if isinstance(row, dict)
+        ]
+    )
     final_rows = rows
     if not (
         validated_year is None
@@ -349,18 +430,21 @@ def list_est_nums_data(
         and validated_quarter is None
     ):
         filtered_rows: list[dict] = []
-        broadcast_match_cache: dict[tuple[date, date], bool] = {}
+        broadcast_match_cache: dict[tuple[date, date, str], bool] = {}
         for row in rows:
             flight_start = _coerce_db_date(row.get("flightStart"), field="flightStart")
             flight_end = _coerce_db_date(row.get("flightEnd"), field="flightEnd")
             if flight_start > flight_end:
                 continue
-            cache_key = (flight_start, flight_end)
+            account_code = str(row.get("accountCode") or "").strip().upper()
+            billing_type = billing_type_by_account.get(account_code, "")
+            cache_key = (flight_start, flight_end, billing_type)
             matches = broadcast_match_cache.get(cache_key)
             if matches is None:
                 matches = _row_matches_broadcast_period(
                     flight_start=flight_start,
                     flight_end=flight_end,
+                    billing_type=billing_type,
                     year=validated_year,
                     month=validated_month,
                     quarter=validated_quarter,
@@ -381,7 +465,7 @@ def list_est_nums_data(
             continue
 
     scheduled_est_nums = get_scheduled_est_nums(est_num_values)
-    broadcast_period_cache: dict[tuple[date, date], tuple[list[int], list[int]]] = {}
+    broadcast_period_cache: dict[tuple[date, date, str], tuple[list[int], list[int]]] = {}
     for row in final_rows:
         raw_value = row.get("estNum")
         has_schedule = False
@@ -398,12 +482,15 @@ def list_est_nums_data(
             flight_start = _coerce_db_date(row.get("flightStart"), field="flightStart")
             flight_end = _coerce_db_date(row.get("flightEnd"), field="flightEnd")
             if flight_start <= flight_end:
-                cache_key = (flight_start, flight_end)
+                account_code = str(row.get("accountCode") or "").strip().upper()
+                billing_type = billing_type_by_account.get(account_code, "")
+                cache_key = (flight_start, flight_end, billing_type)
                 cached = broadcast_period_cache.get(cache_key)
                 if cached is None:
                     cached = _build_broadcast_months_years_for_range(
                         flight_start=flight_start,
                         flight_end=flight_end,
+                        billing_type=billing_type,
                     )
                     broadcast_period_cache[cache_key] = cached
                 months, years = cached

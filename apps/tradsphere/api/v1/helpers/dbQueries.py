@@ -14,12 +14,14 @@ from shared.tenantDataCache import (
 )
 
 from apps.tradsphere.api.v1.helpers.config import (
+    get_db_read_cache_ttl_seconds,
     get_db_tables,
-    get_validation_cache_ttl_seconds,
 )
 
 
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_]+$")
+_DB_READ_CACHE_BUCKET = "db_reads"
+_DB_READ_CACHE_PREFIX = "tradsphere_db_reads::"
 _SCHEDULE_EXISTS_CACHE_BUCKET = "db_reads"
 _SCHEDULE_EXISTS_CACHE_PREFIX = "tradsphere_validation::schedule_has_estnum::"
 
@@ -76,6 +78,80 @@ def _build_in_placeholders(values: list[object]) -> str:
     return ", ".join(["%s"] * len(values))
 
 
+def _cache_ttl_seconds(*, ttl_key: str) -> int:
+    return max(int(get_db_read_cache_ttl_seconds(key=ttl_key)), 0)
+
+
+def _normalized_text_cache_values(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text)
+    return sorted(normalized)
+
+
+def _normalized_int_cache_values(values: list[int]) -> list[int]:
+    seen: set[int] = set()
+    normalized: list[int] = []
+    for value in values:
+        parsed = int(value)
+        if parsed in seen:
+            continue
+        seen.add(parsed)
+        normalized.append(parsed)
+    return sorted(normalized)
+
+
+def _build_db_read_cache_key(
+    cache_scope: str,
+    *parts: str,
+) -> str:
+    cleaned_parts = [str(part or "").strip() for part in parts]
+    return _DB_READ_CACHE_PREFIX + str(cache_scope).strip() + "::" + "::".join(cleaned_parts)
+
+
+def _get_cached_list(
+    cache_key: str,
+    *,
+    ttl_key: str,
+) -> list[dict] | None:
+    cached_value, cache_hit = get_tenant_shared_cache_value(
+        bucket=_DB_READ_CACHE_BUCKET,
+        cache_key=cache_key,
+        ttl_seconds=_cache_ttl_seconds(ttl_key=ttl_key),
+    )
+    if cache_hit and isinstance(cached_value, list):
+        return cached_value
+    return None
+
+
+def _get_cached_dict(
+    cache_key: str,
+    *,
+    ttl_key: str,
+) -> dict | None:
+    cached_value, cache_hit = get_tenant_shared_cache_value(
+        bucket=_DB_READ_CACHE_BUCKET,
+        cache_key=cache_key,
+        ttl_seconds=_cache_ttl_seconds(ttl_key=ttl_key),
+    )
+    if cache_hit and isinstance(cached_value, dict):
+        return cached_value
+    return None
+
+
+def _set_cached_value(cache_key: str, value: object) -> None:
+    set_tenant_shared_cache_value(
+        bucket=_DB_READ_CACHE_BUCKET,
+        cache_key=cache_key,
+        value=value,
+    )
+
+
 def get_accounts(
     *,
     account_codes: list[str] | None = None,
@@ -89,7 +165,9 @@ def get_accounts(
     params: list[object] = []
 
     normalized_codes = [_normalize_account_code(code) for code in (account_codes or [])]
-    normalized_codes = [code for code in normalized_codes if code]
+    normalized_codes = _normalized_text_cache_values(
+        [code for code in normalized_codes if code]
+    )
     if normalized_codes:
         placeholders = _build_in_placeholders(normalized_codes)
         where_clauses.append(f"UPPER(t.accountCode) IN ({placeholders})")
@@ -97,6 +175,20 @@ def get_accounts(
 
     if active_only:
         where_clauses.append("COALESCE(m.active, 0) = 1")
+
+    cache_key = _build_db_read_cache_key(
+        "accounts",
+        f"accounts_table={accounts_table}",
+        f"master_accounts_table={master_accounts_table}",
+        f"active_only={int(bool(active_only))}",
+        "account_codes=" + (",".join(normalized_codes) if normalized_codes else "*"),
+    )
+    cached_rows = _get_cached_list(
+        cache_key,
+        ttl_key="db_accounts_ttl_time",
+    )
+    if cached_rows is not None:
+        return cached_rows
 
     query = (
         "SELECT DISTINCT "
@@ -114,8 +206,9 @@ def get_accounts(
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
     query += " ORDER BY t.accountCode ASC"
-
-    return fetch_all(query, tuple(params))
+    rows = fetch_all(query, tuple(params))
+    _set_cached_value(cache_key, rows)
+    return rows
 
 
 def insert_accounts(items: list[dict]) -> int:
@@ -202,20 +295,36 @@ def get_est_nums(
     where_clauses: list[str] = []
     params: list[object] = []
 
-    normalized_est_nums = [int(item) for item in (est_nums or [])]
+    normalized_est_nums = _normalized_int_cache_values(
+        [int(item) for item in (est_nums or [])]
+    )
     if normalized_est_nums:
         placeholders = _build_in_placeholders(normalized_est_nums)
         where_clauses.append(f"estNum IN ({placeholders})")
         params.extend(normalized_est_nums)
 
-    normalized_account_codes = [
+    normalized_account_codes = _normalized_text_cache_values([
         _normalize_account_code(item) for item in (account_codes or [])
-    ]
+    ])
     normalized_account_codes = [item for item in normalized_account_codes if item]
     if normalized_account_codes:
         placeholders = _build_in_placeholders(normalized_account_codes)
         where_clauses.append(f"UPPER(accountCode) IN ({placeholders})")
         params.extend(normalized_account_codes)
+
+    cache_key = _build_db_read_cache_key(
+        "est_nums",
+        f"est_nums_table={est_nums_table}",
+        "est_nums=" + (",".join(map(str, normalized_est_nums)) if normalized_est_nums else "*"),
+        "account_codes="
+        + (",".join(normalized_account_codes) if normalized_account_codes else "*"),
+    )
+    cached_rows = _get_cached_list(
+        cache_key,
+        ttl_key="db_est_nums_ttl_time",
+    )
+    if cached_rows is not None:
+        return cached_rows
 
     query = (
         "SELECT estNum, accountCode, flightStart, flightEnd, mediaType, buyer, note "
@@ -224,7 +333,9 @@ def get_est_nums(
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
     query += " ORDER BY estNum ASC"
-    return fetch_all(query, tuple(params))
+    rows = fetch_all(query, tuple(params))
+    _set_cached_value(cache_key, rows)
+    return rows
 
 
 def get_scheduled_est_nums(est_nums: list[int]) -> set[int]:
@@ -239,7 +350,10 @@ def get_scheduled_est_nums(est_nums: list[int]) -> set[int]:
     if not normalized:
         return set()
 
-    ttl_seconds = max(int(get_validation_cache_ttl_seconds()), 0)
+    ttl_seconds = max(
+        int(get_db_read_cache_ttl_seconds(key="db_schedule_exists_ttl_time")),
+        0,
+    )
     matched: set[int] = set()
     cache_misses: list[int] = []
 
@@ -429,43 +543,53 @@ def get_schedules(
     where_clauses: list[str] = []
     params: list[object] = []
 
-    normalized_ids = [str(item or "").strip() for item in (ids or [])]
+    normalized_ids = _normalized_text_cache_values(
+        [str(item or "").strip() for item in (ids or [])]
+    )
     normalized_ids = [item for item in normalized_ids if item]
     if normalized_ids:
         placeholders = _build_in_placeholders(normalized_ids)
         where_clauses.append(f"id IN ({placeholders})")
         params.extend(normalized_ids)
 
-    normalized_schedule_ids = [str(item or "").strip() for item in (schedule_ids or [])]
+    normalized_schedule_ids = _normalized_text_cache_values(
+        [str(item or "").strip() for item in (schedule_ids or [])]
+    )
     normalized_schedule_ids = [item for item in normalized_schedule_ids if item]
     if normalized_schedule_ids:
         placeholders = _build_in_placeholders(normalized_schedule_ids)
         where_clauses.append(f"scheduleId IN ({placeholders})")
         params.extend(normalized_schedule_ids)
 
-    normalized_est_nums = [int(item) for item in (est_nums or [])]
+    normalized_est_nums = _normalized_int_cache_values(
+        [int(item) for item in (est_nums or [])]
+    )
     if normalized_est_nums:
         placeholders = _build_in_placeholders(normalized_est_nums)
         where_clauses.append(f"estNum IN ({placeholders})")
         params.extend(normalized_est_nums)
 
-    normalized_billing_codes = [str(item or "").strip() for item in (billing_codes or [])]
+    normalized_billing_codes = _normalized_text_cache_values(
+        [str(item or "").strip() for item in (billing_codes or [])]
+    )
     normalized_billing_codes = [item for item in normalized_billing_codes if item]
     if normalized_billing_codes:
         placeholders = _build_in_placeholders(normalized_billing_codes)
         where_clauses.append(f"billingCode IN ({placeholders})")
         params.extend(normalized_billing_codes)
 
-    normalized_media_types = [_normalize_media_type(item) for item in (media_types or [])]
+    normalized_media_types = _normalized_text_cache_values(
+        [_normalize_media_type(item) for item in (media_types or [])]
+    )
     normalized_media_types = [item for item in normalized_media_types if item]
     if normalized_media_types:
         placeholders = _build_in_placeholders(normalized_media_types)
         where_clauses.append(f"UPPER(mediaType) IN ({placeholders})")
         params.extend(normalized_media_types)
 
-    normalized_station_codes = [
+    normalized_station_codes = _normalized_text_cache_values([
         _normalize_account_code(item) for item in (station_codes or [])
-    ]
+    ])
     normalized_station_codes = [item for item in normalized_station_codes if item]
     if normalized_station_codes:
         placeholders = _build_in_placeholders(normalized_station_codes)
@@ -493,6 +617,31 @@ def get_schedules(
         where_clauses.append("endDate <= %s")
         params.append(str(end_date_to))
 
+    cache_key = _build_db_read_cache_key(
+        "schedules",
+        f"schedules_table={schedules_table}",
+        "ids=" + (",".join(normalized_ids) if normalized_ids else "*"),
+        "schedule_ids=" + (",".join(normalized_schedule_ids) if normalized_schedule_ids else "*"),
+        "est_nums=" + (",".join(map(str, normalized_est_nums)) if normalized_est_nums else "*"),
+        "billing_codes="
+        + (",".join(normalized_billing_codes) if normalized_billing_codes else "*"),
+        "media_types=" + (",".join(normalized_media_types) if normalized_media_types else "*"),
+        "station_codes="
+        + (",".join(normalized_station_codes) if normalized_station_codes else "*"),
+        f"broadcast_month={int(broadcast_month) if broadcast_month is not None else '*'}",
+        f"broadcast_year={int(broadcast_year) if broadcast_year is not None else '*'}",
+        f"start_date_from={str(start_date_from) if start_date_from is not None else '*'}",
+        f"start_date_to={str(start_date_to) if start_date_to is not None else '*'}",
+        f"end_date_from={str(end_date_from) if end_date_from is not None else '*'}",
+        f"end_date_to={str(end_date_to) if end_date_to is not None else '*'}",
+    )
+    cached_rows = _get_cached_list(
+        cache_key,
+        ttl_key="db_schedules_ttl_time",
+    )
+    if cached_rows is not None:
+        return cached_rows
+
     query = (
         "SELECT "
         "id, scheduleId, lineNum, estNum, billingCode, mediaType, stationCode, "
@@ -503,7 +652,9 @@ def get_schedules(
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
     query += " ORDER BY broadcastYear ASC, broadcastMonth ASC, startDate ASC, id ASC"
-    return fetch_all(query, tuple(params))
+    rows = fetch_all(query, tuple(params))
+    _set_cached_value(cache_key, rows)
+    return rows
 
 
 def get_schedules_by_match_keys(match_keys: list[str]) -> list[dict]:
@@ -984,6 +1135,7 @@ def get_stations(
     codes: list[str] | None = None,
     account_codes: list[str] | None = None,
     est_nums: list[int] | None = None,
+    station_name: str | None = None,
     delivery_method_detail: bool = True,
 ) -> list[dict]:
     tables = get_db_tables()
@@ -991,7 +1143,9 @@ def get_stations(
     delivery_methods_table = _quote_table_name(tables["DELIVERYMETHODS"])
     schedules_table = _quote_table_name(tables["SCHEDULES"])
     est_nums_table = _quote_table_name(tables["ESTNUMS"])
-    normalized_codes = [_normalize_account_code(code) for code in (codes or [])]
+    normalized_codes = _normalized_text_cache_values(
+        [_normalize_account_code(code) for code in (codes or [])]
+    )
     normalized_codes = [code for code in normalized_codes if code]
 
     where_clauses: list[str] = []
@@ -1002,12 +1156,15 @@ def get_stations(
         where_clauses.append(f"UPPER(s.code) IN ({code_placeholders})")
         params.extend(normalized_codes)
 
-    normalized_account_codes = [
+    normalized_account_codes = _normalized_text_cache_values([
         _normalize_account_code(item) for item in (account_codes or [])
-    ]
+    ])
     normalized_account_codes = [item for item in normalized_account_codes if item]
 
-    normalized_est_nums = [int(item) for item in (est_nums or [])]
+    normalized_est_nums = _normalized_int_cache_values(
+        [int(item) for item in (est_nums or [])]
+    )
+    normalized_station_name = str(station_name or "").strip().lower()
 
     if normalized_est_nums or normalized_account_codes:
         exists_clauses = ["UPPER(sc.stationCode) = UPPER(s.code)"]
@@ -1034,8 +1191,32 @@ def get_stations(
         )
         params.extend(exists_params)
 
+    if normalized_station_name:
+        where_clauses.append("LOWER(COALESCE(s.name, '')) LIKE %s")
+        params.append(f"%{normalized_station_name}%")
+
     if not where_clauses:
         return []
+
+    cache_key = _build_db_read_cache_key(
+        "stations",
+        f"stations_table={stations_table}",
+        f"delivery_methods_table={delivery_methods_table}",
+        f"schedules_table={schedules_table}",
+        f"est_nums_table={est_nums_table}",
+        "codes=" + (",".join(normalized_codes) if normalized_codes else "*"),
+        "account_codes="
+        + (",".join(normalized_account_codes) if normalized_account_codes else "*"),
+        "est_nums=" + (",".join(map(str, normalized_est_nums)) if normalized_est_nums else "*"),
+        f"station_name={normalized_station_name or '*'}",
+        f"delivery_method_detail={int(bool(delivery_method_detail))}",
+    )
+    cached_rows = _get_cached_list(
+        cache_key,
+        ttl_key="db_stations_ttl_time",
+    )
+    if cached_rows is not None:
+        return cached_rows
 
     select_fields = (
         "s.code AS code, "
@@ -1070,17 +1251,40 @@ def get_stations(
         + " AND ".join(where_clauses)
         + " ORDER BY s.code ASC"
     )
-    return fetch_all(query, tuple(params))
+    rows = fetch_all(query, tuple(params))
+    _set_cached_value(cache_key, rows)
+    return rows
 
 
 def get_station_media_types(*, codes: list[str]) -> dict[str, str]:
-    normalized_codes = [_normalize_account_code(code) for code in (codes or [])]
+    normalized_codes = _normalized_text_cache_values(
+        [_normalize_account_code(code) for code in (codes or [])]
+    )
     normalized_codes = [code for code in normalized_codes if code]
     if not normalized_codes:
         return {}
 
     tables = get_db_tables()
     stations_table = _quote_table_name(tables["STATIONS"])
+    cache_key = _build_db_read_cache_key(
+        "station_media_types",
+        f"stations_table={stations_table}",
+        "codes=" + ",".join(normalized_codes),
+    )
+    cached_mapped = _get_cached_dict(
+        cache_key,
+        ttl_key="db_station_media_types_ttl_time",
+    )
+    if cached_mapped is not None:
+        normalized_mapped: dict[str, str] = {}
+        for code, media_type in cached_mapped.items():
+            code_text = str(code or "").strip().upper()
+            media_type_text = str(media_type or "").strip().upper()
+            if not code_text or not media_type_text:
+                continue
+            normalized_mapped[code_text] = media_type_text
+        return normalized_mapped
+
     placeholders = _build_in_placeholders(normalized_codes)
     query = (
         "SELECT UPPER(code) AS code, UPPER(mediaType) AS mediaType "
@@ -1096,6 +1300,7 @@ def get_station_media_types(*, codes: list[str]) -> dict[str, str]:
         if not code or not media_type:
             continue
         mapped[code] = media_type
+    _set_cached_value(cache_key, mapped)
     return mapped
 
 
@@ -1364,9 +1569,11 @@ def get_contacts(
     normalized_emails = [_normalize_email(item) for item in (emails or [])]
     normalized_emails = [item for item in normalized_emails if item]
     if normalized_emails:
-        placeholders = _build_in_placeholders(normalized_emails)
-        where_clauses.append(f"LOWER(c.email) IN ({placeholders})")
-        params.extend(normalized_emails)
+        email_like_clauses: list[str] = []
+        for email_value in normalized_emails:
+            email_like_clauses.append("LOWER(COALESCE(c.email, '')) LIKE %s")
+            params.append(f"%{email_value}%")
+        where_clauses.append("(" + " OR ".join(email_like_clauses) + ")")
 
     normalized_name = str(name or "").strip().lower()
     if normalized_name:

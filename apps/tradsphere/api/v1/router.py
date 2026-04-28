@@ -1,6 +1,6 @@
 from fastapi import APIRouter
 
-from apps.tradsphere.api.v1.endpoints import (
+from apps.tradsphere.api.v1.endpoints.core import (
     accounts,
     broadcastCalendar,
     contacts,
@@ -12,6 +12,7 @@ from apps.tradsphere.api.v1.endpoints import (
     stations,
     stationsContacts,
 )
+from apps.tradsphere.api.v1.endpoints.core.ui import main as uiMain
 
 router = APIRouter(prefix="/v1")
 router.include_router(accounts.router, tags=["tradsphere"])
@@ -24,3 +25,4 @@ router.include_router(schedulesWeeks.router, tags=["tradsphere"])
 router.include_router(contacts.router, tags=["tradsphere"])
 router.include_router(stationsContacts.router, tags=["tradsphere"])
 router.include_router(broadcastCalendar.router, tags=["tradsphere"])
+router.include_router(uiMain.router, tags=["tradsphere"])

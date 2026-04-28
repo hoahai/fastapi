@@ -18,6 +18,7 @@ def get_stations_route(
     code: list[str] | None = Query(None, alias="code"),
     account_code: list[str] | None = Query(None, alias="accountCode"),
     est_num: list[str] | None = Query(None, alias="estNum"),
+    name: str | None = Query(None, alias="name"),
     delivery_method_detail: bool = Query(False, alias="deliveryMethodDetail"),
     contact_detail: bool = Query(False, alias="contactDetail"),
 ):
@@ -32,6 +33,9 @@ def get_stations_route(
 
     Example request (summary details):
         GET /api/tradsphere/v1/stations?estNum=1957&deliveryMethodDetail=false&contactDetail=false
+
+    Example request (station name filter):
+        GET /api/tradsphere/v1/stations?name=los%20angeles
 
     Example response:
         {
@@ -100,10 +104,11 @@ def get_stations_route(
     Requirements:
         - Requires X-Tenant-Id header
         - Requires valid API key
-        - At least one of codes/code, accountCode, estNum is required
+        - At least one of codes/code, accountCode, estNum, name is required
         - codes/code accepts comma-separated values (multiple supported)
         - accountCode accepts only one value
         - estNum accepts only one unsigned-integer value
+        - name performs case-insensitive partial match on station name
         - deliveryMethodDetail controls deliveryMethod object detail (default false)
         - when deliveryMethodDetail=false, deliveryMethod returns id and name only
         - contactDetail controls REP contact detail (default false)
@@ -131,6 +136,7 @@ def get_stations_route(
             codes=normalized_codes,
             account_code=selected_account_code,
             est_num=selected_est_num,
+            station_name=name,
             delivery_method_detail=delivery_method_detail,
             contact_detail=contact_detail,
         )

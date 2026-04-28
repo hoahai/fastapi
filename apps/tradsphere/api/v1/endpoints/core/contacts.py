@@ -26,10 +26,10 @@ def get_contacts_route(
     """
     Return contact rows filtered by email, name, contact type, and/or active.
 
-    Example request:
-        GET /api/tradsphere/v1/contacts?emails=ops@station.com,billing@station.com&active=true
+    Example request (partial email, multiple values):
+        GET /api/tradsphere/v1/contacts?emails=ops,billing@station.com&active=true
 
-    Example request (by name/contact type):
+    Example request (partial name/contact type):
         GET /api/tradsphere/v1/contacts?name=ari&contactType=REP
 
     Example response:
@@ -57,6 +57,9 @@ def get_contacts_route(
         - Requires valid API key
         - At least one filter is required: emails/email, name, contactType/contactTypes/contacttype, or active
         - emails/email accepts comma-separated values
+        - emails/email uses case-insensitive partial match on contact email
+        - when multiple emails/email values are provided, they are combined with OR (match any value)
+        - name uses case-insensitive partial match across firstName, lastName, and full name
         - contactType/contactTypes/contacttype accepts exactly one value
         - contactType values must match tenant enum tradsphere.ENUMS.contactType
     """
