@@ -11,13 +11,15 @@ from apps.opssphere.api.helpers.ga4 import run_ga4_report
 GA4_EVENT_NAME_DIMENSION_CANDIDATES: tuple[str, ...] = ("eventName",)
 GA4_CLICK_TEXT_DIMENSION = "customEvent:CTA"
 GA4_SUB_MENU_PARENT_DIMENSION = "customEvent:mega_menu_parent"
+GA4_SRP_FILTER_GROUP_DIMENSION = "customEvent:filter_group"
 GA4_EVENT_COUNT_METRIC_CANDIDATES: tuple[str, ...] = ("eventCount",)
 
 MENU_MEGA_EVENT_NAME = "mega_menu_interaction"
 MENU_SUB_EVENT_NAME = "sub_menu_interaction"
+SRP_SORT_EVENT_NAME = "srp_filter_select"
 
 ADV_WEBSITE_EVENT_FILTERS: tuple[str, ...] = (
-    "srp_filter_select",
+    SRP_SORT_EVENT_NAME,
     "new_vdp_cta_interaction",
     "used_vdp_cta_interaction",
     "new_srp_cta_interaction",
@@ -112,6 +114,18 @@ def _to_int(value: object) -> int:
 
 def _normalize_click_text(value: object) -> str:
     return str(value or "").strip()
+
+
+def _to_title_case_words(value: str) -> str:
+    text = _normalize_click_text(value)
+    if not text:
+        return ""
+    # Convert camelCase / PascalCase to spaced words first.
+    spaced = re.sub(r"(?<=[a-z0-9])(?=[A-Z])", " ", text)
+    # Normalize common separators to spaces.
+    spaced = re.sub(r"[_\-]+", " ", spaced)
+    collapsed = " ".join(spaced.split())
+    return collapsed.title()
 
 
 def _is_meaningful_click_text(value: object) -> bool:
@@ -215,6 +229,84 @@ def _fetch_menu_rows_with_parent_dimension(
     if not rows:
         return _build_menu_rows_from_base_rows(base_rows), parent_dimension, stats
     return rows, parent_dimension, stats
+
+
+def _fetch_srp_sort_rows_with_filter_group_dimension(
+    *,
+    property_id: str,
+    start_date: str,
+    end_date: str,
+    event_dimension: str,
+    event_count_metric: str,
+) -> tuple[list[dict[str, object]], str, list[dict[str, object]]]:
+    filter_group_dimension = GA4_SRP_FILTER_GROUP_DIMENSION
+    rows: list[dict[str, object]] = []
+    stats: list[dict[str, object]] = []
+
+    try:
+        report = run_ga4_report(
+            property_id=property_id,
+            start_date=start_date,
+            end_date=end_date,
+            dimensions=[event_dimension, filter_group_dimension],
+            metrics=[event_count_metric],
+            limit=250000,
+            dimension_filter={
+                "filter": {
+                    "fieldName": event_dimension,
+                    "stringFilter": {
+                        "matchType": "EXACT",
+                        "value": SRP_SORT_EVENT_NAME,
+                    },
+                }
+            },
+        )
+    except Exception as exc:
+        stats.append(
+            {
+                "srpSortDimension": filter_group_dimension,
+                "error": str(exc),
+            }
+        )
+        return rows, filter_group_dimension, stats
+
+    meaningful_values: list[str] = []
+    for row in report.get("rows", []):
+        if not isinstance(row, dict):
+            continue
+        dimensions = row.get("dimensions")
+        metrics = row.get("metrics")
+        if not isinstance(dimensions, dict):
+            dimensions = {}
+        if not isinstance(metrics, dict):
+            metrics = {}
+
+        event_name = str(dimensions.get(event_dimension) or "").strip()
+        if event_name != SRP_SORT_EVENT_NAME:
+            continue
+
+        filter_group = _normalize_click_text(dimensions.get(filter_group_dimension))
+        event_count = max(0, _to_int(metrics.get(event_count_metric)))
+        rows.append(
+            {
+                "event_name": event_name,
+                "filter_group": filter_group,
+                "event_count": event_count,
+            }
+        )
+        if _is_meaningful_click_text(filter_group):
+            meaningful_values.append(filter_group)
+
+    unique_meaningful = {value.lower() for value in meaningful_values if str(value).strip()}
+    stats.append(
+        {
+            "srpSortDimension": filter_group_dimension,
+            "rowCount": len(rows),
+            "meaningfulValueCount": len(meaningful_values),
+            "uniqueMeaningfulValueCount": len(unique_meaningful),
+        }
+    )
+    return rows, filter_group_dimension, stats
 
 
 def fetch_adv_website_events_for_month(
@@ -374,6 +466,17 @@ def fetch_adv_website_events_for_date_range(
         event_count_metric=best_count_metric,
         base_rows=best_rows,
     )
+    (
+        srp_sort_rows,
+        resolved_srp_filter_group_dimension,
+        srp_sort_candidate_stats,
+    ) = _fetch_srp_sort_rows_with_filter_group_dimension(
+        property_id=property_id,
+        start_date=start_date,
+        end_date=end_date,
+        event_dimension=best_event_dimension,
+        event_count_metric=best_count_metric,
+    )
 
     return {
         "start_date": start_date,
@@ -382,10 +485,13 @@ def fetch_adv_website_events_for_date_range(
         "resolved_click_text_dimension": best_click_dimension,
         "resolved_event_count_metric": best_count_metric,
         "resolved_sub_menu_parent_dimension": resolved_sub_menu_parent_dimension,
+        "resolved_srp_filter_group_dimension": resolved_srp_filter_group_dimension,
         "candidate_stats": candidate_stats,
         "sub_menu_parent_candidate_stats": sub_menu_parent_candidate_stats,
+        "srp_sort_candidate_stats": srp_sort_candidate_stats,
         "rows": best_rows,
         "menu_rows": menu_rows,
+        "srp_sort_rows": srp_sort_rows,
     }
 
 
@@ -514,4 +620,31 @@ def build_menu_sections(
         "totalSubMenuClicks": sum(
             int(item.get("totalClicks") or 0) for item in sub_menu_groups
         ),
+    }
+
+
+def build_srp_sort_categories_section(
+    rows: list[dict[str, object]],
+) -> dict[str, object]:
+    grouped: dict[str, int] = {}
+    for row in rows:
+        event_name = str(row.get("event_name") or "").strip()
+        if event_name != SRP_SORT_EVENT_NAME:
+            continue
+        category_raw = _normalize_click_text(row.get("filter_group"))
+        category = _to_title_case_words(category_raw) or "(blank)"
+        event_count = max(0, _to_int(row.get("event_count")))
+        grouped[category] = grouped.get(category, 0) + event_count
+
+    section_rows = [
+        {"category": category, "clicks": clicks}
+        for category, clicks in sorted(
+            grouped.items(),
+            key=lambda item: (-int(item[1]), item[0].lower(), item[0]),
+        )
+    ]
+    return {
+        "name": "SRP Sort Categories",
+        "rows": section_rows,
+        "totalClicks": sum(int(item.get("clicks") or 0) for item in section_rows),
     }

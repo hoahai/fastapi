@@ -186,12 +186,15 @@ def get_adv_website_cta_report_pdf(
         - Optional GA4 start-date floor:
           opssphere.ga4.start_date or opssphere.ga4.properties.<accountCode>.start_date
         - GA4 pulls dimensions: eventName + customEvent:CTA
+        - GA4 pulls SRP sort dimension: customEvent:filter_group (event: srp_filter_select)
         - GA4 menu parent dimension: customEvent:mega_menu_parent
         - GA4 pulls metric: eventCount
         - Menu sections in report:
           Megamenus, Submenus
         - CTA sections in report:
           SRPs- New, SRPs- Used, VDPs- New, VDPs- Used
+        - SRP filters section in report:
+          SRP Sort Categories
     """
     account_code = str(accountCode or "").strip().upper()
     if not account_code:

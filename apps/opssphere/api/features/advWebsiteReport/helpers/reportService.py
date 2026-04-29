@@ -8,6 +8,7 @@ from fastapi import HTTPException
 from apps.opssphere.api.features.advWebsiteReport.helpers.advWebsiteReport import (
     build_cta_sections,
     build_menu_sections,
+    build_srp_sort_categories_section,
     fetch_adv_website_events_for_date_range,
     fetch_adv_website_events_for_month,
 )
@@ -69,8 +70,12 @@ def generate_adv_website_report_pdf(
         )
     rows = fetched.get("rows")
     menu_rows = fetched.get("menu_rows")
+    srp_sort_rows = fetched.get("srp_sort_rows")
     sections = build_cta_sections(rows if isinstance(rows, list) else [])
     menu_sections = build_menu_sections(menu_rows if isinstance(menu_rows, list) else [])
+    srp_sort_section = build_srp_sort_categories_section(
+        srp_sort_rows if isinstance(srp_sort_rows, list) else []
+    )
 
     has_meaningful_values = any(
         str(item.get("buttonText") or "").strip().lower()
@@ -99,6 +104,7 @@ def generate_adv_website_report_pdf(
         timezone=timezone_for_report,
         sections=sections,
         menu_sections=menu_sections,
+        srp_sort_section=srp_sort_section,
     )
     return pdf_bytes, timezone_for_report
 

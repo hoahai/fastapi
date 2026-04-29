@@ -27,6 +27,7 @@ _GRID_COLUMNS = 3
 _GRID_COLUMN_GAP = 6.0
 _LEFT_COLUMN_INDEX = 0
 _MIDDLE_COLUMN_INDEX = 1
+_RIGHT_COLUMN_INDEX = 2
 _GRID_ROW_GAP = 6.0
 
 _REPORT_TITLE_HEIGHT = 7.0
@@ -319,6 +320,7 @@ def _resolve_dynamic_page_height(
     *,
     sections: list[dict[str, object]],
     menu_sections: dict[str, object],
+    srp_sort_section: dict[str, object],
 ) -> float:
     probe = _AdvWebsiteReportPDF(
         orientation="L",
@@ -330,6 +332,7 @@ def _resolve_dynamic_page_height(
 
     _, cta_width = _column_geometry(probe, column_index=_MIDDLE_COLUMN_INDEX)
     _, menu_width = _column_geometry(probe, column_index=_LEFT_COLUMN_INDEX)
+    _, srp_width = _column_geometry(probe, column_index=_RIGHT_COLUMN_INDEX)
 
     valid_cta_sections = [
         item
@@ -367,12 +370,22 @@ def _resolve_dynamic_page_height(
         groups=menu_sub_groups,
     )
 
+    srp_rows_raw = srp_sort_section.get("rows")
+    srp_rows = srp_rows_raw if isinstance(srp_rows_raw, list) else []
+    srp_height = _column_header_block_height()
+    srp_height += _estimate_two_col_card_height(
+        probe,
+        width=srp_width,
+        rows=srp_rows,
+        text_key="category",
+    )
+
     content_height = (
         _header_logo_block_height()
         + _REPORT_TITLE_HEIGHT
         + _REPORT_META_HEIGHT
         + _REPORT_AFTER_GAP
-        + max(menu_height, cta_height)
+        + max(menu_height, cta_height, srp_height)
     )
     resolved = _MARGIN_TOP + content_height + _MARGIN_BOTTOM + 2.0
     return max(_PAGE_MIN_HEIGHT_MM, resolved)
@@ -760,6 +773,39 @@ def _draw_cta_column(
     return y
 
 
+def _draw_srp_sort_column(
+    pdf: FPDF,
+    *,
+    start_y: float,
+    srp_sort_section: dict[str, object],
+) -> float:
+    x, width = _column_geometry(pdf, column_index=_RIGHT_COLUMN_INDEX)
+    y = _draw_column_header(
+        pdf,
+        x=x,
+        y=start_y,
+        width=width,
+        title="SRP Filters",
+        context_text="srp_filter_select grouped by customEvent:filter_group",
+    )
+
+    rows_raw = srp_sort_section.get("rows")
+    rows = rows_raw if isinstance(rows_raw, list) else []
+    section_name = str(srp_sort_section.get("name") or "").strip() or "SRP Sort Categories"
+    card_height = _draw_two_col_card(
+        pdf,
+        x=x,
+        y=y,
+        width=width,
+        section_name=section_name,
+        left_header="Category",
+        text_key="category",
+        rows=rows,
+    )
+    y += card_height
+    return y
+
+
 def build_adv_website_cta_report_pdf(
     *,
     tenant_id: str,
@@ -770,12 +816,17 @@ def build_adv_website_cta_report_pdf(
     timezone: str,
     sections: list[dict[str, object]],
     menu_sections: dict[str, object] | None = None,
+    srp_sort_section: dict[str, object] | None = None,
 ) -> bytes:
     _ = tenant_id
     normalized_menu_sections = menu_sections if isinstance(menu_sections, dict) else {}
+    normalized_srp_sort_section = (
+        srp_sort_section if isinstance(srp_sort_section, dict) else {}
+    )
     page_height = _resolve_dynamic_page_height(
         sections=sections,
         menu_sections=normalized_menu_sections,
+        srp_sort_section=normalized_srp_sort_section,
     )
     pdf = _AdvWebsiteReportPDF(
         orientation="L",
@@ -806,7 +857,12 @@ def build_adv_website_cta_report_pdf(
         start_y=start_y,
         sections=sections,
     )
-    pdf.set_y(max(menu_end_y, cta_end_y))
+    srp_sort_end_y = _draw_srp_sort_column(
+        pdf,
+        start_y=start_y,
+        srp_sort_section=normalized_srp_sort_section,
+    )
+    pdf.set_y(max(menu_end_y, cta_end_y, srp_sort_end_y))
 
     rendered = pdf.output(dest="S")
     if isinstance(rendered, bytes):

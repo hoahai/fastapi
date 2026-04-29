@@ -1272,3 +1272,6 @@ Run server:
 ``` bash
 uvicorn main:app --reload
 ```
+
+
+<!-- Compose commit command for what was changed follow my insturctions in AGENTS.md -->
