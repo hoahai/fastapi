@@ -101,6 +101,7 @@ class BudgetManagementDuplicateRequest(BaseModel):
     toMonth: int
     toYear: int
     overwrite: bool = False
+    excludeZeroBudget: bool = True
     overried: bool | None = None
 
 
@@ -1761,6 +1762,7 @@ def duplicate_budget_managements(payload: BudgetManagementDuplicateRequest):
         to_year=payload.toYear,
         account_codes=normalized_codes,
         overwrite=overwrite,
+        exclude_zero_budget=payload.excludeZeroBudget,
     )
     invalidate_budget_managements_cache(payload.toMonth, payload.toYear)
 

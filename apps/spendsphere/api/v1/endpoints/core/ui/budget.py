@@ -389,7 +389,8 @@ def duplicate_budget_managements_ui(
           "fromYear": 2026,
           "toMonth": 3,
           "toYear": 2026,
-          "overwrite": false
+          "overwrite": false,
+          "excludeZeroBudget": true
         }
 
     Example response:
@@ -404,6 +405,7 @@ def duplicate_budget_managements_ui(
         - accountCodes is required
         - fromMonth/toMonth must be in 1..12
         - fromYear/toYear must be in 2000..2100
+        - excludeZeroBudget defaults to true (set false to include zero-value source rows)
         - Supports `overwrite` and legacy `overried` in request body
     """
     return budgetManagements.duplicate_budget_managements(payload)

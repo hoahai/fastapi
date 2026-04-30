@@ -244,12 +244,13 @@ def duplicate_masterbudgets(
     to_year: int,
     account_codes: list[str],
     overwrite: bool = False,
+    exclude_zero_budget: bool = True,
 ) -> int:
     """
     Duplicate master budgets from one month/year to another.
     - Duplicates only for accounts active in the target period.
     - Skips rows that already exist in the target month/year unless overwrite=True.
-    - Never duplicates rows with zero grossAmount.
+    - Optionally excludes rows with zero grossAmount (default enabled).
     """
     from apps.spendsphere.api.v1.helpers.spendsphereHelpers import (
         validate_account_codes,
@@ -308,7 +309,8 @@ def duplicate_masterbudgets(
     query += f"AND b.serviceId IN ({service_placeholders}) "
     params.extend(service_budgets)
 
-    query += "AND b.grossAmount <> 0 "
+    if exclude_zero_budget:
+        query += "AND b.grossAmount <> 0 "
 
     if not overwrite:
         query += "AND t.id IS NULL"
