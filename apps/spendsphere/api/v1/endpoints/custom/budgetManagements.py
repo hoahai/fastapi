@@ -350,6 +350,30 @@ def refresh_budget_managements_cache(
     )
 
 
+def refresh_budget_management_recommended_sheet_cache(
+    month: int | None = None,
+    year: int | None = None,
+) -> dict[str, object]:
+    period_month, period_year = _resolve_period(month, year)
+    active_accounts = validate_account_codes(
+        None,
+        month=period_month,
+        year=period_year,
+    )
+    active_account_codes = _extract_account_codes_from_accounts(active_accounts)
+    rows = _get_recommended_budget_payload(
+        active_account_codes,
+        month=period_month,
+        year=period_year,
+        use_cache=False,
+        refresh_sheet_cache=True,
+    )
+    return {
+        "period": {"month": period_month, "year": period_year},
+        "rows": len(rows),
+    }
+
+
 def _format_decimal_2(value: object) -> str:
     amount = _to_decimal(value)
     return f"{amount.quantize(Decimal('0.00'), rounding=ROUND_HALF_UP):.2f}"
@@ -532,6 +556,7 @@ def _get_recommended_budget_payload(
     year: int,
     service_id: str | None = None,
     use_cache: bool = True,
+    refresh_sheet_cache: bool = False,
 ) -> list[dict[str, object]]:
     requested_account_codes = normalize_account_codes(account_codes)
     if not requested_account_codes:
@@ -563,12 +588,35 @@ def _get_recommended_budget_payload(
         if active_account_codes:
             if bulk_parser is not None:
                 try:
-                    canonical_payload = bulk_parser(active_account_codes, None, month, year)
+                    canonical_payload = bulk_parser(
+                        active_account_codes,
+                        None,
+                        month,
+                        year,
+                        refresh_cache=refresh_sheet_cache,
+                    )
+                except TypeError:
+                    canonical_payload = bulk_parser(
+                        active_account_codes,
+                        None,
+                        month,
+                        year,
+                    )
                 except ValueError as exc:
                     raise HTTPException(status_code=400, detail=str(exc)) from exc
             else:
                 for code in active_account_codes:
                     try:
+                        canonical_payload.extend(
+                            parser(
+                                code,
+                                None,
+                                month,
+                                year,
+                                refresh_cache=refresh_sheet_cache,
+                            )
+                        )
+                    except TypeError:
                         canonical_payload.extend(parser(code, None, month, year))
                     except ValueError as exc:
                         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1170,6 +1218,7 @@ def get_budget_management_db_rows(
         month=period_month,
         year=period_year,
         use_cache=not fresh_data,
+        refresh_sheet_cache=fresh_data,
     )
 
     return {

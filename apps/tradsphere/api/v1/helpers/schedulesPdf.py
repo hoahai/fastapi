@@ -600,20 +600,24 @@ def _new_page_for_compact(
     week_col_width: float,
     total_spot_width: float,
     total_gross_width: float,
+    include_report_header: bool,
+    include_context_header: bool,
 ) -> None:
     pdf.add_page()
-    _draw_report_header(
-        pdf,
-        mode=mode,
-        billing_type=billing_type,
-    )
-    _draw_table_context_header(
-        pdf,
-        est_num=est_num,
-        est_num_note=est_num_note,
-        total_spots=total_spots,
-        total_gross=total_gross,
-    )
+    if include_report_header:
+        _draw_report_header(
+            pdf,
+            mode=mode,
+            billing_type=billing_type,
+        )
+    if include_context_header:
+        _draw_table_context_header(
+            pdf,
+            est_num=est_num,
+            est_num_note=est_num_note,
+            total_spots=total_spots,
+            total_gross=total_gross,
+        )
     _draw_compact_table_header(
         pdf,
         static_columns=static_columns,
@@ -702,6 +706,8 @@ def _draw_compact_mode(
                 week_col_width=week_col_width,
                 total_spot_width=total_spot_width,
                 total_gross_width=total_gross_width,
+                include_report_header=False,
+                include_context_header=False,
             )
             pdf.set_draw_color(*_TABLE_BORDER_RGB)
             pdf.set_font("Helvetica", "", 8)
@@ -778,6 +784,8 @@ def _draw_compact_mode(
             week_col_width=week_col_width,
             total_spot_width=total_spot_width,
             total_gross_width=total_gross_width,
+            include_report_header=False,
+            include_context_header=False,
         )
 
     summary_start_y = pdf.get_y()
@@ -956,6 +964,8 @@ def _draw_detail_mode(
                 week_col_width=week_col_width,
                 total_spot_width=total_spot_width,
                 total_gross_width=total_gross_width,
+                include_report_header=False,
+                include_context_header=False,
             )
             pdf.set_draw_color(*_TABLE_BORDER_RGB)
 
@@ -1092,6 +1102,8 @@ def _draw_detail_mode(
                 week_col_width=week_col_width,
                 total_spot_width=total_spot_width,
                 total_gross_width=total_gross_width,
+                include_report_header=False,
+                include_context_header=False,
             )
             pdf.set_draw_color(*_TABLE_BORDER_RGB)
             pdf.set_font("Helvetica", "", 8)
@@ -1183,6 +1195,8 @@ def _draw_detail_mode(
             week_col_width=week_col_width,
             total_spot_width=total_spot_width,
             total_gross_width=total_gross_width,
+            include_report_header=False,
+            include_context_header=False,
         )
 
     summary_start_y = pdf.get_y()

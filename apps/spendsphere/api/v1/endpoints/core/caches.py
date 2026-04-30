@@ -2,6 +2,7 @@ from fastapi import APIRouter, HTTPException, Query, Request
 
 from apps.spendsphere.api.v1.endpoints.custom.budgetManagements import (
     refresh_budget_management_cache,
+    refresh_budget_management_recommended_sheet_cache,
 )
 from apps.spendsphere.api.v1.helpers.ggAd import (
     get_ggad_accounts,
@@ -131,6 +132,20 @@ def refresh_cache_route(
             "?account_codes&google_ads_clients=false."
         ),
     ),
+    month: int | None = Query(
+        None,
+        description=(
+            "Optional month (1-12) for period-scoped cache refreshes such as "
+            "budget_management and recommended budget sheet refresh."
+        ),
+    ),
+    year: int | None = Query(
+        None,
+        description=(
+            "Optional year (e.g., 2026) for period-scoped cache refreshes. "
+            "Must be provided together with month."
+        ),
+    ),
 ):
     """
     Example request:
@@ -145,6 +160,9 @@ def refresh_cache_route(
 
     Example request (explicit disable):
         POST /api/spendsphere/v1/cache/refresh?account_codes=true&google_ads_clients=false
+
+    Example request (target period for budget-management caches):
+        POST /api/spendsphere/v1/cache/refresh?budget_management&google_sheets&month=5&year=2026
 
     Valid cache values:
         account_codes
@@ -170,7 +188,11 @@ def refresh_cache_route(
           "googleAdsWarnings": 25,
           "googleSheets": {
             "rollovers": 120,
-            "activePeriod": 55
+            "activePeriod": 55,
+            "recommendedBudget": {
+              "period": {"month": 3, "year": 2026},
+              "rows": 85
+            }
           },
           "budgetManagement": {
             "period": {"month": 3, "year": 2026},
@@ -222,13 +244,20 @@ def refresh_cache_route(
     if "google_sheets" in requested:
         rollovers = refresh_google_sheet_cache("rollovers")
         active_period = refresh_google_sheet_cache("active_period")
+        recommended_budget = refresh_budget_management_recommended_sheet_cache(
+            month=month,
+            year=year,
+        )
         response["googleSheets"] = {
             "rollovers": len(rollovers),
             "activePeriod": len(active_period),
+            "recommendedBudget": recommended_budget,
         }
 
     if "budget_management" in requested:
         refreshed_budget_management = refresh_budget_management_cache(
+            month=month,
+            year=year,
             fresh_data=True,
             fresh_spent_data=False,
         )

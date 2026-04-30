@@ -751,16 +751,24 @@ def list_schedules_data(
     )
 
 
-def create_schedules_data(payload: list[dict] | dict) -> dict[str, int]:
+def create_schedules_data(
+    payload: list[dict] | dict,
+    *,
+    include_est_num_lists: bool = False,
+) -> dict[str, int | list[int]]:
     rows = _ensure_list(payload)
     if not rows:
-        return {
+        result: dict[str, int | list[int]] = {
             "inserted": 0,
             "scheduleWeeksUpserted": 0,
             "insertedNew": 0,
             "updatedExisting": 0,
             "dedupedRows": 0,
         }
+        if include_est_num_lists:
+            result["insertedEstNums"] = []
+            result["updatedEstNums"] = []
+        return result
 
     for index, row in enumerate(rows, start=1):
         if not isinstance(row, dict):
@@ -1025,6 +1033,18 @@ def create_schedules_data(payload: list[dict] | dict) -> dict[str, int]:
     )
     inserted_new = len(deduped_match_keys) - updated_existing
     has_new_schedule_rows = inserted_new > 0
+    inserted_est_nums: set[int] = set()
+    updated_est_nums: set[int] = set()
+    for match_key, deduped_row in deduped_rows_by_match_key.items():
+        est_num_value = deduped_row.get("estNum")
+        try:
+            est_num = int(est_num_value)
+        except (TypeError, ValueError):
+            continue
+        if match_key in existing_match_keys:
+            updated_est_nums.add(est_num)
+        else:
+            inserted_est_nums.add(est_num)
 
     inserted = insert_schedules(schedules_payload)
     if schedules_payload:
@@ -1037,13 +1057,17 @@ def create_schedules_data(payload: list[dict] | dict) -> dict[str, int]:
             invalidate_validation_cache()
         weeks_result = create_schedule_weeks_data(schedule_weeks_payload)
         weeks_upserted = int(weeks_result.get("inserted") or 0)
-    return {
+    result = {
         "inserted": inserted,
         "scheduleWeeksUpserted": weeks_upserted,
         "insertedNew": int(inserted_new),
         "updatedExisting": int(updated_existing),
         "dedupedRows": int(len(deduped_rows_by_match_key)),
     }
+    if include_est_num_lists:
+        result["insertedEstNums"] = sorted(inserted_est_nums)
+        result["updatedEstNums"] = sorted(updated_est_nums)
+    return result
 
 
 def modify_schedules_data(payload: list[dict] | dict) -> dict[str, int]:

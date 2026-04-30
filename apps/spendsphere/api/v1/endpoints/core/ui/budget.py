@@ -163,7 +163,8 @@ def get_budget_management_db_budgets_ui(
         False,
         description=(
             "When true, bypasses budget-management data + Google Ads mapping "
-            "caches and fetches fresh data."
+            "caches (including recommended monthly budget sheet cache) and "
+            "fetches fresh data."
         ),
     ),
     fresh_spent_data: bool = Query(
@@ -243,7 +244,8 @@ def get_budget_management_db_budgets_ui(
         - Supports accountCodes and legacy accountCode; empty means all active accounts
         - month/year are optional and default to current tenant period
         - month/year must be provided together when specified
-        - `fresh_data=true` bypasses cache-first behavior for this route
+        - `fresh_data=true` bypasses cache-first behavior for this route,
+          including recommended monthly budget sheet cache
         - `fresh_spent_data=true` bypasses cached payload and refreshes spend data
     """
     merged_account_codes = list(account_codes or [])

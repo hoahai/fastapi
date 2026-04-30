@@ -480,13 +480,18 @@ def import_schedules_data(payload: dict | str) -> dict:
         schedule_payload["_sourceLine"] = int(item["lineNo"])
         schedules_payload.append(schedule_payload)
 
-    schedules_result = create_schedules_data(schedules_payload)
+    schedules_result = create_schedules_data(
+        schedules_payload,
+        include_est_num_lists=True,
+    )
 
     return {
         "summary": {
             "linesSent": len(raw_lines),
             "importedNew": int(schedules_result.get("insertedNew") or 0),
             "updated": int(schedules_result.get("updatedExisting") or 0),
+            "importedEstNums": list(schedules_result.get("insertedEstNums") or []),
+            "updatedEstNums": list(schedules_result.get("updatedEstNums") or []),
             "totalLines": len(raw_lines),
             "parsedLines": len(parsed_rows),
             "schedulesUpserted": int(schedules_result.get("inserted") or 0),

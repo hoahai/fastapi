@@ -75,6 +75,8 @@ def _get_budget_sheet_spreadsheet_id() -> str:
 def _get_monthly_budget_sheet_rows(
     month: int,
     year: int,
+    *,
+    refresh_cache: bool = False,
 ) -> list[dict]:
     spreadsheet_id = _get_budget_sheet_spreadsheet_id()
     sheet_name = _build_month_sheet_name(month, year)
@@ -82,9 +84,10 @@ def _get_monthly_budget_sheet_rows(
     cache_key = f"{_MONTHLY_BUDGET_SHEET_CACHE_KEY_PREFIX}::{year:04d}-{month:02d}"
     config_hash = f"{spreadsheet_id}::{range_name}"
 
-    cached, is_stale = get_google_sheet_cache_entry(cache_key, config_hash=config_hash)
-    if cached is not None and not is_stale:
-        return cached
+    if not refresh_cache:
+        cached, is_stale = get_google_sheet_cache_entry(cache_key, config_hash=config_hash)
+        if cached is not None and not is_stale:
+            return cached
 
     try:
         rows = _read_sheet_raw(
@@ -237,6 +240,8 @@ def get_nucar_recommended_budget(
     service_id: str,
     month: int,
     year: int,
+    *,
+    refresh_cache: bool = False,
 ) -> dict[str, object]:
     """
     Parse NuCar monthly budget sheet and return recommended amount for one
@@ -270,7 +275,7 @@ def get_nucar_recommended_budget(
         service_mapping,
     )
 
-    rows = _get_monthly_budget_sheet_rows(month, year)
+    rows = _get_monthly_budget_sheet_rows(month, year, refresh_cache=refresh_cache)
     amount = 0.0
     found_amount = False
 
@@ -318,6 +323,8 @@ def get_nucar_recommended_budgets(
     service_id: str | None,
     month: int,
     year: int,
+    *,
+    refresh_cache: bool = False,
 ) -> list[dict[str, object]]:
     service_ids = _resolve_requested_service_ids(service_id)
     if not service_ids:
@@ -329,6 +336,7 @@ def get_nucar_recommended_budgets(
             service_id=value,
             month=month,
             year=year,
+            refresh_cache=refresh_cache,
         )
         for value in service_ids
     ]
@@ -339,6 +347,8 @@ def get_nucar_recommended_budgets_bulk(
     service_id: str | None,
     month: int,
     year: int,
+    *,
+    refresh_cache: bool = False,
 ) -> list[dict[str, object]]:
     normalized_account_codes: list[str] = []
     seen_accounts: set[str] = set()
@@ -382,7 +392,7 @@ def get_nucar_recommended_budgets_bulk(
         if isinstance(column, str) and column
     }
 
-    rows = _get_monthly_budget_sheet_rows(month, year)
+    rows = _get_monthly_budget_sheet_rows(month, year, refresh_cache=refresh_cache)
     requested_accounts = set(normalized_account_codes)
     amount_by_account_column: dict[str, dict[str, float]] = {}
     for row in rows:

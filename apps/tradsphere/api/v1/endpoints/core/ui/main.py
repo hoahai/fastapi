@@ -10,12 +10,16 @@ from apps.tradsphere.api.v1.helpers.accountValidation import (
     require_account_code,
 )
 from apps.tradsphere.api.v1.helpers.accounts import list_accounts
-from apps.tradsphere.api.v1.helpers.dbQueries import get_stations
+from apps.tradsphere.api.v1.helpers.dbQueries import (
+    get_contacts_by_station_codes,
+    get_stations,
+)
 from apps.tradsphere.api.v1.helpers.estNums import (
     get_est_num_broadcast_weeks,
     list_est_nums_data,
 )
 from apps.tradsphere.api.v1.helpers.schedules import list_schedules_data
+from apps.tradsphere.api.v1.helpers.stations import build_rep_contact_full_name
 
 router = APIRouter(prefix="/ui/main")
 _MONTH_ABBR = (
@@ -121,6 +125,45 @@ def _station_sort_key(item: dict) -> tuple[int, int, str]:
     return (-latest_ordinal, media_rank, code)
 
 
+def _build_station_rep_contacts_map(
+    station_codes: list[str],
+) -> dict[str, list[dict[str, str]]]:
+    normalized_station_codes = [str(code or "").strip().upper() for code in station_codes]
+    normalized_station_codes = [code for code in normalized_station_codes if code]
+    normalized_station_codes = list(dict.fromkeys(normalized_station_codes))
+    if not normalized_station_codes:
+        return {}
+
+    rows = get_contacts_by_station_codes(
+        station_codes=normalized_station_codes,
+        contact_types=["REP"],
+    )
+    grouped: dict[str, list[dict[str, str]]] = {code: [] for code in normalized_station_codes}
+    dedupe_seen: dict[str, set[tuple[str, str]]] = {
+        code: set() for code in normalized_station_codes
+    }
+    for row in rows:
+        station_code = str(row.get("stationCode") or "").strip().upper()
+        if not station_code:
+            continue
+        full_name = build_rep_contact_full_name(row)
+        email = str(row.get("email") or "").strip()
+        if not full_name and not email:
+            continue
+        fingerprint = (full_name.lower(), email.lower())
+        seen = dedupe_seen.setdefault(station_code, set())
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        grouped.setdefault(station_code, []).append(
+            {
+                "fullName": full_name,
+                "email": email,
+            }
+        )
+    return grouped
+
+
 @router.get("/selections")
 def get_ui_main_selections_route():
     """
@@ -185,7 +228,13 @@ def get_ui_main_load_route(
               {"estnum": 26001, "name": "Q3'26 TV", "hasSchedule": true, "note": "Prime time package"}
             ],
             "stations": [
-              {"code": "KABC", "name": "ABC Los Angeles"}
+              {
+                "code": "KABC",
+                "name": "ABC Los Angeles",
+                "repContacts": [
+                  {"fullName": "Mina Tran", "email": "rep@kabc.com"}
+                ]
+              }
             ]
           }
         }
@@ -197,6 +246,7 @@ def get_ui_main_load_route(
         - estnums are sorted by latest period descending
         - for Calendar billing accounts, trailing overlap week at flight end is excluded when building estnum period labels
         - stations are sorted by most recent related schedule descending, then mediaType order (TV, RA, CA, else)
+        - station repContacts includes active REP contacts with fullName and email
     """
     try:
         normalized_account_code = require_account_code(account_code)
@@ -302,10 +352,17 @@ def get_ui_main_load_route(
             }
 
         station_items = sorted(station_items_index.values(), key=_station_sort_key)
+        station_rep_contacts = _build_station_rep_contacts_map(
+            [str(item.get("code") or "").strip().upper() for item in station_items]
+        )
         stations = [
             {
                 "code": str(item.get("code") or "").strip(),
                 "name": str(item.get("name") or "").strip(),
+                "repContacts": station_rep_contacts.get(
+                    str(item.get("code") or "").strip().upper(),
+                    [],
+                ),
             }
             for item in station_items
             if str(item.get("code") or "").strip()

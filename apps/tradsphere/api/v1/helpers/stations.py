@@ -231,7 +231,7 @@ def _serialize_station_row(
     return station
 
 
-def _build_rep_contact_short_name(row: dict) -> str:
+def build_rep_contact_full_name(row: dict) -> str:
     first_name = str(row.get("firstName") or "").strip()
     last_name = str(row.get("lastName") or "").strip()
     full_name = " ".join(part for part in [first_name, last_name] if part).strip()
@@ -272,7 +272,7 @@ def _build_station_contacts_map(
             contact_bucket.append(
                 {
                     "id": row.get("id"),
-                    "name": _build_rep_contact_short_name(row),
+                    "name": build_rep_contact_full_name(row),
                     "email": email,
                 }
             )
