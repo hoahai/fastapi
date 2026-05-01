@@ -12,6 +12,7 @@ from apps.spendsphere.api.v1.helpers.ggAd import (
 )
 from apps.spendsphere.api.v1.helpers.ggSheet import refresh_google_sheet_cache
 from apps.spendsphere.api.v1.helpers.spendsphereHelpers import (
+    clear_all_tenant_cache_entries,
     cleanup_stale_cache_entries,
     clear_google_ads_warning_cache,
     get_services,
@@ -57,8 +58,14 @@ def _normalize_cache_requests(
     values: list[str] | None,
     *,
     request: Request | None = None,
+    ignore_query_keys: set[str] | None = None,
 ) -> list[str]:
     requested: list[str] = []
+    ignored_keys = {
+        str(key).strip()
+        for key in (ignore_query_keys or set())
+        if str(key).strip()
+    }
 
     if values:
         for value in values:
@@ -78,6 +85,8 @@ def _normalize_cache_requests(
     if request is not None:
         for raw_key in request.query_params.keys():
             if raw_key == "caches":
+                continue
+            if raw_key in ignored_keys:
                 continue
 
             if raw_key not in _VALID_CACHE_KEYS:
@@ -105,6 +114,21 @@ def _normalize_cache_requests(
         return list(_DEFAULT_CACHES)
 
     return requested
+
+
+def _has_cache_selection_params(
+    values: list[str] | None,
+    *,
+    request: Request | None = None,
+) -> bool:
+    if values is not None:
+        return True
+    if request is None:
+        return False
+    return any(
+        raw_key == "caches" or raw_key in _VALID_CACHE_KEYS
+        for raw_key in request.query_params.keys()
+    )
 
 
 @router.post(
@@ -151,6 +175,7 @@ def refresh_cache_route(
     Example request:
         POST /api/spendsphere/v1/cache/refresh
         Header: X-Tenant-Id: acme
+        (Clears all tenant cache buckets first, then refreshes default caches)
 
     Example request (partial):
         POST /api/spendsphere/v1/cache/refresh?caches=google_ads_clients
@@ -174,6 +199,12 @@ def refresh_cache_route(
         google_sheets
         budget_management
         services
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - If no cache flags/`caches` params are provided, all tenant-scoped
+          cache buckets are cleared first (including non-selectable internal buckets).
 
     Example response:
         {
@@ -203,7 +234,14 @@ def refresh_cache_route(
           "services": 6
         }
     """
-    requested = _normalize_cache_requests(caches, request=request)
+    if not _has_cache_selection_params(caches, request=request):
+        clear_all_tenant_cache_entries()
+
+    requested = _normalize_cache_requests(
+        caches,
+        request=request,
+        ignore_query_keys={"month", "year"},
+    )
     response: dict[str, object] = {}
 
     if "account_codes" in requested:

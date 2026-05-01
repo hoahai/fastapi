@@ -1062,6 +1062,40 @@ def clear_google_ads_warning_cache(
         return removed
 
 
+def clear_all_tenant_cache_entries(
+    *,
+    tenant_id: str | None = None,
+) -> dict[str, int]:
+    tenant_key = _normalize_tenant_cache_key(tenant_id or get_tenant_id())
+    cache_path = _get_cache_path(include_all=False)
+    cache_store = _get_cache_store(cache_path)
+
+    removed: dict[str, int] = {}
+    changed = False
+
+    with cache_store.lock():
+        root = _load_cache_root(cache_store)
+
+        for bucket_key, bucket_value in list(root.items()):
+            if not isinstance(bucket_value, dict):
+                continue
+            if tenant_key not in bucket_value:
+                continue
+
+            tenant_entry = bucket_value.get(tenant_key)
+            removed[bucket_key] = (
+                len(tenant_entry) if isinstance(tenant_entry, dict) else 1
+            )
+            bucket_value.pop(tenant_key, None)
+            root[bucket_key] = bucket_value
+            changed = True
+
+        if changed:
+            _write_cache_root(cache_store, root)
+
+    return removed
+
+
 def cleanup_stale_cache_entries(
     *,
     tenant_id: str | None = None,
