@@ -41,6 +41,7 @@ output/
 *.xlsx
 *.json
 *.csv
+!frontend/**/*.json
 
 # ------------------
 # Logs
@@ -52,3 +53,11 @@ logs/
 # Catches
 # ------------------
 caches.json.lock
+
+# ------------------
+# Frontend Build Artifacts
+# ------------------
+node_modules/
+*.tsbuildinfo
+static/assets/
+apps/tradsphere/ui_dist/

@@ -35,8 +35,7 @@ const SELECTIONS_CACHE_KEY = "tradsphere:main:selections:v2";
 const ONE_HOUR_MS = 60 * 60 * 1000;
 const SELECTIONS_CACHE_TTL_MS = ONE_HOUR_MS;
 const LOAD_CACHE_TTL_MS = ONE_HOUR_MS;
-const SCHEDULE_IMPORT_URL =
-  "https://fastapi-i78y.onrender.com/api/tradsphere/v1/schedules/import/file?skipBlankLines=false";
+const SCHEDULE_IMPORT_URL = "/api/tradsphere/v1/schedules/import/file?skipBlankLines=false";
 
 const scheduleFilterFn: FilterFn<EsnumItem> = (row, _columnId, filterValue) => {
   const query = String(filterValue ?? "").trim().toLowerCase();

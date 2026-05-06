@@ -14,14 +14,14 @@ React + TypeScript dashboard UI for TradSphere.
 ## Run
 
 ```bash
-npm --prefix apps/tradsphere/ui install
-npm --prefix apps/tradsphere/ui dev
+npm --prefix frontend/apps/tradsphere install
+npm --prefix frontend/apps/tradsphere dev
 ```
 
 ## Build
 
 ```bash
-npm --prefix apps/tradsphere/ui run build
+npm --prefix frontend/apps/tradsphere run build
 ```
 
 ## Notes

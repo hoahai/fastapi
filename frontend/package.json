@@ -1,0 +1,10 @@
+{
+  "name": "frontend",
+  "private": true,
+  "version": "0.1.0",
+  "scripts": {
+    "dev:tradsphere": "npm --prefix apps/tradsphere run dev",
+    "build:tradsphere": "npm --prefix apps/tradsphere run build",
+    "build": "npm run build:tradsphere"
+  }
+}
