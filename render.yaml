@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: fastapi-gateway
+    runtime: python
+    healthCheckPath: /ping
+    buildCommand: |
+      pip install -r requirements.txt
+      npm --prefix apps/tradsphere/ui ci
+      npm --prefix apps/tradsphere/ui run build
+      rm -rf static/assets static/index.html
+      cp -R apps/tradsphere/ui/dist/* static/
+    startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT

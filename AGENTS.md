@@ -1275,3 +1275,15 @@ uvicorn main:app --reload
 
 
 <!-- Compose commit command for what was changed follow my insturctions in AGENTS.md -->
+
+# 1) Python deps
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+
+# 2) Build TradSphere UI
+npm --prefix apps/tradsphere/ui install
+npm --prefix apps/tradsphere/ui run build
+rm -rf static/assets static/index.html
+cp -R apps/tradsphere/ui/dist/* static/
+uvicorn main:app --reload --host 0.0.0.0 --port 8000

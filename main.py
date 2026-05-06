@@ -2,6 +2,7 @@ from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import FileResponse
+from fastapi.staticfiles import StaticFiles
 
 from apps.spendsphere.api.main import app as spendsphere_app
 from apps.shiftzy.api.main import app as shiftzy_app
@@ -34,6 +35,7 @@ from shared.middleware import (
 
 
 app = FastAPI()
+_STATIC_DIR = Path(__file__).resolve().parent / "static"
 app.state.public_paths = {"/", "/ping"}
 app.state.tenant_validator_registry = [
     (
@@ -58,12 +60,18 @@ app.mount("/api/shiftzy", shiftzy_app)
 app.mount("/api/fundsphere", fundsphere_app)
 app.mount("/api/tradsphere", tradsphere_app)
 app.mount("/api/opssphere", opssphere_app)
+# Serve built frontend assets from static/, including Vite /assets/* files.
+app.mount(
+    "/assets",
+    StaticFiles(directory=_STATIC_DIR / "assets", check_dir=False),
+    name="ui-assets",
+)
 app.include_router(opssphere_public_router)
 
 
 @app.get("/")
 def root():
-    html_path = Path(__file__).resolve().parent / "static" / "index.html"
+    html_path = _STATIC_DIR / "index.html"
     return FileResponse(html_path)
 
 
