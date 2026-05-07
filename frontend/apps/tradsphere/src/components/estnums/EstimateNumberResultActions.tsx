@@ -1,4 +1,4 @@
-import { Copy, Pencil, Table2 } from "lucide-react";
+import { Pencil, Table2 } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
@@ -9,7 +9,6 @@ type EstimateNumberResultActionsProps = {
   disabled?: boolean;
   onViewSchedule: (item: EstimateSearchItem) => void;
   onEditEstimate: (item: EstimateSearchItem) => void;
-  onCopyEstNum: (item: EstimateSearchItem) => void;
 };
 
 export function EstimateNumberResultActions({
@@ -17,7 +16,6 @@ export function EstimateNumberResultActions({
   disabled,
   onViewSchedule,
   onEditEstimate,
-  onCopyEstNum,
 }: EstimateNumberResultActionsProps) {
   return (
     <div className="flex flex-wrap items-center justify-end gap-2">
@@ -46,19 +44,6 @@ export function EstimateNumberResultActions({
       >
         <Pencil className="size-3.5" />
         Edit Estimate
-      </Button>
-      <Button
-        variant="ghost"
-        size="sm"
-        onClick={(event) => {
-          event.stopPropagation();
-          onCopyEstNum(item);
-        }}
-        disabled={disabled}
-        aria-label={`Copy EstNum ${item.estNum}`}
-      >
-        <Copy className="size-3.5" />
-        Copy
       </Button>
     </div>
   );

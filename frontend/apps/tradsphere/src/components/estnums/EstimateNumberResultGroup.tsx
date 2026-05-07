@@ -10,7 +10,6 @@ type EstimateNumberResultGroupProps = {
   disabled?: boolean;
   onViewSchedule: (item: EstimateSearchItem) => void;
   onEditEstimate: (item: EstimateSearchItem) => void;
-  onCopyEstNum: (item: EstimateSearchItem) => void;
 };
 
 export function EstimateNumberResultGroup({
@@ -18,7 +17,6 @@ export function EstimateNumberResultGroup({
   disabled,
   onViewSchedule,
   onEditEstimate,
-  onCopyEstNum,
 }: EstimateNumberResultGroupProps) {
   const title = group.accountName?.trim() ? `${group.accountName} (${group.accountCode})` : group.accountCode;
   const totalItems = group.years.reduce((sum, yearGroup) => sum + yearGroup.items.length, 0);
@@ -41,7 +39,6 @@ export function EstimateNumberResultGroup({
             disabled={disabled}
             onViewSchedule={onViewSchedule}
             onEditEstimate={onEditEstimate}
-            onCopyEstNum={onCopyEstNum}
           />
         ))}
       </div>
@@ -54,7 +51,6 @@ type YearBucketProps = {
   disabled?: boolean;
   onViewSchedule: (item: EstimateSearchItem) => void;
   onEditEstimate: (item: EstimateSearchItem) => void;
-  onCopyEstNum: (item: EstimateSearchItem) => void;
 };
 
 function YearBucket({
@@ -62,7 +58,6 @@ function YearBucket({
   disabled,
   onViewSchedule,
   onEditEstimate,
-  onCopyEstNum,
 }: YearBucketProps) {
   return (
     <section className="overflow-hidden rounded-xl border border-slate-100 bg-slate-50/70">
@@ -122,7 +117,6 @@ function YearBucket({
                 disabled={disabled}
                 onViewSchedule={onViewSchedule}
                 onEditEstimate={onEditEstimate}
-                onCopyEstNum={onCopyEstNum}
               />
             </article>
           );
@@ -165,23 +159,26 @@ function toText(value: string | number | null | undefined): string {
 }
 
 function formatFlightDates(start?: string | null, end?: string | null): string {
-  const normalizedStart = normalizeIsoDate(start);
-  const normalizedEnd = normalizeIsoDate(end);
+  const normalizedStart = formatIsoDateForDisplay(start);
+  const normalizedEnd = formatIsoDateForDisplay(end);
   if (!normalizedStart && !normalizedEnd) {
     return "-";
   }
   if (normalizedStart && normalizedEnd) {
-    return `${normalizedStart} to ${normalizedEnd}`;
+    return `${normalizedStart} \u2192 ${normalizedEnd}`;
   }
   return normalizedStart || normalizedEnd || "-";
 }
 
-function normalizeIsoDate(value?: string | null): string {
+function formatIsoDateForDisplay(value?: string | null): string {
   const text = String(value || "").trim();
   if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
     return "";
   }
-  return text;
+  const year = text.slice(0, 4);
+  const month = text.slice(5, 7);
+  const day = text.slice(8, 10);
+  return `${month}/${day}/${year}`;
 }
 
 function buildMonthOrNote(

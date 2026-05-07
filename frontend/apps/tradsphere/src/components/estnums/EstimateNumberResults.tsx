@@ -19,7 +19,6 @@ type EstimateNumberResultsProps = {
   onLoadMore: () => void;
   onViewSchedule: (item: EstimateSearchItem) => void;
   onEditEstimate: (item: EstimateSearchItem) => void;
-  onCopyEstNum: (item: EstimateSearchItem) => void;
 };
 
 export function EstimateNumberResults({
@@ -33,7 +32,6 @@ export function EstimateNumberResults({
   onLoadMore,
   onViewSchedule,
   onEditEstimate,
-  onCopyEstNum,
 }: EstimateNumberResultsProps) {
   if (state === "idle") {
     return (
@@ -84,7 +82,6 @@ export function EstimateNumberResults({
           disabled={disabled}
           onViewSchedule={onViewSchedule}
           onEditEstimate={onEditEstimate}
-          onCopyEstNum={onCopyEstNum}
         />
       ))}
 

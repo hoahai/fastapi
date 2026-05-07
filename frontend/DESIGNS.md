@@ -262,13 +262,17 @@
 - Route: `/tradsphere/estnums`.
 - Sidebar hierarchy: `Tradsphere` is a parent app entry with child pages (`/tradsphere/home`, `/tradsphere/estnums`).
 - The page is search-first: do not pre-load all EstNums on initial render.
-- Initial state should prompt users to search before results are shown.
-- Use one primary search bar with debounce (about `300ms`) and minimum text length for non-exact queries.
+- Default initial load should fetch only current year + previous year EstNums (not full historical records).
+- Use one primary search bar with lazy submit behavior (Enter/Search submit), not request-on-type.
 - Include subtle helper copy near search input describing supported search terms and keyword tips.
 - Special keyword `today` must resolve to "created today" in TradSphere business timezone (America/Chicago) through backend search parameters, not frontend full-list filtering.
 - Prefer backend search with query + limit (+ cursor/offset when available); avoid client-side full-dataset filtering.
-- Cache search results by query key in memory and use stale-while-revalidate for repeated searches.
-- Clearing the query should return to the empty prompt state, not a full EstNum list.
+- Cache default/search results by query key through shared frontend cache and use stale-while-revalidate.
+- Clearing the query and submitting should return to default current-year + previous-year results.
+- Provide a floating page cache-status chip; click refresh runs network-only for the current default/search context.
 - Group search results by account/client first, then by period (for example year/quarter) when possible.
 - Scheduled EstNums should open the existing Schedule modal; unscheduled rows must keep normal visual style and simply not open schedules.
 - Add/Edit flows must reuse the existing EstimateNumberModal (create/edit modes), not a duplicated form implementation.
+- Do not show `Copy EstNum` action in Estimate Numbers search results.
+- Flight-date display in results should be `MM/DD/YYYY → MM/DD/YYYY` while backend payload remains ISO.
+- Four-digit year search input should map to exact `estNum=<year>` request behavior.

@@ -124,16 +124,20 @@
 
 ## Estimate Numbers Search Page
 - Keep `/tradsphere/estnums` as a dedicated search-first page for EstNums and schedules.
-- Do not load all EstNums on page open; initial state must show a search prompt.
-- Use one main search input (debounced, around `300ms`), not a large filter-heavy surface.
+- Do not load all EstNums on page open; default load should include only current year + previous year.
+- Use one main search input with lazy submit (Enter/Search button), not request-on-type.
 - Show subtle search-help text near the input to explain supported terms.
 - Prefer backend search/paginated APIs (`q/query + limit + cursor/offset`) and avoid full client-side scans.
 - Special keyword `today` must be backend-search-driven for "created today" in America/Chicago; do not implement `today` by loading all EstNums client-side.
 - If backend text search is unavailable, do not implement a full-load fallback; show a clear limitation and propose the backend endpoint.
-- Cache EstNum search responses by query key in memory with stale-while-revalidate behavior.
+- Cache EstNum default/search responses by query key via shared frontend cache with stale-while-revalidate behavior.
+- Include page-level floating cache-status chip; refresh should run network-only for current submitted query/default context only.
 - Group search results by account first and then by period grouping (year/quarter) when practical.
 - Scheduled EstNums open the existing `ScheduleModal`; unscheduled EstNums must remain visually normal and non-opening.
 - Add/Edit actions must reuse `EstimateNumberModal` create/edit modes.
+- Do not show `Copy EstNum` action in Estimate Numbers search results.
+- Display flight dates in Estimate Numbers results as `MM/DD/YYYY → MM/DD/YYYY` (display-only formatting).
+- Four-digit year search submissions should map to exact `estNum=<year>` backend request behavior.
 
 ## Station Item Interactions
 - Station cards may use the same hover-triggered floating attached action menu pattern used by EstNum cards for secondary actions.
