@@ -265,9 +265,12 @@
 - Default initial load should fetch only current year + previous year EstNums (not full historical records).
 - Use one primary search bar with lazy submit behavior (Enter/Search submit), not request-on-type.
 - Include subtle helper copy near search input describing supported search terms and keyword tips.
+- Do not silently interpret ambiguous submissions; require explicit user confirmation via in-app dialog/modal before request dispatch.
+- For 4-digit input (for example `2026`), offer explicit options: `Search by year` and `Search by EstNum`.
+- For month/year and quarter/year patterns (for example `6/26`, `Q1'26`), offer explicit options: structured period search vs text search.
 - Special keyword `today` must resolve to "created today" in TradSphere business timezone (America/Chicago) through backend search parameters, not frontend full-list filtering.
 - Prefer backend search with query + limit (+ cursor/offset when available); avoid client-side full-dataset filtering.
-- Cache default/search results by query key through shared frontend cache and use stale-while-revalidate.
+- Cache default/search results by confirmed interpretation params (mode + values), not raw input alone, through shared frontend cache and use stale-while-revalidate.
 - Clearing the query and submitting should return to default current-year + previous-year results.
 - Provide a floating page cache-status chip; click refresh runs network-only for the current default/search context.
 - Group search results by account/client first, then by period (for example year/quarter) when possible.
@@ -275,4 +278,3 @@
 - Add/Edit flows must reuse the existing EstimateNumberModal (create/edit modes), not a duplicated form implementation.
 - Do not show `Copy EstNum` action in Estimate Numbers search results.
 - Flight-date display in results should be `MM/DD/YYYY → MM/DD/YYYY` while backend payload remains ISO.
-- Four-digit year search input should map to exact `estNum=<year>` request behavior.

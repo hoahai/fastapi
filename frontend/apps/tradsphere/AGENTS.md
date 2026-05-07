@@ -127,17 +127,19 @@
 - Do not load all EstNums on page open; default load should include only current year + previous year.
 - Use one main search input with lazy submit (Enter/Search button), not request-on-type.
 - Show subtle search-help text near the input to explain supported terms.
+- Do not silently guess ambiguous input intent; require user confirmation before running ambiguous searches.
+- For 4-digit input (for example `2026`), show a confirmation dialog with explicit options (`Search by year` vs `Search by EstNum`).
+- For month/year and quarter/year patterns (for example `6/26`, `Q1'26`), show a confirmation dialog (`structured period search` vs `text search`).
 - Prefer backend search/paginated APIs (`q/query + limit + cursor/offset`) and avoid full client-side scans.
 - Special keyword `today` must be backend-search-driven for "created today" in America/Chicago; do not implement `today` by loading all EstNums client-side.
 - If backend text search is unavailable, do not implement a full-load fallback; show a clear limitation and propose the backend endpoint.
-- Cache EstNum default/search responses by query key via shared frontend cache with stale-while-revalidate behavior.
+- Cache EstNum default/search responses by confirmed interpretation params (mode + values), not only raw text, via shared frontend cache with stale-while-revalidate behavior.
 - Include page-level floating cache-status chip; refresh should run network-only for current submitted query/default context only.
 - Group search results by account first and then by period grouping (year/quarter) when practical.
 - Scheduled EstNums open the existing `ScheduleModal`; unscheduled EstNums must remain visually normal and non-opening.
 - Add/Edit actions must reuse `EstimateNumberModal` create/edit modes.
 - Do not show `Copy EstNum` action in Estimate Numbers search results.
 - Display flight dates in Estimate Numbers results as `MM/DD/YYYY → MM/DD/YYYY` (display-only formatting).
-- Four-digit year search submissions should map to exact `estNum=<year>` backend request behavior.
 
 ## Station Item Interactions
 - Station cards may use the same hover-triggered floating attached action menu pattern used by EstNum cards for secondary actions.

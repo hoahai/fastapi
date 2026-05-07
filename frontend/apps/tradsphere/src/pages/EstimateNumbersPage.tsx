@@ -2,7 +2,10 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { AlertCircle } from "lucide-react";
 
 import { EstimateNumberResults } from "@/components/estnums/EstimateNumberResults";
-import { EstimateNumberSearch } from "@/components/estnums/EstimateNumberSearch";
+import {
+  EstimateNumberSearch,
+  type EstimateNumberSearchInterpretationOption,
+} from "@/components/estnums/EstimateNumberSearch";
 import type { EstimateAccountGroup, EstimateSearchItem, EstimateSearchPage } from "@/components/estnums/types";
 import {
   EstimateNumberModal,
@@ -51,6 +54,63 @@ type SearchLoadOptions = {
   policy: CachePolicy;
   append: boolean;
 };
+
+type ConfirmedSearchParams =
+  | { mode: "default" }
+  | { mode: "today"; raw: string }
+  | { mode: "text"; raw: string }
+  | { mode: "estnum"; estNum: string; raw: string }
+  | { mode: "year"; year: number; raw: string }
+  | { mode: "month-year"; year: number; month: number; raw: string }
+  | { mode: "quarter-year"; year: number; quarter: number; raw: string };
+
+type PendingSearchInterpretation = {
+  raw: string;
+  options: Array<EstimateNumberSearchInterpretationOption & { params: ConfirmedSearchParams }>;
+};
+
+const MONTH_BY_NAME: Record<string, number> = {
+  jan: 1,
+  january: 1,
+  feb: 2,
+  february: 2,
+  mar: 3,
+  march: 3,
+  apr: 4,
+  april: 4,
+  may: 5,
+  jun: 6,
+  june: 6,
+  jul: 7,
+  july: 7,
+  aug: 8,
+  august: 8,
+  sep: 9,
+  sept: 9,
+  september: 9,
+  oct: 10,
+  october: 10,
+  nov: 11,
+  november: 11,
+  dec: 12,
+  december: 12,
+};
+
+const MONTH_FULL_LABELS = [
+  "",
+  "January",
+  "February",
+  "March",
+  "April",
+  "May",
+  "June",
+  "July",
+  "August",
+  "September",
+  "October",
+  "November",
+  "December",
+];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -149,6 +209,172 @@ function parseYearSearchQuery(query: string): number | null {
     return null;
   }
   return Math.trunc(parsed);
+}
+
+function normalizeYearToken(value: string): number | null {
+  const trimmed = value.trim();
+  if (!/^\d{2}(\d{2})?$/.test(trimmed)) {
+    return null;
+  }
+  if (trimmed.length === 4) {
+    const parsed = Number(trimmed);
+    if (parsed >= 1901 && parsed <= 2155) {
+      return parsed;
+    }
+    return null;
+  }
+  const twoDigit = Number(trimmed);
+  const normalized = 2000 + twoDigit;
+  if (normalized >= 1901 && normalized <= 2155) {
+    return normalized;
+  }
+  return null;
+}
+
+function parseMonthYearQuery(query: string): { month: number; year: number } | null {
+  const compact = query.trim();
+  if (!compact) {
+    return null;
+  }
+
+  const monthNameMatch = compact.match(/^([a-zA-Z]+)\s+(\d{2}|\d{4})$/);
+  if (monthNameMatch) {
+    const month = MONTH_BY_NAME[monthNameMatch[1].toLowerCase()];
+    const year = normalizeYearToken(monthNameMatch[2]);
+    if (month && year !== null) {
+      return { month, year };
+    }
+  }
+
+  const slashMatch = compact.match(/^(\d{1,2})\s*\/\s*(\d{2}|\d{4})$/);
+  if (slashMatch) {
+    const month = Number(slashMatch[1]);
+    const year = normalizeYearToken(slashMatch[2]);
+    if (month >= 1 && month <= 12 && year !== null) {
+      return { month, year };
+    }
+  }
+
+  return null;
+}
+
+function parseQuarterYearQuery(query: string): { quarter: number; year: number } | null {
+  const compact = query.trim();
+  if (!compact) {
+    return null;
+  }
+
+  const quarterLeadingMatch = compact.match(/^q([1-4])(?:\s*['’]\s*|\s+)(\d{2}|\d{4})$/i);
+  if (quarterLeadingMatch) {
+    const quarter = Number(quarterLeadingMatch[1]);
+    const year = normalizeYearToken(quarterLeadingMatch[2]);
+    if (year !== null) {
+      return { quarter, year };
+    }
+  }
+
+  const yearLeadingMatch = compact.match(/^(\d{2}|\d{4})(?:\s*['’]\s*|\s+)q([1-4])$/i);
+  if (yearLeadingMatch) {
+    const year = normalizeYearToken(yearLeadingMatch[1]);
+    const quarter = Number(yearLeadingMatch[2]);
+    if (year !== null) {
+      return { quarter, year };
+    }
+  }
+
+  return null;
+}
+
+function isTodayQuery(query: string): boolean {
+  return normalizeQueryKey(query) === "today";
+}
+
+function formatMonthYearLabel(month: number, year: number): string {
+  const monthLabel = MONTH_FULL_LABELS[month] || `Month ${month}`;
+  return `${monthLabel} ${year}`;
+}
+
+function buildSearchInterpretationOptions(query: string): PendingSearchInterpretation["options"] {
+  const trimmed = query.trim();
+  if (!trimmed || isTodayQuery(trimmed)) {
+    return [];
+  }
+
+  if (isFourDigitYearQuery(trimmed)) {
+    return [
+      {
+        id: "year",
+        label: `Search by year "${trimmed}"`,
+        description: `Fetch all estimate numbers in broadcast year ${trimmed}.`,
+        params: { mode: "year", year: Number(trimmed), raw: trimmed },
+      },
+      {
+        id: "estnum",
+        label: `Search by EstNum "${trimmed}"`,
+        description: `Fetch the exact estimate number ${trimmed}.`,
+        params: { mode: "estnum", estNum: trimmed, raw: trimmed },
+      },
+    ];
+  }
+
+  const monthYear = parseMonthYearQuery(trimmed);
+  if (monthYear) {
+    return [
+      {
+        id: "month-year",
+        label: `Search by month/year "${formatMonthYearLabel(monthYear.month, monthYear.year)}"`,
+        description: "Use broadcast month and year filters.",
+        params: { mode: "month-year", year: monthYear.year, month: monthYear.month, raw: trimmed },
+      },
+      {
+        id: "text",
+        label: `Search as text "${trimmed}"`,
+        description: "Run a general text search across estimate fields.",
+        params: { mode: "text", raw: trimmed },
+      },
+    ];
+  }
+
+  const quarterYear = parseQuarterYearQuery(trimmed);
+  if (quarterYear) {
+    return [
+      {
+        id: "quarter-year",
+        label: `Search by quarter "Q${quarterYear.quarter} ${quarterYear.year}"`,
+        description: "Use broadcast quarter and year filters.",
+        params: { mode: "quarter-year", year: quarterYear.year, quarter: quarterYear.quarter, raw: trimmed },
+      },
+      {
+        id: "text",
+        label: `Search as text "${trimmed}"`,
+        description: "Run a general text search across estimate fields.",
+        params: { mode: "text", raw: trimmed },
+      },
+    ];
+  }
+
+  return [];
+}
+
+function toConfirmedSearchParams(query: string): ConfirmedSearchParams {
+  const trimmed = query.trim();
+  if (!trimmed) {
+    return { mode: "default" };
+  }
+  if (isTodayQuery(trimmed)) {
+    return { mode: "today", raw: trimmed };
+  }
+
+  const explicitYear = parseYearSearchQuery(trimmed);
+  if (explicitYear !== null) {
+    return { mode: "year", year: explicitYear, raw: trimmed };
+  }
+
+  if (isExactEstNumQuery(trimmed)) {
+    return { mode: "estnum", estNum: trimmed, raw: trimmed };
+  }
+
+  return { mode: "text", raw: trimmed };
 }
 
 function isSearchEndpointMissing(error: unknown): boolean {
@@ -493,17 +719,28 @@ function getCurrentYearInChicago(): number {
 }
 
 function buildSearchCacheKey(
-  submittedQuery: string,
+  confirmedSearch: ConfirmedSearchParams,
   currentYear: number,
   previousYear: number,
 ): string {
-  const normalized = normalizeQueryKey(submittedQuery);
-  if (!normalized) {
-    return `estnums:default:${previousYear}:${currentYear}:limit=${SEARCH_LIMIT}:${ESTNUMS_PAGE_CACHE_VERSION}`;
+  switch (confirmedSearch.mode) {
+    case "default":
+      return `estnums:default:${previousYear}:${currentYear}:limit=${SEARCH_LIMIT}:${ESTNUMS_PAGE_CACHE_VERSION}`;
+    case "today":
+      return `estnums:search:today:tz=${SEARCH_TIMEZONE}:limit=${SEARCH_LIMIT}:${ESTNUMS_PAGE_CACHE_VERSION}`;
+    case "text":
+      return `estnums:search:text:${encodeURIComponent(normalizeQueryKey(confirmedSearch.raw))}:limit=${SEARCH_LIMIT}:${ESTNUMS_PAGE_CACHE_VERSION}`;
+    case "estnum":
+      return `estnums:search:estnum:${encodeURIComponent(confirmedSearch.estNum)}:${ESTNUMS_PAGE_CACHE_VERSION}`;
+    case "year":
+      return `estnums:search:year:${confirmedSearch.year}:${ESTNUMS_PAGE_CACHE_VERSION}`;
+    case "month-year":
+      return `estnums:search:month:${confirmedSearch.year}-${String(confirmedSearch.month).padStart(2, "0")}:${ESTNUMS_PAGE_CACHE_VERSION}`;
+    case "quarter-year":
+      return `estnums:search:quarter:${confirmedSearch.year}-Q${confirmedSearch.quarter}:${ESTNUMS_PAGE_CACHE_VERSION}`;
+    default:
+      return `estnums:search:unknown:${ESTNUMS_PAGE_CACHE_VERSION}`;
   }
-
-  const encoded = encodeURIComponent(normalized);
-  return `estnums:search:${encoded}:limit=${SEARCH_LIMIT}:tz=${SEARCH_TIMEZONE}:${ESTNUMS_PAGE_CACHE_VERSION}`;
 }
 
 function readSidebarCollapsedState(): boolean {
@@ -571,7 +808,8 @@ export default function EstimateNumbersPage() {
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => readSidebarCollapsedState());
 
   const [inputDraft, setInputDraft] = useState("");
-  const [submittedQuery, setSubmittedQuery] = useState("");
+  const [confirmedSearch, setConfirmedSearch] = useState<ConfirmedSearchParams>({ mode: "default" });
+  const [pendingInterpretation, setPendingInterpretation] = useState<PendingSearchInterpretation | null>(null);
   const [submissionVersion, setSubmissionVersion] = useState(0);
 
   const [state, setState] = useState<SearchUiState>("loading");
@@ -622,21 +860,6 @@ export default function EstimateNumbersPage() {
   );
 
   const estimateModalAccountName = accountDirectoryByCode[estimateModalAccountCode]?.name || estimateModalAccountCode;
-  const submittedQueryNormalized = submittedQuery.trim();
-  const parsedDraftYearSearch = useMemo(() => parseYearSearchQuery(inputDraft), [inputDraft]);
-  const contextualSearchHint = useMemo(() => {
-    const draft = inputDraft.trim();
-    if (!draft) {
-      return null;
-    }
-    if (parsedDraftYearSearch !== null) {
-      return `Press Enter to search all estimate numbers in year ${parsedDraftYearSearch}.`;
-    }
-    if (isFourDigitYearQuery(draft)) {
-      return `Press Enter to search exact EstNum ${draft}. For year search, use "year:${draft}".`;
-    }
-    return null;
-  }, [inputDraft, parsedDraftYearSearch]);
 
   const canLoadMore = Boolean(
     displayPage &&
@@ -654,6 +877,8 @@ export default function EstimateNumbersPage() {
         : cacheStatus
           ? `Data source: ${cacheStatus.source}. Last updated ${formatRelativeTime(cacheStatus.fetchedAt)}.`
           : "No cached data yet";
+
+  const interpretationOptions = pendingInterpretation?.options ?? [];
 
   useEffect(() => {
     pageRef.current = page;
@@ -746,39 +971,58 @@ export default function EstimateNumbersPage() {
     };
   }
 
-  async function fetchFirstPageForSubmittedQuery(query: string): Promise<EstimateSearchPage> {
-    const normalized = query.trim();
-
-    if (!normalized) {
+  async function fetchFirstPageForConfirmedSearch(search: ConfirmedSearchParams): Promise<EstimateSearchPage> {
+    if (search.mode === "default") {
       return fetchDefaultYearWindowPage();
     }
 
-    const yearSearch = parseYearSearchQuery(normalized);
-    if (yearSearch !== null) {
-      const payload = await requestJson(`/api/tradsphere/v1/estNums?year=${encodeURIComponent(String(yearSearch))}`, {
+    if (search.mode === "year") {
+      const payload = await requestJson(`/api/tradsphere/v1/estNums?year=${encodeURIComponent(String(search.year))}`, {
         headers: requestHeaders,
         errorToast: false,
       });
       return parseLegacyEstNumsResponse(payload, accountDirectoryByCode);
     }
 
-    // Requested behavior: 4-digit year input should map to estNum query.
-    if (isFourDigitYearQuery(normalized) || isExactEstNumQuery(normalized)) {
-      const payload = await requestJson(`/api/tradsphere/v1/estNums?estNum=${encodeURIComponent(normalized)}`, {
+    if (search.mode === "month-year") {
+      const params = new URLSearchParams();
+      params.set("year", String(search.year));
+      params.set("month", String(search.month));
+      const payload = await requestJson(`/api/tradsphere/v1/estNums?${params.toString()}`, {
         headers: requestHeaders,
         errorToast: false,
       });
       return parseLegacyEstNumsResponse(payload, accountDirectoryByCode);
     }
 
-    if (normalized.length < SEARCH_MIN_TEXT_LENGTH) {
+    if (search.mode === "quarter-year") {
+      const params = new URLSearchParams();
+      params.set("year", String(search.year));
+      params.set("quarter", String(search.quarter));
+      const payload = await requestJson(`/api/tradsphere/v1/estNums?${params.toString()}`, {
+        headers: requestHeaders,
+        errorToast: false,
+      });
+      return parseLegacyEstNumsResponse(payload, accountDirectoryByCode);
+    }
+
+    if (search.mode === "estnum") {
+      const payload = await requestJson(`/api/tradsphere/v1/estNums?estNum=${encodeURIComponent(search.estNum)}`, {
+        headers: requestHeaders,
+        errorToast: false,
+      });
+      return parseLegacyEstNumsResponse(payload, accountDirectoryByCode);
+    }
+
+    const textQuery = search.raw.trim();
+    if (search.mode === "text" && textQuery.length < SEARCH_MIN_TEXT_LENGTH) {
       throw new Error("MIN_QUERY_LENGTH");
     }
 
     const params = new URLSearchParams();
-    params.set("q", normalized);
+    params.set("q", textQuery);
     params.set("limit", String(SEARCH_LIMIT));
-    if (normalizeQueryKey(normalized) === "today") {
+    if (search.mode === "today") {
       params.set("timezone", SEARCH_TIMEZONE);
     }
 
@@ -789,13 +1033,12 @@ export default function EstimateNumbersPage() {
     return parseSearchResponse(payload, accountDirectoryByCode);
   }
 
-  async function fetchNextPageForSubmittedQuery(
-    query: string,
+  async function fetchNextPageForConfirmedSearch(
+    search: ConfirmedSearchParams,
     cursor: string | null,
     offset: number | null,
   ): Promise<EstimateSearchPage> {
-    const normalized = query.trim();
-    if (!normalized || isExactEstNumQuery(normalized) || parseYearSearchQuery(normalized) !== null) {
+    if (search.mode !== "text" && search.mode !== "today") {
       return {
         items: [],
         total: 0,
@@ -807,14 +1050,14 @@ export default function EstimateNumbersPage() {
     }
 
     const params = new URLSearchParams();
-    params.set("q", normalized);
+    params.set("q", search.raw.trim());
     params.set("limit", String(SEARCH_LIMIT));
     if (cursor) {
       params.set("cursor", cursor);
     } else if (offset !== null && offset >= 0) {
       params.set("offset", String(offset));
     }
-    if (normalizeQueryKey(normalized) === "today") {
+    if (search.mode === "today") {
       params.set("timezone", SEARCH_TIMEZONE);
     }
 
@@ -826,11 +1069,11 @@ export default function EstimateNumbersPage() {
   }
 
   async function loadPageData(options: SearchLoadOptions): Promise<void> {
-    const query = submittedQuery.trim();
+    const activeSearch = confirmedSearch;
     const requestToken = ++requestTokenRef.current;
-    const cacheKey = buildSearchCacheKey(query, currentYear, previousYear);
+    const cacheKey = buildSearchCacheKey(activeSearch, currentYear, previousYear);
 
-    if (!options.append && !isExactEstNumQuery(query) && query && query.length < SEARCH_MIN_TEXT_LENGTH) {
+    if (!options.append && activeSearch.mode === "text" && activeSearch.raw.trim().length < SEARCH_MIN_TEXT_LENGTH) {
       setState("min-query");
       setError(null);
       setPage(null);
@@ -876,12 +1119,12 @@ export default function EstimateNumbersPage() {
     let requestPromise = inFlightRef.current[requestKey];
     if (!requestPromise) {
       requestPromise = options.append
-        ? fetchNextPageForSubmittedQuery(
-            query,
+        ? fetchNextPageForConfirmedSearch(
+            activeSearch,
             currentPage?.nextCursor ?? null,
             currentPage?.nextOffset ?? currentPage?.items.length ?? null,
           )
-        : fetchFirstPageForSubmittedQuery(query);
+        : fetchFirstPageForConfirmedSearch(activeSearch);
       inFlightRef.current[requestKey] = requestPromise;
     }
 
@@ -923,7 +1166,7 @@ export default function EstimateNumbersPage() {
       if (message === "MIN_QUERY_LENGTH") {
         setState("min-query");
         setError(null);
-      } else if (!isExactEstNumQuery(query) && isSearchEndpointMissing(loadError)) {
+      } else if ((activeSearch.mode === "text" || activeSearch.mode === "today") && isSearchEndpointMissing(loadError)) {
         setBackendSearchUnavailable(true);
         setState("error");
         setError(
@@ -949,12 +1192,46 @@ export default function EstimateNumbersPage() {
       policy: "stale-while-revalidate",
       append: false,
     });
-  }, [submittedQuery, submissionVersion]);
+  }, [confirmedSearch, submissionVersion]);
+
+  function handleDraftChange(nextValue: string) {
+    setInputDraft(nextValue);
+    if (pendingInterpretation) {
+      setPendingInterpretation(null);
+    }
+  }
 
   function handleSubmitSearch() {
     const nextQuery = inputDraft.trim();
-    setSubmittedQuery(nextQuery);
+    const options = buildSearchInterpretationOptions(nextQuery);
+    if (options.length > 0) {
+      setPendingInterpretation({
+        raw: nextQuery,
+        options,
+      });
+      return;
+    }
+
+    setPendingInterpretation(null);
+    setConfirmedSearch(toConfirmedSearchParams(nextQuery));
     setSubmissionVersion((current) => current + 1);
+  }
+
+  function handleSelectInterpretation(optionId: string) {
+    if (!pendingInterpretation) {
+      return;
+    }
+    const selected = pendingInterpretation.options.find((option) => option.id === optionId);
+    if (!selected) {
+      return;
+    }
+    setPendingInterpretation(null);
+    setConfirmedSearch(selected.params);
+    setSubmissionVersion((current) => current + 1);
+  }
+
+  function handleDismissInterpretation() {
+    setPendingInterpretation(null);
   }
 
   function handleRefreshSearch() {
@@ -1050,17 +1327,19 @@ export default function EstimateNumbersPage() {
 
       <EstimateNumberSearch
         value={inputDraft}
-        onChange={setInputDraft}
+        onChange={handleDraftChange}
         onSubmit={handleSubmitSearch}
         onRefresh={handleRefreshSearch}
         searching={state === "loading"}
         refreshing={isRefreshing}
         disabled={isLoadingMore}
         resultText={resultText}
-        contextualHint={contextualSearchHint}
+        interpretationOptions={interpretationOptions}
+        onSelectInterpretation={handleSelectInterpretation}
+        onDismissInterpretation={handleDismissInterpretation}
       />
 
-      {backendSearchUnavailable && !isExactEstNumQuery(submittedQueryNormalized) ? (
+      {backendSearchUnavailable && (confirmedSearch.mode === "text" || confirmedSearch.mode === "today") ? (
         <p className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
           <AlertCircle className="size-4" />
           Text search depends on backend endpoint `/api/tradsphere/v1/estNums/search`.
