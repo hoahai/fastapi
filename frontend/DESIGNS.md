@@ -257,3 +257,15 @@
 - Schedule tables should provide subtle row and column hover highlighting for readability on wide datasets; highlights should stay light and not overpower the base report palette.
 - Schedule table data should be cached in memory per `EstNum` + view mode during the current page session and reused when toggling modes.
 - Compact/detail table structure should follow backend report-generation rules; if structured backend table data is unavailable, show a clear limitation state instead of inventing inaccurate rows.
+
+## TradSphere Estimate Numbers Search Page
+- Route: `/tradsphere/estnums`.
+- The page is search-first: do not pre-load all EstNums on initial render.
+- Initial state should prompt users to search before results are shown.
+- Use one primary search bar with debounce (about `300ms`) and minimum text length for non-exact queries.
+- Prefer backend search with query + limit (+ cursor/offset when available); avoid client-side full-dataset filtering.
+- Cache search results by query key in memory and use stale-while-revalidate for repeated searches.
+- Clearing the query should return to the empty prompt state, not a full EstNum list.
+- Group search results by account/client first, then by period (for example year/quarter) when possible.
+- Scheduled EstNums should open the existing Schedule modal; unscheduled rows must keep normal visual style and simply not open schedules.
+- Add/Edit flows must reuse the existing EstimateNumberModal (create/edit modes), not a duplicated form implementation.

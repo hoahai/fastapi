@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 
 import TradsphereHomePage from "@/TradsphereHomePage";
+import EstimateNumbersPage from "@/pages/EstimateNumbersPage";
 import { WorkspaceNotFoundPage } from "@home/WorkspaceNotFoundPage";
 import { WorkspacePortalPage } from "@home/WorkspacePortalPage";
 import { AppShell } from "@/components/layout/AppShell";
@@ -43,6 +44,9 @@ function toScrollStorageKey(route: string): string {
   if (route === "/tradsphere/home") {
     return "tradsphere.home.scrollY";
   }
+  if (route === "/tradsphere/estnums") {
+    return "tradsphere.estnums.scrollY";
+  }
   const normalized = route.replace(/[^a-zA-Z0-9]+/g, ".").replace(/^\.+|\.+$/g, "").toLowerCase();
   return `${normalized || "workspace"}.scrollY`;
 }
@@ -70,7 +74,7 @@ function App() {
   }, [frontendPath]);
 
   const knownRoutes = useMemo(() => {
-    return new Set<string>([HOME_ROUTE, "/tradsphere/home"]);
+    return new Set<string>([HOME_ROUTE, "/tradsphere/home", "/tradsphere/estnums"]);
   }, []);
 
   function navigate(route: string) {
@@ -87,6 +91,7 @@ function App() {
     <ToastProvider>
       <AppShell currentPath={frontendPath} onNavigate={navigate}>
         {frontendPath === "/tradsphere/home" ? <TradsphereHomePage /> : null}
+        {frontendPath === "/tradsphere/estnums" ? <EstimateNumbersPage /> : null}
         {frontendPath === HOME_ROUTE ? <WorkspacePortalPage onNavigate={navigate} /> : null}
         {!knownRoutes.has(frontendPath) ? <WorkspaceNotFoundPage onNavigate={navigate} /> : null}
       </AppShell>

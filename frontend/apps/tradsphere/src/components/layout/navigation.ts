@@ -2,6 +2,7 @@ import {
   CalendarClock,
   LayoutDashboard,
   RadioTower,
+  Search,
   type LucideIcon,
   WalletCards,
   Wrench,
@@ -25,6 +26,14 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
     description: "Broadcast schedule workspace",
     route: "/tradsphere/home",
     icon: RadioTower,
+    available: true,
+  },
+  {
+    id: "tradsphere-estnums",
+    label: "Estimate Numbers",
+    description: "Search estimate numbers",
+    route: "/tradsphere/estnums",
+    icon: Search,
     available: true,
   },
   {

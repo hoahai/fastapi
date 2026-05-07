@@ -120,6 +120,17 @@
 - Compact/detail toggles should reuse cached data when available and avoid redundant refetches.
 - Compact/detail table behavior should come from structured backend schedule-table JSON that reuses report logic.
 
+## Estimate Numbers Search Page
+- Keep `/tradsphere/estnums` as a dedicated search-first page for EstNums and schedules.
+- Do not load all EstNums on page open; initial state must show a search prompt.
+- Use one main search input (debounced, around `300ms`), not a large filter-heavy surface.
+- Prefer backend search/paginated APIs (`q/query + limit + cursor/offset`) and avoid full client-side scans.
+- If backend text search is unavailable, do not implement a full-load fallback; show a clear limitation and propose the backend endpoint.
+- Cache EstNum search responses by query key in memory with stale-while-revalidate behavior.
+- Group search results by account first and then by period grouping (year/quarter) when practical.
+- Scheduled EstNums open the existing `ScheduleModal`; unscheduled EstNums must remain visually normal and non-opening.
+- Add/Edit actions must reuse `EstimateNumberModal` create/edit modes.
+
 ## Station Item Interactions
 - Station cards may use the same hover-triggered floating attached action menu pattern used by EstNum cards for secondary actions.
 - `Add station` action opens Station modal in `create` mode.
