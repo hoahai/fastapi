@@ -209,6 +209,29 @@
 - Long report detail views should use a viewport-constrained modal shell (`max-height` + bounded height in detail mode) so footer controls never get displaced by table height.
 - In report modals, keep `Header -> Scroll Viewport -> Footer` structure, and apply `min-height: 0` to the scrollable flex child.
 
+## Reusable Component Primitives
+- Prefer these reusable UI primitives before creating app-level one-offs:
+  - `Section`
+  - `SectionHeader`
+  - `SectionItem` / `EntityItem`
+  - `ModalShell`
+  - `ModalFooter`
+  - `ModalFormLayout`
+  - `FormRow`
+  - `ReadOnlyField`
+  - `IconActionButton`
+  - `Tooltip`
+  - `FloatingActionMenu`
+  - `CacheStatusChip`
+- `Section` should support: title, optional description, optional actions area, optional divider, and consistent spacing.
+- `SectionItem`/entity items should support: primary action, secondary floating menu actions, selected state, disabled state, compact/normal variants, and accessible labels.
+- `ModalShell` should centralize: title/description, close X, open/close animation, backdrop, scrollable body, dirty-close guard behavior, and shell size variants.
+- `ModalFooter` should centralize footer behavior: no cancel button, submit-only when valid/changed, and no browser-native confirm/alert for close/discard flows.
+- Form layouts should rely on shared rows and read-only display primitives; avoid one-off spacing offsets that break label/input alignment.
+- Icon-only actions must use shared icon button + tooltip patterns and always include `aria-label`.
+- Floating menus/tooltips must render as overlays so they do not change layout height and are not clipped by parent containers.
+- Cache/status interactions should use one shared chip pattern for page-level and modal-level placement, refresh action, tooltip, and loading state.
+
 ## Entity Item Action Menus
 - EstNum/entity cards should keep their primary click behavior on the card itself (for example: load/show schedule).
 - Secondary item actions should be shown in a hover-triggered floating attached contextual menu.

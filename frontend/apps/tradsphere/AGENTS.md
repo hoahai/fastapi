@@ -43,6 +43,9 @@
 ## Consistency
 - Follow `frontend/DESIGNS.md` and local `DESIGNS.md`.
 - Reuse existing UI primitives before introducing new one-off components.
+- Reuse shared layout primitives for section/header/item/modal/form/action structures before adding Tradsphere-specific one-offs.
+- Prefer app wrappers around shared primitives rather than duplicating shell/layout classes per modal.
+- Keep reusable app-agnostic primitives in `frontend/shared/components`; keep Tradsphere data-shape wrappers in `frontend/apps/tradsphere/src/components`.
 - Keep TradSphere banner styling aligned with shared banner structure while preserving TradSphere-specific gradient identity.
 - Estimate Number create modal form rows should match Account Information row styling (label typography, spacing, row alignment, and control sizing).
 - Read-only fields (for example `Account` in Estimate Number create modal) should render as read-only text values, not disabled bordered inputs.
@@ -166,3 +169,16 @@
 - Station `Copy contact` should copy Gmail-ready contact text: `Full Name <email@example.com>` when name + email exist, with email-only fallback when name is unavailable.
 - If no valid email exists in loaded station/contact data, keep `Copy contact` unavailable/disabled instead of fetching more data.
 - Clipboard actions must show app-native feedback (toast/inline state) for success/failure; do not use browser-native `alert`/`confirm`.
+
+## Reusable UI Enforcement
+- Use a shared `Section` + `SectionHeader` pattern for repeated areas such as basic info, delivery method, contacts, account info, estimate numbers, stations, and schedules.
+- Use shared `FormRow` + `ReadOnlyField` primitives for label/value alignment and responsive stack behavior; avoid ad-hoc padding offsets for alignment.
+- Use shared `ModalShell` + `ModalFooter` behavior for all Tradsphere modals:
+  - close by `X`
+  - no cancel button
+  - submit disabled until valid/changed
+  - dirty-state close guard + shared unsaved-changes confirmation
+- Use shared action primitives (`IconActionButton`, `Tooltip`, `FloatingActionMenu`) for icon actions and contextual item actions.
+- Icon-only buttons require both tooltip text and matching `aria-label`.
+- Floating action menus must render as overlays so parent section/card height never changes and menu content is not clipped.
+- Use one shared cache/status chip component for page and modal refresh status behavior.

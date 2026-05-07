@@ -3001,17 +3001,19 @@ export function StationModal({
             </LabeledField>
           </div>
 
-          <label className="flex items-center gap-2 text-sm text-slate-700">
-            <input
-              type="checkbox"
-              className="size-4 rounded border border-slate-300"
-              checked={contactEditorForm.primaryContact}
-              onChange={(event) => {
-                setContactEditorForm((current) => ({ ...current, primaryContact: event.target.checked }));
-              }}
-            />
-            Primary contact for this station
-          </label>
+          <div className="mt-2 sm:pl-[126px]">
+            <label className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">
+              <input
+                type="checkbox"
+                className="size-4 rounded border border-slate-300"
+                checked={contactEditorForm.primaryContact}
+                onChange={(event) => {
+                  setContactEditorForm((current) => ({ ...current, primaryContact: event.target.checked }));
+                }}
+              />
+              Mark as primary
+            </label>
+          </div>
 
           {contactEditorError ? <p className="text-sm text-rose-600">{contactEditorError}</p> : null}
 

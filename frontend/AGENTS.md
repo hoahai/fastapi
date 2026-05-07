@@ -20,6 +20,13 @@
 - Follow `frontend/DESIGNS.md`.
 - Reuse shared components/styles before adding one-off styles.
 - Update design docs when introducing new reusable patterns.
+- Prefer reusable layout/action primitives over per-page/per-modal one-off component structures.
+- For app-agnostic UI building blocks, place code in `frontend/shared/components/`.
+- Keep app wrappers in `frontend/apps/<app-name>/` when they bind business-specific data shapes.
+- Avoid one-off modal shells/footers/form-row styling when existing shared primitives can be reused.
+- Icon-only action controls must include tooltip and `aria-label`.
+- Dirty-form close behavior must use shared guard/confirmation patterns, not ad-hoc close logic.
+- Cache/status chips must use a shared chip component and stay in low-emphasis page/modal bottom placement.
 
 ## Backend Safety Rules
 - Do not rename or restructure `apps/`.

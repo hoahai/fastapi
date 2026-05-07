@@ -9,6 +9,7 @@ export default defineConfig({
             "@": path.resolve(__dirname, "./src"),
             "@home": path.resolve(__dirname, "../home/src"),
             "@shared": path.resolve(__dirname, "../../shared"),
+            "react-dom": path.resolve(__dirname, "./node_modules/react-dom"),
             "lucide-react": path.resolve(__dirname, "./node_modules/lucide-react"),
         },
     },
