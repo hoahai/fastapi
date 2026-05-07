@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from zoneinfo import ZoneInfo
 
 from apps.tradsphere.api.v1.helpers.accountValidation import (
     ensure_tradsphere_account_codes_exist,
@@ -13,10 +14,15 @@ from apps.tradsphere.api.v1.helpers.accounts import list_accounts
 from apps.tradsphere.api.v1.helpers.config import get_media_types
 from apps.tradsphere.api.v1.helpers.dbQueries import (
     get_est_nums,
+    search_est_nums,
     get_scheduled_est_nums,
     insert_est_nums,
     update_est_nums,
 )
+
+_EST_NUMS_SEARCH_DEFAULT_LIMIT = 50
+_EST_NUMS_SEARCH_MAX_LIMIT = 200
+_EST_NUMS_SEARCH_TIMEZONE = "America/Chicago"
 
 
 def _normalize_billing_type(value: object | None) -> str:
@@ -275,6 +281,59 @@ def _validate_required_filters(
         )
 
 
+def _ensure_optional_iso_date(
+    value: object | None,
+    *,
+    field: str,
+) -> str | None:
+    if value is None:
+        return None
+    text = str(value).strip()
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text).isoformat()
+    except ValueError as exc:
+        raise ValueError(f"{field} must be ISO date YYYY-MM-DD") from exc
+
+
+def _ensure_limit(value: object | None) -> int:
+    if value is None:
+        return _EST_NUMS_SEARCH_DEFAULT_LIMIT
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError) as exc:
+        raise ValueError("limit must be an integer") from exc
+    if parsed < 1 or parsed > _EST_NUMS_SEARCH_MAX_LIMIT:
+        raise ValueError(
+            f"limit must be between 1 and {_EST_NUMS_SEARCH_MAX_LIMIT}"
+        )
+    return parsed
+
+
+def _ensure_offset(value: object | None, *, field: str) -> int:
+    if value is None:
+        return 0
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"{field} must be a non-negative integer") from exc
+    if parsed < 0:
+        raise ValueError(f"{field} must be a non-negative integer")
+    return parsed
+
+
+def _resolve_search_offset(
+    *,
+    cursor: object | None,
+    offset: object | None,
+) -> int:
+    cursor_text = str(cursor or "").strip()
+    if cursor_text:
+        return _ensure_offset(cursor_text, field="cursor")
+    return _ensure_offset(offset, field="offset")
+
+
 def _coerce_db_date(value: object, *, field: str) -> date:
     if isinstance(value, datetime):
         return value.date()
@@ -389,73 +448,28 @@ def _sort_est_num_rows(rows: list[dict]) -> list[dict]:
     )
 
 
-def list_est_nums_data(
+def _enrich_est_num_rows(
+    rows: list[dict],
     *,
-    est_nums: list[int] | None = None,
-    account_codes: list[str] | None = None,
-    year: int | None = None,
-    month: int | None = None,
-    quarter: int | None = None,
+    sort_rows: bool,
 ) -> list[dict]:
-    validated_year = _ensure_optional_year(year)
-    validated_month = _ensure_optional_month(month)
-    validated_quarter = _ensure_optional_quarter(quarter)
-    _validate_required_filters(
-        est_nums=est_nums,
-        account_codes=account_codes,
-        year=validated_year,
-        month=validated_month,
-        quarter=validated_quarter,
-    )
-    _validate_month_quarter_consistency(
-        month=validated_month,
-        quarter=validated_quarter,
-    )
+    if not rows:
+        return []
 
-    rows = get_est_nums(
-        est_nums=est_nums or [],
-        account_codes=account_codes or [],
-    )
+    enriched_rows = [dict(row) for row in rows if isinstance(row, dict)]
+    if not enriched_rows:
+        return []
+
     billing_type_by_account = _build_account_billing_type_map(
         [
             str(row.get("accountCode") or "").strip().upper()
-            for row in rows
+            for row in enriched_rows
             if isinstance(row, dict)
         ]
     )
-    final_rows = rows
-    if not (
-        validated_year is None
-        and validated_month is None
-        and validated_quarter is None
-    ):
-        filtered_rows: list[dict] = []
-        broadcast_match_cache: dict[tuple[date, date, str], bool] = {}
-        for row in rows:
-            flight_start = _coerce_db_date(row.get("flightStart"), field="flightStart")
-            flight_end = _coerce_db_date(row.get("flightEnd"), field="flightEnd")
-            if flight_start > flight_end:
-                continue
-            account_code = str(row.get("accountCode") or "").strip().upper()
-            billing_type = billing_type_by_account.get(account_code, "")
-            cache_key = (flight_start, flight_end, billing_type)
-            matches = broadcast_match_cache.get(cache_key)
-            if matches is None:
-                matches = _row_matches_broadcast_period(
-                    flight_start=flight_start,
-                    flight_end=flight_end,
-                    billing_type=billing_type,
-                    year=validated_year,
-                    month=validated_month,
-                    quarter=validated_quarter,
-                )
-                broadcast_match_cache[cache_key] = matches
-            if matches:
-                filtered_rows.append(row)
-        final_rows = filtered_rows
 
     est_num_values: list[int] = []
-    for row in final_rows:
+    for row in enriched_rows:
         raw_value = row.get("estNum")
         if raw_value is None:
             continue
@@ -466,7 +480,7 @@ def list_est_nums_data(
 
     scheduled_est_nums = get_scheduled_est_nums(est_num_values)
     broadcast_period_cache: dict[tuple[date, date, str], tuple[list[int], list[int]]] = {}
-    for row in final_rows:
+    for row in enriched_rows:
         raw_value = row.get("estNum")
         has_schedule = False
         if raw_value is not None:
@@ -500,7 +514,162 @@ def list_est_nums_data(
         row["broadcastMonths"] = months
         row["broadcastYears"] = years
 
-    return _sort_est_num_rows(final_rows)
+    if sort_rows:
+        return _sort_est_num_rows(enriched_rows)
+    return enriched_rows
+
+
+def list_est_nums_data(
+    *,
+    est_nums: list[int] | None = None,
+    account_codes: list[str] | None = None,
+    year: int | None = None,
+    month: int | None = None,
+    quarter: int | None = None,
+) -> list[dict]:
+    validated_year = _ensure_optional_year(year)
+    validated_month = _ensure_optional_month(month)
+    validated_quarter = _ensure_optional_quarter(quarter)
+    _validate_required_filters(
+        est_nums=est_nums,
+        account_codes=account_codes,
+        year=validated_year,
+        month=validated_month,
+        quarter=validated_quarter,
+    )
+    _validate_month_quarter_consistency(
+        month=validated_month,
+        quarter=validated_quarter,
+    )
+
+    rows = get_est_nums(
+        est_nums=est_nums or [],
+        account_codes=account_codes or [],
+    )
+    final_rows = [dict(row) for row in rows if isinstance(row, dict)]
+    billing_type_by_account = _build_account_billing_type_map(
+        [
+            str(row.get("accountCode") or "").strip().upper()
+            for row in final_rows
+            if isinstance(row, dict)
+        ]
+    )
+    if not (
+        validated_year is None
+        and validated_month is None
+        and validated_quarter is None
+    ):
+        filtered_rows: list[dict] = []
+        broadcast_match_cache: dict[tuple[date, date, str], bool] = {}
+        for row in rows:
+            flight_start = _coerce_db_date(row.get("flightStart"), field="flightStart")
+            flight_end = _coerce_db_date(row.get("flightEnd"), field="flightEnd")
+            if flight_start > flight_end:
+                continue
+            account_code = str(row.get("accountCode") or "").strip().upper()
+            billing_type = billing_type_by_account.get(account_code, "")
+            cache_key = (flight_start, flight_end, billing_type)
+            matches = broadcast_match_cache.get(cache_key)
+            if matches is None:
+                matches = _row_matches_broadcast_period(
+                    flight_start=flight_start,
+                    flight_end=flight_end,
+                    billing_type=billing_type,
+                    year=validated_year,
+                    month=validated_month,
+                    quarter=validated_quarter,
+                )
+                broadcast_match_cache[cache_key] = matches
+            if matches:
+                filtered_rows.append(row)
+        final_rows = filtered_rows
+
+    return _enrich_est_num_rows(final_rows, sort_rows=True)
+
+
+def _resolve_today_created_range(
+    *,
+    timezone: str,
+) -> tuple[str, str]:
+    try:
+        tz = ZoneInfo(timezone)
+    except Exception as exc:
+        raise ValueError(f"Invalid timezone: {timezone}") from exc
+    today_local = datetime.now(tz).date()
+    iso_value = today_local.isoformat()
+    return iso_value, iso_value
+
+
+def search_est_nums_data(
+    *,
+    query: str | None = None,
+    limit: int | None = None,
+    offset: int | None = None,
+    cursor: str | None = None,
+    created_from: str | None = None,
+    created_to: str | None = None,
+    timezone: str | None = None,
+) -> dict[str, object]:
+    validated_limit = _ensure_limit(limit)
+    validated_offset = _resolve_search_offset(
+        cursor=cursor,
+        offset=offset,
+    )
+    validated_created_from = _ensure_optional_iso_date(
+        created_from,
+        field="createdFrom",
+    )
+    validated_created_to = _ensure_optional_iso_date(
+        created_to,
+        field="createdTo",
+    )
+    resolved_timezone = str(timezone or "").strip() or _EST_NUMS_SEARCH_TIMEZONE
+
+    normalized_query = str(query or "").strip()
+    if normalized_query.lower() == "today":
+        today_from, today_to = _resolve_today_created_range(
+            timezone=resolved_timezone,
+        )
+        validated_created_from = today_from
+        validated_created_to = today_to
+        normalized_query = ""
+
+    if (
+        validated_created_from
+        and validated_created_to
+        and validated_created_from > validated_created_to
+    ):
+        raise ValueError("createdFrom must be on or before createdTo")
+
+    if not normalized_query and not validated_created_from and not validated_created_to:
+        raise ValueError("At least one search filter is required: q, createdFrom, or createdTo")
+
+    search_payload = search_est_nums(
+        query=normalized_query or None,
+        limit=validated_limit,
+        offset=validated_offset,
+        created_from=validated_created_from,
+        created_to=validated_created_to,
+    )
+    rows = search_payload.get("items")
+    total = int(search_payload.get("total") or 0)
+    if not isinstance(rows, list):
+        rows = []
+
+    enriched = _enrich_est_num_rows(rows, sort_rows=False)
+    next_offset: int | None = None
+    next_cursor: str | None = None
+    if validated_offset + len(enriched) < total:
+        next_offset = validated_offset + len(enriched)
+        next_cursor = str(next_offset)
+
+    return {
+        "items": enriched,
+        "total": total,
+        "limit": validated_limit,
+        "nextOffset": next_offset,
+        "nextCursor": next_cursor,
+    }
 
 
 def create_est_nums_data(payload: list[dict] | dict) -> dict[str, int]:

@@ -260,9 +260,12 @@
 
 ## TradSphere Estimate Numbers Search Page
 - Route: `/tradsphere/estnums`.
+- Sidebar hierarchy: `Tradsphere` is a parent app entry with child pages (`/tradsphere/home`, `/tradsphere/estnums`).
 - The page is search-first: do not pre-load all EstNums on initial render.
 - Initial state should prompt users to search before results are shown.
 - Use one primary search bar with debounce (about `300ms`) and minimum text length for non-exact queries.
+- Include subtle helper copy near search input describing supported search terms and keyword tips.
+- Special keyword `today` must resolve to "created today" in TradSphere business timezone (America/Chicago) through backend search parameters, not frontend full-list filtering.
 - Prefer backend search with query + limit (+ cursor/offset when available); avoid client-side full-dataset filtering.
 - Cache search results by query key in memory and use stale-while-revalidate for repeated searches.
 - Clearing the query should return to the empty prompt state, not a full EstNum list.

@@ -29,9 +29,11 @@
 - Schedule modal scroll ownership: only the report/table viewport scrolls (`flex-1`, `min-height: 0`, `overflow: auto`); header and footer remain fixed inside the modal shell.
 - Keep production routing on root paths.
 - Keep TradSphere frontend home mounted at `/tradsphere/home` via client-side routing.
+- Keep Estimate Numbers mounted at `/tradsphere/estnums` as a TradSphere child page route.
 - Keep `/` mapped to the workspace portal page.
 - Treat `/fe` and `/fe/...` as compatibility-only aliases/redirects to root paths.
 - All frontend pages/routes must render inside the shared app shell with the collapsible sidebar.
+- Sidebar navigation should support app child pages; TradSphere parent remains active for any `/tradsphere/*` child route.
 - Sidebar navigation state (collapsed/expanded) should persist across route navigation.
 - Preserve useful page UI state across frontend navigation for workspace routes.
 - Use `localStorage` for durable preferences (for example: sidebar collapsed/expanded).
@@ -124,7 +126,9 @@
 - Keep `/tradsphere/estnums` as a dedicated search-first page for EstNums and schedules.
 - Do not load all EstNums on page open; initial state must show a search prompt.
 - Use one main search input (debounced, around `300ms`), not a large filter-heavy surface.
+- Show subtle search-help text near the input to explain supported terms.
 - Prefer backend search/paginated APIs (`q/query + limit + cursor/offset`) and avoid full client-side scans.
+- Special keyword `today` must be backend-search-driven for "created today" in America/Chicago; do not implement `today` by loading all EstNums client-side.
 - If backend text search is unavailable, do not implement a full-load fallback; show a clear limitation and propose the backend endpoint.
 - Cache EstNum search responses by query key in memory with stale-while-revalidate behavior.
 - Group search results by account first and then by period grouping (year/quarter) when practical.

@@ -24,6 +24,14 @@ _DB_READ_CACHE_BUCKET = "db_reads"
 _DB_READ_CACHE_PREFIX = "tradsphere_db_reads::"
 _SCHEDULE_EXISTS_CACHE_BUCKET = "db_reads"
 _SCHEDULE_EXISTS_CACHE_PREFIX = "tradsphere_validation::schedule_has_estnum::"
+_EST_NUMS_CREATED_COLUMN_CANDIDATES = (
+    "createdAt",
+    "created_at",
+    "createdDate",
+    "created_on",
+    "dateCreated",
+    "createdOn",
+)
 
 
 def _quote_identifier(name: str) -> str:
@@ -150,6 +158,58 @@ def _set_cached_value(cache_key: str, value: object) -> None:
         cache_key=cache_key,
         value=value,
     )
+
+
+def _get_table_columns(
+    *,
+    table_name_quoted: str,
+) -> list[str]:
+    cache_key = _build_db_read_cache_key(
+        "table_columns",
+        f"table={table_name_quoted}",
+    )
+    cached_rows = _get_cached_list(
+        cache_key,
+        ttl_key="db_table_columns_ttl_time",
+    )
+    if cached_rows is not None:
+        normalized_cached: list[str] = []
+        for row in cached_rows:
+            if not isinstance(row, dict):
+                continue
+            name = str(row.get("name") or "").strip()
+            if name:
+                normalized_cached.append(name)
+        if normalized_cached:
+            return normalized_cached
+
+    rows = fetch_all(f"SHOW COLUMNS FROM {table_name_quoted}")
+    normalized: list[str] = []
+    for row in rows:
+        field = str(row.get("Field") or "").strip()
+        if field:
+            normalized.append(field)
+
+    _set_cached_value(
+        cache_key,
+        [{"name": name} for name in normalized],
+    )
+    return normalized
+
+
+def resolve_est_nums_created_column() -> str | None:
+    tables = get_db_tables()
+    est_nums_table = _quote_table_name(tables["ESTNUMS"])
+    columns = _get_table_columns(table_name_quoted=est_nums_table)
+    if not columns:
+        return None
+
+    by_lower = {str(column).strip().lower(): str(column).strip() for column in columns}
+    for candidate in _EST_NUMS_CREATED_COLUMN_CANDIDATES:
+        resolved = by_lower.get(candidate.lower())
+        if resolved:
+            return resolved
+    return None
 
 
 def get_accounts(
@@ -336,6 +396,138 @@ def get_est_nums(
     rows = fetch_all(query, tuple(params))
     _set_cached_value(cache_key, rows)
     return rows
+
+
+def search_est_nums(
+    *,
+    query: str | None,
+    limit: int,
+    offset: int,
+    created_from: str | None = None,
+    created_to: str | None = None,
+) -> dict[str, object]:
+    tables = get_db_tables()
+    est_nums_table = _quote_table_name(tables["ESTNUMS"])
+    master_accounts_table = _quote_table_name(tables["MASTERACCOUNTS"])
+    created_column = resolve_est_nums_created_column()
+
+    normalized_query = str(query or "").strip()
+    normalized_query_upper = normalized_query.upper()
+    has_query = bool(normalized_query)
+
+    where_clauses: list[str] = []
+    params: list[object] = []
+
+    if has_query:
+        like_value = f"%{normalized_query_upper}%"
+        where_clauses.append(
+            "("
+            "CAST(en.estNum AS CHAR) LIKE %s "
+            "OR UPPER(en.accountCode) LIKE %s "
+            "OR UPPER(COALESCE(ma.name, '')) LIKE %s "
+            "OR UPPER(COALESCE(en.buyer, '')) LIKE %s "
+            "OR UPPER(COALESCE(en.mediaType, '')) LIKE %s "
+            "OR UPPER(COALESCE(en.note, '')) LIKE %s "
+            "OR DATE_FORMAT(en.flightStart, '%%Y-%%m-%%d') LIKE %s "
+            "OR DATE_FORMAT(en.flightEnd, '%%Y-%%m-%%d') LIKE %s"
+            ")"
+        )
+        params.extend([like_value] * 8)
+
+    if (created_from or created_to) and not created_column:
+        raise ValueError(
+            "EstNum created-date filtering is unavailable because no created timestamp column was found. "
+            "Expected one of: createdAt, created_at, createdDate, created_on, dateCreated, createdOn."
+        )
+
+    if created_from and created_column:
+        where_clauses.append(f"DATE(en.{_quote_identifier(created_column)}) >= %s")
+        params.append(created_from)
+    if created_to and created_column:
+        where_clauses.append(f"DATE(en.{_quote_identifier(created_column)}) <= %s")
+        params.append(created_to)
+
+    if not where_clauses:
+        raise ValueError("At least one search filter is required")
+
+    where_sql = " WHERE " + " AND ".join(where_clauses)
+    query_suffix_parts = [
+        f"q={normalized_query_upper or '*'}",
+        f"created_from={created_from or '*'}",
+        f"created_to={created_to or '*'}",
+        f"limit={int(limit)}",
+        f"offset={int(offset)}",
+        f"created_column={created_column or 'none'}",
+    ]
+    cache_key = _build_db_read_cache_key(
+        "est_nums_search",
+        f"est_nums_table={est_nums_table}",
+        f"master_accounts_table={master_accounts_table}",
+        *query_suffix_parts,
+    )
+    cached = _get_cached_dict(
+        cache_key,
+        ttl_key="db_est_nums_search_ttl_time",
+    )
+    if cached is not None:
+        cached_items = cached.get("items")
+        cached_total = cached.get("total")
+        if isinstance(cached_items, list):
+            try:
+                normalized_total = int(cached_total or 0)
+            except (TypeError, ValueError):
+                normalized_total = 0
+            return {
+                "items": cached_items,
+                "total": normalized_total,
+                "createdColumn": created_column,
+            }
+
+    from_sql = (
+        f" FROM {est_nums_table} en "
+        f"LEFT JOIN {master_accounts_table} ma ON UPPER(ma.code) = UPPER(en.accountCode)"
+    )
+    count_query = "SELECT COUNT(*) AS total" + from_sql + where_sql
+    count_rows = fetch_all(count_query, tuple(params))
+    total = 0
+    if count_rows:
+        try:
+            total = int(count_rows[0].get("total") or 0)
+        except (TypeError, ValueError):
+            total = 0
+
+    created_select = ""
+    if created_column:
+        created_select = f", en.{_quote_identifier(created_column)} AS createdAt"
+    select_query = (
+        "SELECT "
+        "en.estNum AS estNum, "
+        "en.accountCode AS accountCode, "
+        "en.flightStart AS flightStart, "
+        "en.flightEnd AS flightEnd, "
+        "en.mediaType AS mediaType, "
+        "en.buyer AS buyer, "
+        "en.note AS note, "
+        "ma.name AS accountName"
+        + created_select
+        + from_sql
+        + where_sql
+        + " ORDER BY en.estNum DESC"
+        + " LIMIT %s OFFSET %s"
+    )
+    rows = fetch_all(select_query, tuple([*params, int(limit), int(offset)]))
+    _set_cached_value(
+        cache_key,
+        {
+            "items": rows,
+            "total": total,
+        },
+    )
+    return {
+        "items": rows,
+        "total": total,
+        "createdColumn": created_column,
+    }
 
 
 def get_scheduled_est_nums(est_nums: list[int]) -> set[int]:

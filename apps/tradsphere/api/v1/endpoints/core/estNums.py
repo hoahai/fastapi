@@ -6,10 +6,85 @@ from apps.tradsphere.api.v1.helpers.estNums import (
     create_est_nums_data,
     list_est_nums_data,
     modify_est_nums_data,
+    search_est_nums_data,
 )
 from apps.tradsphere.api.v1.helpers.queryParsing import parse_csv_values, parse_int_list
 
 router = APIRouter(prefix="/estNums")
+
+
+@router.get("/search")
+def search_est_nums_route(
+    q: str | None = Query(None),
+    limit: int = Query(50, ge=1, le=200),
+    offset: int | None = Query(None, ge=0),
+    cursor: str | None = Query(None),
+    created_from: str | None = Query(None, alias="createdFrom"),
+    created_to: str | None = Query(None, alias="createdTo"),
+    timezone: str | None = Query(None, alias="timezone"),
+):
+    """
+    Search TradSphere estimate numbers without loading the full dataset.
+
+    Example request:
+        GET /api/tradsphere/v1/estNums/search?q=2600&limit=50
+
+    Example request (created date range):
+        GET /api/tradsphere/v1/estNums/search?createdFrom=2026-05-07&createdTo=2026-05-07&limit=25
+
+    Example request (special keyword + timezone):
+        GET /api/tradsphere/v1/estNums/search?q=today&timezone=America/Chicago&limit=50
+
+    Example response:
+        {
+          "meta": {"timestamp": "2026-05-07T10:00:00+07:00", "duration_ms": 6},
+          "data": {
+            "items": [
+              {
+                "estNum": 26001,
+                "accountCode": "TAAA",
+                "accountName": "Alpha Motors",
+                "flightStart": "2026-04-01",
+                "flightEnd": "2026-04-30",
+                "mediaType": "TV",
+                "buyer": "Elyse",
+                "note": "Prime time package",
+                "hasSchedule": true,
+                "broadcastMonths": [4, 5],
+                "broadcastYears": [2026]
+              }
+            ],
+            "total": 123,
+            "limit": 50,
+            "nextOffset": 50,
+            "nextCursor": "50"
+          }
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - At least one search filter is required: q, createdFrom, or createdTo
+        - q search matches estNum/accountCode/accountName/buyer/mediaType/note/flight dates
+        - q=today (case-insensitive) applies created-date filter for current date in timezone (default America/Chicago)
+        - createdFrom/createdTo must be ISO date YYYY-MM-DD when provided
+        - createdFrom must be on or before createdTo when both are provided
+        - limit must be between 1 and 200
+        - cursor/offset must be non-negative integers; cursor takes precedence when both are provided
+        - response includes hasSchedule and broadcastMonths/broadcastYears metadata
+    """
+    try:
+        return search_est_nums_data(
+            query=q,
+            limit=limit,
+            offset=offset,
+            cursor=cursor,
+            created_from=created_from,
+            created_to=created_to,
+            timezone=timezone,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("")

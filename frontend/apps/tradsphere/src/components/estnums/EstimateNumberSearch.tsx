@@ -50,6 +50,10 @@ export function EstimateNumberSearch({
         </Button>
       </div>
 
+      <p className="mt-2 text-xs text-slate-500">
+        Search by estimate number, account code, account name, buyer, media type, month/note, or year.
+      </p>
+      <p className="mt-1 text-xs text-slate-400">Tip: type &quot;today&quot; to find estimate numbers created today.</p>
       {resultText ? <p className="mt-2 text-xs text-slate-500">{resultText}</p> : null}
     </section>
   );
