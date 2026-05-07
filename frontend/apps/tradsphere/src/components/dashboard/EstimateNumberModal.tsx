@@ -60,6 +60,10 @@ export type EstimateNumberModalSaveResult = {
   mode: EstimateNumberModalMode;
   estNum: number;
   accountCode: string;
+  flightStart: string;
+  flightEnd: string;
+  mediaType: string;
+  buyer: string;
   note: string | null;
 };
 
@@ -369,6 +373,33 @@ function parseEstNumRow(payload: unknown, targetEstNum: number): EstimateNumberM
   };
 }
 
+function canUseInitialDataForEdit(initialData?: EstimateNumberModalData | null): boolean {
+  if (!initialData) {
+    return false;
+  }
+
+  const estNum = asNumber(initialData.estNum);
+  const accountCode = asString(initialData.accountCode).toUpperCase();
+  const flightStart = asString(initialData.flightStart);
+  const flightEnd = asString(initialData.flightEnd);
+  const mediaType = asString(initialData.mediaType).toUpperCase();
+  const buyer = asString(initialData.buyer);
+
+  const hasIsoDates =
+    /^\d{4}-\d{2}-\d{2}$/.test(flightStart) &&
+    /^\d{4}-\d{2}-\d{2}$/.test(flightEnd);
+
+  return (
+    estNum !== null &&
+    estNum >= 0 &&
+    estNum <= EST_NUM_MAX_UNSIGNED_INT &&
+    Boolean(accountCode) &&
+    hasIsoDates &&
+    Boolean(mediaType) &&
+    Boolean(buyer)
+  );
+}
+
 async function fetchEstNumDetail(
   requestJson: (url: string, options?: ApiRequestOptions) => Promise<unknown>,
   estNum: number,
@@ -496,11 +527,42 @@ export function EstimateNumberModal({
       return;
     }
 
-    // Edit mode keeps a loading shell until detail is fetched; do not pre-seed dates
-    // from partial initialData, otherwise close behavior incorrectly treats form as dirty.
+    // For search-result edits we often already have a full row payload.
+    // Reuse it directly and skip refetch unless user explicitly requests refresh.
+    if (!isManualRefresh && canUseInitialDataForEdit(initialData)) {
+      setForm(initialForm);
+      setOriginalForm(initialForm);
+      setHasAttemptedDetailLoad(true);
+      setIsLoadingDetail(false);
+      setIsRefreshingDetail(false);
+      setDetailCacheStatus({
+        source: "cache",
+        fetchedAt: Date.now(),
+      });
+      const estNum = asNumber(initialData?.estNum);
+      const normalizedAccountCode = asString(initialData?.accountCode).toUpperCase();
+      if (estNum !== null && normalizedAccountCode) {
+        writeBrowserCache(
+          `estnum-detail:${normalizedAccountCode}:${estNum}`,
+          {
+            estNum,
+            accountCode: normalizedAccountCode,
+            flightStart: asString(initialData?.flightStart),
+            flightEnd: asString(initialData?.flightEnd),
+            mediaType: asString(initialData?.mediaType).toUpperCase(),
+            buyer: asString(initialData?.buyer),
+            note: asString(initialData?.note) || null,
+          },
+          ESTNUM_DETAIL_CACHE_TTL_MS,
+          { source: "cache", fetchedAt: Date.now() },
+        );
+      }
+      return;
+    }
+
+    // Fallback for partial/stale payloads: fetch detail in edit mode.
     setForm(initialForm);
     setOriginalForm(null);
-
     setHasAttemptedDetailLoad(false);
     const estNum = initialData?.estNum;
     if (estNum === undefined || estNum === null) {
@@ -696,6 +758,10 @@ export function EstimateNumberModal({
         mode,
         estNum,
         accountCode: form.accountCode.trim().toUpperCase(),
+        flightStart: form.flightStart,
+        flightEnd: form.flightEnd,
+        mediaType: form.mediaType.trim().toUpperCase(),
+        buyer: form.buyer.trim(),
         note: form.note.trim() || null,
       });
       writeBrowserCache(

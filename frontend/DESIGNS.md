@@ -53,6 +53,9 @@
 - Desktop uses a floating rounded left sidebar (fixed position) with spacing from viewport edges.
 - The shell uses a mobile menu/drawer pattern on small screens.
 - Desktop sidebar is collapsible and should persist locally.
+- Manual collapse/expand remains the source of truth for saved sidebar preference.
+- When manually collapsed, desktop sidebar may temporarily expand on hover/focus for navigation preview.
+- Temporary hover/focus expansion must not update saved collapsed preference and must return to collapsed on mouse leave/blur.
 - Expanded desktop sidebar should show section label, app icons, app labels, active state, and optional `Soon` badges.
 - Collapsed desktop sidebar should be icon-only (no text labels and no leftover letter badges).
 - Sidebar remains fixed while page content scrolls independently.
@@ -262,17 +265,16 @@
 - Route: `/tradsphere/estnums`.
 - Sidebar hierarchy: `Tradsphere` is a parent app entry with child pages (`/tradsphere/home`, `/tradsphere/estnums`).
 - The page is search-first: do not pre-load all EstNums on initial render.
-- Default initial load should fetch only current year + previous year EstNums (not full historical records).
-- Use one primary search bar with lazy submit behavior (Enter/Search submit), not request-on-type.
-- Include subtle helper copy near search input describing supported search terms and keyword tips.
-- Do not silently interpret ambiguous submissions; require explicit user confirmation via in-app dialog/modal before request dispatch.
-- For 4-digit input (for example `2026`), offer explicit options: `Search by year` and `Search by EstNum`.
-- For month/year and quarter/year patterns (for example `6/26`, `Q1'26`), offer explicit options: structured period search vs text search.
-- Special keyword `today` must resolve to "created today" in TradSphere business timezone (America/Chicago) through backend search parameters, not frontend full-list filtering.
+- Do not run any default EstNum load on first render (no planning/current-quarter/current-year fallback fetches).
+- Use a multi-field lazy-submit form (Enter/Search) with: `Estimate Number`, `Account`, `Buyer`, `Media Type`, `Month / Note`, `Year`, `Quarter`, `Created today`.
+- Search is submit-only: no request-on-type and no debounced type-ahead search.
+- Empty submit (all fields empty + `Created today` off) should clear results and return to empty-state guidance.
+- `Created today` must resolve to backend created-date filtering in America/Chicago timezone, not client-side full-list filtering.
 - Prefer backend search with query + limit (+ cursor/offset when available); avoid client-side full-dataset filtering.
-- Cache default/search results by confirmed interpretation params (mode + values), not raw input alone, through shared frontend cache and use stale-while-revalidate.
-- Clearing the query and submitting should return to default current-year + previous-year results.
-- Provide a floating page cache-status chip; click refresh runs network-only for the current default/search context.
+- If current backend cannot express a multi-field combination efficiently, show a clear limitation and propose fielded backend search params instead of full-load fallback filtering.
+- Cache results by submitted form params (all fields included), not draft text; use stale-while-revalidate for the last submitted search only.
+- Clearing the form and submitting should clear search results (no default fallback load).
+- Provide a floating page cache-status chip only when submitted search results exist; refresh runs network-only for the last submitted search context.
 - Group search results by account/client first, then by period (for example year/quarter) when possible.
 - Scheduled EstNums should open the existing Schedule modal; unscheduled rows must keep normal visual style and simply not open schedules.
 - Add/Edit flows must reuse the existing EstimateNumberModal (create/edit modes), not a duplicated form implementation.

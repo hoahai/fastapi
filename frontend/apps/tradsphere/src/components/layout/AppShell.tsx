@@ -31,19 +31,40 @@ function readSidebarCollapsedState(): boolean {
 
 export function AppShell({ currentPath, onNavigate, children }: AppShellProps) {
   const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => readSidebarCollapsedState());
+  const [sidebarHoverExpanded, setSidebarHoverExpanded] = useState(false);
   const [mobileOpen, setMobileOpen] = useState(false);
+  const sidebarVisuallyExpanded = !sidebarCollapsed || sidebarHoverExpanded;
 
   useEffect(() => {
     try {
       window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, sidebarCollapsed ? "1" : "0");
       window.localStorage.removeItem(LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY);
-      window.dispatchEvent(
-        new CustomEvent<{ collapsed: boolean }>(SIDEBAR_COLLAPSED_EVENT, {
-          detail: { collapsed: sidebarCollapsed },
-        }),
-      );
     } catch {
       // Ignore storage write failures.
+    }
+  }, [sidebarCollapsed]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.dispatchEvent(
+      new CustomEvent<{ collapsed: boolean; hoverExpanded: boolean; visuallyExpanded: boolean }>(
+        SIDEBAR_COLLAPSED_EVENT,
+        {
+          detail: {
+            collapsed: sidebarCollapsed,
+            hoverExpanded: sidebarHoverExpanded,
+            visuallyExpanded: sidebarVisuallyExpanded,
+          },
+        },
+      ),
+    );
+  }, [sidebarCollapsed, sidebarHoverExpanded, sidebarVisuallyExpanded]);
+
+  useEffect(() => {
+    if (!sidebarCollapsed) {
+      setSidebarHoverExpanded(false);
     }
   }, [sidebarCollapsed]);
 
@@ -61,7 +82,17 @@ export function AppShell({ currentPath, onNavigate, children }: AppShellProps) {
         <Sidebar
           currentPath={currentPath}
           collapsed={sidebarCollapsed}
-          onToggleCollapsed={() => setSidebarCollapsed((value) => !value)}
+          visuallyExpanded={sidebarVisuallyExpanded}
+          onToggleCollapsed={() => {
+            setSidebarHoverExpanded(false);
+            setSidebarCollapsed((value) => !value);
+          }}
+          onHoverExpandedChange={(nextValue) => {
+            if (!sidebarCollapsed) {
+              return;
+            }
+            setSidebarHoverExpanded(nextValue);
+          }}
           onNavigate={onNavigate}
           mobileOpen={mobileOpen}
           onToggleMobile={() => setMobileOpen((value) => !value)}
@@ -72,7 +103,7 @@ export function AppShell({ currentPath, onNavigate, children }: AppShellProps) {
           className={cn(
             "space-y-6 pb-6 transition-[margin] duration-200",
             "lg:mr-6",
-            sidebarCollapsed ? "lg:ml-[6.5rem]" : "lg:ml-[18.75rem]",
+            sidebarVisuallyExpanded ? "lg:ml-[18.75rem]" : "lg:ml-[6.5rem]",
           )}
         >
           {children}

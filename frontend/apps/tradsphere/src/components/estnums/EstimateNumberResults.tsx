@@ -37,7 +37,7 @@ export function EstimateNumberResults({
     return (
       <EmptyPanel
         icon={<Search className="size-5 text-slate-400" />}
-        message="Search for an estimate number to begin."
+        message="Enter search criteria to find estimate numbers."
       />
     );
   }

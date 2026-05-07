@@ -35,6 +35,8 @@
 - All frontend pages/routes must render inside the shared app shell with the collapsible sidebar.
 - Sidebar navigation should support app child pages; TradSphere parent remains active for any `/tradsphere/*` child route.
 - Sidebar navigation state (collapsed/expanded) should persist across route navigation.
+- When sidebar is manually collapsed, desktop hover/focus may temporarily expand it for navigation, then revert on leave/blur.
+- Temporary hover/focus expansion must not overwrite the persisted collapsed/expanded preference.
 - Preserve useful page UI state across frontend navigation for workspace routes.
 - Use `localStorage` for durable preferences (for example: sidebar collapsed/expanded).
 - Use `sessionStorage` for page-specific navigation state (for example: selected account/id, search/filter/sort, section/tab, scroll position).
@@ -124,17 +126,15 @@
 
 ## Estimate Numbers Search Page
 - Keep `/tradsphere/estnums` as a dedicated search-first page for EstNums and schedules.
-- Do not load all EstNums on page open; default load should include only current year + previous year.
-- Use one main search input with lazy submit (Enter/Search button), not request-on-type.
-- Show subtle search-help text near the input to explain supported terms.
-- Do not silently guess ambiguous input intent; require user confirmation before running ambiguous searches.
-- For 4-digit input (for example `2026`), show a confirmation dialog with explicit options (`Search by year` vs `Search by EstNum`).
-- For month/year and quarter/year patterns (for example `6/26`, `Q1'26`), show a confirmation dialog (`structured period search` vs `text search`).
+- Do not run any default EstNum search when the page opens (no auto load for planning/current quarter/year windows).
+- Use explicit multi-field form submit only (Enter/Search), never request-on-type and never debounce-while-typing behavior.
+- Search form fields should include: `Estimate Number`, `Account`, `Buyer`, `Media Type`, `Month / Note`, `Year`, `Quarter`, and `Created today`.
+- Empty submit (all fields blank and `Created today` off) should clear results and return to empty-state guidance.
+- `Created today` must be an explicit form option and must use America/Chicago date semantics through backend filters.
 - Prefer backend search/paginated APIs (`q/query + limit + cursor/offset`) and avoid full client-side scans.
-- Special keyword `today` must be backend-search-driven for "created today" in America/Chicago; do not implement `today` by loading all EstNums client-side.
-- If backend text search is unavailable, do not implement a full-load fallback; show a clear limitation and propose the backend endpoint.
-- Cache EstNum default/search responses by confirmed interpretation params (mode + values), not only raw text, via shared frontend cache with stale-while-revalidate behavior.
-- Include page-level floating cache-status chip; refresh should run network-only for current submitted query/default context only.
+- If backend cannot support a multi-field combination in one efficient query, do not fake it with full-load client filtering; show the limitation and propose a fielded backend search endpoint.
+- Cache EstNum results only for submitted searches, keyed by all submitted search fields; draft edits must not overwrite the active submitted-result context.
+- Include page-level floating cache-status chip only after search results exist; refresh runs network-only for the last submitted search context.
 - Group search results by account first and then by period grouping (year/quarter) when practical.
 - Scheduled EstNums open the existing `ScheduleModal`; unscheduled EstNums must remain visually normal and non-opening.
 - Add/Edit actions must reuse `EstimateNumberModal` create/edit modes.

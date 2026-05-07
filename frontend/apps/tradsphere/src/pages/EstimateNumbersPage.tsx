@@ -1,10 +1,10 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle } from "lucide-react";
+import { AlertCircle, Loader2 } from "lucide-react";
 
 import { EstimateNumberResults } from "@/components/estnums/EstimateNumberResults";
 import {
   EstimateNumberSearch,
-  type EstimateNumberSearchInterpretationOption,
+  type EstimateNumberSearchFormValues,
 } from "@/components/estnums/EstimateNumberSearch";
 import type { EstimateAccountGroup, EstimateSearchItem, EstimateSearchPage } from "@/components/estnums/types";
 import {
@@ -14,7 +14,7 @@ import {
   type EstimateNumberModalSaveResult,
 } from "@/components/dashboard/EstimateNumberModal";
 import { ScheduleModal } from "@/components/dashboard/ScheduleModal";
-import type { EsnumItem } from "@/components/dashboard/types";
+import type { AccountSelection, EsnumItem } from "@/components/dashboard/types";
 import { PageBanner } from "@/components/layout/PageBanner";
 import { AppDropdown } from "@/components/ui/app-dropdown";
 import { Button } from "@/components/ui/button";
@@ -26,18 +26,23 @@ import {
   removeBrowserCacheByPrefix,
   writeBrowserCache,
 } from "@/lib/browserCache";
-import { shouldFetchNetwork, type CachePolicy } from "@shared/cache";
+import {
+  TRADSPHERE_CACHE_TTL_MS,
+  shouldFetchNetwork,
+  type CachePolicy,
+} from "@shared/cache";
 
 const SEARCH_LIMIT = 50;
-const SEARCH_MIN_TEXT_LENGTH = 3;
 const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
 const SEARCH_TIMEZONE = "America/Chicago";
-const ESTNUMS_PAGE_CACHE_VERSION = "v3";
+const ESTNUMS_PAGE_CACHE_VERSION = "v4";
+const SELECTIONS_CACHE_KEY = "tradsphere:main:selections:v2";
+const SELECTIONS_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.SELECTIONS;
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspace.sidebar.collapsed";
 const LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY = "tradsphere:ui:sidebarCollapsed:v1";
 const SIDEBAR_COLLAPSED_EVENT = "workspace-sidebar-collapsed-change";
 
-type SearchUiState = "idle" | "min-query" | "loading" | "ready" | "empty" | "error";
+type SearchUiState = "idle" | "loading" | "ready" | "empty" | "error";
 
 type CacheStatus = {
   source: "cache" | "network";
@@ -55,62 +60,44 @@ type SearchLoadOptions = {
   append: boolean;
 };
 
-type ConfirmedSearchParams =
-  | { mode: "default" }
-  | { mode: "today"; raw: string }
-  | { mode: "text"; raw: string }
-  | { mode: "estnum"; estNum: string; raw: string }
-  | { mode: "year"; year: number; raw: string }
-  | { mode: "month-year"; year: number; month: number; raw: string }
-  | { mode: "quarter-year"; year: number; quarter: number; raw: string };
+type SearchPlan =
+  | {
+      type: "list";
+      query: string;
+    }
+  | {
+      type: "search";
+      query: string;
+      includeCreatedToday: boolean;
+    };
 
-type PendingSearchInterpretation = {
-  raw: string;
-  options: Array<EstimateNumberSearchInterpretationOption & { params: ConfirmedSearchParams }>;
+type SubmittedSearch = {
+  params: EstimateNumberSearchFormValues;
+  plan: SearchPlan;
+  cacheKey: string;
 };
 
-const MONTH_BY_NAME: Record<string, number> = {
-  jan: 1,
-  january: 1,
-  feb: 2,
-  february: 2,
-  mar: 3,
-  march: 3,
-  apr: 4,
-  april: 4,
-  may: 5,
-  jun: 6,
-  june: 6,
-  jul: 7,
-  july: 7,
-  aug: 8,
-  august: 8,
-  sep: 9,
-  sept: 9,
-  september: 9,
-  oct: 10,
-  october: 10,
-  nov: 11,
-  november: 11,
-  dec: 12,
-  december: 12,
-};
+type BuildSearchPlanResult =
+  | {
+      ok: true;
+      submitted: SubmittedSearch;
+    }
+  | {
+      ok: false;
+      clearResults: boolean;
+      message: string;
+    };
 
-const MONTH_FULL_LABELS = [
-  "",
-  "January",
-  "February",
-  "March",
-  "April",
-  "May",
-  "June",
-  "July",
-  "August",
-  "September",
-  "October",
-  "November",
-  "December",
-];
+const INITIAL_SEARCH_FORM: EstimateNumberSearchFormValues = {
+  estimateNumber: "",
+  account: "",
+  buyer: "",
+  note: "",
+  months: [],
+  year: "",
+  quarter: "",
+  createdToday: false,
+};
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -185,196 +172,6 @@ function getErrorMessage(error: unknown, fallback: string): string {
     return error.message.trim();
   }
   return fallback;
-}
-
-function normalizeQueryKey(query: string): string {
-  return query.trim().toLowerCase();
-}
-
-function isFourDigitYearQuery(query: string): boolean {
-  return /^\d{4}$/.test(query.trim());
-}
-
-function isExactEstNumQuery(query: string): boolean {
-  return /^\d+$/.test(query.trim());
-}
-
-function parseYearSearchQuery(query: string): number | null {
-  const match = query.trim().match(/^year\s*:\s*(\d{4})$/i);
-  if (!match) {
-    return null;
-  }
-  const parsed = Number(match[1]);
-  if (!Number.isFinite(parsed)) {
-    return null;
-  }
-  return Math.trunc(parsed);
-}
-
-function normalizeYearToken(value: string): number | null {
-  const trimmed = value.trim();
-  if (!/^\d{2}(\d{2})?$/.test(trimmed)) {
-    return null;
-  }
-  if (trimmed.length === 4) {
-    const parsed = Number(trimmed);
-    if (parsed >= 1901 && parsed <= 2155) {
-      return parsed;
-    }
-    return null;
-  }
-  const twoDigit = Number(trimmed);
-  const normalized = 2000 + twoDigit;
-  if (normalized >= 1901 && normalized <= 2155) {
-    return normalized;
-  }
-  return null;
-}
-
-function parseMonthYearQuery(query: string): { month: number; year: number } | null {
-  const compact = query.trim();
-  if (!compact) {
-    return null;
-  }
-
-  const monthNameMatch = compact.match(/^([a-zA-Z]+)\s+(\d{2}|\d{4})$/);
-  if (monthNameMatch) {
-    const month = MONTH_BY_NAME[monthNameMatch[1].toLowerCase()];
-    const year = normalizeYearToken(monthNameMatch[2]);
-    if (month && year !== null) {
-      return { month, year };
-    }
-  }
-
-  const slashMatch = compact.match(/^(\d{1,2})\s*\/\s*(\d{2}|\d{4})$/);
-  if (slashMatch) {
-    const month = Number(slashMatch[1]);
-    const year = normalizeYearToken(slashMatch[2]);
-    if (month >= 1 && month <= 12 && year !== null) {
-      return { month, year };
-    }
-  }
-
-  return null;
-}
-
-function parseQuarterYearQuery(query: string): { quarter: number; year: number } | null {
-  const compact = query.trim();
-  if (!compact) {
-    return null;
-  }
-
-  const quarterLeadingMatch = compact.match(/^q([1-4])(?:\s*['’]\s*|\s+)(\d{2}|\d{4})$/i);
-  if (quarterLeadingMatch) {
-    const quarter = Number(quarterLeadingMatch[1]);
-    const year = normalizeYearToken(quarterLeadingMatch[2]);
-    if (year !== null) {
-      return { quarter, year };
-    }
-  }
-
-  const yearLeadingMatch = compact.match(/^(\d{2}|\d{4})(?:\s*['’]\s*|\s+)q([1-4])$/i);
-  if (yearLeadingMatch) {
-    const year = normalizeYearToken(yearLeadingMatch[1]);
-    const quarter = Number(yearLeadingMatch[2]);
-    if (year !== null) {
-      return { quarter, year };
-    }
-  }
-
-  return null;
-}
-
-function isTodayQuery(query: string): boolean {
-  return normalizeQueryKey(query) === "today";
-}
-
-function formatMonthYearLabel(month: number, year: number): string {
-  const monthLabel = MONTH_FULL_LABELS[month] || `Month ${month}`;
-  return `${monthLabel} ${year}`;
-}
-
-function buildSearchInterpretationOptions(query: string): PendingSearchInterpretation["options"] {
-  const trimmed = query.trim();
-  if (!trimmed || isTodayQuery(trimmed)) {
-    return [];
-  }
-
-  if (isFourDigitYearQuery(trimmed)) {
-    return [
-      {
-        id: "year",
-        label: `Search by year "${trimmed}"`,
-        description: `Fetch all estimate numbers in broadcast year ${trimmed}.`,
-        params: { mode: "year", year: Number(trimmed), raw: trimmed },
-      },
-      {
-        id: "estnum",
-        label: `Search by EstNum "${trimmed}"`,
-        description: `Fetch the exact estimate number ${trimmed}.`,
-        params: { mode: "estnum", estNum: trimmed, raw: trimmed },
-      },
-    ];
-  }
-
-  const monthYear = parseMonthYearQuery(trimmed);
-  if (monthYear) {
-    return [
-      {
-        id: "month-year",
-        label: `Search by month/year "${formatMonthYearLabel(monthYear.month, monthYear.year)}"`,
-        description: "Use broadcast month and year filters.",
-        params: { mode: "month-year", year: monthYear.year, month: monthYear.month, raw: trimmed },
-      },
-      {
-        id: "text",
-        label: `Search as text "${trimmed}"`,
-        description: "Run a general text search across estimate fields.",
-        params: { mode: "text", raw: trimmed },
-      },
-    ];
-  }
-
-  const quarterYear = parseQuarterYearQuery(trimmed);
-  if (quarterYear) {
-    return [
-      {
-        id: "quarter-year",
-        label: `Search by quarter "Q${quarterYear.quarter} ${quarterYear.year}"`,
-        description: "Use broadcast quarter and year filters.",
-        params: { mode: "quarter-year", year: quarterYear.year, quarter: quarterYear.quarter, raw: trimmed },
-      },
-      {
-        id: "text",
-        label: `Search as text "${trimmed}"`,
-        description: "Run a general text search across estimate fields.",
-        params: { mode: "text", raw: trimmed },
-      },
-    ];
-  }
-
-  return [];
-}
-
-function toConfirmedSearchParams(query: string): ConfirmedSearchParams {
-  const trimmed = query.trim();
-  if (!trimmed) {
-    return { mode: "default" };
-  }
-  if (isTodayQuery(trimmed)) {
-    return { mode: "today", raw: trimmed };
-  }
-
-  const explicitYear = parseYearSearchQuery(trimmed);
-  if (explicitYear !== null) {
-    return { mode: "year", year: explicitYear, raw: trimmed };
-  }
-
-  if (isExactEstNumQuery(trimmed)) {
-    return { mode: "estnum", estNum: trimmed, raw: trimmed };
-  }
-
-  return { mode: "text", raw: trimmed };
 }
 
 function isSearchEndpointMissing(error: unknown): boolean {
@@ -558,6 +355,88 @@ function parseAccountDirectory(payload: unknown): AccountDirectoryItem[] {
   return output.sort((a, b) => a.accountCode.localeCompare(b.accountCode));
 }
 
+function buildSelectionLabel(code: string, name: string): string {
+  if (code && name) {
+    return `${code} - ${name}`;
+  }
+  return code || name;
+}
+
+function normalizeSelectionsResponse(payload: unknown): AccountSelection[] {
+  const data = unwrapData(payload);
+  if (!Array.isArray(data)) {
+    return [];
+  }
+
+  const output: AccountSelection[] = [];
+  const seen = new Set<string>();
+
+  for (const item of data) {
+    if (!isRecord(item)) {
+      continue;
+    }
+
+    const accountCode = asString(item.code ?? item.accountCode ?? item.value).toUpperCase();
+    const name = asString(item.name);
+    const label = asString(item.label) || buildSelectionLabel(accountCode, name);
+
+    if (!accountCode || !label || seen.has(accountCode)) {
+      continue;
+    }
+
+    seen.add(accountCode);
+    output.push({ accountCode, label, name: name || undefined });
+  }
+
+  return output;
+}
+
+function accountDirectoryFromSelections(selections: AccountSelection[]): AccountDirectoryItem[] {
+  return selections
+    .map((selection) => ({
+      accountCode: selection.accountCode.toUpperCase(),
+      name: asString(selection.name),
+      billingType: null,
+    }))
+    .sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+}
+
+function mergeDirectoryWithBillingTypes(
+  baseDirectory: AccountDirectoryItem[],
+  billingDirectory: AccountDirectoryItem[],
+): AccountDirectoryItem[] {
+  const merged = new Map<string, AccountDirectoryItem>();
+
+  for (const item of baseDirectory) {
+    const code = item.accountCode.toUpperCase();
+    merged.set(code, {
+      accountCode: code,
+      name: item.name || "",
+      billingType: item.billingType ?? null,
+    });
+  }
+
+  for (const item of billingDirectory) {
+    const code = item.accountCode.toUpperCase();
+    const existing = merged.get(code);
+    if (existing) {
+      merged.set(code, {
+        accountCode: code,
+        name: existing.name || item.name || "",
+        billingType: item.billingType ?? existing.billingType ?? null,
+      });
+      continue;
+    }
+    merged.set(code, {
+      accountCode: code,
+      name: item.name || "",
+      billingType: item.billingType ?? null,
+    });
+  }
+
+  return [...merged.values()].sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+}
+
 function parseEstimateItem(
   row: Record<string, unknown>,
   accountDirectoryByCode: Record<string, AccountDirectoryItem>,
@@ -709,38 +588,179 @@ function formatRelativeTime(timestamp: number): string {
   return `${days} day${days > 1 ? "s" : ""} ago`;
 }
 
-function getCurrentYearInChicago(): number {
-  const formatter = new Intl.DateTimeFormat("en-US", {
-    timeZone: SEARCH_TIMEZONE,
-    year: "numeric",
-  });
-  const year = Number(formatter.format(new Date()));
-  return Number.isFinite(year) ? year : new Date().getFullYear();
+function encodeKeyPart(value: string): string {
+  return encodeURIComponent(value.trim().toLowerCase());
 }
 
-function buildSearchCacheKey(
-  confirmedSearch: ConfirmedSearchParams,
-  currentYear: number,
-  previousYear: number,
-): string {
-  switch (confirmedSearch.mode) {
-    case "default":
-      return `estnums:default:${previousYear}:${currentYear}:limit=${SEARCH_LIMIT}:${ESTNUMS_PAGE_CACHE_VERSION}`;
-    case "today":
-      return `estnums:search:today:tz=${SEARCH_TIMEZONE}:limit=${SEARCH_LIMIT}:${ESTNUMS_PAGE_CACHE_VERSION}`;
-    case "text":
-      return `estnums:search:text:${encodeURIComponent(normalizeQueryKey(confirmedSearch.raw))}:limit=${SEARCH_LIMIT}:${ESTNUMS_PAGE_CACHE_VERSION}`;
-    case "estnum":
-      return `estnums:search:estnum:${encodeURIComponent(confirmedSearch.estNum)}:${ESTNUMS_PAGE_CACHE_VERSION}`;
-    case "year":
-      return `estnums:search:year:${confirmedSearch.year}:${ESTNUMS_PAGE_CACHE_VERSION}`;
-    case "month-year":
-      return `estnums:search:month:${confirmedSearch.year}-${String(confirmedSearch.month).padStart(2, "0")}:${ESTNUMS_PAGE_CACHE_VERSION}`;
-    case "quarter-year":
-      return `estnums:search:quarter:${confirmedSearch.year}-Q${confirmedSearch.quarter}:${ESTNUMS_PAGE_CACHE_VERSION}`;
-    default:
-      return `estnums:search:unknown:${ESTNUMS_PAGE_CACHE_VERSION}`;
+function buildSearchCacheKey(params: EstimateNumberSearchFormValues): string {
+  const normalizedMonths = [...params.months].map((value) => value.trim()).filter(Boolean).sort((a, b) => Number(a) - Number(b));
+  return [
+    "estnums:form-search",
+    `estnum=${encodeKeyPart(params.estimateNumber)}`,
+    `account=${encodeKeyPart(params.account)}`,
+    `buyer=${encodeKeyPart(params.buyer)}`,
+    `note=${encodeKeyPart(params.note)}`,
+    `months=${encodeKeyPart(normalizedMonths.join(","))}`,
+    `year=${encodeKeyPart(params.year)}`,
+    `quarter=${encodeKeyPart(params.quarter)}`,
+    `today=${params.createdToday ? "1" : "0"}`,
+    ESTNUMS_PAGE_CACHE_VERSION,
+  ].join(":");
+}
+
+function normalizeSearchText(value: string | null | undefined): string {
+  return (value ?? "").trim().toLowerCase();
+}
+
+function isEstimateItemMatchTextQuery(item: EstimateSearchItem, query: string): boolean {
+  const normalizedQuery = normalizeSearchText(query);
+  if (!normalizedQuery) {
+    return true;
   }
+  const candidates = [
+    String(item.estNum),
+    item.accountCode,
+    item.accountName ?? "",
+    item.buyer ?? "",
+    item.note ?? "",
+    item.mediaType ?? "",
+  ].map((value) => normalizeSearchText(value));
+  return candidates.some((value) => value.includes(normalizedQuery));
+}
+
+function isEstimateItemMatchListQuery(item: EstimateSearchItem, query: string): boolean {
+  if (!query) {
+    return true;
+  }
+  const params = new URLSearchParams(query);
+
+  const estNumParam = params.get("estNum");
+  if (estNumParam) {
+    const estNum = Number(estNumParam);
+    if (!Number.isFinite(estNum) || item.estNum !== Math.trunc(estNum)) {
+      return false;
+    }
+  }
+
+  const accountCodeParam = asString(params.get("accountCode")).toUpperCase();
+  if (accountCodeParam && item.accountCode.toUpperCase() !== accountCodeParam) {
+    return false;
+  }
+
+  const yearParam = params.get("year");
+  if (yearParam) {
+    const year = Number(yearParam);
+    if (!Number.isFinite(year) || (item.year ?? null) !== Math.trunc(year)) {
+      return false;
+    }
+  }
+
+  const quarterParam = params.get("quarter");
+  if (quarterParam) {
+    const quarter = Number(quarterParam);
+    if (!Number.isFinite(quarter) || (item.quarter ?? null) !== Math.trunc(quarter)) {
+      return false;
+    }
+  }
+
+  const monthParam = params.get("month");
+  if (monthParam) {
+    const month = Number(monthParam);
+    if (!Number.isFinite(month) || (item.month ?? null) !== Math.trunc(month)) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function isEstimateItemMatchSubmittedSearch(item: EstimateSearchItem, submitted: SubmittedSearch): boolean {
+  if (submitted.plan.type === "list") {
+    return isEstimateItemMatchListQuery(item, submitted.plan.query);
+  }
+  const params = new URLSearchParams(submitted.plan.query);
+  const query = asString(params.get("q"));
+  return isEstimateItemMatchTextQuery(item, query);
+}
+
+function toEstimateSearchItemFromSaveResult(
+  result: EstimateNumberModalSaveResult,
+  accountDirectoryByCode: Record<string, AccountDirectoryItem>,
+): EstimateSearchItem {
+  const accountCode = result.accountCode.trim().toUpperCase();
+  const accountName = accountDirectoryByCode[accountCode]?.name || null;
+  return withDerivedPeriod({
+    estNum: result.estNum,
+    accountCode,
+    accountName,
+    buyer: result.buyer || null,
+    mediaType: result.mediaType || null,
+    note: result.note || null,
+    hasSchedule: false,
+    flightStart: result.flightStart || null,
+    flightEnd: result.flightEnd || null,
+    year: null,
+    quarter: null,
+    month: null,
+    broadcastYears: [],
+    broadcastMonths: [],
+  });
+}
+
+function applySavedEstimateToPage(
+  currentPage: EstimateSearchPage | null,
+  submitted: SubmittedSearch,
+  result: EstimateNumberModalSaveResult,
+  accountDirectoryByCode: Record<string, AccountDirectoryItem>,
+): EstimateSearchPage | null {
+  const savedItem = toEstimateSearchItemFromSaveResult(result, accountDirectoryByCode);
+  const shouldInclude = isEstimateItemMatchSubmittedSearch(savedItem, submitted);
+  const basePage = currentPage ?? {
+    items: [],
+    total: 0,
+    limit: SEARCH_LIMIT,
+    nextCursor: null,
+    nextOffset: null,
+    backendMode: submitted.plan.type === "search" ? "search" : ("legacy-exact" as const),
+  };
+
+  const currentItems = [...basePage.items];
+  const existingIndex = currentItems.findIndex(
+    (item) =>
+      item.estNum === result.estNum &&
+      item.accountCode.toUpperCase() === result.accountCode.trim().toUpperCase(),
+  );
+  const existingItem = existingIndex >= 0 ? currentItems[existingIndex] : null;
+
+  let nextItems = currentItems;
+  let nextTotal = basePage.total;
+
+  if (existingIndex >= 0) {
+    if (shouldInclude) {
+      const mergedItem: EstimateSearchItem = {
+        ...existingItem,
+        ...savedItem,
+        hasSchedule: existingItem?.hasSchedule ?? false,
+      };
+      nextItems[existingIndex] = mergedItem;
+    } else {
+      nextItems.splice(existingIndex, 1);
+      if (nextTotal !== null) {
+        nextTotal = Math.max(0, nextTotal - 1);
+      }
+    }
+  } else if (shouldInclude) {
+    nextItems = [...nextItems, savedItem];
+    if (nextTotal !== null) {
+      nextTotal += 1;
+    }
+  }
+
+  return {
+    ...basePage,
+    items: sortItems(nextItems),
+    total: nextTotal,
+  };
 }
 
 function readSidebarCollapsedState(): boolean {
@@ -797,22 +817,390 @@ function withDirectoryAccountNames(
   };
 }
 
+function parseYear(value: string): number | null {
+  const trimmed = value.trim();
+  if (!trimmed) {
+    return null;
+  }
+  if (!/^\d{4}$/.test(trimmed)) {
+    return null;
+  }
+  const parsed = Number(trimmed);
+  if (!Number.isFinite(parsed) || parsed < 1901 || parsed > 2155) {
+    return null;
+  }
+  return Math.trunc(parsed);
+}
+
+function parseQuarter(value: string): number | null {
+  const trimmed = value.trim().toUpperCase();
+  if (!trimmed) {
+    return null;
+  }
+  const matched = trimmed.match(/^Q?([1-4])$/);
+  if (!matched) {
+    return null;
+  }
+  const parsed = Number(matched[1]);
+  return Number.isFinite(parsed) ? parsed : null;
+}
+
+function looksLikeAccountCode(value: string): boolean {
+  return /^[A-Za-z0-9_-]+$/.test(value.trim());
+}
+
+function normalizeDraft(draft: EstimateNumberSearchFormValues): EstimateNumberSearchFormValues {
+  return {
+    estimateNumber: draft.estimateNumber.trim(),
+    account: draft.account.trim(),
+    buyer: draft.buyer.trim(),
+    note: draft.note.trim(),
+    months: [...draft.months].map((value) => value.trim()).filter((value) => /^\d{1,2}$/.test(value)),
+    year: draft.year.trim(),
+    quarter: draft.quarter.trim().toUpperCase(),
+    createdToday: Boolean(draft.createdToday),
+  };
+}
+
+function toQuarterLabel(quarter: number): string {
+  return `Q${quarter}`;
+}
+
+function getTodayIsoInTimezone(timeZone: string): string {
+  const parts = new Intl.DateTimeFormat("en-CA", {
+    timeZone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).formatToParts(new Date());
+  const year = parts.find((part) => part.type === "year")?.value ?? "";
+  const month = parts.find((part) => part.type === "month")?.value ?? "";
+  const day = parts.find((part) => part.type === "day")?.value ?? "";
+  if (year && month && day) {
+    return `${year}-${month}-${day}`;
+  }
+  return new Date().toISOString().slice(0, 10);
+}
+
+function buildSearchPlan(draft: EstimateNumberSearchFormValues): BuildSearchPlanResult {
+  const normalized = normalizeDraft(draft);
+  const selectedMonths = Array.from(
+    new Set(
+      normalized.months
+        .map((value) => Number(value))
+        .filter((value) => Number.isFinite(value) && value >= 1 && value <= 12)
+        .map((value) => Math.trunc(value)),
+    ),
+  ).sort((a, b) => a - b);
+
+  const hasAnyInput =
+    Boolean(normalized.estimateNumber) ||
+    Boolean(normalized.account) ||
+    Boolean(normalized.buyer) ||
+    Boolean(normalized.note) ||
+    selectedMonths.length > 0 ||
+    Boolean(normalized.year) ||
+    Boolean(normalized.quarter) ||
+    normalized.createdToday;
+
+  if (!hasAnyInput) {
+    return {
+      ok: false,
+      clearResults: true,
+      message: "Enter at least one field or enable Created today.",
+    };
+  }
+
+  const yearValue = normalized.year ? parseYear(normalized.year) : null;
+  if (normalized.year && yearValue === null) {
+    return {
+      ok: false,
+      clearResults: false,
+      message: "Year must be a 4-digit value between 1901 and 2155.",
+    };
+  }
+
+  const quarterValue = normalized.quarter ? parseQuarter(normalized.quarter) : null;
+  if (normalized.quarter && quarterValue === null) {
+    return {
+      ok: false,
+      clearResults: false,
+      message: "Quarter must be Q1, Q2, Q3, or Q4.",
+    };
+  }
+  if (quarterValue !== null && yearValue === null) {
+    return {
+      ok: false,
+      clearResults: false,
+      message: "Quarter search requires Year.",
+    };
+  }
+  if (selectedMonths.length > 0 && yearValue === null) {
+    return {
+      ok: false,
+      clearResults: false,
+      message: "Months search requires Year.",
+    };
+  }
+  if (quarterValue !== null && selectedMonths.length > 0) {
+    for (const monthValue of selectedMonths) {
+      const derivedQuarter = Math.floor((monthValue - 1) / 3) + 1;
+      if (derivedQuarter !== quarterValue) {
+        return {
+          ok: false,
+          clearResults: false,
+          message: `Month ${monthValue} does not belong to ${toQuarterLabel(quarterValue)}.`,
+        };
+      }
+    }
+  }
+
+  const estimateExact = /^\d+$/.test(normalized.estimateNumber);
+  const accountExact = looksLikeAccountCode(normalized.account);
+
+  const periodUsed = yearValue !== null || quarterValue !== null || selectedMonths.length > 0;
+
+  const textFields: string[] = [];
+  if (normalized.estimateNumber && !estimateExact) {
+    textFields.push(normalized.estimateNumber);
+  }
+  if (normalized.account && !accountExact) {
+    textFields.push(normalized.account);
+  }
+  if (normalized.buyer) {
+    textFields.push(normalized.buyer);
+  }
+  if (normalized.note) {
+    textFields.push(normalized.note);
+  }
+
+  if (periodUsed) {
+    if (normalized.createdToday) {
+      return {
+        ok: false,
+        clearResults: false,
+        message:
+          "Created today cannot be combined with Year, Quarter, or structured Month using the current backend search API.",
+      };
+    }
+
+    if (textFields.length > 0) {
+      return {
+        ok: false,
+        clearResults: false,
+        message:
+          "This combination needs fielded backend search (period + text filters). Current APIs cannot apply them together in one efficient query.",
+      };
+    }
+    if (selectedMonths.length > 1) {
+      return {
+        ok: false,
+        clearResults: false,
+        message:
+          "Current backend list API supports one month per request. Multiple month selection needs a backend multi-month search endpoint.",
+      };
+    }
+
+    if (normalized.estimateNumber && !estimateExact) {
+      return {
+        ok: false,
+        clearResults: false,
+        message: "Estimate Number must be numeric when used with period filters.",
+      };
+    }
+
+    if (normalized.account && !accountExact) {
+      return {
+        ok: false,
+        clearResults: false,
+        message: "Account must be an account code when used with period filters.",
+      };
+    }
+
+    const params = new URLSearchParams();
+    if (estimateExact && normalized.estimateNumber) {
+      params.set("estNum", normalized.estimateNumber);
+    }
+    if (normalized.account) {
+      params.set("accountCode", normalized.account.toUpperCase());
+    }
+    if (yearValue !== null) {
+      params.set("year", String(yearValue));
+    }
+    if (selectedMonths.length === 1) {
+      params.set("month", String(selectedMonths[0]));
+    }
+    if (quarterValue !== null) {
+      params.set("quarter", String(quarterValue));
+    }
+
+    return {
+      ok: true,
+      submitted: {
+        params: normalized,
+        cacheKey: buildSearchCacheKey(normalized),
+        plan: {
+          type: "list",
+          query: params.toString(),
+        },
+      },
+    };
+  }
+
+  if (normalized.createdToday) {
+    const todayTokens: string[] = [];
+    if (normalized.estimateNumber) {
+      todayTokens.push(normalized.estimateNumber);
+    }
+    if (normalized.account) {
+      todayTokens.push(normalized.account);
+    }
+    if (normalized.buyer) {
+      todayTokens.push(normalized.buyer);
+    }
+    if (normalized.note) {
+      todayTokens.push(normalized.note);
+    }
+
+    if (todayTokens.length > 1) {
+      return {
+        ok: false,
+        clearResults: false,
+        message:
+          "Current backend search accepts a single text query with Created today. Multiple text fields need a fielded search endpoint.",
+      };
+    }
+
+    const params = new URLSearchParams();
+    if (todayTokens[0]) {
+      params.set("q", todayTokens[0]);
+    }
+    params.set("limit", String(SEARCH_LIMIT));
+    params.set("timezone", SEARCH_TIMEZONE);
+
+    return {
+      ok: true,
+      submitted: {
+        params: normalized,
+        cacheKey: buildSearchCacheKey(normalized),
+        plan: {
+          type: "search",
+          query: params.toString(),
+          includeCreatedToday: true,
+        },
+      },
+    };
+  }
+
+  const hasFuzzyText = Boolean(normalized.buyer || normalized.note);
+
+  if (hasFuzzyText) {
+    const fuzzyTokens: string[] = [];
+    if (normalized.estimateNumber) {
+      fuzzyTokens.push(normalized.estimateNumber);
+    }
+    if (normalized.account) {
+      fuzzyTokens.push(normalized.account);
+    }
+    if (normalized.buyer) {
+      fuzzyTokens.push(normalized.buyer);
+    }
+    if (normalized.note) {
+      fuzzyTokens.push(normalized.note);
+    }
+
+    if (fuzzyTokens.length > 1) {
+      return {
+        ok: false,
+        clearResults: false,
+        message:
+          "Current backend search accepts a single text query. Multiple text fields need a fielded search endpoint.",
+      };
+    }
+
+    const params = new URLSearchParams();
+    params.set("q", fuzzyTokens[0] || "");
+    params.set("limit", String(SEARCH_LIMIT));
+
+    return {
+      ok: true,
+      submitted: {
+        params: normalized,
+        cacheKey: buildSearchCacheKey(normalized),
+        plan: {
+          type: "search",
+          query: params.toString(),
+          includeCreatedToday: false,
+        },
+      },
+    };
+  }
+
+  if ((normalized.estimateNumber && !estimateExact) || (normalized.account && !accountExact)) {
+    const singleText = normalized.estimateNumber || normalized.account;
+    const bothFilled = Boolean(normalized.estimateNumber && normalized.account);
+    if (bothFilled) {
+      return {
+        ok: false,
+        clearResults: false,
+        message:
+          "Current backend search accepts one text query at a time. Estimate Number + Account text combination needs a fielded search endpoint.",
+      };
+    }
+    const params = new URLSearchParams();
+    params.set("q", singleText);
+    params.set("limit", String(SEARCH_LIMIT));
+
+    return {
+      ok: true,
+      submitted: {
+        params: normalized,
+        cacheKey: buildSearchCacheKey(normalized),
+        plan: {
+          type: "search",
+          query: params.toString(),
+          includeCreatedToday: false,
+        },
+      },
+    };
+  }
+
+  const listParams = new URLSearchParams();
+  if (normalized.estimateNumber) {
+    listParams.set("estNum", normalized.estimateNumber);
+  }
+  if (normalized.account) {
+    listParams.set("accountCode", normalized.account.toUpperCase());
+  }
+
+  return {
+    ok: true,
+    submitted: {
+      params: normalized,
+      cacheKey: buildSearchCacheKey(normalized),
+      plan: {
+        type: "list",
+        query: listParams.toString(),
+      },
+    },
+  };
+}
+
 export default function EstimateNumbersPage() {
   const toast = useToast();
   const { requestJson } = useApiRequest();
   const requestHeaders = useMemo(() => buildAuthHeaders(false), []);
-  const currentYear = useMemo(() => getCurrentYearInChicago(), []);
-  const previousYear = currentYear - 1;
 
   const [accountDirectory, setAccountDirectory] = useState<AccountDirectoryItem[]>([]);
-  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => readSidebarCollapsedState());
+  const [isLoadingAccountSelections, setIsLoadingAccountSelections] = useState(true);
+  const [sidebarVisuallyExpanded, setSidebarVisuallyExpanded] = useState<boolean>(() => !readSidebarCollapsedState());
 
-  const [inputDraft, setInputDraft] = useState("");
-  const [confirmedSearch, setConfirmedSearch] = useState<ConfirmedSearchParams>({ mode: "default" });
-  const [pendingInterpretation, setPendingInterpretation] = useState<PendingSearchInterpretation | null>(null);
+  const [draft, setDraft] = useState<EstimateNumberSearchFormValues>(INITIAL_SEARCH_FORM);
+  const [submittedSearch, setSubmittedSearch] = useState<SubmittedSearch | null>(null);
   const [submissionVersion, setSubmissionVersion] = useState(0);
+  const [searchMessage, setSearchMessage] = useState<string | null>(null);
 
-  const [state, setState] = useState<SearchUiState>("loading");
+  const [state, setState] = useState<SearchUiState>("idle");
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
@@ -862,23 +1250,31 @@ export default function EstimateNumbersPage() {
   const estimateModalAccountName = accountDirectoryByCode[estimateModalAccountCode]?.name || estimateModalAccountCode;
 
   const canLoadMore = Boolean(
-    displayPage &&
+    submittedSearch?.plan.type === "search" &&
+      displayPage &&
       (displayPage.nextCursor ||
         (displayPage.total !== null && displayPage.items.length < displayPage.total) ||
         (displayPage.nextOffset !== null && displayPage.nextOffset > displayPage.items.length)),
   );
 
   const isAnyModalOpen = isScheduleModalOpen || isEstimateModalOpen;
-  const cacheStatusText =
-    state === "loading" && !displayPage
-      ? "Loading..."
-      : isRefreshing
-        ? "Refreshing..."
-        : cacheStatus
-          ? `Data source: ${cacheStatus.source}. Last updated ${formatRelativeTime(cacheStatus.fetchedAt)}.`
-          : "No cached data yet";
+  const cacheStatusText = isRefreshing
+    ? "Refreshing..."
+    : cacheStatus
+      ? `Data source: ${cacheStatus.source}. Last updated ${formatRelativeTime(cacheStatus.fetchedAt)}.`
+      : "No cached data yet";
 
-  const interpretationOptions = pendingInterpretation?.options ?? [];
+  const showCacheChip = Boolean(
+    submittedSearch && !isAnyModalOpen && state === "ready" && (displayPage?.items.length ?? 0) > 0,
+  );
+  const isPageBusy = isLoadingAccountSelections || state === "loading" || isRefreshing || isLoadingMore;
+  const pageBusyMessage = isLoadingAccountSelections
+    ? "Loading account selections..."
+    : isLoadingMore
+      ? "Loading more estimate numbers..."
+      : isRefreshing
+        ? "Refreshing estimate numbers..."
+        : "Searching estimate numbers...";
 
   useEffect(() => {
     pageRef.current = page;
@@ -890,15 +1286,21 @@ export default function EstimateNumbersPage() {
     }
 
     const handleStorage = () => {
-      setSidebarCollapsed(readSidebarCollapsedState());
+      const collapsed = readSidebarCollapsedState();
+      setSidebarVisuallyExpanded(!collapsed);
     };
     const handleSidebarEvent = (event: Event) => {
-      const customEvent = event as CustomEvent<{ collapsed?: boolean }>;
-      if (typeof customEvent.detail?.collapsed === "boolean") {
-        setSidebarCollapsed(customEvent.detail.collapsed);
+      const customEvent = event as CustomEvent<{ collapsed?: boolean; visuallyExpanded?: boolean }>;
+      if (typeof customEvent.detail?.visuallyExpanded === "boolean") {
+        setSidebarVisuallyExpanded(customEvent.detail.visuallyExpanded);
         return;
       }
-      setSidebarCollapsed(readSidebarCollapsedState());
+      if (typeof customEvent.detail?.collapsed === "boolean") {
+        setSidebarVisuallyExpanded(!customEvent.detail.collapsed);
+        return;
+      }
+      const collapsed = readSidebarCollapsedState();
+      setSidebarVisuallyExpanded(!collapsed);
     };
 
     window.addEventListener("storage", handleStorage);
@@ -913,8 +1315,44 @@ export default function EstimateNumbersPage() {
     let cancelled = false;
 
     async function loadAccounts() {
+      let selectionBackedDirectory: AccountDirectoryItem[] = [];
+      if (!cancelled) {
+        setIsLoadingAccountSelections(true);
+      }
       try {
-        const payload = await requestJson("/api/tradsphere/v1/accounts?active=false", {
+        const selectionCacheSnapshot = readBrowserCacheSnapshot<AccountSelection[]>(SELECTIONS_CACHE_KEY);
+        const cachedSelections = normalizeSelectionsResponse(selectionCacheSnapshot?.data);
+        const hasCachedSelections = cachedSelections.length > 0;
+        if (hasCachedSelections) {
+          selectionBackedDirectory = accountDirectoryFromSelections(cachedSelections);
+          if (!cancelled) {
+            setAccountDirectory(selectionBackedDirectory);
+            setCreateAccountCode((current) => current || selectionBackedDirectory[0]?.accountCode || "");
+          }
+        }
+
+        const shouldFetchSelectionsFromNetwork = shouldFetchNetwork(
+          "stale-while-revalidate",
+          selectionCacheSnapshot,
+        );
+        if (shouldFetchSelectionsFromNetwork || !hasCachedSelections) {
+          const selectionPayload = await requestJson("/api/tradsphere/v1/ui/main/selections", {
+            headers: requestHeaders,
+            errorToast: false,
+          });
+          const selections = normalizeSelectionsResponse(selectionPayload);
+          writeBrowserCache(SELECTIONS_CACHE_KEY, selections, SELECTIONS_CACHE_TTL_MS, {
+            source: "network",
+            fetchedAt: Date.now(),
+          });
+          selectionBackedDirectory = accountDirectoryFromSelections(selections);
+          if (!cancelled) {
+            setAccountDirectory(selectionBackedDirectory);
+            setCreateAccountCode((current) => current || selectionBackedDirectory[0]?.accountCode || "");
+          }
+        }
+
+        const accountPayload = await requestJson("/api/tradsphere/v1/accounts?active=false", {
           headers: requestHeaders,
           errorToast: false,
         });
@@ -922,14 +1360,21 @@ export default function EstimateNumbersPage() {
           return;
         }
 
-        const parsed = parseAccountDirectory(payload);
-        setAccountDirectory(parsed);
-        setCreateAccountCode((current) => current || parsed[0]?.accountCode || "");
+        const billingDirectory = parseAccountDirectory(accountPayload);
+        const merged = mergeDirectoryWithBillingTypes(selectionBackedDirectory, billingDirectory);
+        setAccountDirectory(merged);
+        setCreateAccountCode((current) => current || merged[0]?.accountCode || "");
       } catch (loadError) {
         if (cancelled) {
           return;
         }
-        toast.error("Account load failed", getErrorMessage(loadError, "Unable to load TradSphere accounts."));
+        if (!selectionBackedDirectory.length) {
+          toast.error("Account load failed", getErrorMessage(loadError, "Unable to load TradSphere accounts."));
+        }
+      } finally {
+        if (!cancelled) {
+          setIsLoadingAccountSelections(false);
+        }
       }
     }
 
@@ -940,128 +1385,74 @@ export default function EstimateNumbersPage() {
     };
   }, [requestHeaders, requestJson, toast]);
 
-  async function fetchDefaultYearWindowPage(): Promise<EstimateSearchPage> {
-    const [currentPayload, previousPayload] = await Promise.all([
-      requestJson(`/api/tradsphere/v1/estNums?year=${encodeURIComponent(String(currentYear))}`, {
-        headers: requestHeaders,
-        errorToast: false,
-      }),
-      requestJson(`/api/tradsphere/v1/estNums?year=${encodeURIComponent(String(previousYear))}`, {
-        headers: requestHeaders,
-        errorToast: false,
-      }),
-    ]);
-
-    const currentPage = parseLegacyEstNumsResponse(currentPayload, accountDirectoryByCode);
-    const previousPage = parseLegacyEstNumsResponse(previousPayload, accountDirectoryByCode);
-
-    const mergedMap = new Map<string, EstimateSearchItem>();
-    for (const item of [...currentPage.items, ...previousPage.items]) {
-      mergedMap.set(`${item.accountCode}:${item.estNum}`, item);
+  function buildSearchRequestQuery(plan: SearchPlan, options: { append: boolean; cursor: string | null; offset: number | null }): string {
+    if (plan.type !== "search") {
+      return plan.query;
     }
 
-    const items = sortItems([...mergedMap.values()]);
-    return {
-      items,
-      total: items.length,
-      limit: SEARCH_LIMIT,
-      nextCursor: null,
-      nextOffset: null,
-      backendMode: "legacy-exact",
-    };
-  }
-
-  async function fetchFirstPageForConfirmedSearch(search: ConfirmedSearchParams): Promise<EstimateSearchPage> {
-    if (search.mode === "default") {
-      return fetchDefaultYearWindowPage();
+    const params = new URLSearchParams(plan.query);
+    if (options.append) {
+      if (options.cursor) {
+        params.set("cursor", options.cursor);
+      } else if (options.offset !== null && options.offset >= 0) {
+        params.set("offset", String(options.offset));
+      }
     }
 
-    if (search.mode === "year") {
-      const payload = await requestJson(`/api/tradsphere/v1/estNums?year=${encodeURIComponent(String(search.year))}`, {
-        headers: requestHeaders,
-        errorToast: false,
-      });
-      return parseLegacyEstNumsResponse(payload, accountDirectoryByCode);
-    }
-
-    if (search.mode === "month-year") {
-      const params = new URLSearchParams();
-      params.set("year", String(search.year));
-      params.set("month", String(search.month));
-      const payload = await requestJson(`/api/tradsphere/v1/estNums?${params.toString()}`, {
-        headers: requestHeaders,
-        errorToast: false,
-      });
-      return parseLegacyEstNumsResponse(payload, accountDirectoryByCode);
-    }
-
-    if (search.mode === "quarter-year") {
-      const params = new URLSearchParams();
-      params.set("year", String(search.year));
-      params.set("quarter", String(search.quarter));
-      const payload = await requestJson(`/api/tradsphere/v1/estNums?${params.toString()}`, {
-        headers: requestHeaders,
-        errorToast: false,
-      });
-      return parseLegacyEstNumsResponse(payload, accountDirectoryByCode);
-    }
-
-    if (search.mode === "estnum") {
-      const payload = await requestJson(`/api/tradsphere/v1/estNums?estNum=${encodeURIComponent(search.estNum)}`, {
-        headers: requestHeaders,
-        errorToast: false,
-      });
-      return parseLegacyEstNumsResponse(payload, accountDirectoryByCode);
-    }
-
-    const textQuery = search.raw.trim();
-    if (search.mode === "text" && textQuery.length < SEARCH_MIN_TEXT_LENGTH) {
-      throw new Error("MIN_QUERY_LENGTH");
-    }
-
-    const params = new URLSearchParams();
-    params.set("q", textQuery);
-    params.set("limit", String(SEARCH_LIMIT));
-    if (search.mode === "today") {
+    if (plan.includeCreatedToday) {
+      const today = getTodayIsoInTimezone(SEARCH_TIMEZONE);
+      params.set("createdFrom", today);
+      params.set("createdTo", today);
       params.set("timezone", SEARCH_TIMEZONE);
     }
 
-    const payload = await requestJson(`/api/tradsphere/v1/estNums/search?${params.toString()}`, {
+    return params.toString();
+  }
+
+  async function fetchFirstPageForSubmittedSearch(search: SubmittedSearch): Promise<EstimateSearchPage> {
+    if (search.plan.type === "list") {
+      const endpoint = search.plan.query ? `/api/tradsphere/v1/estNums?${search.plan.query}` : "/api/tradsphere/v1/estNums";
+      const payload = await requestJson(endpoint, {
+        headers: requestHeaders,
+        errorToast: false,
+      });
+      return parseLegacyEstNumsResponse(payload, accountDirectoryByCode);
+    }
+
+    const query = buildSearchRequestQuery(search.plan, {
+      append: false,
+      cursor: null,
+      offset: null,
+    });
+    const payload = await requestJson(`/api/tradsphere/v1/estNums/search?${query}`, {
       headers: requestHeaders,
       errorToast: false,
     });
     return parseSearchResponse(payload, accountDirectoryByCode);
   }
 
-  async function fetchNextPageForConfirmedSearch(
-    search: ConfirmedSearchParams,
+  async function fetchNextPageForSubmittedSearch(
+    search: SubmittedSearch,
     cursor: string | null,
     offset: number | null,
   ): Promise<EstimateSearchPage> {
-    if (search.mode !== "text" && search.mode !== "today") {
+    if (search.plan.type !== "search") {
       return {
         items: [],
         total: 0,
         limit: SEARCH_LIMIT,
         nextCursor: null,
         nextOffset: null,
-        backendMode: "search",
+        backendMode: "legacy-exact",
       };
     }
 
-    const params = new URLSearchParams();
-    params.set("q", search.raw.trim());
-    params.set("limit", String(SEARCH_LIMIT));
-    if (cursor) {
-      params.set("cursor", cursor);
-    } else if (offset !== null && offset >= 0) {
-      params.set("offset", String(offset));
-    }
-    if (search.mode === "today") {
-      params.set("timezone", SEARCH_TIMEZONE);
-    }
-
-    const payload = await requestJson(`/api/tradsphere/v1/estNums/search?${params.toString()}`, {
+    const query = buildSearchRequestQuery(search.plan, {
+      append: true,
+      cursor,
+      offset,
+    });
+    const payload = await requestJson(`/api/tradsphere/v1/estNums/search?${query}`, {
       headers: requestHeaders,
       errorToast: false,
     });
@@ -1069,19 +1460,23 @@ export default function EstimateNumbersPage() {
   }
 
   async function loadPageData(options: SearchLoadOptions): Promise<void> {
-    const activeSearch = confirmedSearch;
-    const requestToken = ++requestTokenRef.current;
-    const cacheKey = buildSearchCacheKey(activeSearch, currentYear, previousYear);
-
-    if (!options.append && activeSearch.mode === "text" && activeSearch.raw.trim().length < SEARCH_MIN_TEXT_LENGTH) {
-      setState("min-query");
-      setError(null);
-      setPage(null);
-      setCacheStatus(null);
-      setIsRefreshing(false);
-      setIsLoadingMore(false);
+    if (!submittedSearch) {
+      if (!options.append) {
+        setState("idle");
+        setError(null);
+        setPage(null);
+        setCacheStatus(null);
+      }
       return;
     }
+
+    if (options.append && submittedSearch.plan.type !== "search") {
+      return;
+    }
+
+    const activeSearch = submittedSearch;
+    const requestToken = ++requestTokenRef.current;
+    const cacheKey = activeSearch.cacheKey;
 
     const snapshot = !options.append ? readBrowserCacheSnapshot<EstimateSearchPage>(cacheKey) : null;
 
@@ -1095,9 +1490,7 @@ export default function EstimateNumbersPage() {
       });
     }
 
-    const shouldFetch = options.append
-      ? true
-      : shouldFetchNetwork(options.policy, snapshot);
+    const shouldFetch = options.append ? true : shouldFetchNetwork(options.policy, snapshot);
     if (!shouldFetch) {
       return;
     }
@@ -1119,12 +1512,12 @@ export default function EstimateNumbersPage() {
     let requestPromise = inFlightRef.current[requestKey];
     if (!requestPromise) {
       requestPromise = options.append
-        ? fetchNextPageForConfirmedSearch(
+        ? fetchNextPageForSubmittedSearch(
             activeSearch,
             currentPage?.nextCursor ?? null,
             currentPage?.nextOffset ?? currentPage?.items.length ?? null,
           )
-        : fetchFirstPageForConfirmedSearch(activeSearch);
+        : fetchFirstPageForSubmittedSearch(activeSearch);
       inFlightRef.current[requestKey] = requestPromise;
     }
 
@@ -1134,9 +1527,7 @@ export default function EstimateNumbersPage() {
         return;
       }
 
-      const resolvedPage = options.append && currentPage
-        ? mergeSearchPages(currentPage, nextPage)
-        : nextPage;
+      const resolvedPage = options.append && currentPage ? mergeSearchPages(currentPage, nextPage) : nextPage;
 
       setPage(resolvedPage);
       pageRef.current = resolvedPage;
@@ -1163,14 +1554,11 @@ export default function EstimateNumbersPage() {
       }
 
       const message = getErrorMessage(loadError, "Unable to load estimate numbers.");
-      if (message === "MIN_QUERY_LENGTH") {
-        setState("min-query");
-        setError(null);
-      } else if ((activeSearch.mode === "text" || activeSearch.mode === "today") && isSearchEndpointMissing(loadError)) {
+      if (activeSearch.plan.type === "search" && isSearchEndpointMissing(loadError)) {
         setBackendSearchUnavailable(true);
         setState("error");
         setError(
-          "Backend EstNum search endpoint is unavailable. Exact EstNum search works now. Proposed API: GET /api/tradsphere/v1/estNums/search?q=<query>&limit=50.",
+          "Backend EstNum search endpoint is unavailable. Proposed backend support: GET /api/tradsphere/v1/estNums/search with fielded params (estnum, account, buyer, note, months, year, quarter, createdToday).",
         );
       } else {
         setState("error");
@@ -1188,53 +1576,65 @@ export default function EstimateNumbersPage() {
   }
 
   useEffect(() => {
+    if (!submittedSearch) {
+      return;
+    }
     void loadPageData({
       policy: "stale-while-revalidate",
       append: false,
     });
-  }, [confirmedSearch, submissionVersion]);
+  }, [submittedSearch, submissionVersion]);
 
-  function handleDraftChange(nextValue: string) {
-    setInputDraft(nextValue);
-    if (pendingInterpretation) {
-      setPendingInterpretation(null);
+  function handleDraftChange<K extends keyof EstimateNumberSearchFormValues>(
+    field: K,
+    nextValue: EstimateNumberSearchFormValues[K],
+  ) {
+    setDraft((current) => ({
+      ...current,
+      [field]: nextValue,
+    }));
+    if (searchMessage) {
+      setSearchMessage(null);
     }
   }
 
   function handleSubmitSearch() {
-    const nextQuery = inputDraft.trim();
-    const options = buildSearchInterpretationOptions(nextQuery);
-    if (options.length > 0) {
-      setPendingInterpretation({
-        raw: nextQuery,
-        options,
+    const result = buildSearchPlan(draft);
+    if (!result.ok) {
+      setSearchMessage(result.message);
+      if (result.clearResults) {
+        setSubmittedSearch(null);
+        setPage(null);
+        setError(null);
+        setCacheStatus(null);
+        setState("idle");
+      }
+      return;
+    }
+
+    setSearchMessage(null);
+    setBackendSearchUnavailable(false);
+    const isSameSubmittedSearch = submittedSearch?.cacheKey === result.submitted.cacheKey;
+    if (isSameSubmittedSearch) {
+      void loadPageData({
+        policy: "network-only",
+        append: false,
       });
       return;
     }
-
-    setPendingInterpretation(null);
-    setConfirmedSearch(toConfirmedSearchParams(nextQuery));
+    setSubmittedSearch(result.submitted);
     setSubmissionVersion((current) => current + 1);
   }
 
-  function handleSelectInterpretation(optionId: string) {
-    if (!pendingInterpretation) {
-      return;
-    }
-    const selected = pendingInterpretation.options.find((option) => option.id === optionId);
-    if (!selected) {
-      return;
-    }
-    setPendingInterpretation(null);
-    setConfirmedSearch(selected.params);
-    setSubmissionVersion((current) => current + 1);
-  }
-
-  function handleDismissInterpretation() {
-    setPendingInterpretation(null);
+  function handleClearDraft() {
+    setDraft(INITIAL_SEARCH_FORM);
+    setSearchMessage(null);
   }
 
   function handleRefreshSearch() {
+    if (!submittedSearch) {
+      return;
+    }
     void loadPageData({
       policy: "network-only",
       append: false,
@@ -1242,7 +1642,7 @@ export default function EstimateNumbersPage() {
   }
 
   function handleLoadMore() {
-    if (!canLoadMore || isLoadingMore) {
+    if (!canLoadMore || isLoadingMore || !submittedSearch) {
       return;
     }
     void loadPageData({
@@ -1273,6 +1673,10 @@ export default function EstimateNumbersPage() {
     setEstimateModalInitialData({
       estNum: item.estNum,
       accountCode: item.accountCode.toUpperCase(),
+      flightStart: item.flightStart ?? "",
+      flightEnd: item.flightEnd ?? "",
+      mediaType: item.mediaType ?? "",
+      buyer: item.buyer ?? "",
       note: item.note ?? "",
     });
     setIsEstimateModalOpen(true);
@@ -1291,10 +1695,28 @@ export default function EstimateNumbersPage() {
 
   async function handleEstimateSaved(result: EstimateNumberModalSaveResult): Promise<void> {
     removeBrowserCacheByPrefix(`schedule-table:${result.accountCode.toUpperCase()}:${result.estNum}:`);
-    removeBrowserCacheByPrefix("estnums:");
-    void loadPageData({
-      policy: "network-only",
-      append: false,
+
+    if (!submittedSearch) {
+      return;
+    }
+    const nextPage = applySavedEstimateToPage(pageRef.current, submittedSearch, result, accountDirectoryByCode);
+    if (!nextPage) {
+      return;
+    }
+
+    const fetchedAt = Date.now();
+    setPage(nextPage);
+    pageRef.current = nextPage;
+    setState(nextPage.items.length ? "ready" : "empty");
+    setError(null);
+    setCacheStatus({
+      source: "cache",
+      fetchedAt,
+    });
+
+    writeBrowserCache(submittedSearch.cacheKey, nextPage, SEARCH_CACHE_TTL_MS, {
+      source: "cache",
+      fetchedAt,
     });
   }
 
@@ -1326,20 +1748,17 @@ export default function EstimateNumbersPage() {
       />
 
       <EstimateNumberSearch
-        value={inputDraft}
+        value={draft}
         onChange={handleDraftChange}
         onSubmit={handleSubmitSearch}
-        onRefresh={handleRefreshSearch}
+        onClear={handleClearDraft}
         searching={state === "loading"}
-        refreshing={isRefreshing}
-        disabled={isLoadingMore}
+        disabled={isLoadingMore || isRefreshing || isLoadingAccountSelections}
         resultText={resultText}
-        interpretationOptions={interpretationOptions}
-        onSelectInterpretation={handleSelectInterpretation}
-        onDismissInterpretation={handleDismissInterpretation}
+        message={searchMessage}
       />
 
-      {backendSearchUnavailable && (confirmedSearch.mode === "text" || confirmedSearch.mode === "today") ? (
+      {backendSearchUnavailable && submittedSearch?.plan.type === "search" ? (
         <p className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
           <AlertCircle className="size-4" />
           Text search depends on backend endpoint `/api/tradsphere/v1/estNums/search`.
@@ -1350,7 +1769,7 @@ export default function EstimateNumbersPage() {
         state={state}
         groups={groupedResults}
         error={error}
-        minQueryLength={SEARCH_MIN_TEXT_LENGTH}
+        minQueryLength={1}
         loadMoreVisible={canLoadMore}
         loadMoreLoading={isLoadingMore}
         onLoadMore={handleLoadMore}
@@ -1358,9 +1777,9 @@ export default function EstimateNumbersPage() {
         onEditEstimate={handleOpenEdit}
       />
 
-      {!isAnyModalOpen ? (
+      {showCacheChip ? (
         <div className="pointer-events-none fixed inset-x-0 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40">
-          <div className={`mx-4 sm:mx-6 lg:mr-6 ${sidebarCollapsed ? "lg:ml-[6.5rem]" : "lg:ml-[18.75rem]"}`}>
+          <div className={`mx-4 sm:mx-6 lg:mr-6 ${sidebarVisuallyExpanded ? "lg:ml-[18.75rem]" : "lg:ml-[6.5rem]"}`}>
             <div className="mx-auto w-full max-w-[1600px]">
               <CacheStatusChip
                 text={cacheStatusText}
@@ -1368,7 +1787,7 @@ export default function EstimateNumbersPage() {
                 disabled={isRefreshing || isLoadingMore}
                 refreshing={isRefreshing}
                 refreshLabel="Refresh estimate numbers"
-                tooltipText="Click to refresh estimate numbers"
+                tooltipText="Click to refresh last submitted search"
                 containerClassName="pointer-events-auto"
                 className="max-w-[min(90vw,34rem)]"
               />
@@ -1396,6 +1815,15 @@ export default function EstimateNumbersPage() {
         billingType={selectedScheduleBillingType}
         headers={requestHeaders}
       />
+
+      {isPageBusy ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/25 backdrop-blur-[1.5px]">
+          <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-medium text-slate-700 shadow-soft">
+            <Loader2 className="size-4 animate-spin text-blue-600" />
+            <span>{pageBusyMessage}</span>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }

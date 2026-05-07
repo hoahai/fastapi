@@ -19,6 +19,7 @@
 
 ## Architecture
 - Home app should render inside shared layout/shell components used by the frontend workspace.
+- Shared shell sidebar preference is manual collapse/expand; collapsed hover/focus expansion is temporary and should not change saved preference.
 - Keep Home-specific pages/components in `frontend/apps/home/`.
 - Put reusable cross-app UI, hooks, styles, and cache utilities in `frontend/shared/`.
 

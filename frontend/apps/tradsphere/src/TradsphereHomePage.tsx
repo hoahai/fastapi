@@ -112,7 +112,7 @@ function readSidebarCollapsedState(): boolean {
 function App() {
   const toast = useToast();
   const { requestJson } = useApiRequest();
-  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => readSidebarCollapsedState());
+  const [sidebarVisuallyExpanded, setSidebarVisuallyExpanded] = useState<boolean>(() => !readSidebarCollapsedState());
   const [accountSelections, setAccountSelections] = useState<AccountSelection[]>([]);
   const [selectedAccountCode, setSelectedAccountCode] = usePersistentState<string>(
     HOME_SELECTED_ACCOUNT_STORAGE_KEY,
@@ -174,15 +174,21 @@ function App() {
     }
 
     const handleStorage = () => {
-      setSidebarCollapsed(readSidebarCollapsedState());
+      const collapsed = readSidebarCollapsedState();
+      setSidebarVisuallyExpanded(!collapsed);
     };
     const handleSidebarEvent = (event: Event) => {
-      const customEvent = event as CustomEvent<{ collapsed?: boolean }>;
-      if (typeof customEvent.detail?.collapsed === "boolean") {
-        setSidebarCollapsed(customEvent.detail.collapsed);
+      const customEvent = event as CustomEvent<{ collapsed?: boolean; visuallyExpanded?: boolean }>;
+      if (typeof customEvent.detail?.visuallyExpanded === "boolean") {
+        setSidebarVisuallyExpanded(customEvent.detail.visuallyExpanded);
         return;
       }
-      setSidebarCollapsed(readSidebarCollapsedState());
+      if (typeof customEvent.detail?.collapsed === "boolean") {
+        setSidebarVisuallyExpanded(!customEvent.detail.collapsed);
+        return;
+      }
+      const collapsed = readSidebarCollapsedState();
+      setSidebarVisuallyExpanded(!collapsed);
     };
 
     window.addEventListener("storage", handleStorage);
@@ -769,7 +775,7 @@ function App() {
       {pageCacheStatusText && !isAnyModalOpen ? (
         <div className="pointer-events-none fixed inset-x-0 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40">
           <div
-            className={`mx-4 sm:mx-6 lg:mr-6 ${sidebarCollapsed ? "lg:ml-[6.5rem]" : "lg:ml-[18.75rem]"}`}
+            className={`mx-4 sm:mx-6 lg:mr-6 ${sidebarVisuallyExpanded ? "lg:ml-[18.75rem]" : "lg:ml-[6.5rem]"}`}
           >
             <div className="mx-auto w-full max-w-[1600px]">
               <CacheStatusChip

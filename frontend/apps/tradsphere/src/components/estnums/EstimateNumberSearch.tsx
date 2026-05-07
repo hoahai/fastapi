@@ -1,169 +1,246 @@
-import { useEffect, useRef } from "react";
-import { CheckCircle2, Loader2, RefreshCcw, Search, X } from "lucide-react";
+import { useMemo, type ReactNode } from "react";
+import { Loader2, Search, X } from "lucide-react";
 
+import { AppDropdown } from "@/components/ui/app-dropdown";
 import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogDescription, DialogHeader, DialogTitle } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Section, SectionHeader } from "@shared/components";
 
-export type EstimateNumberSearchInterpretationOption = {
-  id: string;
-  label: string;
-  description?: string | null;
+export type EstimateNumberSearchFormValues = {
+  estimateNumber: string;
+  account: string;
+  buyer: string;
+  note: string;
+  months: string[];
+  year: string;
+  quarter: string;
+  createdToday: boolean;
 };
 
 type EstimateNumberSearchProps = {
-  value: string;
-  onChange: (value: string) => void;
+  value: EstimateNumberSearchFormValues;
+  onChange: <K extends keyof EstimateNumberSearchFormValues>(field: K, nextValue: EstimateNumberSearchFormValues[K]) => void;
   onSubmit: () => void;
-  onRefresh: () => void;
+  onClear: () => void;
   searching: boolean;
-  refreshing: boolean;
   disabled?: boolean;
   resultText?: string | null;
-  interpretationOptions?: EstimateNumberSearchInterpretationOption[];
-  onSelectInterpretation?: (id: string) => void;
-  onDismissInterpretation?: () => void;
+  message?: string | null;
 };
+
+const MONTH_OPTIONS = [
+  { value: "1", label: "JAN" },
+  { value: "2", label: "FEB" },
+  { value: "3", label: "MAR" },
+  { value: "4", label: "APR" },
+  { value: "5", label: "MAY" },
+  { value: "6", label: "JUN" },
+  { value: "7", label: "JUL" },
+  { value: "8", label: "AUG" },
+  { value: "9", label: "SEP" },
+  { value: "10", label: "OCT" },
+  { value: "11", label: "NOV" },
+  { value: "12", label: "DEC" },
+];
+
+const QUARTER_OPTIONS = [
+  { value: "", label: "" },
+  { value: "Q1", label: "Q1" },
+  { value: "Q2", label: "Q2" },
+  { value: "Q3", label: "Q3" },
+  { value: "Q4", label: "Q4" },
+];
 
 export function EstimateNumberSearch({
   value,
   onChange,
   onSubmit,
-  onRefresh,
+  onClear,
   searching,
-  refreshing,
   disabled,
   resultText,
-  interpretationOptions,
-  onSelectInterpretation,
-  onDismissInterpretation,
+  message,
 }: EstimateNumberSearchProps) {
-  const firstOptionButtonRef = useRef<HTMLButtonElement | null>(null);
-  const isInterpretationOpen = Boolean(interpretationOptions?.length);
-
-  useEffect(() => {
-    if (!isInterpretationOpen) {
-      return;
+  const yearOptions = useMemo(() => {
+    const nowYear = new Date().getFullYear();
+    const years: string[] = [];
+    for (let year = nowYear - 3; year <= nowYear + 2; year += 1) {
+      years.push(String(year));
     }
-    firstOptionButtonRef.current?.focus();
-  }, [isInterpretationOpen]);
+    return [{ value: "", label: "" }, ...years.map((year) => ({ value: year, label: year }))];
+  }, []);
 
   return (
-    <section className="rounded-2xl border border-slate-200 bg-white p-4 shadow-soft">
+    <Section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-soft">
+      <SectionHeader
+        title="Estimate Numbers Search"
+        description="Search by one or more fields. Results load only after you click Search."
+      />
+
       <form
-        className="flex flex-col gap-3 md:flex-row md:items-center"
+        className="space-y-4 px-1"
         onSubmit={(event) => {
           event.preventDefault();
-          if (disabled || searching || refreshing) {
+          if (disabled || searching) {
             return;
           }
           onSubmit();
         }}
       >
-        <label htmlFor="estnum-search" className="relative block flex-1">
-          <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
-          <Input
-            id="estnum-search"
-            value={value}
-            onChange={(event) => {
-              onChange(event.target.value);
-            }}
-            disabled={disabled}
-            autoComplete="off"
-            spellCheck={false}
-            placeholder="Search estimate number, account, buyer, media, note..."
-            className="h-11 pl-9"
-            onKeyDown={(event) => {
-              if (event.key === "Escape" && isInterpretationOpen) {
-                event.preventDefault();
-                onDismissInterpretation?.();
-              }
-            }}
-          />
-        </label>
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+          <Field label="Estimate Number">
+            <ClearableInput
+              id="estnum-search-estimate-number"
+              value={value.estimateNumber}
+              onChange={(nextValue) => {
+                onChange("estimateNumber", nextValue.replace(/\D+/g, ""));
+              }}
+              inputMode="numeric"
+            />
+          </Field>
 
-        <Button
-          type="submit"
-          variant="outline"
-          disabled={disabled || searching || refreshing}
-          aria-label="Submit estimate-number search"
-        >
-          Search
-        </Button>
+          <Field label="Account">
+            <ClearableInput
+              id="estnum-search-account"
+              value={value.account}
+              onChange={(nextValue) => onChange("account", nextValue)}
+            />
+          </Field>
 
-        <Button
-          variant="outline"
-          onClick={onRefresh}
-          disabled={disabled || searching || refreshing}
-          aria-label="Refresh current estimate-number search"
-        >
-          {refreshing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCcw className="size-4" />}
-          Refresh
-        </Button>
+          <Field label="Buyer">
+            <ClearableInput
+              id="estnum-search-buyer"
+              value={value.buyer}
+              onChange={(nextValue) => onChange("buyer", nextValue)}
+            />
+          </Field>
+
+          <Field label="Note">
+            <ClearableInput
+              id="estnum-search-note"
+              value={value.note}
+              onChange={(nextValue) => onChange("note", nextValue)}
+            />
+          </Field>
+
+          <Field label="Months">
+            <AppDropdown
+              ariaLabel="Months"
+              value=""
+              values={value.months}
+              onValueChange={() => {}}
+              onValuesChange={(nextValues) => onChange("months", nextValues)}
+              options={MONTH_OPTIONS}
+              placeholder=""
+              searchable={false}
+              multiple
+              disabled={disabled || searching}
+              emptyText="No month found."
+            />
+          </Field>
+
+          <Field label="Quater">
+            <AppDropdown
+              ariaLabel="Quater"
+              value={value.quarter}
+              onValueChange={(nextValue) => onChange("quarter", nextValue)}
+              options={QUARTER_OPTIONS}
+              placeholder=""
+              searchable={false}
+              disabled={disabled || searching}
+              emptyText="No quarter found."
+            />
+          </Field>
+
+          <Field label="Year">
+            <AppDropdown
+              ariaLabel="Year"
+              value={value.year}
+              onValueChange={(nextValue) => onChange("year", nextValue)}
+              options={yearOptions}
+              placeholder=""
+              searchable={false}
+              disabled={disabled || searching}
+              emptyText="No year found."
+            />
+          </Field>
+
+          <div className="flex items-end">
+            <label htmlFor="estnum-search-created-today" className="flex h-10 cursor-pointer items-center gap-2 text-sm text-slate-700">
+              <input
+                id="estnum-search-created-today"
+                type="checkbox"
+                checked={value.createdToday}
+                onChange={(event) => onChange("createdToday", event.target.checked)}
+                className="size-4 rounded border-slate-300 text-blue-600"
+              />
+              <span>Created today</span>
+            </label>
+          </div>
+        </div>
+
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <p className="text-xs text-slate-500">{resultText ?? ""}</p>
+          <div className="flex items-center gap-2">
+            <Button type="button" variant="outline" onClick={onClear} disabled={disabled || searching}>
+              Clear
+            </Button>
+            <Button type="submit" disabled={disabled || searching}>
+              {searching ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
+              Search
+            </Button>
+          </div>
+        </div>
       </form>
 
-      <Dialog
-        open={isInterpretationOpen}
-        onOpenChange={(open) => {
-          if (!open) {
-            onDismissInterpretation?.();
-          }
-        }}
-      >
-        <DialogContent
-          className="max-w-xl p-0"
-          onEscapeKeyDown={(event) => {
-            event.preventDefault();
-            onDismissInterpretation?.();
-          }}
-        >
-          <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-soft">
-            <div className="mb-2 flex items-start justify-between gap-2">
-              <DialogHeader className="space-y-1 text-left">
-                <DialogTitle className="text-base text-slate-900">Choose Search Type</DialogTitle>
-                <DialogDescription className="text-xs text-slate-500">
-                  This term can be interpreted in multiple ways. Select one option to continue.
-                </DialogDescription>
-              </DialogHeader>
-              <Button
-                type="button"
-                variant="ghost"
-                size="icon"
-                className="size-7 text-slate-500"
-                aria-label="Dismiss search interpretation dialog"
-                onClick={onDismissInterpretation}
-              >
-                <X className="size-4" />
-              </Button>
-            </div>
-            <div className="grid gap-2" role="listbox" aria-label="Search interpretation options">
-              {interpretationOptions?.map((option, index) => (
-                <button
-                  key={option.id}
-                  ref={index === 0 ? firstOptionButtonRef : undefined}
-                  type="button"
-                  role="option"
-                  className="flex w-full items-start gap-2 rounded-lg border border-slate-200 bg-white px-3 py-2 text-left transition hover:border-slate-300 hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-400"
-                  onClick={() => onSelectInterpretation?.(option.id)}
-                >
-                  <CheckCircle2 className="mt-0.5 size-4 text-slate-500" />
-                  <span className="min-w-0">
-                    <span className="block text-sm font-medium text-slate-800">{option.label}</span>
-                    {option.description ? <span className="block text-xs text-slate-500">{option.description}</span> : null}
-                  </span>
-                </button>
-              ))}
-            </div>
-          </div>
-        </DialogContent>
-      </Dialog>
+      {message ? <p className="mt-2 text-xs text-amber-700">{message}</p> : null}
+    </Section>
+  );
+}
 
-      <p className="mt-2 text-xs text-slate-500">
-        Search by estimate number, account code, account name, buyer, media type, month/note, or year.
-      </p>
-      <p className="mt-1 text-xs text-slate-400">Ambiguous examples: "2026", "Q1'26", "6/26".</p>
-      <p className="mt-1 text-xs text-slate-400">Tip: type &quot;today&quot; to find estimate numbers created today.</p>
-      {resultText ? <p className="mt-2 text-xs text-slate-500">{resultText}</p> : null}
-    </section>
+function Field({ label, children }: { label: string; children: ReactNode }) {
+  return (
+    <label className="block min-w-0">
+      <span className="mb-1 block text-xs font-medium uppercase tracking-[0.08em] text-slate-500">{label}</span>
+      {children}
+    </label>
+  );
+}
+
+function ClearableInput({
+  id,
+  value,
+  onChange,
+  inputMode,
+}: {
+  id: string;
+  value: string;
+  onChange: (nextValue: string) => void;
+  inputMode?: "text" | "numeric" | "decimal" | "email" | "tel" | "search" | "url";
+}) {
+  const hasValue = value.trim().length > 0;
+
+  return (
+    <div className="group relative">
+      <Input
+        id={id}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        autoComplete="off"
+        spellCheck={false}
+        inputMode={inputMode}
+        className="pr-9"
+      />
+      <button
+        type="button"
+        aria-label="Clear input"
+        onClick={() => onChange("")}
+        className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 opacity-0 transition hover:text-slate-600 focus-visible:opacity-100 focus-visible:outline-none group-hover:opacity-100 group-focus-within:opacity-100"
+        style={{ visibility: hasValue ? "visible" : "hidden" }}
+        tabIndex={hasValue ? 0 : -1}
+      >
+        <X className="size-3.5" />
+      </button>
+    </div>
   );
 }

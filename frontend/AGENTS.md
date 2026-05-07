@@ -22,6 +22,7 @@
 - Follow `frontend/DESIGNS.md`.
 - Reuse shared components/styles before adding one-off styles.
 - Update design docs when introducing new reusable patterns.
+- For shared shell sidebar behavior: persist manual collapse/expand preference, and keep hover/focus expansion temporary-only (no preference write).
 - Prefer reusable layout/action primitives over per-page/per-modal one-off component structures.
 - For app-agnostic UI building blocks, place code in `frontend/shared/components/`.
 - Keep app wrappers in `frontend/apps/<app-name>/` when they bind business-specific data shapes.

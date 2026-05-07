@@ -17,6 +17,9 @@ interface AppDropdownProps {
   value: string;
   options: AppDropdownOption[];
   onValueChange: (value: string) => void;
+  values?: string[];
+  onValuesChange?: (values: string[]) => void;
+  multiple?: boolean;
   placeholder?: string;
   ariaLabel?: string;
   disabled?: boolean;
@@ -31,6 +34,9 @@ export function AppDropdown({
   value,
   options,
   onValueChange,
+  values,
+  onValuesChange,
+  multiple = false,
   placeholder = "Select option",
   ariaLabel,
   disabled = false,
@@ -50,6 +56,30 @@ export function AppDropdown({
   const [panelMaxHeight, setPanelMaxHeight] = useState<number>(320);
 
   const selectedOption = options.find((option) => option.value === value) ?? null;
+  const selectedValues = useMemo(() => {
+    if (!multiple) {
+      return [];
+    }
+    const seen = new Set<string>();
+    const normalized: string[] = [];
+    for (const raw of values ?? []) {
+      const candidate = String(raw || "").trim();
+      if (!candidate || seen.has(candidate)) {
+        continue;
+      }
+      seen.add(candidate);
+      normalized.push(candidate);
+    }
+    return normalized;
+  }, [multiple, values]);
+
+  const selectedOptions = useMemo(() => {
+    if (!multiple) {
+      return [];
+    }
+    const selectedSet = new Set(selectedValues);
+    return options.filter((option) => selectedSet.has(option.value));
+  }, [multiple, options, selectedValues]);
 
   const filteredOptions = useMemo(() => {
     if (!searchable) {
@@ -97,8 +127,19 @@ export function AppDropdown({
   }, []);
 
   function selectValue(nextValue: string) {
-    onValueChange(nextValue);
-    setIsOpen(false);
+    if (!multiple) {
+      onValueChange(nextValue);
+      setIsOpen(false);
+      return;
+    }
+
+    const selectedSet = new Set(selectedValues);
+    if (selectedSet.has(nextValue)) {
+      selectedSet.delete(nextValue);
+    } else {
+      selectedSet.add(nextValue);
+    }
+    onValuesChange?.(Array.from(selectedSet));
   }
 
   function updateMenuPosition() {
@@ -186,6 +227,13 @@ export function AppDropdown({
   }
 
   const isCompact = size === "sm";
+  const triggerLabel = multiple
+    ? selectedOptions.length === 0
+      ? placeholder
+      : selectedOptions.length <= 2
+        ? selectedOptions.map((option) => option.label).join(", ")
+        : `${selectedOptions[0]?.label || ""}, +${selectedOptions.length - 1}`
+    : (selectedOption?.label || placeholder);
 
   return (
     <div ref={containerRef} data-app-dropdown-root="true" className={cn("relative w-full", className)}>
@@ -203,7 +251,7 @@ export function AppDropdown({
           )}
           onClick={() => setIsOpen((current) => !current)}
         >
-          <span className="truncate text-left">{selectedOption?.label || placeholder}</span>
+          <span className="truncate text-left">{triggerLabel}</span>
           {loading ? (
             <Spinner className={cn("ml-2 shrink-0", isCompact ? "size-3.5" : "size-4")} />
           ) : (
@@ -252,7 +300,9 @@ export function AppDropdown({
             ) : (
               <ul>
                 {filteredOptions.map((option, index) => {
-                  const isSelected = option.value === value;
+                  const isSelected = multiple
+                    ? selectedValues.includes(option.value)
+                    : option.value === value;
                   const isHighlighted = index === highlightedIndex;
                   return (
                     <li key={option.value}>

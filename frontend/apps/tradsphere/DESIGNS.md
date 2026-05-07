@@ -19,18 +19,17 @@ This app inherits global standards from `frontend/DESIGNS.md`.
 ## Estimate Numbers Page
 - Add and maintain a dedicated `/tradsphere/estnums` page focused on fast search.
 - Treat Estimate Numbers as a child page under the Tradsphere sidebar parent.
-- Use a single prominent search bar; avoid introducing filter-heavy controls.
-- Include a short helper line under search input with supported fields and tips.
+- Use an explicit multi-field search form with these fields: `Estimate Number`, `Account`, `Buyer`, `Media Type`, `Month / Note`, `Year`, `Quarter`, `Created today`.
+- Keep helper copy concise and practical.
 - Do not fetch all EstNums on initial render.
-- Default initial load should fetch only current year + previous year EstNums.
+- Do not run any default EstNum load on open (no current/previous year auto-fetch).
 - Search should be lazy: run on Enter/submit, not on every keystroke.
-- Ambiguous submissions must prompt for confirmation before request dispatch (no silent interpretation).
-- For `YYYY` input, present `Search by year` and `Search by EstNum` choices.
-- For month/year and quarter/year patterns (for example `6/26`, `Q1'26`), present `structured period search` and `text search` choices.
+- Do not run request-on-type and do not debounce typing.
+- Empty submit should clear results and return to an empty-state prompt.
 - Prefer backend search with `query + limit + pagination` and keep request count minimal.
-- `today` keyword behavior should map to backend created-date search in America/Chicago timezone.
-- Cache default/search results by confirmed search interpretation (mode + params) and keep stale data visible while revalidating.
-- Provide page-level cache-status chip with refresh scoped to current submitted query/default result.
+- `Created today` should map to backend created-date filtering in America/Chicago timezone.
+- Cache submitted-search results by full submitted form params and keep stale data visible while revalidating.
+- Show page-level cache-status chip only after submitted search results exist; refresh must target the last submitted search only.
 - Group result presentation by account/client and period sections for quick scanning.
 - Scheduled rows should open existing schedule modal flow; unscheduled rows remain normal style.
 - Add/Edit actions should use existing Estimate Number modal behavior.

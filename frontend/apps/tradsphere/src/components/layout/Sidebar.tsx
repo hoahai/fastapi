@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronLeft, ChevronRight, LayoutDashboard, Menu } from "lucide-react";
-import { useEffect, useState, type ComponentType } from "react";
+import { useEffect, useState, type ComponentType, type FocusEvent } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -14,7 +14,9 @@ import { cn } from "@/lib/utils";
 type SidebarProps = {
   currentPath: string;
   collapsed: boolean;
+  visuallyExpanded: boolean;
   onToggleCollapsed: () => void;
+  onHoverExpandedChange: (nextValue: boolean) => void;
   onNavigate: (route: string) => void;
   mobileOpen: boolean;
   onToggleMobile: () => void;
@@ -24,13 +26,16 @@ type SidebarProps = {
 export function Sidebar({
   currentPath,
   collapsed,
+  visuallyExpanded,
   onToggleCollapsed,
+  onHoverExpandedChange,
   onNavigate,
   mobileOpen,
   onToggleMobile,
   onCloseMobile,
 }: SidebarProps) {
   const [expandedById, setExpandedById] = useState<Record<string, boolean>>(() => ({}));
+  const isCompact = !visuallyExpanded;
 
   useEffect(() => {
     setExpandedById((current) => {
@@ -61,6 +66,46 @@ export function Sidebar({
     }));
   }
 
+  function handleSidebarMouseEnter() {
+    if (
+      !collapsed ||
+      typeof window === "undefined" ||
+      !window.matchMedia("(hover: hover) and (pointer: fine)").matches
+    ) {
+      return;
+    }
+    onHoverExpandedChange(true);
+  }
+
+  function handleSidebarMouseLeave() {
+    if (
+      !collapsed ||
+      typeof window === "undefined" ||
+      !window.matchMedia("(hover: hover) and (pointer: fine)").matches
+    ) {
+      return;
+    }
+    onHoverExpandedChange(false);
+  }
+
+  function handleSidebarFocusCapture() {
+    if (!collapsed) {
+      return;
+    }
+    onHoverExpandedChange(true);
+  }
+
+  function handleSidebarBlurCapture(event: FocusEvent<HTMLElement>) {
+    if (!collapsed) {
+      return;
+    }
+    const nextFocusedElement = event.relatedTarget;
+    if (nextFocusedElement instanceof Node && event.currentTarget.contains(nextFocusedElement)) {
+      return;
+    }
+    onHoverExpandedChange(false);
+  }
+
   return (
     <>
       <header className="sticky top-0 z-30 rounded-2xl border border-border/80 bg-white/90 p-3 shadow-soft backdrop-blur lg:hidden">
@@ -81,11 +126,15 @@ export function Sidebar({
         className={cn(
           "fixed left-0 top-0 z-50 h-screen w-72 overflow-y-auto border-r border-border bg-white p-4 transition-[width,transform] duration-200 lg:left-4 lg:top-4 lg:bottom-4 lg:h-auto lg:w-[260px] lg:rounded-3xl lg:border lg:border-border/80 lg:bg-white/95 lg:shadow-soft lg:backdrop-blur lg:translate-x-0",
           mobileOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
-          collapsed ? "lg:w-[72px]" : "lg:w-[260px]",
+          isCompact ? "lg:w-[72px]" : "lg:w-[260px]",
         )}
+        onMouseEnter={handleSidebarMouseEnter}
+        onMouseLeave={handleSidebarMouseLeave}
+        onFocusCapture={handleSidebarFocusCapture}
+        onBlurCapture={handleSidebarBlurCapture}
       >
         <div className="flex items-center justify-between gap-2 px-1">
-          <div className={cn("min-w-0", collapsed && "lg:hidden")}>
+          <div className={cn("min-w-0", isCompact && "lg:hidden")}>
             <p className="text-xs font-semibold uppercase tracking-[0.2em] text-blue-700">Portal</p>
             <h2 className="mt-1 text-lg font-bold text-slate-900">Workspace</h2>
           </div>
@@ -105,7 +154,7 @@ export function Sidebar({
           </div>
         </div>
 
-        {!collapsed ? (
+        {!isCompact ? (
           <p className="mt-4 px-2 text-[11px] font-semibold uppercase tracking-[0.22em] text-slate-500">Apps</p>
         ) : null}
 
@@ -114,14 +163,14 @@ export function Sidebar({
             icon={LayoutDashboard}
             label="Portal / Workspace Home"
             route="/"
-            collapsed={collapsed}
+            collapsed={isCompact}
             active={currentPath === "/"}
             available
             onNavigate={onNavigate}
             onCloseMobile={onCloseMobile}
           />
           {APP_NAV_ITEMS.map((topLevel) => {
-            const hasChildren = !collapsed && Boolean(topLevel.children?.length);
+            const hasChildren = !isCompact && Boolean(topLevel.children?.length);
             const expanded = Boolean(expandedById[topLevel.id]);
             const parentActive = isTopLevelActive(topLevel, currentPath);
 
@@ -131,7 +180,7 @@ export function Sidebar({
                   icon={topLevel.icon}
                   label={topLevel.label}
                   route={topLevel.route}
-                  collapsed={collapsed}
+                  collapsed={isCompact}
                   available={topLevel.available}
                   active={parentActive}
                   expanded={expanded}
