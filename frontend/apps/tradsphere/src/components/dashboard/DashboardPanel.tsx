@@ -2,7 +2,6 @@ import type { ReactNode } from "react";
 
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
-import { cn } from "@/lib/utils";
 
 interface DashboardPanelProps {
   title: string;
@@ -24,7 +23,7 @@ export function DashboardPanel({
   className,
 }: DashboardPanelProps) {
   return (
-    <Card className={cn("overflow-hidden", className)}>
+    <Card className={className}>
       <CardHeader className="border-b border-blue-100 bg-secondary/60 py-4">
         <div className="flex items-center justify-between gap-3">
           <CardTitle className="flex items-center gap-3">

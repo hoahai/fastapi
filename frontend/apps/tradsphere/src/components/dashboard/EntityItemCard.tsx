@@ -6,6 +6,8 @@ import { cn } from "@/lib/utils";
 interface EntityItemCardProps {
   rootAs?: "article" | "button" | "div";
   rootClassName?: string;
+  onClick?: () => void;
+  disabled?: boolean;
   circleClassName?: string;
   circleContent: ReactNode;
   badge?: ReactNode;
@@ -18,6 +20,8 @@ interface EntityItemCardProps {
 export function EntityItemCard({
   rootAs = "article",
   rootClassName,
+  onClick,
+  disabled,
   circleClassName,
   circleContent,
   badge,
@@ -26,11 +30,14 @@ export function EntityItemCard({
   subtitleClassName,
   srOnlyText,
 }: EntityItemCardProps) {
+  const isInteractive = rootAs === "button" && !disabled && Boolean(onClick);
+
   const content = (
     <>
       <HoverCircle
         className={cn(
-          "mx-auto mb-3 grid size-20 place-items-center rounded-full bg-blue-50 text-blue-600 transition-colors group-hover:bg-blue-100",
+          "mx-auto mb-3 grid size-20 place-items-center rounded-full bg-blue-50 text-blue-600 shadow-[0_0_0_0_rgba(59,130,246,0)] transition-[background-color,box-shadow,color] duration-200 group-hover:bg-blue-100 group-hover:shadow-[0_0_18px_4px_rgba(59,130,246,0.2)]",
+          !isInteractive && "transition-none group-hover:scale-100 group-hover:bg-blue-50 group-hover:shadow-none",
           circleClassName,
         )}
       >
@@ -47,7 +54,17 @@ export function EntityItemCard({
 
   if (rootAs === "button") {
     return (
-      <AnimatedHoverCard as="button" type="button" className={cn("text-center", rootClassName)}>
+      <AnimatedHoverCard
+        as="button"
+        type="button"
+        className={cn(
+          "cursor-pointer text-center disabled:cursor-not-allowed",
+          !isInteractive && "hover:!translate-y-0 transition-none",
+          rootClassName,
+        )}
+        onClick={onClick}
+        disabled={disabled}
+      >
         {content}
       </AnimatedHoverCard>
     );
@@ -55,14 +72,20 @@ export function EntityItemCard({
 
   if (rootAs === "div") {
     return (
-      <AnimatedHoverCard as="div" className={cn("text-center", rootClassName)}>
+      <AnimatedHoverCard
+        as="div"
+        className={cn("text-center hover:!translate-y-0 transition-none", rootClassName)}
+      >
         {content}
       </AnimatedHoverCard>
     );
   }
 
   return (
-    <AnimatedHoverCard as="article" className={cn("text-center", rootClassName)}>
+    <AnimatedHoverCard
+      as="article"
+      className={cn("text-center hover:!translate-y-0 transition-none", rootClassName)}
+    >
       {content}
     </AnimatedHoverCard>
   );

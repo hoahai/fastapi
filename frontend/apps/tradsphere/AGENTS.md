@@ -6,13 +6,163 @@
 
 ## API and Routing
 - Keep API requests relative to backend routes (for example: `/api/tradsphere/v1/...`).
+- Route API calls through a shared frontend request helper/hook so toast behavior is global and consistent.
+- API failures should always surface a toast with backend-provided message/detail when available.
+- Mutation requests should emit success toasts by default; customize title/message per action instead of duplicating manual toast logic in each component.
+- For create/update/delete flows, avoid calling broad reload endpoints (for example full dashboard/account reload) immediately after mutation by default.
+- Patch local state + local cache for the affected records directly from mutation context/response, and invalidate only related narrow caches.
+- If a full reload is required for correctness, keep it explicit and add a short code comment explaining the dependency gap.
+- Cache EstNum detail and Schedule detail/table payloads in browser storage with TTL to improve reopen speed.
+- Browser detail-cache keys must include account/entity context (for example accountCode + estNum + mode) and support targeted invalidation on related updates/imports.
+- Cache/freshness status notes (for example `Last updated ...`) should render in subtle secondary UI locations.
+- Prefer bottom/footer placement for freshness notes within the page or modal section instead of placing them next to primary action controls.
+- Do not place cache-status text inline with main header/action/filter controls unless there is no viable secondary placement.
+- Cache status controls should be floating chips with button semantics, not layout content that pushes cards/tables/forms.
+- Page-level cache chips should stay fixed near the viewport bottom during scroll.
+- Modal-level cache chips should stay fixed/sticky to modal bottom while modal body/table areas scroll.
+- Clicking a cache chip must trigger the existing context refresh path with `network-only` behavior and keep current cache metadata updates.
+- Cache chips must include hover/focus tooltip text and accessible labels (for example `aria-label`).
+- For Schedule/report tables, keep cache chips anchored to modal footer/shell, not inside table scroll content.
+- Revalidation flows must not clear already visible cached dashboard data while fetching fresh responses.
+- On safe app navigation away/back, restore selected account context and cached dashboard data when available.
+- Schedule detail reports must render inside a flex-column modal shell with bounded viewport height in detail/loading states.
+- Schedule modal scroll ownership: only the report/table viewport scrolls (`flex-1`, `min-height: 0`, `overflow: auto`); header and footer remain fixed inside the modal shell.
 - Keep production routing compatible with `/fe` base path.
+- Keep TradSphere frontend home mounted at `/fe/tradsphere/home` via client-side routing.
+- Keep `/fe` and `/fe/` mapped to the workspace portal page.
+- All frontend pages/routes must render inside the shared app shell with the collapsible sidebar.
+- Sidebar navigation state (collapsed/expanded) should persist across route navigation.
+- Preserve useful page UI state across frontend navigation for `/fe` routes.
+- Use `localStorage` for durable preferences (for example: sidebar collapsed/expanded).
+- Use `sessionStorage` for page-specific navigation state (for example: selected account/id, search/filter/sort, section/tab, scroll position).
+- Do not persist sensitive values (`password`, secrets, tokens), error/loading states, or temporary modal-open state by default.
+- Prefer persisting IDs and small UI preferences instead of full backend response objects.
+- When persisted IDs become stale after data refresh (for example removed account/EstNum), clear the persisted selection gracefully.
 - Do not hardcode hostnames.
 
 ## Consistency
 - Follow `frontend/DESIGNS.md` and local `DESIGNS.md`.
 - Reuse existing UI primitives before introducing new one-off components.
+- Keep TradSphere banner styling aligned with shared banner structure while preserving TradSphere-specific gradient identity.
+- Estimate Number create modal form rows should match Account Information row styling (label typography, spacing, row alignment, and control sizing).
+- Read-only fields (for example `Account` in Estimate Number create modal) should render as read-only text values, not disabled bordered inputs.
+- Estimate Number `Media Type` dropdown should reuse the same dropdown style pattern as Account Information `Billing Type`.
+- Tradsphere scheduling date fields should use Monday-start calendar behavior and America/Chicago timezone semantics; when native inputs are used temporarily, keep a TODO for full broadcast-calendar picker behavior.
+- Estimate Number create/edit forms may provide a compact preset `Flight Range` helper with `Month`, `Quarter`, `Year`, and `Custom` modes to auto-fill `flightStart`/`flightEnd`.
+- Flight-range helper controls must stay visually secondary (compact sizing, subtle styling) and must not overflow modal bounds.
+- Flight Range/Quick Range is a shortcut helper, not a persisted data field.
+- When start/end represent one business concept, prefer one combined `Flight Dates` form row while keeping backend `flightStart`/`flightEnd` payload keys internally.
+- Place date helper controls (for example Quick Range) inside the related date-range picker/popover when practical, not as separate primary form rows.
+- Inside date popovers, separate preset helper controls from manual start/end date fields with a subtle divider.
+- Preset range calculations should follow TradSphere broadcast semantics (Monday-start weeks, America/Chicago context) and preserve backend payload field names/date format.
+- Preset-applied date changes must participate in edit dirty-state detection; `Save Changes` stays disabled until values differ from loaded data.
+- Manual `flightStart`/`flightEnd` editing must remain available; manual edits may switch the helper into `Custom` state.
+- Default date values auto-seeded for create forms must be treated as initial form baseline (not unsaved changes).
+- In edit mode, before detail data is fully loaded, closing via outside-click or `X` must not trigger unsaved-change warnings.
+- In edit mode, auto-seeded defaults should be considered unsaved only when they fill missing persisted date fields after detail load.
 
 ## Backend Boundaries
 - Do not restructure backend folders.
 - Touch backend only when required for `/fe` static serving integration.
+
+## Schema-Driven Forms
+- For TradSphere CRUD forms, inspect backend endpoint/helper validation first and map frontend fields directly to backend payload keys.
+- Estimate Number create payload must follow `POST /api/tradsphere/v1/estNums`:
+  - Required: `estNum`, `accountCode`, `flightStart`, `flightEnd`, `mediaType`, `buyer`
+  - Optional: `note`
+  - Validation highlights: `estNum` unsigned int, `flightStart <= flightEnd`, `buyer <= 36 chars`, `note <= 2048 chars`, `mediaType` must match tenant enum.
+- Estimate Number modal should support both create and edit modes in the same component when feasible.
+- Estimate Number edit submit must use existing backend APIs only (currently `PUT /api/tradsphere/v1/estNums`); do not invent frontend-only API shapes.
+- Keep `accountCode` scoped to the selected TradSphere account context (read-only in modal forms unless route behavior requires manual override).
+- In EstNum create forms, display a user-friendly `Account` field with account name as read-only UI; keep `accountCode` internal for backend payload mapping.
+- In EstNum edit forms, keep `accountCode` internal for payload mapping while showing account name as read-only UI.
+- If backend enum options are not exposed by a dedicated endpoint, use minimal safe fallbacks documented in code comments and prefer wiring to backend options when available.
+- EstNum create/edit modal must follow shared modal/form rules from `frontend/DESIGNS.md`:
+  - show explicit loading state before rendering edit-form fields when detail data is still loading
+  - require dirty-state detection for edit forms and disable `Save Changes` until data is changed
+  - block outside-click close when form is dirty and avoid accidental unsaved-data loss
+  - keep modal animation/backdrop behavior intact
+- Do not allow accidental discard of unsaved EstNum form changes; use confirmation or keep-editing flow.
+- Never use browser-native `window.confirm`/`alert` for unsaved-change workflows in Tradsphere UI.
+- Use app-styled confirmation dialog patterns with explicit actions: `Keep editing` and `Discard changes`.
+
+## Preview Motion
+- Logo/image preview interactions should use the shared dialog/modal motion pattern (animated backdrop + animated content) rather than abrupt custom overlays.
+- Keep preview close behavior consistent with dialogs (Escape key, outside click, and visible close control).
+
+## EstNum Item Interactions
+- EstNum cards use hover-triggered floating attached action menus for secondary actions.
+- Keep EstNum primary click behavior on the card itself (schedule load/show behavior stays primary).
+- EstNum hover state should not add a visible outer border/shadow/ring frame on the card container.
+- Any non-clickable card/item state (including `hasSchedule=false`) must not show click cursor or hover lift/scale effects.
+- Action menus must render as overlay/floating elements (prefer portal + anchored positioning), not in normal layout flow.
+- Floating menus must anchor to the exact hovered EstNum card element (never a shared/stale ref from another item).
+- Position floating menus closely attached to the related EstNum content block (just below item text), while avoiding overlap and layout shift.
+- EstNum floating action labels should be center-aligned within each menu row for a clean compact presentation.
+- Floating action menus must not increase card height, EstNum-row height, or parent section/container height.
+- Menu clicks must stop propagation so they never trigger the EstNum card primary click.
+- Build these menus with reusable components so future entity cards can add actions like duplicate/archive/delete without layout regressions.
+- EstNum circle/card primary click opens the Schedule modal only when `hasSchedule` is true.
+- When `hasSchedule` is false/null/missing, the EstNum item should be non-clickable (no pointer cursor) and should not open the Schedule modal, but should keep normal card visual styling (no grayed/muted treatment).
+- EstNum edit remains available via contextual action menu (for example `Update Estimate`) and must still open the Estimate edit modal.
+- Schedule modal content must be native frontend table UI (no PDF embedding/viewers/images) with `Compact` default and user-selectable `Detail`.
+- Schedule modal width should follow report/table content width as closely as possible (fit-content behavior) while respecting viewport max constraints (for example `max-width` near `92-96vw`, `max-height` near `85-90vh`).
+- Schedule modal loading state should use report-viewer sizing (not a small form-sized modal) so initial load feels consistent with the final report experience.
+- Compact schedule reports should avoid large unused right-side whitespace; summary bars should align to report/table width.
+- Large schedule report modals should use constrained flex layout (`max-height` + column flex); keep header/control section outside the report scroll area when practical.
+- Schedule table/report scroll container must be a shrinkable flex child (`min-height: 0`) with `overflow: auto` so both horizontal and vertical scrolling happen inside the modal.
+- Schedule tables should support subtle row + column hover highlighting to improve readability across wide reports; hovered cell may be slightly stronger, while overall report styling remains dominant.
+- Schedule table data should be cached in-memory per `EstNum` + view mode (for example `<estNum>:compact`, `<estNum>:detail`) during the page session.
+- Compact/detail toggles should reuse cached data when available and avoid redundant refetches.
+- Compact/detail table behavior should come from structured backend schedule-table JSON that reuses report logic.
+
+## Station Item Interactions
+- Station cards may use the same hover-triggered floating attached action menu pattern used by EstNum cards for secondary actions.
+- `Add station` action opens Station modal in `create` mode.
+- Clicking a Station card opens Station modal in `edit` mode.
+- Station modal should use one shared component for create/edit when feasible.
+- Station modal draft state should include station fields, delivery-method fields, linked contacts, and station-contact link metadata in one local object.
+- Do not call backend updates while Station modal fields are edited; apply changes only from the primary modal submit action.
+- Station modal layout should feel like one integrated editor; avoid heavy per-section card framing that makes the form feel fragmented.
+- Use subtle section headings/dividers and spacing for Station modal structure instead of strong boxed backgrounds.
+- Three-section Station modal layouts should use responsive grid behavior that can render 3 columns on wide screens, 2 columns on medium screens, and stacked sections on smaller screens.
+- Keep enough horizontal gap between Station modal columns so sections feel breathable and scannable.
+- Do not allow Station columns to squeeze below usable form widths; wrap/stack sections instead.
+- Station modal labels (including nested Station helper dialogs) should reuse shared form label sizing/weight/color to match EstNum and Account Information patterns.
+- Keep internal identifiers hidden in user-facing Station sections by default (for example delivery-method ids), while retaining ids in draft/payload state.
+- Prefer compact icon action controls with tooltips for station entity actions rather than large text-button rows.
+- Delivery-method selector dialogs must provide a comfortably tall, scrollable list region so options are not clipped by modal containers.
+- Delivery-method selector options must include enough identifying metadata when names repeat (name + URL + username + deadline + password, with ID when useful).
+- Cache delivery-method selector options in memory only for reopen performance; do not persist selector data in browser storage.
+- Delivery-method passwords may be shown in Station selector/summary UI when they are intentionally shared credentials.
+- Keep delivery-method selector data memory-only and do not persist password-bearing selector payloads in browser storage.
+- Delivery-method selector search should cover visible identifying fields (name, URL, username, deadline, password, and optional ID).
+- Station nested helper modals (`Select Delivery Method`, `Add/Edit Delivery Method`, `Add Existing Contact`, `Create/Edit Contact`) must use top-right `X` close only; do not add footer `Cancel`/`Close` buttons.
+- Station nested helper modals must block accidental loss: dirty state uses unsaved-changes confirmation on close attempts, and outside click must not silently close dirty forms.
+- Selector-style Station helper modals should disable primary action until the selection is valid and changed from current/baseline values.
+- Delivery Method add/edit form required fields must show red `*` indicators for required labels only (`name`, `url`, `username`, `deadline`).
+- Delivery Method and Contact helper forms should align label/input rows consistently with shared Tradsphere form geometry on desktop and stack on smaller widths.
+- Delivery Method edit helper modal should include a compact `Also used by` section listing other stations using the same method when frontend data is available.
+- Delivery Method action icons inside Station modal should be ordered left-to-right as `Add delivery method`, `Edit delivery method`, then `Select delivery method`, with matching tooltip and `aria-label`.
+- Station contact actions (`add existing`, `create`, `copy`, `edit`, `remove`) should be icon-based and stay draft-local until Station save submits bundled payload.
+- Keep Station form-row alignment strict: a stable label column and consistent value-column left edge across read-only values, inputs, dropdowns, and textareas.
+- When dropdowns are used inside modals, menu overlays must render without clipping (layered above containers) and support internal scrolling for long option lists.
+- Every icon-only action control should include a visible tooltip on hover/focus and an equivalent `aria-label`.
+- Icon-only controls should use clear action-specific icons; avoid ambiguous symbols when a clearer icon is available.
+- Ensure tooltip overlays are not clipped by card or scroll containers; use overlay-safe rendering patterns.
+- Align multi-section modal header rows to a shared baseline so divider lines appear level across columns.
+- Delivery Method inside Station modal should be managed through action workflows (`Select Delivery Method`, `Add Delivery Method`, `Edit Delivery Method`) instead of inline direct field editing.
+- Station contacts UI should keep compact cards with clear actions (`Copy contact`, `Edit`, `Remove`) and lightweight visual density.
+- Keep `Add Existing Contact` and `Create Contact` as draft-state actions when bundled station APIs support transactional save.
+- Contact/card copy actions should output Gmail-ready values and use app-native feedback.
+- Large Station/related-record modals should use responsive wrapping grids and viewport-safe sizing (wide desktop layout, clean wrap/stack on medium/small screens).
+- Station modal section cards should keep a minimum usable width (about `360px` when space allows); never let columns shrink to unreadable form widths.
+- Form rows must wrap labels above controls on narrow cards instead of squeezing controls; input/textarea text should remain horizontal and readable.
+- Keep Station modal save behavior request-efficient:
+  - prefer one detail-read request for edit mode.
+  - prefer one transactional backend create/update endpoint when available; if unavailable, document the API gap and avoid partial per-field autosaves.
+- Station modal contacts section should support linked-contact display; if safe create/edit/remove of contacts/links is not fully supported by backend APIs, keep those actions disabled and clearly marked.
+- Station `Copy contact` must use only station/contact fields that are already loaded in current frontend state; do not add backend routes or new API calls for contact copying.
+- Station `Copy contact` should copy Gmail-ready contact text: `Full Name <email@example.com>` when name + email exist, with email-only fallback when name is unavailable.
+- If no valid email exists in loaded station/contact data, keep `Copy contact` unavailable/disabled instead of fetching more data.
+- Clipboard actions must show app-native feedback (toast/inline state) for success/failure; do not use browser-native `alert`/`confirm`.

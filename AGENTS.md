@@ -1282,8 +1282,9 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # 2) Build TradSphere UI
-npm --prefix apps/tradsphere/ui install
-npm --prefix apps/tradsphere/ui run build
-rm -rf static/assets static/index.html
-cp -R apps/tradsphere/ui/dist/* static/
+npm --prefix frontend/apps/tradsphere install
+npm --prefix frontend/apps/tradsphere run build
+rm -rf apps/tradsphere/ui_dist/assets apps/tradsphere/ui_dist/index.html
+cp -R frontend/apps/tradsphere/dist/* apps/tradsphere/ui_dist/
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
+

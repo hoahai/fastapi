@@ -16,7 +16,12 @@
     "noUnusedParameters": true,
     "baseUrl": ".",
     "paths": {
-      "@/*": ["./src/*"]
+      "@/*": ["./src/*"],
+      "@home/*": ["../home/src/*"],
+      "react": ["./node_modules/@types/react/index.d.ts"],
+      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime.d.ts"],
+      "lucide-react": ["./node_modules/lucide-react/dist/lucide-react.d.ts"],
+      "@shared/*": ["../../shared/*"]
     }
   },
   "include": ["src"]

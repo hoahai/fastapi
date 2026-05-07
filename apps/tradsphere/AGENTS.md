@@ -228,6 +228,10 @@ Authorization:
   - billingType: `Calendar` or `Broadcast`
   - PDF payload cached per tenant+estNum for 90 days.
   - PDF cache invalidated on schedule/schedule-week writes.
+- `GET /schedules/table`:
+  - returns structured schedule-table JSON for frontend report rendering
+  - reuses schedule report-generation logic so compact/detail table math stays aligned
+  - does not modify existing PDF generation behavior
 
 ## 9. MySQL Database Schema
 
@@ -297,6 +301,7 @@ All routes require `X-Tenant-Id` + valid API key unless route docs/state says ot
 | POST | `/api/tradsphere/v1/stations/deliveryMethods` | `create_delivery_methods_route` | `TradSphere_DeliveryMethods` | Upserts delivery methods; invalidates caches. |
 | PUT | `/api/tradsphere/v1/stations/deliveryMethods` | `update_delivery_methods_route` | `TradSphere_DeliveryMethods` | Updates delivery methods; invalidates caches. |
 | GET | `/api/tradsphere/v1/schedules` | `get_schedules_route` | `TradSphere_Schedules` | Read only. |
+| GET | `/api/tradsphere/v1/schedules/table` | `get_schedules_table_route` | `TradSphere_Schedules`, `TradSphere_ScheduleWeeks`, `TradSphere_Stations`, `TradSphere_EstNums` | Returns structured compact/detail schedule table JSON; reused report logic; PDF route unchanged. |
 | GET | `/api/tradsphere/v1/schedules/pdf` | `get_schedules_pdf_route` | `TradSphere_Schedules`, `TradSphere_ScheduleWeeks`, `TradSphere_Stations`, `TradSphere_EstNums` | Generates PDF bytes; uses/refreshes tenant-scoped PDF cache. |
 | POST | `/api/tradsphere/v1/schedules` | `create_schedules_route` | `TradSphere_Schedules`, `TradSphere_ScheduleWeeks` | Upserts schedules + weeks; invalidates validation + PDF caches. |
 | PUT | `/api/tradsphere/v1/schedules` | `update_schedules_route` | `TradSphere_Schedules`, `TradSphere_ScheduleWeeks` | Updates schedules; recomputes totals; invalidates validation + PDF caches. |

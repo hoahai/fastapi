@@ -34,14 +34,15 @@ type AnimatedHoverCardProps =
 
 function focusAndInteractionClasses(as: AnimatedHoverCardProps["as"]): string {
   if (as === "button") {
-    return "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 focus-visible:ring-offset-2";
+    return "appearance-none border-0 outline-none focus:outline-none focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 focus-visible:ring-offset-2";
   }
   return "";
 }
 
 export function AnimatedHoverCard(props: AnimatedHoverCardProps) {
   const commonRootClassName = cn(
-    "group relative overflow-visible rounded-xl bg-transparent",
+    "group relative isolate overflow-visible rounded-xl bg-transparent",
+    "before:pointer-events-none before:absolute before:inset-x-4 before:inset-y-2 before:z-0 before:rounded-2xl before:bg-blue-500/12 before:opacity-0 before:blur-md before:content-[''] before:transition-opacity before:duration-200 group-hover:before:opacity-100",
     "transition-transform duration-200 ease-out hover:-translate-y-0.5",
     "motion-reduce:transition-none motion-reduce:hover:translate-y-0",
     focusAndInteractionClasses(props.as),
@@ -95,7 +96,7 @@ export function HoverCircle({ children, className }: HoverCircleProps) {
   return (
     <div
       className={cn(
-        "relative z-10 transition-transform duration-150 ease-out group-hover:scale-[1.055]",
+        "relative z-10 transition-transform duration-150 ease-out group-hover:scale-[1.02]",
         "motion-reduce:transition-none motion-reduce:group-hover:scale-100",
         className,
       )}

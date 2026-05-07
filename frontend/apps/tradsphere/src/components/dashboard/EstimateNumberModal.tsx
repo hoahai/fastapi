@@ -1,0 +1,985 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import { Loader2, X } from "lucide-react";
+
+import {
+  TRADSPHERE_BROADCAST_TIMEZONE,
+  getBroadcastMonthRange,
+  getBroadcastQuarterRange,
+  getBroadcastYearRange,
+} from "@/lib/broadcastCalendar";
+import { AppDropdown } from "@/components/ui/app-dropdown";
+import { Button } from "@/components/ui/button";
+import { CacheStatusChip } from "@/components/ui/cache-status-chip";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
+import { canModalClose, shouldBlockOutsideClose } from "@/components/ui/modal-close-guard";
+import { UnsavedChangesDialog } from "@/components/ui/unsaved-changes-dialog";
+import { useApiRequest, type ApiRequestOptions } from "@/hooks/useApiRequest";
+import { readBrowserCacheSnapshot, writeBrowserCache } from "@/lib/browserCache";
+import { TRADSPHERE_CACHE_TTL_MS } from "@shared/cache";
+
+import { FlightDateRangeField } from "./FlightDateRangeField";
+import { type FlightRangePresetState } from "./FlightRangeSelector";
+import { LabeledField, ReadOnlyValue } from "./FormFieldRow";
+
+const EST_NUM_MAX_UNSIGNED_INT = 4294967295;
+const MEDIA_TYPE_VALUES = ["TV", "RA", "CA", "OD", "NP", "CINE", "OTT"] as const;
+const MEDIA_TYPE_OPTIONS = MEDIA_TYPE_VALUES.map((value) => ({ value, label: value }));
+const CREATE_EST_NUM_URL = "/api/tradsphere/v1/estNums";
+const UPDATE_EST_NUM_URL = "/api/tradsphere/v1/estNums";
+const ESTNUM_DETAIL_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.ESTNUM_DETAIL;
+const CHICAGO_DATE_PARTS_FORMATTER = new Intl.DateTimeFormat("en-US", {
+  timeZone: TRADSPHERE_BROADCAST_TIMEZONE,
+  year: "numeric",
+  month: "2-digit",
+  day: "2-digit",
+});
+
+export type EstimateNumberModalMode = "create" | "edit";
+
+export type EstimateNumberModalData = {
+  estNum?: number;
+  accountCode?: string;
+  flightStart?: string;
+  flightEnd?: string;
+  mediaType?: string;
+  buyer?: string;
+  note?: string | null;
+};
+
+export type EstimateNumberModalSaveResult = {
+  mode: EstimateNumberModalMode;
+  estNum: number;
+  accountCode: string;
+  note: string | null;
+};
+
+interface EstimateNumberModalProps {
+  open: boolean;
+  onOpenChange: (open: boolean) => void;
+  mode: EstimateNumberModalMode;
+  initialData?: EstimateNumberModalData | null;
+  accountCode: string;
+  accountName?: string;
+  headers: HeadersInit;
+  onSuccess?: (result: EstimateNumberModalSaveResult) => Promise<void> | void;
+}
+
+type EstNumFormState = {
+  estNum: string;
+  accountCode: string;
+  flightStart: string;
+  flightEnd: string;
+  mediaType: string;
+  buyer: string;
+  note: string;
+};
+
+type ComparableFormState = {
+  estNum: string;
+  accountCode: string;
+  flightStart: string;
+  flightEnd: string;
+  mediaType: string;
+  buyer: string;
+  note: string;
+};
+
+type ParsedIsoDate = {
+  year: number;
+  month: number;
+  day: number;
+};
+
+
+function buildInitialFormState(
+  accountCode: string,
+  mode: EstimateNumberModalMode,
+  initialData?: EstimateNumberModalData | null,
+): EstNumFormState {
+  const normalizedAccountCode =
+    asString(initialData?.accountCode).toUpperCase() || accountCode.trim().toUpperCase();
+
+  return {
+    estNum:
+      initialData?.estNum !== undefined && initialData?.estNum !== null
+        ? String(initialData.estNum)
+        : "",
+    accountCode: normalizedAccountCode,
+    flightStart: asString(initialData?.flightStart),
+    flightEnd: asString(initialData?.flightEnd),
+    mediaType:
+      asString(initialData?.mediaType).toUpperCase() ||
+      (mode === "create" ? MEDIA_TYPE_VALUES[0] : ""),
+    buyer: asString(initialData?.buyer) || (mode === "create" ? "Elyse" : ""),
+    note: asString(initialData?.note),
+  };
+}
+
+function parseIsoDate(value: string): ParsedIsoDate | null {
+  const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
+  if (!match) {
+    return null;
+  }
+
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  const day = Number(match[3]);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || !Number.isInteger(day)) {
+    return null;
+  }
+  if (month < 1 || month > 12) {
+    return null;
+  }
+
+  const maxDay = new Date(Date.UTC(year, month, 0)).getUTCDate();
+  if (day < 1 || day > maxDay) {
+    return null;
+  }
+
+  return { year, month, day };
+}
+
+function getTodayInChicago(): ParsedIsoDate {
+  const parts = CHICAGO_DATE_PARTS_FORMATTER.formatToParts(new Date());
+  const values = parts.reduce<Record<string, string>>((output, part) => {
+    output[part.type] = part.value;
+    return output;
+  }, {});
+
+  const year = Number(values.year);
+  const month = Number(values.month);
+  const day = Number(values.day);
+
+  return {
+    year: Number.isFinite(year) ? year : 1970,
+    month: Number.isFinite(month) ? month : 1,
+    day: Number.isFinite(day) ? day : 1,
+  };
+}
+
+function toQuarter(month: number): string {
+  return String(Math.floor((month - 1) / 3) + 1);
+}
+
+function buildDefaultQuarterPreset(month: number, year: number): FlightRangePresetState {
+  return {
+    rangeType: "QUARTER",
+    rangeValue: toQuarter(month),
+    year: String(year),
+  };
+}
+
+function getRangeFromPreset(preset: FlightRangePresetState): { flightStart: string; flightEnd: string } | null {
+  const year = Number(preset.year);
+  if (!Number.isInteger(year)) {
+    return null;
+  }
+
+  if (preset.rangeType === "MONTH") {
+    const month = Number(preset.rangeValue);
+    if (!Number.isInteger(month)) {
+      return null;
+    }
+    return getBroadcastMonthRange(month, year);
+  }
+
+  if (preset.rangeType === "QUARTER") {
+    const quarter = Number(preset.rangeValue);
+    if (!Number.isInteger(quarter) || quarter < 1 || quarter > 4) {
+      return null;
+    }
+    return getBroadcastQuarterRange(quarter as 1 | 2 | 3 | 4, year);
+  }
+
+  if (preset.rangeType === "YEAR") {
+    return getBroadcastYearRange(year);
+  }
+
+  return null;
+}
+
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function asString(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (typeof value === "number") {
+    return String(value);
+  }
+  return "";
+}
+
+function asNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    if (Number.isFinite(parsed)) {
+      return parsed;
+    }
+  }
+  return null;
+}
+
+function unwrapData(payload: unknown): unknown {
+  if (isRecord(payload) && "data" in payload) {
+    return payload.data;
+  }
+  return payload;
+}
+
+function toTitleCasePreservingSpaces(value: string): string {
+  return value.replace(/\S+/g, (token) => {
+    if (!token) {
+      return token;
+    }
+    return token.charAt(0).toUpperCase() + token.slice(1).toLowerCase();
+  });
+}
+
+function validateForm(form: EstNumFormState): string | null {
+  const estNumText = form.estNum.trim();
+  if (!estNumText) {
+    return "EstNum is required.";
+  }
+
+  const estNum = Number(estNumText);
+  if (!Number.isInteger(estNum) || estNum < 0 || estNum > EST_NUM_MAX_UNSIGNED_INT) {
+    return "EstNum must be an unsigned integer.";
+  }
+
+  if (!form.accountCode.trim()) {
+    return "Account code is required.";
+  }
+
+  if (!form.flightStart || !form.flightEnd) {
+    return "Flight dates are required.";
+  }
+
+  const flightRangeError = getFlightRangeValidationError(form);
+  if (flightRangeError) {
+    return flightRangeError;
+  }
+
+  if (!form.mediaType.trim()) {
+    return "Media type is required.";
+  }
+
+  const buyer = form.buyer.trim();
+  if (!buyer) {
+    return "Buyer is required.";
+  }
+  if (buyer.length > 36) {
+    return "Buyer must be 36 characters or fewer.";
+  }
+
+  if (form.note.trim().length > 2048) {
+    return "Note must be 2048 characters or fewer.";
+  }
+
+  return null;
+}
+
+function getFlightRangeValidationError(form: EstNumFormState): string | null {
+  if (!form.flightStart || !form.flightEnd) {
+    return null;
+  }
+  if (form.flightStart > form.flightEnd) {
+    return "Flight start date must be on or before flight end date.";
+  }
+  return null;
+}
+
+function toComparableFormState(form: EstNumFormState): ComparableFormState {
+  return {
+    estNum: form.estNum.trim(),
+    accountCode: form.accountCode.trim().toUpperCase(),
+    flightStart: form.flightStart.trim(),
+    flightEnd: form.flightEnd.trim(),
+    mediaType: form.mediaType.trim().toUpperCase(),
+    buyer: form.buyer.trim(),
+    note: form.note.trim(),
+  };
+}
+
+function hasFormChanges(current: EstNumFormState, original: EstNumFormState | null): boolean {
+  if (!original) {
+    return false;
+  }
+
+  const currentComparable = toComparableFormState(current);
+  const originalComparable = toComparableFormState(original);
+  return (
+    currentComparable.estNum !== originalComparable.estNum ||
+    currentComparable.accountCode !== originalComparable.accountCode ||
+    currentComparable.flightStart !== originalComparable.flightStart ||
+    currentComparable.flightEnd !== originalComparable.flightEnd ||
+    currentComparable.mediaType !== originalComparable.mediaType ||
+    currentComparable.buyer !== originalComparable.buyer ||
+    currentComparable.note !== originalComparable.note
+  );
+}
+
+function parseEstNumRow(payload: unknown, targetEstNum: number): EstimateNumberModalData | null {
+  const data = unwrapData(payload);
+  if (!Array.isArray(data)) {
+    return null;
+  }
+
+  const matched = data.find((item) => {
+    if (!isRecord(item)) {
+      return false;
+    }
+    const estNum = asNumber(item.estNum);
+    return estNum !== null && estNum === targetEstNum;
+  });
+
+  if (!isRecord(matched)) {
+    return null;
+  }
+
+  const estNum = asNumber(matched.estNum);
+  if (estNum === null) {
+    return null;
+  }
+
+  return {
+    estNum,
+    accountCode: asString(matched.accountCode).toUpperCase(),
+    flightStart: asString(matched.flightStart),
+    flightEnd: asString(matched.flightEnd),
+    mediaType: asString(matched.mediaType).toUpperCase(),
+    buyer: asString(matched.buyer),
+    note: asString(matched.note),
+  };
+}
+
+async function fetchEstNumDetail(
+  requestJson: (url: string, options?: ApiRequestOptions) => Promise<unknown>,
+  estNum: number,
+  accountCode: string,
+  headers: HeadersInit,
+  forceFresh = false,
+): Promise<{ detail: EstimateNumberModalData | null; source: "cache" | "network" | null; fetchedAt: number | null }> {
+  const normalizedAccountCode = accountCode.trim().toUpperCase();
+  const detailCacheKey = `estnum-detail:${normalizedAccountCode}:${estNum}`;
+  const cachedDetail = readBrowserCacheSnapshot<EstimateNumberModalData>(detailCacheKey);
+  if (!forceFresh && cachedDetail && !cachedDetail.isExpired) {
+    return {
+      detail: cachedDetail.data,
+      source: "cache",
+      fetchedAt: cachedDetail.fetchedAt,
+    };
+  }
+
+  const query = new URLSearchParams();
+  query.set("estNum", String(estNum));
+  if (normalizedAccountCode) {
+    query.set("accountCode", normalizedAccountCode);
+  }
+
+  const payload = await requestJson(`/api/tradsphere/v1/estNums?${query.toString()}`, {
+    headers,
+    errorToast: false,
+  });
+  const parsed = parseEstNumRow(payload, estNum);
+  const fetchedAt = Date.now();
+  if (parsed) {
+    writeBrowserCache(detailCacheKey, parsed, ESTNUM_DETAIL_CACHE_TTL_MS, { source: "network", fetchedAt });
+  }
+  return {
+    detail: parsed,
+    source: "network",
+    fetchedAt,
+  };
+}
+
+function RequiredMark() {
+  return <span className="ml-1 text-rose-600">*</span>;
+}
+
+export function EstimateNumberModal({
+  open,
+  onOpenChange,
+  mode,
+  initialData,
+  accountCode,
+  accountName,
+  headers,
+  onSuccess,
+}: EstimateNumberModalProps) {
+  const { requestJson } = useApiRequest();
+  const chicagoToday = useMemo(() => getTodayInChicago(), []);
+  const [form, setForm] = useState<EstNumFormState>(() =>
+    buildInitialFormState(accountCode, mode, initialData),
+  );
+  const [originalForm, setOriginalForm] = useState<EstNumFormState | null>(null);
+  const [flightRangePreset, setFlightRangePreset] = useState<FlightRangePresetState>(() =>
+    buildDefaultQuarterPreset(chicagoToday.month, chicagoToday.year),
+  );
+  const [hasAutoSeededDefaultDates, setHasAutoSeededDefaultDates] = useState(false);
+  const [flightRangeError, setFlightRangeError] = useState<string | null>(null);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [detailError, setDetailError] = useState<string | null>(null);
+  const [isLoadingDetail, setIsLoadingDetail] = useState(false);
+  const [isRefreshingDetail, setIsRefreshingDetail] = useState(false);
+  const [hasAttemptedDetailLoad, setHasAttemptedDetailLoad] = useState(false);
+  const [detailRefreshToken, setDetailRefreshToken] = useState(0);
+  const [detailCacheStatus, setDetailCacheStatus] = useState<{ source: "cache" | "network"; fetchedAt: number } | null>(null);
+  const handledDetailRefreshTokenRef = useRef(0);
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false);
+
+  useEffect(() => {
+    if (!open) {
+      setOriginalForm(null);
+      setHasAutoSeededDefaultDates(false);
+      setSubmitError(null);
+      setDetailError(null);
+      setIsDiscardDialogOpen(false);
+      setIsLoadingDetail(false);
+      setIsRefreshingDetail(false);
+      setHasAttemptedDetailLoad(false);
+      setDetailCacheStatus(null);
+      setFlightRangeError(null);
+      return;
+    }
+
+    setSubmitError(null);
+    setDetailError(null);
+    setIsDiscardDialogOpen(false);
+    setFlightRangeError(null);
+    setHasAutoSeededDefaultDates(false);
+    const isManualRefresh = detailRefreshToken !== handledDetailRefreshTokenRef.current;
+    if (isManualRefresh) {
+      handledDetailRefreshTokenRef.current = detailRefreshToken;
+    }
+    setIsRefreshingDetail(isManualRefresh);
+
+    const initialForm = buildInitialFormState(accountCode, mode, initialData);
+    const parsedStart = parseIsoDate(initialForm.flightStart);
+    const defaultPreset = buildDefaultQuarterPreset(
+      parsedStart?.month ?? chicagoToday.month,
+      parsedStart?.year ?? chicagoToday.year,
+    );
+    setFlightRangePreset(defaultPreset);
+
+    if (mode === "create") {
+      let seededInitialForm = initialForm;
+      if (!initialForm.flightStart || !initialForm.flightEnd) {
+        const defaultRange = getRangeFromPreset(defaultPreset);
+        if (defaultRange) {
+          seededInitialForm = {
+            ...initialForm,
+            flightStart: initialForm.flightStart || defaultRange.flightStart,
+            flightEnd: initialForm.flightEnd || defaultRange.flightEnd,
+          };
+        }
+      }
+      setForm(seededInitialForm);
+      setOriginalForm(seededInitialForm);
+      return;
+    }
+
+    // Edit mode keeps a loading shell until detail is fetched; do not pre-seed dates
+    // from partial initialData, otherwise close behavior incorrectly treats form as dirty.
+    setForm(initialForm);
+    setOriginalForm(null);
+
+    setHasAttemptedDetailLoad(false);
+    const estNum = initialData?.estNum;
+    if (estNum === undefined || estNum === null) {
+      setDetailError("Missing EstNum identifier for edit mode.");
+      setHasAttemptedDetailLoad(true);
+      return;
+    }
+
+    let isMounted = true;
+    setIsLoadingDetail(true);
+
+    void fetchEstNumDetail(requestJson, estNum, accountCode, headers, isManualRefresh)
+      .then((detailResult) => {
+        if (!isMounted || !detailResult.detail) {
+          if (isMounted) {
+            setDetailError("Unable to load estimate details.");
+            setHasAttemptedDetailLoad(true);
+          }
+          return;
+        }
+        if (detailResult.source && detailResult.fetchedAt) {
+          setDetailCacheStatus({
+            source: detailResult.source,
+            fetchedAt: detailResult.fetchedAt,
+          });
+        }
+        const loadedForm = buildInitialFormState(accountCode, mode, detailResult.detail);
+        setForm(loadedForm);
+        setOriginalForm(loadedForm);
+        setHasAutoSeededDefaultDates(false);
+        {
+          const parsedStart = parseIsoDate(loadedForm.flightStart);
+          const defaultPreset = buildDefaultQuarterPreset(
+            parsedStart?.month ?? chicagoToday.month,
+            parsedStart?.year ?? chicagoToday.year,
+          );
+          setFlightRangePreset(defaultPreset);
+
+          if (!loadedForm.flightStart || !loadedForm.flightEnd) {
+            const defaultRange = getRangeFromPreset(defaultPreset);
+            if (defaultRange) {
+              setHasAutoSeededDefaultDates(true);
+              setForm((current) => ({
+                ...current,
+                flightStart: current.flightStart || defaultRange.flightStart,
+                flightEnd: current.flightEnd || defaultRange.flightEnd,
+              }));
+            }
+          }
+        }
+        setHasAttemptedDetailLoad(true);
+      })
+      .catch((error) => {
+        if (!isMounted) {
+          return;
+        }
+        setDetailError(error instanceof Error ? error.message : "Unable to load estimate details.");
+        setHasAttemptedDetailLoad(true);
+      })
+      .finally(() => {
+        if (isMounted) {
+          setIsLoadingDetail(false);
+          setIsRefreshingDetail(false);
+        }
+      });
+
+    return () => {
+      isMounted = false;
+    };
+  }, [accountCode, chicagoToday.month, chicagoToday.year, detailRefreshToken, headers, initialData, mode, open]);
+
+  function updateForm<K extends keyof EstNumFormState>(field: K, value: EstNumFormState[K]) {
+    setForm((current) => ({ ...current, [field]: value }));
+    setSubmitError(null);
+  }
+
+  function updateFlightDateManually(field: "flightStart" | "flightEnd", value: string) {
+    setForm((current) => ({ ...current, [field]: value }));
+    setFlightRangeError(null);
+    setSubmitError(null);
+    setFlightRangePreset((current) => {
+      if (current.rangeType === "CUSTOM") {
+        return current;
+      }
+      return { ...current, rangeType: "CUSTOM", rangeValue: "" };
+    });
+  }
+
+  function applyFlightRangePreset(range: { flightStart: string; flightEnd: string }) {
+    if (range.flightStart > range.flightEnd) {
+      setFlightRangeError("Preset range is invalid. Please choose a different preset.");
+      return;
+    }
+    setFlightRangeError(null);
+    setSubmitError(null);
+    setForm((current) => ({
+      ...current,
+      flightStart: range.flightStart,
+      flightEnd: range.flightEnd,
+    }));
+  }
+
+  const isEditMode = mode === "edit";
+  const hasUnsavedChanges =
+    hasFormChanges(form, originalForm) || (isEditMode && hasAutoSeededDefaultDates);
+  const isDetailReady = !isEditMode || (hasAttemptedDetailLoad && !isLoadingDetail && !detailError && !!originalForm);
+
+  function handleDialogOpenChange(nextOpen: boolean) {
+    const allowClose = canModalClose({
+      nextOpen,
+      isBusy: isSubmitting,
+      hasUnsavedChanges,
+    });
+    if (!allowClose) {
+      if (!nextOpen && hasUnsavedChanges && !isSubmitting) {
+        setIsDiscardDialogOpen(true);
+      }
+      return;
+    }
+    onOpenChange(nextOpen);
+  }
+
+  async function handleSubmit() {
+    if (isSubmitting) {
+      return;
+    }
+
+    const validationError = validateForm(form);
+    if (validationError) {
+      setSubmitError(validationError);
+      return;
+    }
+
+    if (mode === "edit" && (!isDetailReady || !hasUnsavedChanges)) {
+      return;
+    }
+
+    setSubmitError(null);
+    setIsSubmitting(true);
+
+    try {
+      const estNum = Number(form.estNum.trim());
+
+      if (mode === "create") {
+        const createPayload = {
+          estNum,
+          accountCode: form.accountCode.trim().toUpperCase(),
+          flightStart: form.flightStart,
+          flightEnd: form.flightEnd,
+          mediaType: form.mediaType.trim().toUpperCase(),
+          buyer: form.buyer.trim(),
+          note: form.note.trim(),
+        };
+
+        await requestJson(CREATE_EST_NUM_URL, {
+          method: "POST",
+          headers,
+          body: createPayload,
+          successToast: {
+            title: "Estimate created",
+            message: `EstNum ${estNum} was created successfully.`,
+          },
+          errorToast: {
+            title: "Create failed",
+          },
+        });
+      } else {
+        const updatePayload = {
+          estNum,
+          accountCode: form.accountCode.trim().toUpperCase(),
+          flightStart: form.flightStart,
+          flightEnd: form.flightEnd,
+          mediaType: form.mediaType.trim().toUpperCase(),
+          buyer: form.buyer.trim(),
+          note: form.note.trim(),
+        };
+
+        await requestJson(UPDATE_EST_NUM_URL, {
+          method: "PUT",
+          headers,
+          body: updatePayload,
+          successToast: {
+            title: "Estimate updated",
+            message: `EstNum ${estNum} was updated successfully.`,
+          },
+          errorToast: {
+            title: "Update failed",
+          },
+        });
+      }
+
+      await onSuccess?.({
+        mode,
+        estNum,
+        accountCode: form.accountCode.trim().toUpperCase(),
+        note: form.note.trim() || null,
+      });
+      writeBrowserCache(
+        `estnum-detail:${form.accountCode.trim().toUpperCase()}:${estNum}`,
+        {
+          estNum,
+          accountCode: form.accountCode.trim().toUpperCase(),
+          flightStart: form.flightStart,
+          flightEnd: form.flightEnd,
+          mediaType: form.mediaType.trim().toUpperCase(),
+          buyer: form.buyer.trim(),
+          note: form.note.trim() || null,
+        },
+        ESTNUM_DETAIL_CACHE_TTL_MS,
+        { source: "network" },
+      );
+      setDetailCacheStatus({
+        source: "network",
+        fetchedAt: Date.now(),
+      });
+      onOpenChange(false);
+    } catch (error) {
+      const errorMessage =
+        error instanceof Error
+          ? error.message
+          : mode === "create"
+            ? "Unable to create estimate number."
+            : "Unable to update estimate number.";
+      setSubmitError(
+        errorMessage,
+      );
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  const modalTitle = isEditMode ? "Edit Estimate Number" : "Estimate Number";
+  const submitLabel = isEditMode ? "Save Changes" : "Create";
+  const description = isEditMode
+    ? "Update the selected estimate number."
+    : "Create a new estimate number for the selected TradSphere account.";
+  const formValidationError = isDetailReady ? validateForm(form) : null;
+  const flightDateValidationError = isDetailReady ? getFlightRangeValidationError(form) : null;
+  const flightErrorMessage = flightRangeError || flightDateValidationError;
+  const detailStatusText = isEditMode
+    ? isLoadingDetail
+      ? isRefreshingDetail
+        ? "Refreshing..."
+        : "Loading..."
+      : detailCacheStatus
+        ? `Data source: ${detailCacheStatus.source}. Last updated ${formatRelativeTime(detailCacheStatus.fetchedAt)}.`
+        : "No cached data yet"
+    : null;
+  const canSubmit =
+    isDetailReady &&
+    !formValidationError &&
+    (!isEditMode || hasUnsavedChanges);
+  const shouldShowSubmitButton = canSubmit || isSubmitting;
+
+  return (
+    <Dialog open={open} onOpenChange={handleDialogOpenChange}>
+      <DialogContent
+        className="max-w-[620px] rounded-xl bg-white p-6"
+        onEscapeKeyDown={(event) => {
+          if (isSubmitting) {
+            event.preventDefault();
+          }
+        }}
+        onInteractOutside={(event) => {
+          if (
+            shouldBlockOutsideClose({
+              isBusy: isSubmitting,
+              hasUnsavedChanges,
+            })
+          ) {
+            event.preventDefault();
+          }
+        }}
+      >
+        <DialogClose
+          className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
+          aria-label="Close estimate number modal"
+          disabled={isSubmitting}
+        >
+          <X className="size-4" />
+        </DialogClose>
+
+        <DialogHeader>
+          <DialogTitle>{modalTitle}</DialogTitle>
+          <DialogDescription>{description}</DialogDescription>
+        </DialogHeader>
+
+        {isEditMode && !isDetailReady ? (
+          <div className="mt-8 flex min-h-52 flex-col items-center justify-center gap-3 text-center">
+            {detailError ? (
+              <p className="text-sm text-amber-700">{detailError}</p>
+            ) : (
+              <>
+                <Loader2 className="size-5 animate-spin text-slate-500" />
+                <p className="text-sm text-slate-600">Loading estimate number...</p>
+              </>
+            )}
+          </div>
+        ) : (
+          <div className="mt-4 space-y-4">
+            <LabeledField
+              label={
+                <>
+                  Account<RequiredMark />
+                </>
+              }
+            >
+              <ReadOnlyValue value={accountName?.trim() || form.accountCode} />
+            </LabeledField>
+
+            <LabeledField
+              label={
+                <>
+                  EstNum<RequiredMark />
+                </>
+              }
+            >
+              {isEditMode ? (
+                <ReadOnlyValue value={form.estNum} />
+              ) : (
+                <Input
+                  id="estnum-number"
+                  type="number"
+                  min={0}
+                  max={EST_NUM_MAX_UNSIGNED_INT}
+                  step={1}
+                  value={form.estNum}
+                  onChange={(event) => updateForm("estNum", event.target.value)}
+                  placeholder="e.g. 26001"
+                  disabled={isSubmitting}
+                />
+              )}
+            </LabeledField>
+
+            <LabeledField
+              label={
+                <>
+                  Media Type<RequiredMark />
+                </>
+              }
+            >
+              <AppDropdown
+                ariaLabel="Media type"
+                value={form.mediaType}
+                options={MEDIA_TYPE_OPTIONS}
+                onValueChange={(value) => updateForm("mediaType", value)}
+                placeholder="Select media type"
+                disabled={isSubmitting}
+                searchable={false}
+                className="w-full"
+                emptyText="No media type found."
+              />
+            </LabeledField>
+
+            <LabeledField
+              label={
+                <>
+                  Buyer<RequiredMark />
+                </>
+              }
+            >
+              <Input
+                id="estnum-buyer"
+                value={form.buyer}
+                onChange={(event) => updateForm("buyer", event.target.value)}
+                onBlur={(event) => {
+                  const normalized = toTitleCasePreservingSpaces(event.target.value);
+                  if (normalized !== form.buyer) {
+                    updateForm("buyer", normalized);
+                  }
+                }}
+                placeholder="Buyer name"
+                maxLength={36}
+                disabled={isSubmitting}
+              />
+            </LabeledField>
+
+            <LabeledField
+              label={
+                <>
+                  Flight Dates<RequiredMark />
+                </>
+              }
+            >
+              <FlightDateRangeField
+                flightStart={form.flightStart}
+                flightEnd={form.flightEnd}
+                onFlightStartChange={(value) => updateFlightDateManually("flightStart", value)}
+                onFlightEndChange={(value) => updateFlightDateManually("flightEnd", value)}
+                flightRangePreset={flightRangePreset}
+                onFlightRangePresetChange={setFlightRangePreset}
+                onApplyFlightRangePreset={applyFlightRangePreset}
+                onFlightRangeError={setFlightRangeError}
+                defaultMonth={chicagoToday.month}
+                defaultYear={chicagoToday.year}
+                disabled={isSubmitting}
+              />
+            </LabeledField>
+
+            {flightErrorMessage ? <p className="ml-[126px] text-sm text-rose-600">{flightErrorMessage}</p> : null}
+
+            <LabeledField label="Note" alignStart>
+              <Textarea
+                id="estnum-note"
+                value={form.note}
+                onChange={(event) => updateForm("note", event.target.value)}
+                placeholder="Optional note"
+                maxLength={2048}
+                disabled={isSubmitting}
+              />
+            </LabeledField>
+          </div>
+        )}
+
+        {submitError ? <p className="mt-2 text-sm text-rose-600">{submitError}</p> : null}
+
+        {shouldShowSubmitButton ? (
+          <DialogFooter>
+            <Button onClick={handleSubmit} disabled={isSubmitting}>
+              {isSubmitting ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  Saving...
+                </>
+              ) : (
+                submitLabel
+              )}
+            </Button>
+          </DialogFooter>
+        ) : null}
+
+        {detailStatusText ? (
+          <footer className="shrink-0 border-t border-slate-100 bg-white px-0 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+            <CacheStatusChip
+              text={detailStatusText}
+              onRefresh={() => {
+                if (!isLoadingDetail && !isSubmitting && isEditMode) {
+                  setDetailRefreshToken((current) => current + 1);
+                }
+              }}
+              disabled={!isEditMode || isLoadingDetail || isSubmitting}
+              refreshing={isRefreshingDetail}
+              refreshLabel="Refresh estimate detail"
+              tooltipText="Click to refresh this data"
+            />
+          </footer>
+        ) : null}
+      </DialogContent>
+
+      <UnsavedChangesDialog
+        open={isDiscardDialogOpen}
+        onKeepEditing={() => {
+          setIsDiscardDialogOpen(false);
+        }}
+        onDiscardChanges={() => {
+          setIsDiscardDialogOpen(false);
+          onOpenChange(false);
+        }}
+      />
+    </Dialog>
+  );
+}
+
+function formatRelativeTime(timestamp: number): string {
+  const ageMs = Math.max(0, Date.now() - timestamp);
+  if (ageMs < 30_000) {
+    return "just now";
+  }
+
+  const minutes = Math.floor(ageMs / 60_000);
+  if (minutes < 60) {
+    return `${minutes} min ago`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours} hr ago`;
+  }
+
+  const days = Math.floor(hours / 24);
+  return `${days} day${days > 1 ? "s" : ""} ago`;
+}

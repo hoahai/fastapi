@@ -3,7 +3,12 @@
 ## Scope
 - Frontend source lives under `frontend/`.
 - App-specific code lives under `frontend/apps/<app-name>/`.
+- Workspace Home is an app under `frontend/apps/home/`.
+- Tradsphere is an app under `frontend/apps/tradsphere/`.
+- New frontend apps should be added under `frontend/apps/<app-name>/`.
 - Shared UI code lives under `frontend/shared/`.
+- Shared UI/cache/hooks/styles/theme utilities belong in `frontend/shared/`.
+- Keep `frontend/src/` minimal for root app entry/router wiring only.
 
 ## Routing and API Rules
 - Production frontend route is `/fe`.
@@ -24,3 +29,16 @@
 ## Delivery Rules
 - Keep generated artifacts out of source commits.
 - Ensure frontend builds before proposing backend integration changes.
+
+## Shared Cache Rules
+- Use shared cache utilities under `frontend/shared/cache/` for frontend data caching.
+- Default data-loading policy is `stale-while-revalidate`.
+- Manual refresh actions must use `network-only` and update cache on success.
+- Mutations (`create/update/delete`) must patch relevant cache entries and invalidate or mark related cache keys stale.
+- Never persist sensitive values (`passwords`, tokens, secrets) to `localStorage`/`sessionStorage`; use in-memory cache for sensitive data.
+- Avoid app-specific duplicate cache implementations when shared cache utilities can be reused.
+- Cache status UI should use low-emphasis floating chips; do not let cache notes/buttons occupy primary layout flow.
+- Page cache chips should stay fixed near viewport bottom; modal chips should stay fixed/sticky near modal bottom.
+- Cache refresh chips must use button semantics, keyboard focus styles, tooltip text on hover/focus, and context-specific `aria-label`.
+- In report/table dialogs, anchor cache chips to the modal shell/footer (outside primary scroll content) so large tables never push chip placement.
+- Preserve stale-while-revalidate UX: show cached data immediately and revalidate without blanking visible cached panels.

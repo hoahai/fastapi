@@ -1,0 +1,1156 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  type ColumnDef,
+  type FilterFn,
+  getCoreRowModel,
+  getFilteredRowModel,
+  useReactTable,
+} from "@tanstack/react-table";
+import { AlertCircle, CalendarDays, CloudUpload, Monitor, Plus } from "lucide-react";
+
+import { AccountInformationCard } from "@/components/dashboard/AccountInformationCard";
+import { ActionIconButton } from "@/components/dashboard/ActionIconButton";
+import { AccountSelector } from "@/components/dashboard/AccountSelector";
+import { AppHeader } from "@/components/dashboard/AppHeader";
+import { DashboardPanel } from "@/components/dashboard/DashboardPanel";
+import {
+  EstimateNumberModal,
+  type EstimateNumberModalData,
+  type EstimateNumberModalMode,
+  type EstimateNumberModalSaveResult,
+} from "@/components/dashboard/EstimateNumberModal";
+import { HeroBanner } from "@/components/dashboard/HeroBanner";
+import { ScheduleCard } from "@/components/dashboard/ScheduleCard";
+import { ScheduleModal } from "@/components/dashboard/ScheduleModal";
+import { ScheduleUploadDialog } from "@/components/dashboard/ScheduleUploadDialog";
+import { StationCard } from "@/components/dashboard/StationCard";
+import {
+  StationModal,
+  type StationModalMode,
+  type StationModalSaveResult,
+} from "@/components/dashboard/StationModal";
+import { CacheStatusChip } from "@/components/ui/cache-status-chip";
+import type {
+  AccountInfo,
+  AccountSelection,
+  ApiMainLoadResponse,
+  EsnumItem,
+  MainLoadResponse,
+  StationItem,
+} from "@/components/dashboard/types";
+import { Separator } from "@/components/ui/separator";
+import { useToast } from "@/components/ui/toast";
+import { useApiRequest, type ApiRequestOptions } from "@/hooks/useApiRequest";
+import { usePersistentState } from "@/hooks/usePersistentState";
+import {
+  readBrowserCacheSnapshot,
+  removeBrowserCacheByPrefix,
+  writeBrowserCache,
+} from "@/lib/browserCache";
+import { TRADSPHERE_CACHE_TTL_MS, shouldFetchNetwork, type CachePolicy } from "@shared/cache";
+
+const scheduleColumns: ColumnDef<EsnumItem>[] = [{ accessorKey: "estnum" }, { accessorKey: "name" }];
+
+const stationColumns: ColumnDef<StationItem>[] = [{ accessorKey: "code" }, { accessorKey: "name" }];
+
+const SELECTIONS_CACHE_KEY = "tradsphere:main:selections:v2";
+const SELECTIONS_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.SELECTIONS;
+const LOAD_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.MAIN_LOAD;
+const SCHEDULE_IMPORT_URL = "/api/tradsphere/v1/schedules/import/file?skipBlankLines=false";
+const HOME_SELECTED_ACCOUNT_STORAGE_KEY = "tradsphere.home.selectedAccount";
+const HOME_SCHEDULE_SEARCH_STORAGE_KEY = "tradsphere.home.searchText.schedule";
+const HOME_STATION_SEARCH_STORAGE_KEY = "tradsphere.home.searchText.station";
+
+type CacheStatus = {
+  source: "cache" | "network";
+  fetchedAt: number;
+};
+
+const scheduleFilterFn: FilterFn<EsnumItem> = (row, _columnId, filterValue) => {
+  const query = String(filterValue ?? "").trim().toLowerCase();
+  if (!query) {
+    return true;
+  }
+  const esnum = row.original;
+  return [String(esnum.estnum), esnum.name, esnum.note ?? ""]
+    .join(" ")
+    .toLowerCase()
+    .includes(query);
+};
+
+const stationFilterFn: FilterFn<StationItem> = (row, _columnId, filterValue) => {
+  const query = String(filterValue ?? "").trim().toLowerCase();
+  if (!query) {
+    return true;
+  }
+  const station = row.original;
+  const repText = (station.repContacts ?? [])
+    .map((contact) => `${contact.fullName ?? ""} ${contact.email ?? ""}`.trim())
+    .join(" ");
+  return [station.code, station.name ?? "", repText].join(" ").toLowerCase().includes(query);
+};
+
+function App() {
+  const toast = useToast();
+  const { requestJson } = useApiRequest();
+  const [accountSelections, setAccountSelections] = useState<AccountSelection[]>([]);
+  const [selectedAccountCode, setSelectedAccountCode] = usePersistentState<string>(
+    HOME_SELECTED_ACCOUNT_STORAGE_KEY,
+    "",
+    { storage: "session", validate: (value: unknown): value is string => typeof value === "string" },
+  );
+  const [isLoadingSelections, setIsLoadingSelections] = useState(true);
+  const [isRefreshingSelections, setIsRefreshingSelections] = useState(false);
+  const [selectionsError, setSelectionsError] = useState<string | null>(null);
+  const [selectionsCacheStatus, setSelectionsCacheStatus] = useState<CacheStatus | null>(null);
+
+  const [isLoadingAccount, setIsLoadingAccount] = useState(false);
+  const [isRefreshingAccount, setIsRefreshingAccount] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
+  const [hasLoadedDashboard, setHasLoadedDashboard] = useState(false);
+  const [dashboardCacheStatus, setDashboardCacheStatus] = useState<CacheStatus | null>(null);
+
+  const [accountOriginal, setAccountOriginal] = useState<AccountInfo | null>(null);
+  const [accountForm, setAccountForm] = useState<AccountInfo | null>(null);
+
+  const [esnums, setEsnums] = useState<EsnumItem[]>([]);
+  const [stations, setStations] = useState<StationItem[]>([]);
+
+  const [scheduleSearch, setScheduleSearch] = usePersistentState<string>(
+    HOME_SCHEDULE_SEARCH_STORAGE_KEY,
+    "",
+    { storage: "session", validate: (value: unknown): value is string => typeof value === "string" },
+  );
+  const [stationSearch, setStationSearch] = usePersistentState<string>(
+    HOME_STATION_SEARCH_STORAGE_KEY,
+    "",
+    { storage: "session", validate: (value: unknown): value is string => typeof value === "string" },
+  );
+
+  const [isSaving, setIsSaving] = useState(false);
+  const [saveError, setSaveError] = useState<string | null>(null);
+  const [isScheduleUploadOpen, setIsScheduleUploadOpen] = useState(false);
+  const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
+  const [selectedScheduleEstnum, setSelectedScheduleEstnum] = useState<EsnumItem | null>(null);
+  const [scheduleCacheInvalidationToken, setScheduleCacheInvalidationToken] = useState(0);
+  const [invalidatedScheduleEstnum, setInvalidatedScheduleEstnum] = useState<number | null>(null);
+  const [isEstimateNumberModalOpen, setIsEstimateNumberModalOpen] = useState(false);
+  const [estimateModalMode, setEstimateModalMode] = useState<EstimateNumberModalMode>("create");
+  const [estimateModalInitialData, setEstimateModalInitialData] = useState<EstimateNumberModalData | null>(null);
+  const [isStationModalOpen, setIsStationModalOpen] = useState(false);
+  const [stationModalMode, setStationModalMode] = useState<StationModalMode>("create");
+  const [stationModalCode, setStationModalCode] = useState<string | null>(null);
+  const [scheduleUploadSuccessMessage, setScheduleUploadSuccessMessage] = useState<string | null>(null);
+  const hasAttemptedDashboardRestoreRef = useRef(false);
+  const requestHeaders = useMemo(() => buildAuthHeaders(false), []);
+
+  useEffect(() => {
+    void fetchSelections("stale-while-revalidate");
+  }, []);
+
+  const schedulesTable = useReactTable({
+    data: esnums,
+    columns: scheduleColumns,
+    state: { globalFilter: scheduleSearch },
+    onGlobalFilterChange: setScheduleSearch,
+    globalFilterFn: scheduleFilterFn,
+    getCoreRowModel: getCoreRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+  });
+
+  const stationsTable = useReactTable({
+    data: stations,
+    columns: stationColumns,
+    state: { globalFilter: stationSearch },
+    onGlobalFilterChange: setStationSearch,
+    globalFilterFn: stationFilterFn,
+    getCoreRowModel: getCoreRowModel(),
+    getFilteredRowModel: getFilteredRowModel(),
+  });
+
+  const filteredSchedules = schedulesTable.getFilteredRowModel().rows.map((row) => row.original);
+  const filteredStations = stationsTable.getFilteredRowModel().rows.map((row) => row.original);
+
+  const hasEditableChanges = Boolean(
+    accountOriginal &&
+      accountForm &&
+      (accountOriginal.billingType !== accountForm.billingType ||
+        (accountOriginal.market ?? "") !== (accountForm.market ?? "") ||
+        (accountOriginal.note ?? "") !== (accountForm.note ?? "")),
+  );
+
+  function resetLoadedDashboardData() {
+    setAccountOriginal(null);
+    setAccountForm(null);
+    setEsnums([]);
+    setStations([]);
+    setScheduleUploadSuccessMessage(null);
+  }
+
+  function applyLoadedData(data: MainLoadResponse) {
+    setAccountOriginal(data.account);
+    setAccountForm(data.account);
+    setEsnums(data.esnums);
+    setStations(data.stations);
+  }
+
+  function handleAccountChange(value: string) {
+    setSelectedAccountCode(value.toUpperCase());
+    setLoadError(null);
+    setSaveError(null);
+    setDashboardCacheStatus(null);
+    setIsRefreshingAccount(false);
+    setIsEstimateNumberModalOpen(false);
+    setEstimateModalMode("create");
+    setEstimateModalInitialData(null);
+    setIsStationModalOpen(false);
+    setStationModalMode("create");
+    setStationModalCode(null);
+    setIsScheduleModalOpen(false);
+    setSelectedScheduleEstnum(null);
+    setHasLoadedDashboard(false);
+    resetLoadedDashboardData();
+  }
+
+  async function fetchSelections(policy: CachePolicy) {
+    const cacheSnapshot = readBrowserCacheSnapshot<AccountSelection[]>(SELECTIONS_CACHE_KEY);
+    const cachedSelections = normalizeSelectionsResponse(cacheSnapshot?.data);
+    const hasCachedSelections = cachedSelections.length > 0;
+    const shouldUseCache = policy !== "network-only" && hasCachedSelections;
+    const shouldFetchFromNetwork = shouldFetchNetwork(policy, cacheSnapshot);
+
+    if (shouldUseCache) {
+      applySelections(cachedSelections);
+      setSelectionsCacheStatus({
+        source: "cache",
+        fetchedAt: cacheSnapshot?.fetchedAt ?? Date.now(),
+      });
+    }
+
+    if (!shouldFetchFromNetwork) {
+      setIsLoadingSelections(false);
+      setIsRefreshingSelections(false);
+      return;
+    }
+
+    setIsLoadingSelections(!shouldUseCache);
+    setIsRefreshingSelections(shouldUseCache);
+    setSelectionsError(null);
+
+    try {
+      const payload = await requestJson("/api/tradsphere/v1/ui/main/selections", {
+        headers: requestHeaders,
+      });
+      const selections = normalizeSelectionsResponse(payload);
+      writeBrowserCache(SELECTIONS_CACHE_KEY, selections, SELECTIONS_CACHE_TTL_MS, { source: "network" });
+      applySelections(selections);
+      setSelectionsCacheStatus({
+        source: "network",
+        fetchedAt: Date.now(),
+      });
+    } catch (error) {
+      if (!shouldUseCache) {
+        setSelectionsError(getErrorMessage(error, "Unable to load account selections."));
+        setAccountSelections([]);
+        setSelectedAccountCode("");
+        setHasLoadedDashboard(false);
+        resetLoadedDashboardData();
+      } else {
+        setSelectionsError(null);
+      }
+    } finally {
+      setIsLoadingSelections(false);
+      setIsRefreshingSelections(false);
+    }
+  }
+
+  function applySelections(selections: AccountSelection[]) {
+    setAccountSelections(selections);
+    if (!selections.length) {
+      setSelectedAccountCode("");
+      return;
+    }
+
+    const normalizedSelectedAccountCode = selectedAccountCode.toUpperCase();
+    const matchingSelection = selections.find(
+      (option) => option.accountCode.toUpperCase() === normalizedSelectedAccountCode,
+    );
+    if (matchingSelection) {
+      if (matchingSelection.accountCode !== selectedAccountCode) {
+        setSelectedAccountCode(matchingSelection.accountCode);
+      }
+      return;
+    }
+
+    setSelectedAccountCode(selections[0].accountCode);
+    setHasLoadedDashboard(false);
+    resetLoadedDashboardData();
+  }
+
+  useEffect(() => {
+    if (isLoadingSelections || hasAttemptedDashboardRestoreRef.current) {
+      return;
+    }
+
+    hasAttemptedDashboardRestoreRef.current = true;
+    if (!selectedAccountCode || hasLoadedDashboard || isLoadingAccount || isSaving) {
+      return;
+    }
+
+    const cacheSnapshot = readBrowserCacheSnapshot<unknown>(getLoadCacheKey(selectedAccountCode));
+    const cachedDashboard = normalizeCachedMainLoadResponse(cacheSnapshot?.data);
+    if (!cachedDashboard || !shouldUseCachedLoad(cachedDashboard, selectedAccountCode)) {
+      return;
+    }
+
+    void loadAccountDashboard("stale-while-revalidate");
+  }, [hasLoadedDashboard, isLoadingAccount, isLoadingSelections, isSaving, selectedAccountCode]);
+
+  async function loadAccountDashboard(
+    policy: CachePolicy,
+  ): Promise<{ success: boolean; source: "cache" | "network" | null }> {
+    if (!selectedAccountCode || isLoadingAccount || isSaving) {
+      return { success: false, source: null };
+    }
+
+    const loadCacheKey = getLoadCacheKey(selectedAccountCode);
+    const cacheSnapshot = readBrowserCacheSnapshot<unknown>(loadCacheKey);
+    const cachedDashboard = normalizeCachedMainLoadResponse(cacheSnapshot?.data);
+    const canUseCachedData =
+      policy !== "network-only" &&
+      !!cachedDashboard &&
+      shouldUseCachedLoad(cachedDashboard, selectedAccountCode);
+    const shouldFetchFromNetwork = shouldFetchNetwork(policy, cacheSnapshot);
+
+    if (canUseCachedData && cachedDashboard) {
+      applyLoadedData(cachedDashboard);
+      setHasLoadedDashboard(true);
+      setDashboardCacheStatus({
+        source: "cache",
+        fetchedAt: cacheSnapshot?.fetchedAt ?? Date.now(),
+      });
+    }
+
+    if (!shouldFetchFromNetwork) {
+      return { success: true, source: "cache" };
+    }
+
+    setIsLoadingAccount(!canUseCachedData);
+    setIsRefreshingAccount(canUseCachedData);
+    setLoadError(null);
+    setSaveError(null);
+
+    try {
+      const payload = await requestJson(
+        `/api/tradsphere/v1/ui/main/load?accountCode=${encodeURIComponent(selectedAccountCode)}`,
+        {
+          headers: requestHeaders,
+        },
+      );
+      const data = normalizeMainLoadResponse(payload);
+
+      if (!data?.account) {
+        throw new Error("Load response did not include account data.");
+      }
+
+      writeBrowserCache(loadCacheKey, data, LOAD_CACHE_TTL_MS, { source: "network" });
+      applyLoadedData(data);
+      setHasLoadedDashboard(true);
+      setDashboardCacheStatus({
+        source: "network",
+        fetchedAt: Date.now(),
+      });
+      return { success: true, source: "network" };
+    } catch (error) {
+      const errorMessage = getErrorMessage(error, "Unable to load account dashboard data.");
+      if (canUseCachedData) {
+        setLoadError(null);
+        return { success: true, source: "cache" };
+      } else {
+        setLoadError(errorMessage);
+        resetLoadedDashboardData();
+        setHasLoadedDashboard(false);
+        return { success: false, source: null };
+      }
+    } finally {
+      setIsLoadingAccount(false);
+      setIsRefreshingAccount(false);
+    }
+  }
+
+  async function handleLoadAccount() {
+    const isSameLoadedAccount =
+      hasLoadedDashboard &&
+      accountOriginal?.code?.trim().toUpperCase() === selectedAccountCode.trim().toUpperCase();
+    const result = await loadAccountDashboard(isSameLoadedAccount ? "network-only" : "cache-first");
+    if (result.success && selectedAccountCode) {
+      if (isSameLoadedAccount) {
+        toast.success("Dashboard refreshed", `Fetched fresh data for ${selectedAccountCode}.`);
+      } else {
+        const suffix = result.source === "cache" ? " from cache." : ".";
+        toast.success("Account loaded", `Loaded dashboard for ${selectedAccountCode}${suffix}`);
+      }
+    }
+  }
+
+  async function handleRefreshAccount(): Promise<void> {
+    if (!selectedAccountCode) {
+      return;
+    }
+    const result = await loadAccountDashboard("network-only");
+    if (result.success) {
+      toast.success("Dashboard refreshed", `Fetched fresh data for ${selectedAccountCode}.`);
+    }
+  }
+
+  async function handleSaveAccount() {
+    if (!accountForm || isSaving || isLoadingAccount) {
+      return;
+    }
+
+    setIsSaving(true);
+    setSaveError(null);
+
+    try {
+      await saveAccountChanges(requestJson, accountForm, requestHeaders);
+      setAccountOriginal(accountForm);
+
+      const cacheKey = getLoadCacheKey(accountForm.code);
+      const cached = normalizeCachedMainLoadResponse(readBrowserCacheSnapshot<unknown>(cacheKey)?.data);
+      if (cached) {
+        writeBrowserCache(
+          cacheKey,
+          {
+            ...cached,
+            account: accountForm,
+          },
+          LOAD_CACHE_TTL_MS,
+          { source: "network" },
+        );
+        setDashboardCacheStatus({
+          source: "network",
+          fetchedAt: Date.now(),
+        });
+      }
+    } catch (error) {
+      const errorMessage = getErrorMessage(error, "Unable to save account changes.");
+      setSaveError(errorMessage);
+      toast.error("Save failed", errorMessage);
+    } finally {
+      setIsSaving(false);
+    }
+  }
+
+  async function handleEstimateNumberSaved(result: EstimateNumberModalSaveResult): Promise<void> {
+    if (!selectedAccountCode || result.accountCode.toUpperCase() !== selectedAccountCode.toUpperCase()) {
+      return;
+    }
+
+    setEsnums((current) => {
+      const existing = current.find((item) => item.estnum === result.estNum);
+      const fallbackName = String(result.estNum);
+      const nextItem: EsnumItem = {
+        estnum: result.estNum,
+        name: existing?.name || fallbackName,
+        hasSchedule: existing?.hasSchedule ?? false,
+        note: result.note,
+      };
+
+      const next = existing
+        ? current.map((item) => (item.estnum === result.estNum ? { ...item, ...nextItem } : item))
+        : [...current, nextItem].sort((a, b) => a.estnum - b.estnum);
+
+      const loadCacheKey = getLoadCacheKey(selectedAccountCode);
+      const cachedDashboard = normalizeCachedMainLoadResponse(readBrowserCacheSnapshot<unknown>(loadCacheKey)?.data);
+      const accountCacheSource = cachedDashboard?.account ?? accountForm ?? accountOriginal;
+      if (accountCacheSource) {
+        writeBrowserCache(
+          loadCacheKey,
+          {
+            account: accountCacheSource,
+            esnums: next,
+            stations,
+          },
+          LOAD_CACHE_TTL_MS,
+          { source: "network" },
+        );
+        setDashboardCacheStatus({
+          source: "network",
+          fetchedAt: Date.now(),
+        });
+      }
+
+      return next;
+    });
+
+    setInvalidatedScheduleEstnum(result.estNum);
+    setScheduleCacheInvalidationToken((current) => current + 1);
+    removeBrowserCacheByPrefix(`schedule-table:${selectedAccountCode.toUpperCase()}:${result.estNum}:`);
+  }
+
+  async function handleStationSaved(result: StationModalSaveResult): Promise<void> {
+    setStations((current) => {
+      const nextStation: StationItem = {
+        code: result.stationCode,
+        name: result.stationName || result.stationCode,
+        repContacts: result.repContacts?.length ? result.repContacts : undefined,
+      };
+      const existingIndex = current.findIndex(
+        (item) => item.code.toUpperCase() === result.stationCode.toUpperCase(),
+      );
+      const next =
+        existingIndex >= 0
+          ? current.map((item, index) => (index === existingIndex ? { ...item, ...nextStation } : item))
+          : [...current, nextStation].sort((a, b) => a.code.localeCompare(b.code));
+
+      const loadCacheKey = getLoadCacheKey(selectedAccountCode);
+      const cachedDashboard = normalizeCachedMainLoadResponse(readBrowserCacheSnapshot<unknown>(loadCacheKey)?.data);
+      const accountCacheSource = cachedDashboard?.account ?? accountForm ?? accountOriginal;
+      if (accountCacheSource) {
+        writeBrowserCache(
+          loadCacheKey,
+          {
+            account: accountCacheSource,
+            esnums,
+            stations: next,
+          },
+          LOAD_CACHE_TTL_MS,
+          { source: "network" },
+        );
+        setDashboardCacheStatus({
+          source: "network",
+          fetchedAt: Date.now(),
+        });
+      }
+      return next;
+    });
+  }
+
+  function openEstimateCreateModal() {
+    setEstimateModalMode("create");
+    setEstimateModalInitialData(null);
+    setIsEstimateNumberModalOpen(true);
+  }
+
+  function openEstimateEditModal(esnum: EsnumItem) {
+    setEstimateModalMode("edit");
+    setEstimateModalInitialData({
+      estNum: esnum.estnum,
+      accountCode: selectedAccountCode,
+      note: esnum.note ?? "",
+    });
+    setIsEstimateNumberModalOpen(true);
+  }
+
+  function openStationCreateModal() {
+    setStationModalMode("create");
+    setStationModalCode(null);
+    setIsStationModalOpen(true);
+  }
+
+  function openStationEditModal(station: StationItem) {
+    setStationModalMode("edit");
+    setStationModalCode(station.code);
+    setIsStationModalOpen(true);
+  }
+
+  function openScheduleModal(esnum: EsnumItem) {
+    if (!esnum.hasSchedule || !selectedAccountCode || isLoadingAccount || isSaving) {
+      return;
+    }
+    setSelectedScheduleEstnum(esnum);
+    setIsScheduleModalOpen(true);
+  }
+
+  const selectionsStatusText = isLoadingSelections
+    ? "Loading..."
+    : isRefreshingSelections
+      ? "Refreshing..."
+      : selectionsCacheStatus
+        ? `Selections source: ${selectionsCacheStatus.source}. Last updated ${formatRelativeTime(selectionsCacheStatus.fetchedAt)}.`
+        : null;
+  const dashboardStatusText = isLoadingAccount
+    ? "Loading..."
+    : isRefreshingAccount
+      ? "Refreshing..."
+      : dashboardCacheStatus
+        ? `Data source: ${dashboardCacheStatus.source}. Last updated ${formatRelativeTime(dashboardCacheStatus.fetchedAt)}.`
+        : null;
+  const pageCacheStatusText = dashboardStatusText ?? selectionsStatusText;
+
+  return (
+    <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-6 pb-12">
+      <AppHeader />
+      <HeroBanner />
+
+      <AccountSelector
+        selectedAccountCode={selectedAccountCode}
+        options={accountSelections}
+        isLoadingSelections={isLoadingSelections}
+        selectionsError={selectionsError}
+        isLoadingAccount={isLoadingAccount}
+        isRefreshingAccount={isRefreshingAccount}
+        isSavingAccount={isSaving}
+        onAccountChange={handleAccountChange}
+        onLoad={handleLoadAccount}
+      />
+
+      {loadError ? (
+        <p className="flex items-center gap-2 text-sm text-rose-600">
+          <AlertCircle className="size-4" />
+          {loadError}
+        </p>
+      ) : null}
+
+      {hasLoadedDashboard ? (
+        <>
+          <Separator />
+
+          <main className="grid gap-5 lg:grid-cols-[360px_minmax(0,1fr)] lg:items-start">
+            <AccountInformationCard
+              account={accountForm}
+              isSaving={isSaving}
+              hasEditableChanges={hasEditableChanges}
+              saveError={saveError}
+              onBillingTypeChange={(billingType) =>
+                setAccountForm((current) =>
+                  current
+                    ? {
+                        ...current,
+                        billingType,
+                      }
+                    : current,
+                )
+              }
+              onMarketChange={(market) =>
+                setAccountForm((current) => (current ? { ...current, market } : current))
+              }
+              onNoteChange={(note) =>
+                setAccountForm((current) => (current ? { ...current, note } : current))
+              }
+              onSave={handleSaveAccount}
+            />
+
+            <div className="space-y-5">
+              <DashboardPanel
+                title="EstNums - Schedules"
+                icon={<CalendarDays className="size-5 text-blue-600" />}
+                searchValue={scheduleSearch}
+                onSearchChange={setScheduleSearch}
+                actions={
+                  <>
+                    <ActionIconButton
+                      aria-label="Upload schedules"
+                      tooltip="Upload schedules"
+                      onClick={() => {
+                        setScheduleUploadSuccessMessage(null);
+                        setIsScheduleUploadOpen(true);
+                      }}
+                      disabled={isLoadingAccount || isSaving}
+                      icon={<CloudUpload />}
+                    />
+                    <ActionIconButton
+                      aria-label="Add estimate"
+                      tooltip="Add estimate"
+                      onClick={openEstimateCreateModal}
+                      disabled={!selectedAccountCode || isLoadingAccount || isSaving}
+                      icon={<Plus />}
+                    />
+                  </>
+                }
+              >
+                {scheduleUploadSuccessMessage ? (
+                  <p className="rounded-md border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
+                    {scheduleUploadSuccessMessage}
+                  </p>
+                ) : null}
+                <div className="flex gap-3 overflow-x-auto pb-2">
+                  {filteredSchedules.map((esnum) => (
+                    <ScheduleCard
+                      key={esnum.estnum}
+                      esnum={esnum}
+                      onClick={() => openScheduleModal(esnum)}
+                      onEditEstimate={() => openEstimateEditModal(esnum)}
+                      disabled={!selectedAccountCode || isLoadingAccount || isSaving}
+                    />
+                  ))}
+                </div>
+                {!filteredSchedules.length ? (
+                  <p className="text-sm text-slate-500">No EstNums or schedules were returned for this account.</p>
+                ) : null}
+              </DashboardPanel>
+
+              <DashboardPanel
+                title="Stations"
+                icon={<Monitor className="size-5 text-blue-600" />}
+                searchValue={stationSearch}
+                onSearchChange={setStationSearch}
+                actions={
+                  <ActionIconButton
+                    aria-label="Add station"
+                    tooltip="Add station"
+                    icon={<Plus />}
+                    onClick={openStationCreateModal}
+                    disabled={!selectedAccountCode || isLoadingAccount || isSaving}
+                  />
+                }
+              >
+                <div className="flex gap-3 overflow-x-auto pb-2">
+                  {filteredStations.map((station) => (
+                    <StationCard
+                      key={station.code}
+                      station={station}
+                      onClick={() => openStationEditModal(station)}
+                      disabled={!selectedAccountCode || isLoadingAccount || isSaving}
+                    />
+                  ))}
+                </div>
+                {!filteredStations.length ? (
+                  <p className="text-sm text-slate-500">No stations were returned for this account.</p>
+                ) : null}
+              </DashboardPanel>
+            </div>
+          </main>
+        </>
+      ) : null}
+
+      {pageCacheStatusText ? (
+        <CacheStatusChip
+          text={pageCacheStatusText}
+          onRefresh={() => {
+            void handleRefreshAccount();
+          }}
+          disabled={!selectedAccountCode || isLoadingAccount || isRefreshingAccount || isSaving}
+          refreshing={isRefreshingAccount}
+          refreshLabel="Refresh data"
+          tooltipText="Click to refresh data"
+          containerClassName="fixed right-4 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40 sm:right-6 lg:right-10"
+          className="max-w-[min(90vw,32rem)]"
+        />
+      ) : null}
+
+      <ScheduleUploadDialog
+        open={isScheduleUploadOpen}
+        onOpenChange={setIsScheduleUploadOpen}
+        uploadUrl={SCHEDULE_IMPORT_URL}
+        headers={requestHeaders}
+        onUploadSuccess={(fileName) => {
+          setScheduleUploadSuccessMessage(`Upload completed for "${fileName}".`);
+          setInvalidatedScheduleEstnum(null);
+          setScheduleCacheInvalidationToken((current) => current + 1);
+          removeBrowserCacheByPrefix(`schedule-table:${selectedAccountCode.toUpperCase()}:`);
+          void loadAccountDashboard("network-only");
+        }}
+      />
+
+      <EstimateNumberModal
+        open={isEstimateNumberModalOpen}
+        onOpenChange={(nextOpen) => {
+          setIsEstimateNumberModalOpen(nextOpen);
+          if (!nextOpen) {
+            setEstimateModalInitialData(null);
+            setEstimateModalMode("create");
+          }
+        }}
+        mode={estimateModalMode}
+        initialData={estimateModalInitialData}
+        accountCode={selectedAccountCode}
+        accountName={
+          accountForm?.name ||
+          accountSelections.find((option) => option.accountCode === selectedAccountCode)?.name ||
+          ""
+        }
+        headers={requestHeaders}
+        onSuccess={handleEstimateNumberSaved}
+      />
+
+      <StationModal
+        open={isStationModalOpen}
+        onOpenChange={(nextOpen) => {
+          setIsStationModalOpen(nextOpen);
+          if (!nextOpen) {
+            setStationModalMode("create");
+            setStationModalCode(null);
+          }
+        }}
+        mode={stationModalMode}
+        stationCode={stationModalCode}
+        stationCatalog={stations}
+        headers={requestHeaders}
+        onSuccess={handleStationSaved}
+      />
+
+      <ScheduleModal
+        open={isScheduleModalOpen}
+        onOpenChange={(nextOpen) => {
+          setIsScheduleModalOpen(nextOpen);
+          if (!nextOpen) {
+            setSelectedScheduleEstnum(null);
+          }
+        }}
+        selectedEstnum={selectedScheduleEstnum}
+        accountCode={selectedAccountCode}
+        billingType={accountForm?.billingType}
+        headers={requestHeaders}
+        cacheInvalidationToken={scheduleCacheInvalidationToken}
+        invalidatedEstnum={invalidatedScheduleEstnum}
+      />
+    </div>
+  );
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
+}
+
+function unwrapData(payload: unknown): unknown {
+  if (isRecord(payload) && "data" in payload) {
+    return payload.data;
+  }
+  return payload;
+}
+
+function asString(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (typeof value === "number") {
+    return String(value);
+  }
+  return "";
+}
+
+function asNumber(value: unknown): number | null {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
+  }
+  if (typeof value === "string") {
+    const parsed = Number(value);
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  return null;
+}
+
+function buildLabel(code: string, name: string): string {
+  if (code && name) {
+    return `${code} - ${name}`;
+  }
+  return code || name;
+}
+
+function normalizeSelectionsResponse(payload: unknown): AccountSelection[] {
+  const data = unwrapData(payload);
+  if (!Array.isArray(data)) {
+    return [];
+  }
+
+  const output: AccountSelection[] = [];
+  const seen = new Set<string>();
+
+  for (const item of data) {
+    if (!isRecord(item)) {
+      continue;
+    }
+
+    const accountCode = asString(item.code ?? item.accountCode ?? item.value).toUpperCase();
+    const name = asString(item.name);
+    const label = asString(item.label) || buildLabel(accountCode, name);
+
+    if (!accountCode || !label || seen.has(accountCode)) {
+      continue;
+    }
+
+    seen.add(accountCode);
+    output.push({ accountCode, label, name: name || undefined });
+  }
+
+  return output;
+}
+
+function normalizeMainLoadResponse(payload: unknown): MainLoadResponse | null {
+  const apiResponse = parseApiMainLoadResponse(payload);
+  if (!apiResponse) {
+    return null;
+  }
+
+  return {
+    account: {
+      code: apiResponse.data.account.code,
+      name: apiResponse.data.account.name,
+      logoUrl: apiResponse.data.account.logoUrl ?? undefined,
+      billingType: apiResponse.data.account.billingType || "Calendar",
+      market: apiResponse.data.account.market ?? undefined,
+      note: apiResponse.data.account.note ?? undefined,
+    },
+    esnums: apiResponse.data.esnums ?? [],
+    stations: apiResponse.data.stations ?? [],
+  };
+}
+
+function normalizeCachedMainLoadResponse(payload: unknown): MainLoadResponse | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+
+  const accountRow = isRecord(payload.account) ? payload.account : null;
+  if (!accountRow) {
+    return null;
+  }
+
+  const code = asString(accountRow.code).toUpperCase();
+  const name = asString(accountRow.name);
+  if (!code || !name) {
+    return null;
+  }
+
+  const esnums = (Array.isArray(payload.esnums) ? payload.esnums : []).reduce<EsnumItem[]>((items, item) => {
+    if (!isRecord(item)) {
+      return items;
+    }
+
+    const estnum = asNumber(item.estnum);
+    if (estnum === null) {
+      return items;
+    }
+
+    items.push({
+      estnum,
+      name: asString(item.name) || String(estnum),
+      hasSchedule: Boolean(item.hasSchedule),
+      note: asNullableString(item.note),
+    });
+    return items;
+  }, []);
+
+  const stations = (Array.isArray(payload.stations) ? payload.stations : []).reduce<StationItem[]>((items, item) => {
+    if (!isRecord(item)) {
+      return items;
+    }
+
+    const stationCode = asString(item.code).toUpperCase();
+    if (!stationCode) {
+      return items;
+    }
+
+    const repContacts = (Array.isArray(item.repContacts) ? item.repContacts : []).reduce<NonNullable<StationItem["repContacts"]>>((contacts, contact) => {
+      if (!isRecord(contact)) {
+        return contacts;
+      }
+      const fullName = asNullableString(contact.fullName);
+      const email = asNullableString(contact.email);
+      if (!fullName && !email) {
+        return contacts;
+      }
+      contacts.push({ fullName, email });
+      return contacts;
+    }, []);
+
+    items.push({
+      code: stationCode,
+      name: asString(item.name),
+      deliveryMethodId: asNumber(item.deliveryMethodId ?? item.delivery_method_id),
+      mediaType: asNullableString(item.mediaType),
+      repContacts: repContacts.length ? repContacts : undefined,
+    });
+    return items;
+  }, []);
+
+  return {
+    account: {
+      code,
+      name,
+      logoUrl: asNullableString(accountRow.logoUrl),
+      billingType: asNullableString(accountRow.billingType) || "Calendar",
+      market: asNullableString(accountRow.market),
+      note: asNullableString(accountRow.note),
+    },
+    esnums,
+    stations,
+  };
+}
+
+function shouldUseCachedLoad(cached: MainLoadResponse, selectedAccountCode: string): boolean {
+  if (cached.account.code.toUpperCase() !== selectedAccountCode.toUpperCase()) {
+    return false;
+  }
+  if (cached.esnums.length === 0 && cached.stations.length === 0) {
+    return false;
+  }
+  return true;
+}
+
+function parseApiMainLoadResponse(payload: unknown): ApiMainLoadResponse | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+
+  const data = isRecord(payload.data) ? payload.data : payload;
+  if (!data) {
+    return null;
+  }
+
+  const accountRow = isRecord(data.account) ? data.account : null;
+  if (!accountRow) {
+    return null;
+  }
+
+  const accountCode = asString(accountRow.code).toUpperCase();
+  const accountName = asString(accountRow.name);
+  if (!accountCode || !accountName) {
+    return null;
+  }
+
+  const esnums = (Array.isArray(data.esnums) ? data.esnums : []).reduce<EsnumItem[]>((items, item) => {
+    if (!isRecord(item)) {
+      return items;
+    }
+
+    const estnum = asNumber(item.estnum);
+    if (estnum === null) {
+      return items;
+    }
+
+    items.push({
+      estnum,
+      name: asString(item.name) || String(estnum),
+      hasSchedule: Boolean(item.hasSchedule),
+      note: asNullableString(item.note),
+    });
+    return items;
+  }, []);
+
+  const stations = (Array.isArray(data.stations) ? data.stations : []).reduce<StationItem[]>((items, item) => {
+    if (!isRecord(item)) {
+      return items;
+    }
+
+    const stationCode = asString(item.code).toUpperCase();
+    if (!stationCode) {
+      return items;
+    }
+
+    const repContacts = (Array.isArray(item.repContacts) ? item.repContacts : []).reduce<NonNullable<StationItem["repContacts"]>>((contacts, contact) => {
+      if (!isRecord(contact)) {
+        return contacts;
+      }
+
+      const fullName = asNullableString(contact.fullName);
+      const email = asNullableString(contact.email);
+      if (!fullName && !email) {
+        return contacts;
+      }
+
+      contacts.push({ fullName, email });
+      return contacts;
+    }, []);
+
+    items.push({
+      code: stationCode,
+      name: asString(item.name),
+      deliveryMethodId: asNumber(item.deliveryMethodId ?? item.delivery_method_id),
+      mediaType: asNullableString(item.mediaType),
+      repContacts: repContacts.length ? repContacts : undefined,
+    });
+    return items;
+  }, []);
+
+  return {
+    meta: isRecord(payload.meta)
+      ? {
+          timestamp: asString(payload.meta.timestamp) || undefined,
+          duration_ms: asNumber(payload.meta.duration_ms) ?? undefined,
+          duration_hms: asString(payload.meta.duration_hms) || undefined,
+          client_id: asString(payload.meta.client_id) || undefined,
+          request_id: asString(payload.meta.request_id) || undefined,
+        }
+      : undefined,
+    data: {
+      account: {
+        code: accountCode,
+        name: accountName,
+        logoUrl: asNullableString(accountRow.logoUrl),
+        billingType: asNullableString(accountRow.billingType),
+        market: asNullableString(accountRow.market),
+        note: asNullableString(accountRow.note),
+      },
+      esnums,
+      stations,
+    },
+  };
+}
+
+function asNullableString(value: unknown): string | null {
+  if (value === null || value === undefined) {
+    return null;
+  }
+  const text = asString(value);
+  return text || null;
+}
+
+function getLoadCacheKey(accountCode: string): string {
+  return `tradsphere:main:load:${accountCode.toUpperCase()}:v2`;
+}
+
+function formatRelativeTime(timestamp: number): string {
+  const ageMs = Math.max(0, Date.now() - timestamp);
+  if (ageMs < 30_000) {
+    return "just now";
+  }
+
+  const minutes = Math.floor(ageMs / 60_000);
+  if (minutes < 60) {
+    return `${minutes} min ago`;
+  }
+
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours} hr ago`;
+  }
+
+  const days = Math.floor(hours / 24);
+  return `${days} day${days > 1 ? "s" : ""} ago`;
+}
+
+function buildAuthHeaders(includeJsonContentType: boolean): HeadersInit {
+  return {
+    "X-API-Key": "6ad13c1f7c17c32fb5a4582b4be42df5",
+    "X-Tenant-Id": "taaa",
+    "X-User-Name": "Hai Truong",
+    ...(includeJsonContentType ? { "Content-Type": "application/json" } : {}),
+  };
+}
+
+function getErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof Error && error.message) {
+    return error.message;
+  }
+  return fallback;
+}
+
+async function saveAccountChanges(
+  requestJson: (url: string, options?: ApiRequestOptions) => Promise<unknown>,
+  account: AccountInfo,
+  headers: HeadersInit,
+): Promise<void> {
+  const payload = {
+    accountCode: account.code,
+    billingType: account.billingType || "Calendar",
+    market: account.market ?? "",
+    note: account.note ?? "",
+  };
+
+  await requestJson("/api/tradsphere/v1/accounts", {
+    method: "PUT",
+    headers,
+    body: payload,
+    successToast: {
+      title: "Account saved",
+      message: `Account ${account.code} was updated successfully.`,
+    },
+    errorToast: {
+      title: "Save failed",
+    },
+  });
+}
+
+export default App;

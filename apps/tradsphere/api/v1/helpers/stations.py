@@ -1,6 +1,8 @@
 from __future__ import annotations
 
+from apps.tradsphere.api.v1.helpers import contacts as contacts_helper
 from apps.tradsphere.api.v1.helpers.accountValidation import (
+    ensure_contact_ids_exist,
     ensure_delivery_method_ids_exist,
     ensure_station_codes_exist,
     invalidate_validation_cache,
@@ -9,10 +11,13 @@ from apps.tradsphere.api.v1.helpers.config import get_media_types
 from apps.tradsphere.api.v1.helpers.dbQueries import (
     get_contacts_by_station_codes,
     get_delivery_methods,
+    get_station_contacts_detail_rows,
+    get_station_detail_row,
     get_station_media_types,
     get_stations,
     insert_delivery_methods,
     insert_stations,
+    save_station_detail_bundle,
     update_delivery_methods,
     update_stations,
 )
@@ -628,3 +633,390 @@ def modify_delivery_methods_data(payload: list[dict] | dict) -> dict[str, int]:
     updated = update_delivery_methods(normalized_rows)
     invalidate_validation_cache()
     return {"updated": updated}
+
+
+def _normalize_station_detail_contacts(contacts_payload: object) -> list[dict]:
+    if contacts_payload is None:
+        return []
+    if not isinstance(contacts_payload, list):
+        raise ValueError("contacts must be an array")
+
+    normalized_rows: list[dict] = []
+    ids_to_validate: list[int] = []
+    for index, row in enumerate(contacts_payload):
+        if not isinstance(row, dict):
+            raise ValueError(f"contacts[{index}] must be an object")
+
+        row_id = row.get("id")
+        client_key = str(row.get("clientKey") or "").strip()
+        has_first_name = "firstName" in row
+        has_last_name = "lastName" in row
+        use_name_field = "name" in row and not (has_first_name and has_last_name)
+
+        normalized_first_name: str | None = None
+        normalized_last_name: str | None = None
+        if has_first_name or has_last_name or use_name_field:
+            normalized_first_name, normalized_last_name = contacts_helper._resolve_contact_name_values(
+                row,
+                required_first_name=row_id is None,
+            )
+
+        email_value = contacts_helper._ensure_email(
+            row.get("email"),
+            field=f"contacts[{index}].email",
+        )
+        if row_id is not None:
+            ids_to_validate.append(int(row_id))
+
+        normalized_rows.append(
+            {
+                "id": int(row_id) if row_id is not None else None,
+                "clientKey": client_key or None,
+                "email": email_value,
+                "firstName": (
+                    normalized_first_name
+                    if normalized_first_name is not None
+                    else ("" if row_id is None else None)
+                ),
+                "lastName": normalized_last_name,
+                "company": contacts_helper._ensure_optional_text(
+                    row.get("company"),
+                    field=f"contacts[{index}].company",
+                    max_length=255,
+                ),
+                "jobTitle": contacts_helper._ensure_optional_text(
+                    row.get("jobTitle"),
+                    field=f"contacts[{index}].jobTitle",
+                    max_length=255,
+                ),
+                "office": contacts_helper._ensure_phone(
+                    row.get("office"),
+                    field=f"contacts[{index}].office",
+                    max_length=35,
+                    allow_extension=True,
+                ),
+                "cell": contacts_helper._ensure_phone(
+                    row.get("cell"),
+                    field=f"contacts[{index}].cell",
+                    max_length=20,
+                    allow_extension=False,
+                ),
+                "active": row.get("active"),
+                "note": contacts_helper._ensure_optional_text(
+                    row.get("note"),
+                    field=f"contacts[{index}].note",
+                    max_length=2048,
+                ),
+            }
+        )
+
+    if ids_to_validate:
+        ensure_contact_ids_exist(ids_to_validate)
+    return normalized_rows
+
+
+def _normalize_station_detail_links(contact_links_payload: object) -> list[dict]:
+    if contact_links_payload is None:
+        return []
+    if not isinstance(contact_links_payload, list):
+        raise ValueError("contactLinks must be an array")
+
+    normalized_rows: list[dict] = []
+    for index, row in enumerate(contact_links_payload):
+        if not isinstance(row, dict):
+            raise ValueError(f"contactLinks[{index}] must be an object")
+
+        contact_id = row.get("contactId")
+        contact_client_key = str(row.get("contactClientKey") or "").strip()
+        if contact_id is None and not contact_client_key:
+            raise ValueError(
+                f"Ambiguous contact link resolution at contactLinks[{index}]: "
+                "either contactId or contactClientKey is required"
+            )
+        normalized_rows.append(
+            {
+                "id": int(row.get("id")) if row.get("id") is not None else None,
+                "contactId": int(contact_id) if contact_id is not None else None,
+                "contactClientKey": contact_client_key or None,
+                "contactType": contacts_helper._normalize_contact_type(
+                    row.get("contactType")
+                ),
+                "primaryContact": row.get("primaryContact"),
+                "note": contacts_helper._ensure_optional_text(
+                    row.get("note"),
+                    field=f"contactLinks[{index}].note",
+                    max_length=2048,
+                ),
+                "active": row.get("active"),
+            }
+        )
+
+    return normalized_rows
+
+
+def _normalize_station_detail_payload(
+    payload: dict,
+    *,
+    mode: str,
+    path_station_code: str | None = None,
+) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError("Payload must be an object")
+
+    station_payload = payload.get("station")
+    delivery_payload = payload.get("deliveryMethod")
+    contacts_payload = payload.get("contacts")
+    links_payload = payload.get("contactLinks")
+
+    if not isinstance(station_payload, dict):
+        raise ValueError("station is required and must be an object")
+    if delivery_payload is not None and not isinstance(delivery_payload, dict):
+        raise ValueError("deliveryMethod must be an object when provided")
+
+    station_code = str(station_payload.get("code") or "").strip().upper()
+    if not station_code:
+        raise ValueError("station.code is required")
+    if path_station_code and station_code != str(path_station_code or "").strip().upper():
+        raise ValueError("station.code must match path station code")
+
+    media_type = _ensure_media_type(station_payload.get("mediaType"))
+    has_syscode_field = "syscode" in station_payload
+    syscode = (
+        _ensure_optional_unsigned_int(station_payload.get("syscode"), field="station.syscode")
+        if has_syscode_field
+        else None
+    )
+    _validate_syscode_for_media_type(
+        media_type=media_type,
+        has_syscode_field=has_syscode_field,
+        syscode=syscode,
+        require_syscode_for_ca=True,
+    )
+
+    normalized_delivery: dict | None = None
+    if isinstance(delivery_payload, dict):
+        delivery_method_id = delivery_payload.get("id")
+        if delivery_method_id is not None:
+            delivery_method_id = _ensure_optional_unsigned_int(
+                delivery_method_id,
+                field="deliveryMethod.id",
+            )
+            if delivery_method_id is None:
+                raise ValueError("deliveryMethod.id cannot be empty")
+            ensure_delivery_method_ids_exist([delivery_method_id])
+
+        has_inline_delivery_details = any(
+            [
+                str(delivery_payload.get("name") or "").strip(),
+                str(delivery_payload.get("url") or "").strip(),
+                str(delivery_payload.get("username") or "").strip(),
+                str(delivery_payload.get("password") or "").strip(),
+                str(delivery_payload.get("note") or "").strip(),
+                str(delivery_payload.get("deadline") or "").strip(),
+            ]
+        )
+
+        if has_inline_delivery_details:
+            normalized_delivery = {
+                "id": delivery_method_id,
+                "name": _ensure_required_text(
+                    delivery_payload.get("name"),
+                    field="deliveryMethod.name",
+                    max_length=255,
+                ),
+                "url": _ensure_required_text(
+                    delivery_payload.get("url"),
+                    field="deliveryMethod.url",
+                    max_length=2048,
+                ),
+                "username": _ensure_required_text(
+                    delivery_payload.get("username"),
+                    field="deliveryMethod.username",
+                    max_length=255,
+                ),
+                "password": delivery_payload.get("password"),
+                "deadline": _ensure_required_text(
+                    delivery_payload.get("deadline") or "10 AM",
+                    field="deliveryMethod.deadline",
+                    max_length=50,
+                ),
+                "note": _ensure_optional_text(
+                    delivery_payload.get("note"),
+                    field="deliveryMethod.note",
+                    max_length=2048,
+                ),
+            }
+            if mode == "create" and normalized_delivery.get("id") is not None:
+                # Allow reference-by-id creates, but explicit note/url/username/name/deadline
+                # are still validated above to keep payload deterministic.
+                pass
+        elif delivery_method_id is not None:
+            normalized_delivery = {"id": delivery_method_id}
+
+    normalized_contacts = _normalize_station_detail_contacts(contacts_payload)
+    normalized_links = _normalize_station_detail_links(links_payload)
+
+    return {
+        "station": {
+            "code": station_code,
+            "name": _ensure_required_text(
+                station_payload.get("name"),
+                field="station.name",
+                max_length=255,
+            ),
+            "affiliation": _ensure_optional_text(
+                station_payload.get("affiliation"),
+                field="station.affiliation",
+                max_length=255,
+            ),
+            "mediaType": media_type,
+            "syscode": syscode,
+            "language": _ensure_language(station_payload.get("language")),
+            "ownership": _ensure_optional_text(
+                station_payload.get("ownership"),
+                field="station.ownership",
+                max_length=255,
+            ),
+            "note": _ensure_optional_text(
+                station_payload.get("note"),
+                field="station.note",
+                max_length=2048,
+            ),
+        },
+        "deliveryMethod": normalized_delivery,
+        "contacts": normalized_contacts,
+        "contactLinks": normalized_links,
+    }
+
+
+def _build_station_detail_response(station_code: str) -> dict:
+    row = get_station_detail_row(code=station_code)
+    if not row:
+        raise ValueError(f"Unknown stationCode values: {station_code}")
+
+    normalized_station_code = str(row.get("code") or "").strip().upper()
+    contact_rows = get_station_contacts_detail_rows(
+        station_code=normalized_station_code,
+        active_only=True,
+    )
+
+    contacts_index: dict[int, dict] = {}
+    for item in contact_rows:
+        contact_id = item.get("id")
+        if contact_id is None:
+            continue
+        parsed_contact_id = int(contact_id)
+        if parsed_contact_id in contacts_index:
+            continue
+        contacts_index[parsed_contact_id] = {
+            "id": parsed_contact_id,
+            "email": item.get("email"),
+            "firstName": item.get("firstName"),
+            "lastName": item.get("lastName"),
+            "company": item.get("company"),
+            "jobTitle": item.get("jobTitle"),
+            "office": item.get("office"),
+            "cell": item.get("cell"),
+            "active": item.get("active"),
+            "note": item.get("note"),
+        }
+
+    contact_links: list[dict] = []
+    for item in contact_rows:
+        link_id = item.get("linkId")
+        if link_id is None:
+            continue
+        contact_links.append(
+            {
+                "id": int(link_id),
+                "stationCode": normalized_station_code,
+                "contactId": int(item.get("linkContactId"))
+                if item.get("linkContactId") is not None
+                else None,
+                "contactType": item.get("contactType"),
+                "primaryContact": item.get("primaryContact"),
+                "note": item.get("contactTypeNote"),
+                "active": item.get("linkActive"),
+            }
+        )
+
+    return {
+        "station": {
+            "code": normalized_station_code,
+            "name": row.get("name"),
+            "affiliation": row.get("affiliation"),
+            "mediaType": row.get("mediaType"),
+            "syscode": row.get("syscode"),
+            "language": row.get("language"),
+            "ownership": row.get("ownership"),
+            "deliveryMethodId": row.get("deliveryMethodId"),
+            "note": row.get("note"),
+        },
+        "deliveryMethod": {
+            "id": row.get("deliveryMethodIdValue"),
+            "name": row.get("deliveryMethodName"),
+            "url": row.get("deliveryMethodUrl"),
+            "username": row.get("deliveryMethodUsername"),
+            "password": row.get("deliveryMethodPassword"),
+            "deadline": row.get("deliveryMethodDeadline"),
+            "note": row.get("deliveryMethodNote"),
+        }
+        if row.get("deliveryMethodIdValue") is not None
+        else None,
+        "contacts": list(contacts_index.values()),
+        "contactLinks": contact_links,
+    }
+
+
+def get_station_detail_data(code: str) -> dict:
+    normalized_code = str(code or "").strip().upper()
+    if not normalized_code:
+        raise ValueError("station code is required")
+    ensure_station_codes_exist([normalized_code])
+    return _build_station_detail_response(normalized_code)
+
+
+def create_station_detail_data(payload: dict) -> dict:
+    normalized_payload = _normalize_station_detail_payload(
+        payload,
+        mode="create",
+    )
+    transaction_result = save_station_detail_bundle(
+        mode="create",
+        station_code=normalized_payload["station"]["code"],
+        station=normalized_payload["station"],
+        delivery_method=normalized_payload["deliveryMethod"],
+        contacts=normalized_payload["contacts"],
+        contact_links=normalized_payload["contactLinks"],
+    )
+    invalidate_validation_cache()
+    detail = _build_station_detail_response(normalized_payload["station"]["code"])
+    detail["summary"] = transaction_result["summary"]
+    return detail
+
+
+def update_station_detail_data(
+    *,
+    station_code: str,
+    payload: dict,
+) -> dict:
+    normalized_station_code = str(station_code or "").strip().upper()
+    if not normalized_station_code:
+        raise ValueError("station code is required")
+    normalized_payload = _normalize_station_detail_payload(
+        payload,
+        mode="update",
+        path_station_code=normalized_station_code,
+    )
+    transaction_result = save_station_detail_bundle(
+        mode="update",
+        station_code=normalized_station_code,
+        station=normalized_payload["station"],
+        delivery_method=normalized_payload["deliveryMethod"],
+        contacts=normalized_payload["contacts"],
+        contact_links=normalized_payload["contactLinks"],
+    )
+    invalidate_validation_cache()
+    detail = _build_station_detail_response(normalized_station_code)
+    detail["summary"] = transaction_result["summary"]
+    return detail

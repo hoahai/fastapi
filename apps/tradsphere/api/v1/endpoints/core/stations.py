@@ -4,8 +4,11 @@ from fastapi import APIRouter, Body, HTTPException, Query
 
 from apps.tradsphere.api.v1.helpers.queryParsing import parse_csv_values, parse_int_list
 from apps.tradsphere.api.v1.helpers.stations import (
+    create_station_detail_data,
     create_stations_data,
+    get_station_detail_data,
     list_stations_data,
+    update_station_detail_data,
     modify_stations_data,
 )
 
@@ -235,5 +238,249 @@ def update_stations_route(
     """
     try:
         return modify_stations_data(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{code}/detail")
+def get_station_detail_route(code: str):
+    """
+    Return full station detail payload in one request.
+
+    Example request:
+        GET /api/tradsphere/v1/stations/KABC/detail
+
+    Example response:
+        {
+          "meta": {"timestamp": "2026-05-06T10:00:00+07:00", "duration_ms": 4},
+          "data": {
+            "station": {
+              "code": "KABC",
+              "name": "KABC Los Angeles",
+              "affiliation": "ABC",
+              "mediaType": "TV",
+              "language": "English",
+              "ownership": "Owned",
+              "deliveryMethodId": 12,
+              "note": "Primary station"
+            },
+            "deliveryMethod": {
+              "id": 12,
+              "name": "Station Portal",
+              "url": "https://delivery.example.com",
+              "username": "ops_user",
+              "password": "secret",
+              "deadline": "10 AM",
+              "note": "Primary endpoint"
+            },
+            "contacts": [
+              {
+                "id": 88,
+                "email": "rep@kabc.com",
+                "firstName": "Mina",
+                "lastName": "Tran",
+                "company": "KABC",
+                "jobTitle": "Sales Rep",
+                "office": "213-555-0100",
+                "cell": "213-555-0101",
+                "active": 1,
+                "note": null
+              }
+            ],
+            "contactLinks": [
+              {
+                "id": 44,
+                "stationCode": "KABC",
+                "contactId": 88,
+                "contactType": "REP",
+                "primaryContact": 1,
+                "note": "Primary booking rep",
+                "active": 1
+              }
+            ]
+          }
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - code must exist in stations
+        - Returns station + delivery method + linked contacts + station-contact links
+        - Contact links include active links only
+    """
+    try:
+        return get_station_detail_data(code)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/detail")
+def create_station_detail_route(payload: dict = Body(...)):
+    """
+    Create station detail (station + delivery method + contacts + links) in one transaction.
+
+    Example request:
+        POST /api/tradsphere/v1/stations/detail
+        {
+          "station": {
+            "code": "KABC",
+            "name": "KABC Los Angeles",
+            "affiliation": "ABC",
+            "mediaType": "TV",
+            "language": "English",
+            "ownership": "Owned",
+            "note": "Primary station"
+          },
+          "deliveryMethod": {
+            "name": "Station Portal",
+            "url": "https://delivery.example.com",
+            "username": "ops_user",
+            "password": "secret",
+            "deadline": "10 AM",
+            "note": "Primary endpoint"
+          },
+          "contacts": [
+            {
+              "clientKey": "rep-1",
+              "email": "rep@kabc.com",
+              "firstName": "Mina",
+              "lastName": "Tran",
+              "company": "KABC",
+              "jobTitle": "Sales Rep",
+              "office": "213-555-0100",
+              "cell": "213-555-0101",
+              "active": true
+            }
+          ],
+          "contactLinks": [
+            {
+              "contactClientKey": "rep-1",
+              "contactType": "REP",
+              "primaryContact": true,
+              "note": "Primary booking rep",
+              "active": true
+            }
+          ]
+        }
+
+    Example response:
+        {
+          "meta": {"timestamp": "2026-05-06T10:00:00+07:00", "duration_ms": 8},
+          "data": {
+            "station": {"code": "KABC"},
+            "deliveryMethod": {"id": 12},
+            "contacts": [{"id": 88}],
+            "contactLinks": [{"id": 44}],
+            "summary": {
+              "deliveryMethodCreated": true,
+              "deliveryMethodUpdated": false,
+              "stationCreated": true,
+              "stationUpdated": false,
+              "contactsCreated": 1,
+              "contactsUpdated": 0,
+              "linksCreatedOrReactivated": 1,
+              "linksUpdated": 0,
+              "linksDeactivated": 0
+            }
+          }
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - station object is required
+        - deliveryMethod object is optional; when provided, name/url/username/deadline are required
+        - Uses one transaction; any error rolls back all changes
+        - Removed links are not deleted (active links are managed by contactLinks desired set)
+        - Uses contactId or contactClientKey to resolve link targets
+        - Duplicate/ambiguous contact link references return 400
+    """
+    try:
+        return create_station_detail_data(payload)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.put("/{code}/detail")
+def update_station_detail_route(
+    code: str,
+    payload: dict = Body(...),
+):
+    """
+    Update station detail (station + delivery method + contacts + links) in one transaction.
+
+    Example request:
+        PUT /api/tradsphere/v1/stations/KABC/detail
+        {
+          "station": {
+            "code": "KABC",
+            "name": "KABC Los Angeles",
+            "affiliation": "ABC",
+            "mediaType": "TV",
+            "language": "Spanish",
+            "ownership": "Owned",
+            "note": "Updated note"
+          },
+          "deliveryMethod": {
+            "id": 12,
+            "name": "Station Portal",
+            "url": "https://delivery.example.com/v2",
+            "username": "ops_user",
+            "deadline": "17:00",
+            "note": "Updated endpoint"
+          },
+          "contacts": [
+            {
+              "id": 88,
+              "email": "rep@kabc.com",
+              "firstName": "Mina",
+              "lastName": "Tran",
+              "office": "213-555-0111",
+              "cell": "213-555-0101"
+            }
+          ],
+          "contactLinks": [
+            {
+              "contactId": 88,
+              "contactType": "REP",
+              "primaryContact": true,
+              "active": true
+            }
+          ]
+        }
+
+    Example response:
+        {
+          "meta": {"timestamp": "2026-05-06T10:00:00+07:00", "duration_ms": 8},
+          "data": {
+            "station": {"code": "KABC"},
+            "deliveryMethod": {"id": 12},
+            "contacts": [{"id": 88}],
+            "contactLinks": [{"id": 44}],
+            "summary": {
+              "deliveryMethodCreated": false,
+              "deliveryMethodUpdated": true,
+              "stationCreated": false,
+              "stationUpdated": true,
+              "contactsCreated": 0,
+              "contactsUpdated": 1,
+              "linksCreatedOrReactivated": 0,
+              "linksUpdated": 1,
+              "linksDeactivated": 1
+            }
+          }
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - Path code must match payload station.code
+        - deliveryMethod object is optional; when provided, name/url/username/deadline are required
+        - Uses one transaction; any error rolls back all changes
+        - Existing active links omitted from contactLinks are deactivated (not deleted)
+        - If delivery method is shared by multiple stations, it is not updated in place
+    """
+    try:
+        return update_station_detail_data(station_code=code, payload=payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

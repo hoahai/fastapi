@@ -1,15 +1,19 @@
 import { useEffect, useRef, useState, type ChangeEvent, type DragEvent } from "react";
-import { FileText, Loader2, UploadCloud } from "lucide-react";
+import { FileText, Loader2, UploadCloud, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { canModalClose, shouldBlockOutsideClose } from "@/components/ui/modal-close-guard";
+import { UnsavedChangesDialog } from "@/components/ui/unsaved-changes-dialog";
+import { useApiRequest } from "@/hooks/useApiRequest";
 import { cn } from "@/lib/utils";
 
 interface ScheduleUploadDialogProps {
@@ -22,32 +26,6 @@ interface ScheduleUploadDialogProps {
 
 const ACCEPTED_FILE_EXTENSION = ".txt";
 
-function isRecord(value: unknown): value is Record<string, unknown> {
-  return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function asString(value: unknown): string {
-  if (typeof value === "string") {
-    return value.trim();
-  }
-  return "";
-}
-
-function getUploadErrorMessage(payload: unknown, statusCode: number): string {
-  if (isRecord(payload)) {
-    const error = isRecord(payload.error) ? payload.error : null;
-    const message = asString(error?.message ?? payload.detail);
-    const detail = asString(error?.detail);
-    if (message && detail) {
-      return `${message}: ${detail}`;
-    }
-    if (message || detail) {
-      return message || detail;
-    }
-  }
-  return `Upload failed with status ${statusCode}.`;
-}
-
 function isValidTextFile(file: File): boolean {
   return file.name.toLowerCase().endsWith(ACCEPTED_FILE_EXTENSION);
 }
@@ -59,12 +37,16 @@ export function ScheduleUploadDialog({
   headers,
   onUploadSuccess,
 }: ScheduleUploadDialogProps) {
+  const { requestJson } = useApiRequest();
   const fileInputRef = useRef<HTMLInputElement | null>(null);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
   const [uploadError, setUploadError] = useState<string | null>(null);
   const [isUploading, setIsUploading] = useState(false);
   const [isDragActive, setIsDragActive] = useState(false);
+  const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false);
+  const canUpload = Boolean(selectedFile) && !isUploading;
+  const shouldShowUploadButton = canUpload || isUploading;
 
   useEffect(() => {
     if (!open && !isUploading) {
@@ -72,6 +54,7 @@ export function ScheduleUploadDialog({
       setValidationError(null);
       setUploadError(null);
       setIsDragActive(false);
+      setIsDiscardDialogOpen(false);
       if (fileInputRef.current) {
         fileInputRef.current.value = "";
       }
@@ -79,7 +62,16 @@ export function ScheduleUploadDialog({
   }, [open, isUploading]);
 
   function handleDialogOpenChange(nextOpen: boolean) {
-    if (isUploading) {
+    const hasUnsavedChanges = Boolean(selectedFile);
+    const allowClose = canModalClose({
+      nextOpen,
+      isBusy: isUploading,
+      hasUnsavedChanges,
+    });
+    if (!allowClose) {
+      if (!nextOpen && hasUnsavedChanges && !isUploading) {
+        setIsDiscardDialogOpen(true);
+      }
       return;
     }
     onOpenChange(nextOpen);
@@ -151,22 +143,25 @@ export function ScheduleUploadDialog({
       const formData = new FormData();
       formData.append("file", selectedFile);
 
-      const response = await fetch(uploadUrl, {
+      await requestJson(uploadUrl, {
         method: "POST",
         headers,
         body: formData,
+        successToast: {
+          title: "Upload completed",
+          message: `Schedule file "${selectedFile.name}" uploaded successfully.`,
+        },
+        errorToast: {
+          title: "Upload failed",
+        },
       });
-
-      const payload = await response.json().catch(() => null);
-      if (!response.ok) {
-        throw new Error(getUploadErrorMessage(payload, response.status));
-      }
 
       const uploadedFileName = selectedFile.name;
       onUploadSuccess?.(uploadedFileName);
       onOpenChange(false);
     } catch (error) {
-      setUploadError(error instanceof Error ? error.message : "Upload failed.");
+      const errorMessage = error instanceof Error ? error.message : "Upload failed.";
+      setUploadError(errorMessage);
     } finally {
       setIsUploading(false);
     }
@@ -181,11 +176,24 @@ export function ScheduleUploadDialog({
           }
         }}
         onInteractOutside={(event) => {
-          if (isUploading) {
+          if (
+            shouldBlockOutsideClose({
+              isBusy: isUploading,
+              hasUnsavedChanges: Boolean(selectedFile),
+            })
+          ) {
             event.preventDefault();
           }
         }}
       >
+        <DialogClose
+          className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
+          aria-label="Close upload schedule modal"
+          disabled={isUploading}
+        >
+          <X className="size-4" />
+        </DialogClose>
+
         <DialogHeader>
           <DialogTitle>Upload STRATA Schedule File</DialogTitle>
           <DialogDescription>Drag and drop a .txt schedule file, or browse from your device.</DialogDescription>
@@ -243,22 +251,32 @@ export function ScheduleUploadDialog({
         {validationError ? <p className="mt-3 text-sm text-rose-600">{validationError}</p> : null}
         {uploadError ? <p className="mt-2 text-sm text-rose-600">{uploadError}</p> : null}
 
-        <DialogFooter>
-          <Button variant="outline" onClick={() => onOpenChange(false)} disabled={isUploading}>
-            Cancel
-          </Button>
-          <Button onClick={handleUpload} disabled={!selectedFile || isUploading}>
-            {isUploading ? (
-              <>
-                <Loader2 className="size-4 animate-spin" aria-hidden="true" />
-                Uploading...
-              </>
-            ) : (
-              "Upload"
-            )}
-          </Button>
-        </DialogFooter>
+        {shouldShowUploadButton ? (
+          <DialogFooter>
+            <Button onClick={handleUpload} disabled={isUploading}>
+              {isUploading ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" aria-hidden="true" />
+                  Uploading...
+                </>
+              ) : (
+                "Upload"
+              )}
+            </Button>
+          </DialogFooter>
+        ) : null}
       </DialogContent>
+
+      <UnsavedChangesDialog
+        open={isDiscardDialogOpen}
+        onKeepEditing={() => {
+          setIsDiscardDialogOpen(false);
+        }}
+        onDiscardChanges={() => {
+          setIsDiscardDialogOpen(false);
+          onOpenChange(false);
+        }}
+      />
     </Dialog>
   );
 }

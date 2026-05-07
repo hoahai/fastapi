@@ -28,6 +28,8 @@ export type StationRepContact = {
 export type StationItem = {
   code: string;
   name: string;
+  deliveryMethodId?: number | null;
+  mediaType?: string | null;
   repContacts?: StationRepContact[];
 };
 

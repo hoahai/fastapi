@@ -35,6 +35,7 @@ def get_delivery_methods_route(
               "name": "Station Portal",
               "url": "https://delivery.example.com",
               "username": "ops_user",
+              "password": "secret",
               "deadline": "17:00",
               "note": "Standard daily upload"
             }

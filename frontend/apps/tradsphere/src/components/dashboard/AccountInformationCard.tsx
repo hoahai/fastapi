@@ -1,14 +1,19 @@
-import { type ReactNode, useState } from "react";
-import { createPortal } from "react-dom";
-import { Save } from "lucide-react";
+import { useState } from "react";
+import { Save, X } from "lucide-react";
 
 import { AppDropdown } from "@/components/ui/app-dropdown";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { Textarea } from "@/components/ui/textarea";
 
+import { LabeledField, ReadOnlyValue } from "./FormFieldRow";
 import type { AccountInfo } from "./types";
 
 interface AccountInformationCardProps {
@@ -111,32 +116,9 @@ export function AccountInformationCard({
   );
 }
 
-function LabeledField({
-  label,
-  children,
-  alignStart = false,
-}: {
-  label: string;
-  children: ReactNode;
-  alignStart?: boolean;
-}) {
-  return (
-    <div className={`grid grid-cols-[110px_1fr] gap-4 ${alignStart ? "items-start" : "items-center"}`}>
-      <p className={`text-sm text-slate-600 ${alignStart ? "pt-2" : ""}`}>{label}</p>
-      <div>{children}</div>
-    </div>
-  );
-}
-
-function ReadOnlyValue({ value }: { value?: string }) {
-  const displayValue = value?.trim() ? value : "-";
-  return <div className="min-h-10 py-2 text-sm text-slate-800 cursor-default select-text">{displayValue}</div>;
-}
-
 function LogoBlock({ account }: { account: AccountInfo | null }) {
   const hasLogo = Boolean(account?.logoUrl);
   const [isZoomOpen, setIsZoomOpen] = useState(false);
-  const canRenderPortal = typeof document !== "undefined";
 
   return (
     <>
@@ -161,33 +143,28 @@ function LogoBlock({ account }: { account: AccountInfo | null }) {
         )}
       </div>
 
-      {hasLogo && isZoomOpen && canRenderPortal
-        ? createPortal(
-            <div
-              className="fixed inset-0 z-[9999] grid h-[100dvh] w-screen place-items-center bg-slate-900/75 p-6"
-              onClick={() => setIsZoomOpen(false)}
-            >
-              <button
-                type="button"
-                className="absolute right-5 top-5 rounded-md bg-white/90 px-3 py-1 text-sm font-medium text-slate-900"
-                onClick={(event) => {
-                  event.stopPropagation();
-                  setIsZoomOpen(false);
-                }}
+      {hasLogo ? (
+        <Dialog open={isZoomOpen} onOpenChange={setIsZoomOpen}>
+          <DialogContent
+            className="w-[calc(100vw-2.5rem)] max-w-3xl border-none bg-transparent p-0 shadow-none"
+            aria-describedby={undefined}
+          >
+            <div className="relative flex w-full items-center justify-center overflow-hidden rounded-2xl bg-white px-6 pb-6 pt-14 shadow-2xl sm:px-8 sm:pb-8 sm:pt-16">
+              <DialogClose
+                className="absolute right-4 top-4 z-10 rounded-md bg-slate-900/85 p-1.5 text-white transition-colors hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                 aria-label="Close logo preview"
               >
-                Close
-              </button>
+                <X className="size-4" />
+              </DialogClose>
               <img
                 src={account?.logoUrl ?? undefined}
                 alt={`${account?.name ?? "Account"} logo enlarged`}
-                className="max-h-[90vh] max-w-[90vw] rounded-xl bg-white object-contain p-4 shadow-2xl"
-                onClick={(event) => event.stopPropagation()}
+                className="mx-auto block h-auto max-h-[70vh] w-auto max-w-full object-contain"
               />
-            </div>,
-            document.body,
-          )
-        : null}
+            </div>
+          </DialogContent>
+        </Dialog>
+      ) : null}
     </>
   );
 }

@@ -1,4 +1,5 @@
-import { type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { type CSSProperties, type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
 import { Check, ChevronsUpDown } from "lucide-react";
 
 import { cn } from "@/lib/utils";
@@ -23,6 +24,7 @@ interface AppDropdownProps {
   searchable?: boolean;
   emptyText?: string;
   className?: string;
+  size?: "default" | "sm";
 }
 
 export function AppDropdown({
@@ -36,11 +38,16 @@ export function AppDropdown({
   searchable = true,
   emptyText = "No option found.",
   className,
+  size = "default",
 }: AppDropdownProps) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const triggerRef = useRef<HTMLSpanElement | null>(null);
+  const menuRef = useRef<HTMLDivElement | null>(null);
   const [isOpen, setIsOpen] = useState(false);
   const [query, setQuery] = useState("");
   const [highlightedIndex, setHighlightedIndex] = useState(0);
+  const [menuStyle, setMenuStyle] = useState<CSSProperties | null>(null);
+  const [panelMaxHeight, setPanelMaxHeight] = useState<number>(320);
 
   const selectedOption = options.find((option) => option.value === value) ?? null;
 
@@ -72,6 +79,12 @@ export function AppDropdown({
       if (!(target instanceof Node)) {
         return;
       }
+      if (containerRef.current?.contains(target)) {
+        return;
+      }
+      if (menuRef.current?.contains(target)) {
+        return;
+      }
       if (!containerRef.current?.contains(target)) {
         setIsOpen(false);
       }
@@ -87,6 +100,54 @@ export function AppDropdown({
     onValueChange(nextValue);
     setIsOpen(false);
   }
+
+  function updateMenuPosition() {
+    const trigger = triggerRef.current;
+    if (!trigger) {
+      return;
+    }
+
+    const rect = trigger.getBoundingClientRect();
+    const viewportPadding = 12;
+    const minPanelHeight = 220;
+    const maxPanelHeight = 440;
+    const availableBelow = window.innerHeight - rect.bottom - viewportPadding;
+    const availableAbove = rect.top - viewportPadding;
+    const preferAbove = availableBelow < minPanelHeight && availableAbove > availableBelow;
+    const resolvedMaxHeight = Math.max(
+      minPanelHeight,
+      Math.min(maxPanelHeight, (preferAbove ? availableAbove : availableBelow) - 8),
+    );
+
+    setPanelMaxHeight(resolvedMaxHeight);
+    setMenuStyle({
+      position: "fixed",
+      left: rect.left,
+      top: preferAbove ? rect.top - 8 : rect.bottom + 8,
+      width: rect.width,
+      zIndex: 90,
+      transform: preferAbove ? "translateY(-100%)" : "none",
+    });
+  }
+
+  useEffect(() => {
+    if (!isOpen) {
+      setMenuStyle(null);
+      return;
+    }
+
+    updateMenuPosition();
+    const handlePositionUpdate = () => {
+      updateMenuPosition();
+    };
+
+    window.addEventListener("resize", handlePositionUpdate);
+    window.addEventListener("scroll", handlePositionUpdate, true);
+    return () => {
+      window.removeEventListener("resize", handlePositionUpdate);
+      window.removeEventListener("scroll", handlePositionUpdate, true);
+    };
+  }, [isOpen]);
 
   function handleListKeyDown(event: KeyboardEvent<HTMLElement>) {
     if (!filteredOptions.length) {
@@ -124,28 +185,48 @@ export function AppDropdown({
     }
   }
 
-  return (
-    <div ref={containerRef} className={cn("relative w-full", className)}>
-      <Button
-        type="button"
-        variant="outline"
-        role="combobox"
-        aria-label={ariaLabel}
-        aria-expanded={isOpen}
-        disabled={disabled || loading}
-        className="h-10 w-full justify-between rounded-md border-input bg-white px-3 py-2 text-sm font-normal"
-        onClick={() => setIsOpen((current) => !current)}
-      >
-        <span className="truncate text-left">{selectedOption?.label || placeholder}</span>
-        {loading ? <Spinner className="ml-2 size-4" /> : <ChevronsUpDown className="ml-2 size-4 shrink-0 opacity-50" />}
-      </Button>
+  const isCompact = size === "sm";
 
-      {isOpen ? (
-        <div className="absolute z-50 mt-2 w-full rounded-md border border-input bg-white p-2 shadow-lg">
+  return (
+    <div ref={containerRef} data-app-dropdown-root="true" className={cn("relative w-full", className)}>
+      <span ref={triggerRef} className="inline-flex w-full">
+        <Button
+          type="button"
+          variant="outline"
+          role="combobox"
+          aria-label={ariaLabel}
+          aria-expanded={isOpen}
+          disabled={disabled || loading}
+          className={cn(
+            "w-full justify-between rounded-md border-input bg-white font-normal",
+            isCompact ? "h-8 px-2.5 py-1.5 text-xs" : "h-10 px-3 py-2 text-sm",
+          )}
+          onClick={() => setIsOpen((current) => !current)}
+        >
+          <span className="truncate text-left">{selectedOption?.label || placeholder}</span>
+          {loading ? (
+            <Spinner className={cn("ml-2 shrink-0", isCompact ? "size-3.5" : "size-4")} />
+          ) : (
+            <ChevronsUpDown className={cn("ml-2 shrink-0 opacity-50", isCompact ? "size-3.5" : "size-4")} />
+          )}
+        </Button>
+      </span>
+
+      {isOpen && menuStyle && typeof document !== "undefined"
+        ? createPortal(
+        <div
+          ref={menuRef}
+          data-app-dropdown-menu="true"
+          style={menuStyle}
+          className="pointer-events-auto rounded-md border border-input bg-white p-2 shadow-lg"
+        >
           {searchable ? (
             <input
               type="text"
-              className="mb-2 h-9 w-full rounded-md border border-input bg-white px-3 text-sm outline-none focus:ring-2 focus:ring-ring"
+              className={cn(
+                "mb-2 w-full rounded-md border border-input bg-white outline-none focus:ring-2 focus:ring-ring",
+                isCompact ? "h-8 px-2.5 text-xs" : "h-9 px-3 text-sm",
+              )}
               placeholder="Search..."
               value={query}
               onChange={(event) => {
@@ -157,9 +238,17 @@ export function AppDropdown({
             />
           ) : null}
 
-          <div className="max-h-60 overflow-auto" onKeyDown={handleListKeyDown}>
+          <div
+            className="overflow-auto"
+            style={{
+              maxHeight: searchable ? Math.max(140, panelMaxHeight - 74) : Math.max(160, panelMaxHeight - 16),
+            }}
+            onKeyDown={handleListKeyDown}
+          >
             {!filteredOptions.length ? (
-              <p className="px-2 py-3 text-sm text-slate-500">{emptyText}</p>
+              <p className={cn("px-2 py-3 text-slate-500", isCompact ? "text-xs" : "text-sm")}>
+                {emptyText}
+              </p>
             ) : (
               <ul>
                 {filteredOptions.map((option, index) => {
@@ -170,7 +259,8 @@ export function AppDropdown({
                       <button
                         type="button"
                         className={cn(
-                          "flex w-full items-center justify-between rounded-md px-2 py-2 text-left text-sm",
+                          "flex w-full items-center justify-between rounded-md px-2 text-left",
+                          isCompact ? "py-1.5 text-xs" : "py-2 text-sm",
                           isHighlighted && "bg-blue-50",
                           !isHighlighted && "hover:bg-slate-100",
                         )}
@@ -178,7 +268,13 @@ export function AppDropdown({
                         onClick={() => selectValue(option.value)}
                       >
                         <span className="truncate">{option.label}</span>
-                        <Check className={cn("size-4 text-blue-600", isSelected ? "opacity-100" : "opacity-0")} />
+                        <Check
+                          className={cn(
+                            "text-blue-600",
+                            isCompact ? "size-3.5" : "size-4",
+                            isSelected ? "opacity-100" : "opacity-0",
+                          )}
+                        />
                       </button>
                     </li>
                   );
@@ -186,7 +282,8 @@ export function AppDropdown({
               </ul>
             )}
           </div>
-        </div>
+        </div>,
+        document.body,
       ) : null}
     </div>
   );

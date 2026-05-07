@@ -455,6 +455,351 @@ def _build_compact_pivot_rows(
     return out
 
 
+def _build_monthly_gross_totals(
+    *,
+    week_defs: list[dict[str, str]],
+    month_groups: list[tuple[str, int]],
+    weekly_gross_totals: dict[str, Decimal],
+) -> list[str]:
+    out: list[str] = []
+    month_week_index = 0
+    for _month_label, month_count in month_groups:
+        month_total = Decimal("0")
+        for _ in range(month_count):
+            if month_week_index >= len(week_defs):
+                break
+            week_key = str(week_defs[month_week_index].get("key") or "")
+            month_total += _to_decimal(weekly_gross_totals.get(week_key))
+            month_week_index += 1
+        out.append(_format_money(month_total))
+    return out
+
+
+def _build_context_title(*, est_num: int, est_num_note: str | None) -> str:
+    note_text = _safe_text(est_num_note)
+    if note_text:
+        return f"EstNum: {est_num} | Note: {note_text}"
+    return f"EstNum: {est_num}"
+
+
+def _normalize_station_names(station_names: dict[str, str] | None) -> dict[str, str]:
+    normalized: dict[str, str] = {}
+    for key, value in (station_names or {}).items():
+        normalized[str(key or "").strip().upper()] = str(value or "").strip()
+    return normalized
+
+
+def build_schedules_table_data(
+    *,
+    est_num: int,
+    est_num_note: str | None = None,
+    schedules: list[dict],
+    mode: str = _MODE_COMPACT,
+    schedule_weeks: list[dict] | None = None,
+    station_names: dict[str, str] | None = None,
+    billing_type: str = "Calendar",
+) -> dict[str, object]:
+    normalized_mode = _normalize_mode(mode)
+    normalized_billing_type = _normalize_billing_type(billing_type)
+    normalized_schedules = [row for row in schedules if isinstance(row, dict)]
+    normalized_schedule_weeks = [row for row in (schedule_weeks or []) if isinstance(row, dict)]
+    normalized_station_names = _normalize_station_names(station_names)
+
+    total_spots = sum(_to_int(row.get("totalSpot")) for row in normalized_schedules)
+    total_gross = sum((_to_decimal(row.get("totalGross")) for row in normalized_schedules), Decimal("0"))
+    week_defs = _build_week_defs(normalized_schedule_weeks, billing_type=normalized_billing_type)
+    month_groups = _build_month_groups(week_defs)
+    week_columns = [
+        {
+            "key": str(week.get("key") or ""),
+            "label": str(week.get("label") or ""),
+            "monthLabel": str(week.get("monthLabel") or ""),
+        }
+        for week in week_defs
+    ]
+    month_group_payload = [
+        {"label": month_label, "count": int(month_count)}
+        for month_label, month_count in month_groups
+    ]
+
+    if normalized_mode == _MODE_COMPACT:
+        week_spots_by_schedule = _build_week_spots_map(normalized_schedule_weeks)
+        compact_rows = _build_compact_pivot_rows(normalized_schedules, week_spots_by_schedule)
+        zero_spot_week_keys = _compute_zero_spot_week_keys(
+            week_defs=week_defs,
+            row_week_spots=[dict(row.get("weekSpots") or {}) for row in compact_rows],
+        )
+
+        rows_payload: list[dict[str, object]] = []
+        weekly_spot_totals: dict[str, int] = {}
+        weekly_gross_totals: dict[str, Decimal] = {}
+        summary_total_spot = 0
+        summary_total_gross = Decimal("0")
+
+        for row in compact_rows:
+            station_code = str(row.get("stationCode") or "").strip().upper()
+            station_name = normalized_station_names.get(station_code, "")
+            vendor = _resolve_vendor_label(
+                station_code=station_code,
+                station_name=station_name,
+                media_type=row.get("mediaType"),
+            )
+
+            row_week_spots = dict(row.get("weekSpots") or {})
+            row_week_values: list[int] = []
+            row_total_spot = 0
+            for week in week_defs:
+                week_key = str(week.get("key") or "")
+                spots = int(row_week_spots.get(week_key, 0))
+                row_total_spot += spots
+                row_week_values.append(spots)
+                weekly_spot_totals[week_key] = int(weekly_spot_totals.get(week_key, 0)) + int(spots)
+
+            if row_total_spot <= 0:
+                row_total_spot = _to_int(row.get("fallbackTotalSpot"))
+
+            row_week_gross = dict(row.get("weekGross") or {})
+            row_total_gross = Decimal("0")
+            for week in week_defs:
+                week_key = str(week.get("key") or "")
+                value = _to_decimal(row_week_gross.get(week_key))
+                row_total_gross += value
+                weekly_gross_totals[week_key] = _to_decimal(weekly_gross_totals.get(week_key)) + value
+
+            if row_total_gross <= 0:
+                row_total_gross = _to_decimal(row.get("fallbackTotalGross"))
+
+            summary_total_spot += int(row_total_spot)
+            summary_total_gross += row_total_gross
+
+            rows_payload.append(
+                {
+                    "kind": "data",
+                    "values": [
+                        vendor,
+                        _format_date_us(row.get("startDate")),
+                        _format_date_us(row.get("endDate")),
+                    ],
+                    "weekValues": row_week_values,
+                    "totalSpot": int(row_total_spot),
+                    "totalGross": _format_money(row_total_gross),
+                }
+            )
+
+        return {
+            "estNum": int(est_num),
+            "estNumNote": _safe_text(est_num_note),
+            "viewMode": normalized_mode,
+            "billingType": normalized_billing_type.title(),
+            "contextTitle": _build_context_title(est_num=est_num, est_num_note=est_num_note),
+            "summary": {
+                "gross": _format_money(total_gross),
+                "spots": int(total_spots),
+            },
+            "table": {
+                "staticColumns": [label for label, _ in _COMPACT_STATIC_COLUMNS],
+                "weekColumns": week_columns,
+                "monthGroups": month_group_payload,
+                "zeroSpotWeekKeys": sorted(zero_spot_week_keys),
+                "rows": rows_payload,
+                "totals": {
+                    "weeklySpotTotals": [
+                        int(weekly_spot_totals.get(str(week.get("key") or ""), 0)) for week in week_defs
+                    ],
+                    "weeklyGrossTotals": [
+                        _format_money(_to_decimal(weekly_gross_totals.get(str(week.get("key") or ""))))
+                        for week in week_defs
+                    ],
+                    "monthlyGrossTotals": _build_monthly_gross_totals(
+                        week_defs=week_defs,
+                        month_groups=month_groups,
+                        weekly_gross_totals=weekly_gross_totals,
+                    ),
+                    "totalSpot": int(summary_total_spot),
+                    "totalGross": _format_money(summary_total_gross),
+                },
+            },
+        }
+
+    week_spots_by_schedule = _build_week_spots_map(normalized_schedule_weeks)
+    zero_spot_week_keys = _compute_zero_spot_week_keys(
+        week_defs=week_defs,
+        row_week_spots=[
+            dict(week_spots_by_schedule.get(str(row.get("id") or "").strip(), {}))
+            for row in normalized_schedules
+        ],
+    )
+
+    groups: list[dict[str, object]] = []
+    current_station_key: str | None = None
+    current_station_label = ""
+    current_rows: list[dict[str, object]] = []
+    station_week_spot_totals: dict[str, int] = {}
+    station_week_gross_totals: dict[str, Decimal] = {}
+    station_total_spot = 0
+    station_total_gross = Decimal("0")
+
+    overall_week_spot_totals: dict[str, int] = {}
+    overall_week_gross_totals: dict[str, Decimal] = {}
+    overall_total_spot = 0
+    overall_total_gross = Decimal("0")
+
+    def _flush_station_group() -> None:
+        nonlocal current_station_key
+        nonlocal current_station_label
+        nonlocal current_rows
+        nonlocal station_week_spot_totals
+        nonlocal station_week_gross_totals
+        nonlocal station_total_spot
+        nonlocal station_total_gross
+        if current_station_key is None:
+            return
+        groups.append(
+            {
+                "groupKey": current_station_key,
+                "groupLabel": current_station_label,
+                "rows": list(current_rows),
+                "subtotal": {
+                    "weeklySpotTotals": [
+                        int(station_week_spot_totals.get(str(week.get("key") or ""), 0))
+                        for week in week_defs
+                    ],
+                    "weeklyGrossTotals": [
+                        _format_money(
+                            _to_decimal(station_week_gross_totals.get(str(week.get("key") or "")))
+                        )
+                        for week in week_defs
+                    ],
+                    "monthlyGrossTotals": _build_monthly_gross_totals(
+                        week_defs=week_defs,
+                        month_groups=month_groups,
+                        weekly_gross_totals=station_week_gross_totals,
+                    ),
+                    "totalSpot": int(station_total_spot),
+                    "totalGross": _format_money(station_total_gross),
+                },
+            }
+        )
+        current_station_key = None
+        current_station_label = ""
+        current_rows = []
+        station_week_spot_totals = {}
+        station_week_gross_totals = {}
+        station_total_spot = 0
+        station_total_gross = Decimal("0")
+
+    for row in normalized_schedules:
+        station_code = str(row.get("stationCode") or "").strip().upper()
+        station_name = normalized_station_names.get(station_code, "")
+        vendor = _resolve_vendor_label(
+            station_code=station_code,
+            station_name=station_name,
+            media_type=row.get("mediaType"),
+        )
+        station_key = station_code or vendor.upper()
+
+        if current_station_key is None:
+            current_station_key = station_key
+            current_station_label = vendor
+        elif station_key != current_station_key:
+            _flush_station_group()
+            current_station_key = station_key
+            current_station_label = vendor
+
+        schedule_row_id = str(row.get("id") or "").strip()
+        row_week_spots = week_spots_by_schedule.get(schedule_row_id, {})
+        row_rate_gross = _to_decimal(row.get("rateGross"))
+        row_total_spot = 0
+        row_total_gross_by_weeks = Decimal("0")
+        week_values: list[int] = []
+        for week in week_defs:
+            week_key = str(week.get("key") or "")
+            spots = int(row_week_spots.get(week_key, 0))
+            row_total_spot += spots
+            week_values.append(spots)
+
+            overall_week_spot_totals[week_key] = int(overall_week_spot_totals.get(week_key, 0)) + int(spots)
+            station_week_spot_totals[week_key] = int(station_week_spot_totals.get(week_key, 0)) + int(spots)
+
+            gross_value = row_rate_gross * Decimal(int(spots))
+            row_total_gross_by_weeks += gross_value
+            overall_week_gross_totals[week_key] = _to_decimal(overall_week_gross_totals.get(week_key)) + gross_value
+            station_week_gross_totals[week_key] = (
+                _to_decimal(station_week_gross_totals.get(week_key)) + gross_value
+            )
+
+        if row_total_spot <= 0:
+            row_total_spot = _to_int(row.get("totalSpot"))
+
+        row_total_gross = _to_decimal(row.get("totalGross"))
+        if row_total_gross <= 0:
+            if row_total_gross_by_weeks > 0:
+                row_total_gross = row_total_gross_by_weeks
+            else:
+                row_total_gross = row_rate_gross * Decimal(row_total_spot)
+
+        station_total_spot += int(row_total_spot)
+        station_total_gross += row_total_gross
+        overall_total_spot += int(row_total_spot)
+        overall_total_gross += row_total_gross
+
+        current_rows.append(
+            {
+                "kind": "data",
+                "values": [
+                    vendor,
+                    _safe_text(row.get("days")),
+                    _format_date_us(row.get("startDate")),
+                    _format_date_us(row.get("endDate")),
+                    _safe_text(row.get("daypart")),
+                    _safe_text(row.get("programName")),
+                    _safe_text(row.get("rtg")),
+                    _format_money(_to_decimal(row.get("rateGross"))),
+                ],
+                "weekValues": week_values,
+                "totalSpot": int(row_total_spot),
+                "totalGross": _format_money(row_total_gross),
+            }
+        )
+
+    _flush_station_group()
+
+    return {
+        "estNum": int(est_num),
+        "estNumNote": _safe_text(est_num_note),
+        "viewMode": normalized_mode,
+        "billingType": normalized_billing_type.title(),
+        "contextTitle": _build_context_title(est_num=est_num, est_num_note=est_num_note),
+        "summary": {
+            "gross": _format_money(total_gross),
+            "spots": int(total_spots),
+        },
+            "table": {
+                "staticColumns": [label for label, _ in _DETAIL_STATIC_COLUMNS],
+                "weekColumns": week_columns,
+            "monthGroups": month_group_payload,
+            "zeroSpotWeekKeys": sorted(zero_spot_week_keys),
+            "groups": groups,
+            "totals": {
+                "weeklySpotTotals": [
+                    int(overall_week_spot_totals.get(str(week.get("key") or ""), 0)) for week in week_defs
+                ],
+                "weeklyGrossTotals": [
+                    _format_money(_to_decimal(overall_week_gross_totals.get(str(week.get("key") or ""))))
+                    for week in week_defs
+                ],
+                "monthlyGrossTotals": _build_monthly_gross_totals(
+                    week_defs=week_defs,
+                    month_groups=month_groups,
+                    weekly_gross_totals=overall_week_gross_totals,
+                ),
+                "totalSpot": int(overall_total_spot),
+                "totalGross": _format_money(overall_total_gross),
+            },
+        },
+    }
+
+
 def _draw_report_header(
     pdf: FPDF,
     *,

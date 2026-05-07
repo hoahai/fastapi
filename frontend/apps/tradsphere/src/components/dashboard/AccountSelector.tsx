@@ -12,6 +12,7 @@ interface AccountSelectorProps {
   isLoadingSelections: boolean;
   selectionsError: string | null;
   isLoadingAccount: boolean;
+  isRefreshingAccount?: boolean;
   isSavingAccount: boolean;
   onAccountChange: (value: string) => void;
   onLoad: () => void;
@@ -23,11 +24,12 @@ export function AccountSelector({
   isLoadingSelections,
   selectionsError,
   isLoadingAccount,
+  isRefreshingAccount = false,
   isSavingAccount,
   onAccountChange,
   onLoad,
 }: AccountSelectorProps) {
-  const isControlLocked = isLoadingSelections || isLoadingAccount || isSavingAccount;
+  const isControlLocked = isLoadingSelections || isLoadingAccount || isRefreshingAccount || isSavingAccount;
   const hasValidSelection = options.some((option) => option.accountCode === selectedAccountCode);
 
   return (

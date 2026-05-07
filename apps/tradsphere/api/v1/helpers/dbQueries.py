@@ -1088,7 +1088,7 @@ def get_delivery_methods(*, ids: list[int] | None = None) -> list[dict]:
         params.extend(normalized_ids)
 
     query = (
-        "SELECT id, name, url, username, deadline, note "
+        "SELECT id, name, url, username, password, deadline, note "
         f"FROM {delivery_methods_table}"
     )
     if where_clauses:
@@ -1853,6 +1853,696 @@ def get_stations_contacts(
         query += " WHERE " + " AND ".join(where_clauses)
     query += " ORDER BY id ASC"
     return fetch_all(query, tuple(params))
+
+
+def get_station_detail_row(*, code: str) -> dict | None:
+    normalized_code = _normalize_account_code(code)
+    if not normalized_code:
+        return None
+
+    tables = get_db_tables()
+    stations_table = _quote_table_name(tables["STATIONS"])
+    delivery_methods_table = _quote_table_name(tables["DELIVERYMETHODS"])
+
+    query = (
+        "SELECT "
+        "s.code AS code, "
+        "s.name AS name, "
+        "s.affiliation AS affiliation, "
+        "s.mediaType AS mediaType, "
+        "CASE WHEN UPPER(s.mediaType) = 'CA' THEN s.syscode ELSE NULL END AS syscode, "
+        "s.language AS language, "
+        "s.ownership AS ownership, "
+        "s.deliveryMethodId AS deliveryMethodId, "
+        "s.note AS note, "
+        "d.id AS deliveryMethodIdValue, "
+        "d.name AS deliveryMethodName, "
+        "d.url AS deliveryMethodUrl, "
+        "d.username AS deliveryMethodUsername, "
+        "d.password AS deliveryMethodPassword, "
+        "d.deadline AS deliveryMethodDeadline, "
+        "d.note AS deliveryMethodNote "
+        f"FROM {stations_table} s "
+        f"LEFT JOIN {delivery_methods_table} d ON d.id = s.deliveryMethodId "
+        "WHERE UPPER(s.code) = UPPER(%s) "
+        "LIMIT 1"
+    )
+    rows = fetch_all(query, (normalized_code,))
+    if not rows:
+        return None
+    return rows[0]
+
+
+def get_station_contacts_detail_rows(
+    *,
+    station_code: str,
+    active_only: bool = True,
+) -> list[dict]:
+    normalized_code = _normalize_account_code(station_code)
+    if not normalized_code:
+        return []
+
+    tables = get_db_tables()
+    stations_contacts_table = _quote_table_name(tables["STATIONSCONTACTS"])
+    contacts_table = _quote_table_name(tables["CONTACTS"])
+
+    where_clauses = ["UPPER(sc.stationCode) = UPPER(%s)"]
+    params: list[object] = [normalized_code]
+    if active_only:
+        where_clauses.append("sc.active = 1")
+
+    query = (
+        "SELECT "
+        "sc.id AS linkId, "
+        "sc.stationCode AS stationCode, "
+        "sc.contactId AS linkContactId, "
+        "sc.contactType AS contactType, "
+        "sc.primaryContact AS primaryContact, "
+        "sc.note AS contactTypeNote, "
+        "sc.active AS linkActive, "
+        "c.id AS id, "
+        "c.email AS email, "
+        "c.firstName AS firstName, "
+        "c.lastName AS lastName, "
+        "c.company AS company, "
+        "c.jobTitle AS jobTitle, "
+        "c.office AS office, "
+        "c.cell AS cell, "
+        "c.active AS active, "
+        "c.note AS note "
+        f"FROM {stations_contacts_table} sc "
+        f"LEFT JOIN {contacts_table} c ON c.id = sc.contactId "
+        "WHERE "
+        + " AND ".join(where_clauses)
+        + " ORDER BY sc.primaryContact DESC, sc.id ASC"
+    )
+    return fetch_all(query, tuple(params))
+
+
+def save_station_detail_bundle(
+    *,
+    mode: str,
+    station_code: str,
+    station: dict,
+    delivery_method: dict | None,
+    contacts: list[dict],
+    contact_links: list[dict],
+) -> dict:
+    normalized_mode = str(mode or "").strip().lower()
+    if normalized_mode not in {"create", "update"}:
+        raise ValueError("mode must be create or update")
+
+    normalized_station_code = _normalize_account_code(station_code)
+    if not normalized_station_code:
+        raise ValueError("station code is required")
+
+    tables = get_db_tables()
+    stations_table = _quote_table_name(tables["STATIONS"])
+    delivery_methods_table = _quote_table_name(tables["DELIVERYMETHODS"])
+    contacts_table = _quote_table_name(tables["CONTACTS"])
+    stations_contacts_table = _quote_table_name(tables["STATIONSCONTACTS"])
+
+    station_payload = dict(station or {})
+    delivery_payload = dict(delivery_method or {})
+    contact_rows = [dict(item or {}) for item in (contacts or [])]
+    link_rows = [dict(item or {}) for item in (contact_links or [])]
+
+    if _normalize_account_code(station_payload.get("code")) != normalized_station_code:
+        raise ValueError("station.code must match stationCode")
+
+    def _fetch_one(cursor, query: str, params: tuple[object, ...]) -> dict | None:
+        cursor.execute(query, params)
+        row = cursor.fetchone()
+        if not row:
+            return None
+        return dict(row)
+
+    def _resolve_delivery_method_id(
+        cursor,
+        *,
+        current_station_delivery_method_id: int | None,
+    ) -> tuple[int | None, bool, bool]:
+        desired_id_raw = delivery_payload.get("id")
+        desired_name = _normalize_input_text(delivery_payload.get("name"))
+        desired_url = _normalize_input_text(delivery_payload.get("url"))
+        desired_username = _normalize_input_text(delivery_payload.get("username"))
+        desired_deadline = _normalize_input_text(delivery_payload.get("deadline"))
+        desired_note = _normalize_optional_input_text(delivery_payload.get("note"))
+        desired_password = delivery_payload.get("password")
+        desired_id: int | None = int(desired_id_raw) if desired_id_raw is not None else None
+
+        has_delivery_payload = any(
+            [
+                desired_id_raw is not None,
+                bool(desired_name),
+                bool(desired_url),
+                bool(desired_username),
+                bool(desired_deadline),
+                bool(str(desired_password).strip()) if desired_password is not None else False,
+                bool(desired_note),
+            ]
+        )
+        has_inline_delivery_details = any(
+            [
+                bool(desired_name),
+                bool(desired_url),
+                bool(desired_username),
+                bool(desired_deadline),
+                bool(str(desired_password).strip()) if desired_password is not None else False,
+                bool(desired_note),
+            ]
+        )
+
+        if desired_name is None:
+            desired_name = ""
+        if desired_url is None:
+            desired_url = ""
+        if desired_username is None:
+            desired_username = ""
+        if desired_deadline is None:
+            desired_deadline = ""
+
+        created = False
+        updated = False
+
+        if not has_delivery_payload:
+            if normalized_mode == "create":
+                return None, created, updated
+            return current_station_delivery_method_id, created, updated
+        if desired_id is not None and not has_inline_delivery_details:
+            return desired_id, created, updated
+
+        def _find_matching_delivery_method_id() -> int | None:
+            if not desired_url or not desired_username or not desired_deadline:
+                return None
+            query = (
+                "SELECT id "
+                f"FROM {delivery_methods_table} "
+                "WHERE url = %s AND username = %s AND deadline = %s "
+                "LIMIT 1"
+            )
+            row = _fetch_one(cursor, query, (desired_url, desired_username, desired_deadline))
+            if not row:
+                return None
+            return int(row["id"])
+
+        def _insert_delivery_method() -> int:
+            insert_query = (
+                f"INSERT INTO {delivery_methods_table} "
+                "(name, url, username, password, deadline, note) "
+                "VALUES (%s, %s, %s, %s, %s, %s)"
+            )
+            cursor.execute(
+                insert_query,
+                (
+                    desired_name,
+                    desired_url,
+                    desired_username,
+                    desired_password,
+                    desired_deadline,
+                    desired_note,
+                ),
+            )
+            return int(cursor.lastrowid)
+
+        def _count_station_refs(delivery_method_id: int) -> int:
+            count_query = (
+                "SELECT COUNT(*) AS total "
+                f"FROM {stations_table} "
+                "WHERE deliveryMethodId = %s"
+            )
+            row = _fetch_one(cursor, count_query, (delivery_method_id,))
+            return int((row or {}).get("total") or 0)
+
+        if desired_id is None:
+            resolved_existing = _find_matching_delivery_method_id()
+            if resolved_existing is not None:
+                return resolved_existing, created, updated
+            resolved_id = _insert_delivery_method()
+            created = True
+            return resolved_id, created, updated
+
+        current_row = _fetch_one(
+            cursor,
+            (
+                "SELECT id, name, url, username, password, deadline, note "
+                f"FROM {delivery_methods_table} "
+                "WHERE id = %s "
+                "LIMIT 1"
+            ),
+            (desired_id,),
+        )
+        if not current_row:
+            raise ValueError(f"Unknown deliveryMethodId values: {desired_id}")
+
+        current_name = _normalize_input_text(current_row.get("name")) or ""
+        current_url = _normalize_input_text(current_row.get("url")) or ""
+        current_username = _normalize_input_text(current_row.get("username")) or ""
+        current_deadline = _normalize_input_text(current_row.get("deadline")) or ""
+        current_note = _normalize_optional_input_text(current_row.get("note"))
+
+        password_changed = desired_password is not None and str(desired_password).strip() != ""
+        is_changed = (
+            desired_name != current_name
+            or desired_url != current_url
+            or desired_username != current_username
+            or desired_deadline != current_deadline
+            or desired_note != current_note
+            or password_changed
+        )
+        if not is_changed:
+            return desired_id, created, updated
+
+        refs = _count_station_refs(desired_id)
+        is_shared = refs > 1
+        if (
+            current_station_delivery_method_id is not None
+            and desired_id != int(current_station_delivery_method_id)
+        ):
+            is_shared = True
+
+        if is_shared:
+            resolved_existing = _find_matching_delivery_method_id()
+            if resolved_existing is not None:
+                return resolved_existing, created, updated
+            resolved_id = _insert_delivery_method()
+            created = True
+            return resolved_id, created, updated
+
+        update_fields: list[str] = [
+            "name = %s",
+            "url = %s",
+            "username = %s",
+            "deadline = %s",
+            "note = %s",
+        ]
+        params: list[object] = [
+            desired_name,
+            desired_url,
+            desired_username,
+            desired_deadline,
+            desired_note,
+        ]
+        if password_changed:
+            update_fields.append("password = %s")
+            params.append(desired_password)
+        params.append(desired_id)
+        cursor.execute(
+            f"UPDATE {delivery_methods_table} SET " + ", ".join(update_fields) + " WHERE id = %s",
+            tuple(params),
+        )
+        updated = True
+        return desired_id, created, updated
+
+    def _work(cursor) -> dict:
+        summary = {
+            "deliveryMethodCreated": False,
+            "deliveryMethodUpdated": False,
+            "stationCreated": False,
+            "stationUpdated": False,
+            "contactsCreated": 0,
+            "contactsUpdated": 0,
+            "linksCreatedOrReactivated": 0,
+            "linksUpdated": 0,
+            "linksDeactivated": 0,
+        }
+
+        current_station_row = _fetch_one(
+            cursor,
+            (
+                "SELECT code, deliveryMethodId "
+                f"FROM {stations_table} "
+                "WHERE UPPER(code) = UPPER(%s) "
+                "LIMIT 1 FOR UPDATE"
+            ),
+            (normalized_station_code,),
+        )
+
+        if normalized_mode == "create":
+            if current_station_row:
+                raise ValueError(f"Station '{normalized_station_code}' already exists")
+        else:
+            if not current_station_row:
+                raise ValueError(f"Unknown stationCode values: {normalized_station_code}")
+
+        current_delivery_method_id = (
+            int(current_station_row.get("deliveryMethodId"))
+            if current_station_row and current_station_row.get("deliveryMethodId") is not None
+            else None
+        )
+        resolved_delivery_method_id, dm_created, dm_updated = _resolve_delivery_method_id(
+            cursor,
+            current_station_delivery_method_id=current_delivery_method_id,
+        )
+        summary["deliveryMethodCreated"] = dm_created
+        summary["deliveryMethodUpdated"] = dm_updated
+
+        if normalized_mode == "create":
+            cursor.execute(
+                f"INSERT INTO {stations_table} "
+                "(code, name, affiliation, mediaType, syscode, language, ownership, deliveryMethodId, note) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    normalized_station_code,
+                    _normalize_input_text(station_payload.get("name")),
+                    _normalize_optional_input_text(station_payload.get("affiliation")),
+                    _normalize_media_type(station_payload.get("mediaType")),
+                    station_payload.get("syscode"),
+                    _normalize_input_text(station_payload.get("language")),
+                    _normalize_optional_input_text(station_payload.get("ownership")),
+                    resolved_delivery_method_id,
+                    _normalize_optional_input_text(station_payload.get("note")),
+                ),
+            )
+            summary["stationCreated"] = True
+        else:
+            cursor.execute(
+                f"UPDATE {stations_table} "
+                "SET name = %s, affiliation = %s, mediaType = %s, syscode = %s, "
+                "language = %s, ownership = %s, deliveryMethodId = %s, note = %s "
+                "WHERE UPPER(code) = UPPER(%s)",
+                (
+                    _normalize_input_text(station_payload.get("name")),
+                    _normalize_optional_input_text(station_payload.get("affiliation")),
+                    _normalize_media_type(station_payload.get("mediaType")),
+                    station_payload.get("syscode"),
+                    _normalize_input_text(station_payload.get("language")),
+                    _normalize_optional_input_text(station_payload.get("ownership")),
+                    resolved_delivery_method_id,
+                    _normalize_optional_input_text(station_payload.get("note")),
+                    normalized_station_code,
+                ),
+            )
+            summary["stationUpdated"] = True
+
+        contact_keys_by_email: dict[str, str] = {}
+        create_contacts_rows: list[dict] = []
+        update_contacts_rows: list[dict] = []
+        resolved_contact_ids_by_client_key: dict[str, int] = {}
+        resolved_contact_ids_from_payload: set[int] = set()
+
+        for index, row in enumerate(contact_rows):
+            row_id = row.get("id")
+            row_client_key = str(row.get("clientKey") or "").strip()
+            row_email = _normalize_email(row.get("email")) if "email" in row else ""
+            contact_ref = (
+                f"id:{int(row_id)}"
+                if row_id is not None
+                else (f"clientKey:{row_client_key}" if row_client_key else f"index:{index}")
+            )
+
+            if row_email:
+                owner = contact_keys_by_email.get(row_email)
+                if owner and owner != contact_ref:
+                    raise ValueError(
+                        f"Duplicate contacts found: email '{row_email}' appears multiple times in payload"
+                    )
+                contact_keys_by_email[row_email] = contact_ref
+
+            if row_id is None:
+                create_contacts_rows.append(
+                    {
+                        "index": index,
+                        "clientKey": row_client_key,
+                        "email": row_email,
+                        "firstName": _normalize_input_text(row.get("firstName") or ""),
+                        "lastName": _normalize_optional_input_text(row.get("lastName")),
+                        "company": _normalize_optional_input_text(row.get("company")),
+                        "jobTitle": _normalize_optional_input_text(row.get("jobTitle")),
+                        "office": _normalize_optional_input_text(row.get("office")),
+                        "cell": _normalize_optional_input_text(row.get("cell")),
+                        "active": _normalize_bool(row.get("active"), default=True),
+                        "note": _normalize_optional_input_text(row.get("note")),
+                    }
+                )
+                continue
+
+            parsed_id = int(row_id)
+            existing_contact = _fetch_one(
+                cursor,
+                (
+                    "SELECT id "
+                    f"FROM {contacts_table} "
+                    "WHERE id = %s LIMIT 1 FOR UPDATE"
+                ),
+                (parsed_id,),
+            )
+            if not existing_contact:
+                raise ValueError(f"Unknown contactId values: {parsed_id}")
+
+            resolved_contact_ids_from_payload.add(parsed_id)
+            if row_client_key:
+                resolved_contact_ids_by_client_key[row_client_key] = parsed_id
+
+            update_contacts_rows.append(
+                {
+                    "id": parsed_id,
+                    "email": row_email if "email" in row else None,
+                    "firstName": _normalize_input_text(row.get("firstName") or "")
+                    if "firstName" in row
+                    else None,
+                    "lastName": _normalize_optional_input_text(row.get("lastName"))
+                    if "lastName" in row
+                    else None,
+                    "company": _normalize_optional_input_text(row.get("company"))
+                    if "company" in row
+                    else None,
+                    "jobTitle": _normalize_optional_input_text(row.get("jobTitle"))
+                    if "jobTitle" in row
+                    else None,
+                    "office": _normalize_optional_input_text(row.get("office"))
+                    if "office" in row
+                    else None,
+                    "cell": _normalize_optional_input_text(row.get("cell"))
+                    if "cell" in row
+                    else None,
+                    "active": _normalize_bool(row.get("active"), default=True)
+                    if "active" in row
+                    else None,
+                    "note": _normalize_optional_input_text(row.get("note"))
+                    if "note" in row
+                    else None,
+                }
+            )
+
+        email_values = sorted(contact_keys_by_email.keys())
+        if email_values:
+            placeholders = _build_in_placeholders(email_values)
+            cursor.execute(
+                (
+                    "SELECT id, LOWER(email) AS email "
+                    f"FROM {contacts_table} "
+                    f"WHERE LOWER(email) IN ({placeholders})"
+                ),
+                tuple(email_values),
+            )
+            existing_email_rows = cursor.fetchall() or []
+            existing_email_map = {
+                str(item.get("email") or "").strip().lower(): int(item.get("id"))
+                for item in existing_email_rows
+                if item.get("id") is not None and str(item.get("email") or "").strip()
+            }
+            for email, owner in contact_keys_by_email.items():
+                existing_id = existing_email_map.get(email)
+                if existing_id is None:
+                    continue
+                if owner.startswith("id:"):
+                    current_id = int(owner.split(":", 1)[1])
+                    if current_id == existing_id:
+                        continue
+                raise ValueError(
+                    f"Duplicate contacts found: email '{email}' already exists on contact id {existing_id}"
+                )
+
+        for row in create_contacts_rows:
+            if not row["email"]:
+                raise ValueError("contacts[].email is required for new contacts")
+            cursor.execute(
+                f"INSERT INTO {contacts_table} "
+                "(firstName, lastName, company, jobTitle, office, cell, email, active, note) "
+                "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                (
+                    row["firstName"],
+                    row["lastName"],
+                    row["company"],
+                    row["jobTitle"],
+                    row["office"],
+                    row["cell"],
+                    row["email"],
+                    row["active"],
+                    row["note"],
+                ),
+            )
+            created_contact_id = int(cursor.lastrowid)
+            summary["contactsCreated"] += 1
+            resolved_contact_ids_from_payload.add(created_contact_id)
+            if row["clientKey"]:
+                resolved_contact_ids_by_client_key[row["clientKey"]] = created_contact_id
+
+        for row in update_contacts_rows:
+            fields: list[str] = []
+            params: list[object] = []
+            if row["email"] is not None:
+                fields.append("email = %s")
+                params.append(row["email"])
+            if row["firstName"] is not None:
+                fields.append("firstName = %s")
+                params.append(row["firstName"])
+            if row["lastName"] is not None:
+                fields.append("lastName = %s")
+                params.append(row["lastName"])
+            if row["company"] is not None:
+                fields.append("company = %s")
+                params.append(row["company"])
+            if row["jobTitle"] is not None:
+                fields.append("jobTitle = %s")
+                params.append(row["jobTitle"])
+            if row["office"] is not None:
+                fields.append("office = %s")
+                params.append(row["office"])
+            if row["cell"] is not None:
+                fields.append("cell = %s")
+                params.append(row["cell"])
+            if row["active"] is not None:
+                fields.append("active = %s")
+                params.append(row["active"])
+            if row["note"] is not None:
+                fields.append("note = %s")
+                params.append(row["note"])
+            if not fields:
+                continue
+            params.append(row["id"])
+            cursor.execute(
+                f"UPDATE {contacts_table} SET " + ", ".join(fields) + " WHERE id = %s",
+                tuple(params),
+            )
+            summary["contactsUpdated"] += int(cursor.rowcount or 0)
+
+        cursor.execute(
+            (
+                "SELECT id, stationCode, contactId, contactType, primaryContact, note, active "
+                f"FROM {stations_contacts_table} "
+                "WHERE UPPER(stationCode) = UPPER(%s)"
+            ),
+            (normalized_station_code,),
+        )
+        existing_link_rows = cursor.fetchall() or []
+        existing_link_by_fingerprint: dict[tuple[int, str], dict] = {}
+        active_existing_fingerprints: set[tuple[int, str]] = set()
+        for row in existing_link_rows:
+            contact_id = row.get("contactId")
+            if contact_id is None:
+                continue
+            contact_type = _normalize_contact_type(row.get("contactType"))
+            fingerprint = (int(contact_id), contact_type)
+            existing_link_by_fingerprint.setdefault(fingerprint, row)
+            if _normalize_bool(row.get("active"), default=True):
+                active_existing_fingerprints.add(fingerprint)
+
+        desired_link_payload: dict[tuple[int, str], dict] = {}
+        for index, row in enumerate(link_rows):
+            explicit_contact_id = row.get("contactId")
+            client_key = str(row.get("contactClientKey") or "").strip()
+
+            resolved_contact_id: int | None = None
+            if explicit_contact_id is not None:
+                resolved_contact_id = int(explicit_contact_id)
+            if client_key:
+                mapped_contact_id = resolved_contact_ids_by_client_key.get(client_key)
+                if mapped_contact_id is None:
+                    raise ValueError(
+                        f"Ambiguous contact link resolution at contactLinks[{index}]: "
+                        f"unknown contactClientKey '{client_key}'"
+                    )
+                if resolved_contact_id is not None and resolved_contact_id != mapped_contact_id:
+                    raise ValueError(
+                        f"Ambiguous contact link resolution at contactLinks[{index}]: "
+                        f"contactId '{resolved_contact_id}' does not match contactClientKey '{client_key}'"
+                    )
+                resolved_contact_id = mapped_contact_id
+
+            if resolved_contact_id is None:
+                raise ValueError(
+                    f"Ambiguous contact link resolution at contactLinks[{index}]: "
+                    "either contactId or contactClientKey is required"
+                )
+
+            if resolved_contact_id not in resolved_contact_ids_from_payload:
+                existing_contact = _fetch_one(
+                    cursor,
+                    f"SELECT id FROM {contacts_table} WHERE id = %s LIMIT 1",
+                    (resolved_contact_id,),
+                )
+                if not existing_contact:
+                    raise ValueError(f"Unknown contactId values: {resolved_contact_id}")
+
+            contact_type = _normalize_contact_type(row.get("contactType"))
+            fingerprint = (resolved_contact_id, contact_type)
+            if fingerprint in desired_link_payload:
+                raise ValueError(
+                    f"Duplicate contactLinks found for contactId '{resolved_contact_id}' and contactType '{contact_type}'"
+                )
+
+            desired_link_payload[fingerprint] = {
+                "stationCode": normalized_station_code,
+                "contactId": resolved_contact_id,
+                "contactType": contact_type,
+                "primaryContact": _normalize_bool(row.get("primaryContact"), default=False),
+                "note": _normalize_optional_input_text(row.get("note")),
+                "active": _normalize_bool(row.get("active"), default=True),
+            }
+
+        for fingerprint, payload in desired_link_payload.items():
+            existing_link = existing_link_by_fingerprint.get(fingerprint)
+            if existing_link:
+                cursor.execute(
+                    f"UPDATE {stations_contacts_table} "
+                    "SET primaryContact = %s, note = %s, active = %s "
+                    "WHERE id = %s",
+                    (
+                        payload["primaryContact"],
+                        payload["note"],
+                        payload["active"],
+                        int(existing_link["id"]),
+                    ),
+                )
+                summary["linksUpdated"] += int(cursor.rowcount or 0)
+                continue
+
+            cursor.execute(
+                f"INSERT INTO {stations_contacts_table} "
+                "(stationCode, contactId, contactType, primaryContact, note, active) "
+                "VALUES (%s, %s, %s, %s, %s, %s)",
+                (
+                    payload["stationCode"],
+                    payload["contactId"],
+                    payload["contactType"],
+                    payload["primaryContact"],
+                    payload["note"],
+                    payload["active"],
+                ),
+            )
+            summary["linksCreatedOrReactivated"] += 1
+
+        for fingerprint in active_existing_fingerprints:
+            if fingerprint in desired_link_payload:
+                continue
+            existing_link = existing_link_by_fingerprint.get(fingerprint)
+            if not existing_link:
+                continue
+            cursor.execute(
+                f"UPDATE {stations_contacts_table} SET active = %s WHERE id = %s",
+                (0, int(existing_link["id"])),
+            )
+            summary["linksDeactivated"] += int(cursor.rowcount or 0)
+
+        return {
+            "stationCode": normalized_station_code,
+            "deliveryMethodId": resolved_delivery_method_id,
+            "summary": summary,
+        }
+
+    return run_transaction(_work, cursor_kwargs={"dictionary": True})
 
 
 def insert_stations_contacts(items: list[dict]) -> int:
