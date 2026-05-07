@@ -232,8 +232,10 @@ export function ScheduleModal({
   const estnum = selectedEstnum?.estnum ?? null;
   const normalizedAccountCode = accountCode?.trim().toUpperCase() || "UNKNOWN";
   const hasSchedule = Boolean(selectedEstnum?.hasSchedule);
-  const isReportLoadingState = isLoading && hasSchedule && estnum !== null && tableData === null;
-  const shouldUseViewportConstrainedHeight = mode === "detail" || isReportLoadingState;
+  const hasRenderableScheduleTable = Boolean(tableData);
+  const shouldUseCompactModalFrame = isLoading || !hasRenderableScheduleTable;
+  const isDetailViewportState = mode === "detail";
+  const shouldUseScrollableBody = isDetailViewportState && hasRenderableScheduleTable;
 
   useEffect(() => {
     if (!open) {
@@ -465,11 +467,16 @@ export function ScheduleModal({
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
+        onInteractOutside={(event) => {
+          event.preventDefault();
+        }}
         className={cn(
           "flex min-h-0 max-h-[min(90vh,calc(100dvh-1rem))] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white !inset-0 !m-auto !p-0",
-          shouldUseViewportConstrainedHeight
-            ? "!h-[min(90vh,calc(100dvh-1rem))] min-h-[65vh] !w-fit !max-w-[85vw] sm:min-h-[70vh]"
-            : "!h-fit !w-fit !max-w-[85vw]",
+          shouldUseCompactModalFrame
+            ? "!h-[18rem] !w-[min(92vw,56rem)] !max-w-[92vw] sm:!h-[19rem]"
+            : isDetailViewportState
+              ? "!h-[min(90vh,calc(100dvh-1rem))] min-h-[65vh] !w-fit !max-w-[85vw] sm:min-h-[70vh]"
+              : "!h-fit !w-fit !max-w-[85vw]",
         )}
       >
         <div className="shrink-0 border-b border-slate-200 bg-white px-6 py-5 sm:px-8">
@@ -493,12 +500,12 @@ export function ScheduleModal({
 
         <div
           className={cn(
-            "overflow-x-auto overscroll-contain px-6 py-5 sm:px-8 sm:py-6",
-            shouldUseViewportConstrainedHeight ? "min-h-0 flex-1 overflow-y-auto" : "flex-none overflow-y-visible",
+            "min-h-0 overflow-x-auto overscroll-contain px-6 py-5 sm:px-8 sm:py-6",
+            shouldUseScrollableBody ? "min-h-0 flex-1 overflow-y-auto" : "flex-none overflow-y-visible",
           )}
         >
           {isLoading ? (
-            <div className="flex min-h-[240px] items-center justify-center gap-3 text-slate-600">
+            <div className="flex min-h-[80px] items-center justify-center gap-3 text-slate-600">
               <Loader2 className="size-5 animate-spin" />
               <span className="text-sm">Loading schedules...</span>
             </div>
