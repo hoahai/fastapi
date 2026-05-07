@@ -5,6 +5,7 @@ const config: Config = {
   content: [
     "./index.html",
     "./src/**/*.{ts,tsx}",
+    "../home/src/**/*.{ts,tsx}",
     "../../shared/**/*.{ts,tsx}",
   ],
   theme: {

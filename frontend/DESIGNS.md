@@ -48,8 +48,8 @@
 - Use reusable layout primitives before custom page-level overrides.
 
 ## Frontend Portal Pattern
-- The frontend workspace root is `/fe` and should render a portal landing page.
-- The frontend uses a shared app shell for all `/fe` pages, not page-specific wrappers.
+- The frontend workspace root is `/` and should render the Workspace Home portal page.
+- The frontend uses a shared app shell for workspace pages, not page-specific wrappers.
 - Desktop uses a floating rounded left sidebar (fixed position) with spacing from viewport edges.
 - The shell uses a mobile menu/drawer pattern on small screens.
 - Desktop sidebar is collapsible and should persist locally.
@@ -57,8 +57,10 @@
 - Collapsed desktop sidebar should be icon-only (no text labels and no leftover letter badges).
 - Sidebar remains fixed while page content scrolls independently.
 - Sidebar entries include `Home / Portal` and app links/status (for example `Tradsphere`, future app placeholders).
-- App pages follow `/fe/<app-name>/home`.
-- Portal home should include a clear title, short guidance text, and app cards with direct navigation.
+- App pages follow `/<app-name>/home` (for example `/tradsphere/home`).
+- `/fe` is compatibility-only and should redirect/alias to root-based routes.
+- Portal home should include a clear title, short guidance text, an Announcements section, and an Apps section with direct navigation cards.
+- The Apps section should use responsive cards: mobile 1 column, tablet 2 columns, desktop 3+ columns when space allows.
 - Reuse a shared banner component so portal and app pages keep the same visual language.
 
 ## Page State Persistence

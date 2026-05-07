@@ -27,12 +27,13 @@
 - On safe app navigation away/back, restore selected account context and cached dashboard data when available.
 - Schedule detail reports must render inside a flex-column modal shell with bounded viewport height in detail/loading states.
 - Schedule modal scroll ownership: only the report/table viewport scrolls (`flex-1`, `min-height: 0`, `overflow: auto`); header and footer remain fixed inside the modal shell.
-- Keep production routing compatible with `/fe` base path.
-- Keep TradSphere frontend home mounted at `/fe/tradsphere/home` via client-side routing.
-- Keep `/fe` and `/fe/` mapped to the workspace portal page.
+- Keep production routing on root paths.
+- Keep TradSphere frontend home mounted at `/tradsphere/home` via client-side routing.
+- Keep `/` mapped to the workspace portal page.
+- Treat `/fe` and `/fe/...` as compatibility-only aliases/redirects to root paths.
 - All frontend pages/routes must render inside the shared app shell with the collapsible sidebar.
 - Sidebar navigation state (collapsed/expanded) should persist across route navigation.
-- Preserve useful page UI state across frontend navigation for `/fe` routes.
+- Preserve useful page UI state across frontend navigation for workspace routes.
 - Use `localStorage` for durable preferences (for example: sidebar collapsed/expanded).
 - Use `sessionStorage` for page-specific navigation state (for example: selected account/id, search/filter/sort, section/tab, scroll position).
 - Do not persist sensitive values (`password`, secrets, tokens), error/loading states, or temporary modal-open state by default.

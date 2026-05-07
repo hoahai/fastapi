@@ -1,7 +1,7 @@
 from pathlib import Path
 
-from fastapi import FastAPI
-from fastapi.responses import FileResponse
+from fastapi import FastAPI, HTTPException
+from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
 from apps.spendsphere.api.main import app as spendsphere_app
@@ -37,6 +37,7 @@ from shared.middleware import (
 app = FastAPI()
 _STATIC_DIR = Path(__file__).resolve().parent / "static"
 _TRADSPHERE_FE_DIST = Path(__file__).resolve().parent / "apps" / "tradsphere" / "ui_dist"
+_FRONTEND_INDEX = _TRADSPHERE_FE_DIST / "index.html"
 app.state.public_paths = {"/", "/ping"}
 app.state.tenant_validator_registry = [
     (
@@ -63,17 +64,32 @@ app.mount("/api/tradsphere", tradsphere_app)
 app.mount("/api/opssphere", opssphere_app)
 if _TRADSPHERE_FE_DIST.exists():
     app.mount(
+        "/assets",
+        StaticFiles(directory=_TRADSPHERE_FE_DIST / "assets", check_dir=False),
+        name="assets",
+    )
+    app.mount(
         "/fe/assets",
         StaticFiles(directory=_TRADSPHERE_FE_DIST / "assets", check_dir=False),
-        name="fe-assets",
+        name="fe-assets-compat",
     )
 app.include_router(opssphere_public_router)
 
 
+def _frontend_index_response() -> FileResponse:
+    if _FRONTEND_INDEX.exists():
+        return FileResponse(_FRONTEND_INDEX)
+
+    html_path = _STATIC_DIR / "index.html"
+    if html_path.exists():
+        return FileResponse(html_path)
+
+    raise HTTPException(status_code=404, detail="Frontend build not found")
+
+
 @app.get("/")
 def root():
-    html_path = _STATIC_DIR / "index.html"
-    return FileResponse(html_path)
+    return _frontend_index_response()
 
 
 @app.get("/ping")
@@ -85,12 +101,24 @@ if _TRADSPHERE_FE_DIST.exists():
     @app.get("/fe")
     @app.get("/fe/")
     def serve_fe_root():
-        return FileResponse(_TRADSPHERE_FE_DIST / "index.html")
+        return RedirectResponse(url="/", status_code=307)
 
 
     @app.get("/fe/{full_path:path}")
     def serve_fe_app(full_path: str):
-        target = _TRADSPHERE_FE_DIST / full_path
-        if target.exists() and target.is_file():
-            return FileResponse(target)
-        return FileResponse(_TRADSPHERE_FE_DIST / "index.html")
+        normalized_path = full_path.lstrip("/")
+        if not normalized_path:
+            return RedirectResponse(url="/", status_code=307)
+        return RedirectResponse(url=f"/{normalized_path}", status_code=307)
+
+
+@app.get("/{full_path:path}")
+def serve_frontend_app(full_path: str):
+    if full_path == "api" or full_path.startswith("api/"):
+        raise HTTPException(status_code=404, detail="Not Found")
+
+    target = _TRADSPHERE_FE_DIST / full_path
+    if target.exists() and target.is_file():
+        return FileResponse(target)
+
+    return _frontend_index_response()

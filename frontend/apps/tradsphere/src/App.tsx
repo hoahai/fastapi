@@ -33,10 +33,7 @@ function stripTrailingSlash(path: string): string {
 }
 
 function toFrontendHref(route: string): string {
-  if (route === "/") {
-    return "/fe";
-  }
-  return `/fe${route}`;
+  return route;
 }
 
 function toScrollStorageKey(route: string): string {
@@ -62,6 +59,15 @@ function App() {
     window.addEventListener("popstate", handlePopState);
     return () => window.removeEventListener("popstate", handlePopState);
   }, []);
+
+  useEffect(() => {
+    const canonicalPath = toFrontendHref(frontendPath);
+    if (window.location.pathname === canonicalPath) {
+      return;
+    }
+
+    window.history.replaceState({}, "", canonicalPath);
+  }, [frontendPath]);
 
   const knownRoutes = useMemo(() => {
     return new Set<string>([HOME_ROUTE, "/tradsphere/home"]);

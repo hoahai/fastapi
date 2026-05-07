@@ -5,8 +5,17 @@
 - Home app source lives under `frontend/apps/home/src/`.
 
 ## Routing
-- Workspace Home route is `/fe` and `/fe/`.
+- Workspace Home primary route is `/`.
+- Tradsphere route is `/tradsphere/home`.
+- `/fe` and `/fe/...` are compatibility-only paths and may redirect/alias to root-based routes.
 - Keep route URLs stable and compatible with the shared frontend shell router.
+
+## Home Page Structure
+- Workspace Home should include:
+  - workspace banner/header
+  - Announcements section
+  - Apps section with responsive app-card grid
+- Apps grid should show current apps and mark unavailable apps as `Soon`.
 
 ## Architecture
 - Home app should render inside shared layout/shell components used by the frontend workspace.
