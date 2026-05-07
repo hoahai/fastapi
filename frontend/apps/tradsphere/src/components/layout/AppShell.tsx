@@ -11,6 +11,7 @@ type AppShellProps = {
 
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspace.sidebar.collapsed";
 const LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY = "tradsphere:ui:sidebarCollapsed:v1";
+const SIDEBAR_COLLAPSED_EVENT = "workspace-sidebar-collapsed-change";
 
 function readSidebarCollapsedState(): boolean {
   if (typeof window === "undefined") {
@@ -36,6 +37,11 @@ export function AppShell({ currentPath, onNavigate, children }: AppShellProps) {
     try {
       window.localStorage.setItem(SIDEBAR_COLLAPSED_STORAGE_KEY, sidebarCollapsed ? "1" : "0");
       window.localStorage.removeItem(LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY);
+      window.dispatchEvent(
+        new CustomEvent<{ collapsed: boolean }>(SIDEBAR_COLLAPSED_EVENT, {
+          detail: { collapsed: sidebarCollapsed },
+        }),
+      );
     } catch {
       // Ignore storage write failures.
     }

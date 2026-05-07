@@ -466,83 +466,86 @@ export function ScheduleModal({
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
         className={cn(
-          "max-h-[90vh] overflow-hidden rounded-2xl border border-slate-200 bg-white p-0",
+          "flex min-h-0 max-h-[min(90vh,calc(100dvh-1rem))] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white !inset-0 !m-auto !p-0",
           shouldUseViewportConstrainedHeight
-            ? "h-[min(90vh,calc(100dvh-1rem))] min-h-[65vh] w-[calc(100vw-1rem)] max-w-[96vw] sm:min-h-[70vh] sm:w-[82vw] sm:min-w-[720px] sm:max-w-[1300px]"
-            : "h-auto w-[calc(100vw-1rem)] max-w-[96vw] sm:w-fit sm:max-w-[95vw]",
+            ? "!h-[min(90vh,calc(100dvh-1rem))] min-h-[65vh] !w-fit !max-w-[85vw] sm:min-h-[70vh]"
+            : "!h-fit !w-fit !max-w-[85vw]",
         )}
       >
-        <div className="flex h-full min-h-0 flex-col">
-          <div className="shrink-0 border-b border-slate-200 bg-white px-4 py-4 sm:px-6">
-            <div className="flex items-start justify-between gap-4">
-              <DialogTitle asChild>
-                <h2 className="text-xl font-semibold text-slate-900">Schedules</h2>
-              </DialogTitle>
-              <button
-                type="button"
-                onClick={() => onOpenChange(false)}
-                className="rounded-md p-1 text-slate-500 transition-colors hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
-                aria-label="Close schedules modal"
-              >
-                <X className="size-5" />
-              </button>
-            </div>
-            <div className="mt-3 flex flex-wrap items-center gap-4">
-              <ScheduleViewModeToggle mode={mode} onModeChange={setMode} detailEnabled />
-            </div>
+        <div className="shrink-0 border-b border-slate-200 bg-white px-6 py-5 sm:px-8">
+          <div className="flex items-start justify-between gap-4">
+            <DialogTitle asChild>
+              <h2 className="text-xl font-semibold text-slate-900">Schedules</h2>
+            </DialogTitle>
+            <button
+              type="button"
+              onClick={() => onOpenChange(false)}
+              className="rounded-md p-1 text-slate-500 transition-colors hover:text-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-400"
+              aria-label="Close schedules modal"
+            >
+              <X className="size-5" />
+            </button>
           </div>
-
-          <div className="min-h-0 flex-1 overflow-auto overscroll-contain px-4 py-4 sm:px-6 sm:py-5">
-            {isLoading ? (
-              <div className="flex min-h-[240px] items-center justify-center gap-3 text-slate-600">
-                <Loader2 className="size-5 animate-spin" />
-                <span className="text-sm">Loading schedules...</span>
-              </div>
-            ) : error ? (
-              <div className="rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>
-            ) : estnum === null ? (
-              <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                Select an EstNum to view schedules.
-              </div>
-            ) : !hasSchedule ? (
-              <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                No schedule yet for this EstNum.
-              </div>
-            ) : tableData ? (
-              <div className="inline-block min-w-full align-top sm:min-w-0">
-                <ScheduleTable data={tableData} />
-              </div>
-            ) : (
-              <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
-                Schedule table data is unavailable.
-              </div>
-            )}
+          <div className="mt-3 flex flex-wrap items-center gap-4">
+            <ScheduleViewModeToggle mode={mode} onModeChange={setMode} detailEnabled />
           </div>
-
-          <footer className="shrink-0 border-t border-slate-100 bg-white px-4 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))] sm:px-6">
-            <CacheStatusChip
-              text={
-                isLoading
-                  ? "Loading..."
-                  : isRefreshing
-                    ? "Refreshing..."
-                    : lastUpdatedAt
-                      ? `Last updated ${formatRelativeTime(lastUpdatedAt)}`
-                      : "No cached data yet"
-              }
-              onRefresh={() => {
-                if (!isLoading && !isRefreshing) {
-                  setRefreshRequestId((current) => current + 1);
-                }
-              }}
-              disabled={isLoading || isRefreshing}
-              refreshing={isRefreshing}
-              refreshLabel="Refresh schedule data"
-              tooltipText="Click to refresh schedule data"
-              className="max-w-[min(92vw,28rem)]"
-            />
-          </footer>
         </div>
+
+        <div
+          className={cn(
+            "overflow-x-auto overscroll-contain px-6 py-5 sm:px-8 sm:py-6",
+            shouldUseViewportConstrainedHeight ? "min-h-0 flex-1 overflow-y-auto" : "flex-none overflow-y-visible",
+          )}
+        >
+          {isLoading ? (
+            <div className="flex min-h-[240px] items-center justify-center gap-3 text-slate-600">
+              <Loader2 className="size-5 animate-spin" />
+              <span className="text-sm">Loading schedules...</span>
+            </div>
+          ) : error ? (
+            <div className="rounded-md border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">{error}</div>
+          ) : estnum === null ? (
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+              Select an EstNum to view schedules.
+            </div>
+          ) : !hasSchedule ? (
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+              No schedule yet for this EstNum.
+            </div>
+          ) : tableData ? (
+            <div className="inline-block align-top">
+              <ScheduleTable data={tableData} />
+            </div>
+          ) : (
+            <div className="rounded-md border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-700">
+              Schedule table data is unavailable.
+            </div>
+          )}
+        </div>
+
+        <footer className="shrink-0 border-t border-slate-100 bg-white px-4 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
+          <CacheStatusChip
+            text={
+              isLoading
+                ? "Loading..."
+                : isRefreshing
+                  ? "Refreshing..."
+                  : lastUpdatedAt
+                    ? `Last updated ${formatRelativeTime(lastUpdatedAt)}`
+                    : "No cached data yet"
+            }
+            onRefresh={() => {
+              if (!isLoading && !isRefreshing) {
+                setRefreshRequestId((current) => current + 1);
+              }
+            }}
+            disabled={isLoading || isRefreshing}
+            refreshing={isRefreshing}
+            refreshLabel="Refresh schedule data"
+            tooltipText="Click to refresh schedule data"
+            className="max-w-[min(92vw,28rem)]"
+          />
+        </footer>
       </DialogContent>
     </Dialog>
   );

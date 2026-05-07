@@ -6,7 +6,7 @@ import {
   getFilteredRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { AlertCircle, CalendarDays, CloudUpload, Monitor, Plus } from "lucide-react";
+import { AlertCircle, CalendarDays, CloudUpload, Loader2, Monitor, Plus } from "lucide-react";
 
 import { AccountInformationCard } from "@/components/dashboard/AccountInformationCard";
 import { ActionIconButton } from "@/components/dashboard/ActionIconButton";
@@ -60,6 +60,9 @@ const SCHEDULE_IMPORT_URL = "/api/tradsphere/v1/schedules/import/file?skipBlankL
 const HOME_SELECTED_ACCOUNT_STORAGE_KEY = "tradsphere.home.selectedAccount";
 const HOME_SCHEDULE_SEARCH_STORAGE_KEY = "tradsphere.home.searchText.schedule";
 const HOME_STATION_SEARCH_STORAGE_KEY = "tradsphere.home.searchText.station";
+const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspace.sidebar.collapsed";
+const LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY = "tradsphere:ui:sidebarCollapsed:v1";
+const SIDEBAR_COLLAPSED_EVENT = "workspace-sidebar-collapsed-change";
 
 type CacheStatus = {
   source: "cache" | "network";
@@ -90,9 +93,26 @@ const stationFilterFn: FilterFn<StationItem> = (row, _columnId, filterValue) => 
   return [station.code, station.name ?? "", repText].join(" ").toLowerCase().includes(query);
 };
 
+function readSidebarCollapsedState(): boolean {
+  if (typeof window === "undefined") {
+    return false;
+  }
+
+  try {
+    const nextValue = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY);
+    if (nextValue !== null) {
+      return nextValue === "1";
+    }
+    return window.localStorage.getItem(LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY) === "1";
+  } catch {
+    return false;
+  }
+}
+
 function App() {
   const toast = useToast();
   const { requestJson } = useApiRequest();
+  const [sidebarCollapsed, setSidebarCollapsed] = useState<boolean>(() => readSidebarCollapsedState());
   const [accountSelections, setAccountSelections] = useState<AccountSelection[]>([]);
   const [selectedAccountCode, setSelectedAccountCode] = usePersistentState<string>(
     HOME_SELECTED_ACCOUNT_STORAGE_KEY,
@@ -146,6 +166,31 @@ function App() {
 
   useEffect(() => {
     void fetchSelections("stale-while-revalidate");
+  }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+
+    const handleStorage = () => {
+      setSidebarCollapsed(readSidebarCollapsedState());
+    };
+    const handleSidebarEvent = (event: Event) => {
+      const customEvent = event as CustomEvent<{ collapsed?: boolean }>;
+      if (typeof customEvent.detail?.collapsed === "boolean") {
+        setSidebarCollapsed(customEvent.detail.collapsed);
+        return;
+      }
+      setSidebarCollapsed(readSidebarCollapsedState());
+    };
+
+    window.addEventListener("storage", handleStorage);
+    window.addEventListener(SIDEBAR_COLLAPSED_EVENT, handleSidebarEvent as EventListener);
+    return () => {
+      window.removeEventListener("storage", handleStorage);
+      window.removeEventListener(SIDEBAR_COLLAPSED_EVENT, handleSidebarEvent as EventListener);
+    };
   }, []);
 
   const schedulesTable = useReactTable({
@@ -577,6 +622,13 @@ function App() {
         ? `Data source: ${dashboardCacheStatus.source}. Last updated ${formatRelativeTime(dashboardCacheStatus.fetchedAt)}.`
         : null;
   const pageCacheStatusText = dashboardStatusText ?? selectionsStatusText;
+  const isPageBusy = isLoadingSelections || isRefreshingSelections || isLoadingAccount || isRefreshingAccount || isSaving;
+  const pageBusyMessage = isSaving
+    ? "Saving account changes..."
+    : isLoadingAccount || isRefreshingAccount
+      ? "Loading account dashboard..."
+      : "Loading account selections...";
+  const isAnyModalOpen = isScheduleModalOpen || isEstimateNumberModalOpen || isStationModalOpen || isScheduleUploadOpen;
 
   return (
     <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-6 pb-12">
@@ -714,19 +766,27 @@ function App() {
         </>
       ) : null}
 
-      {pageCacheStatusText ? (
-        <CacheStatusChip
-          text={pageCacheStatusText}
-          onRefresh={() => {
-            void handleRefreshAccount();
-          }}
-          disabled={!selectedAccountCode || isLoadingAccount || isRefreshingAccount || isSaving}
-          refreshing={isRefreshingAccount}
-          refreshLabel="Refresh data"
-          tooltipText="Click to refresh data"
-          containerClassName="fixed right-4 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40 sm:right-6 lg:right-10"
-          className="max-w-[min(90vw,32rem)]"
-        />
+      {pageCacheStatusText && !isAnyModalOpen ? (
+        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40">
+          <div
+            className={`mx-4 sm:mx-6 lg:mr-6 ${sidebarCollapsed ? "lg:ml-[6.5rem]" : "lg:ml-[18.75rem]"}`}
+          >
+            <div className="mx-auto w-full max-w-[1600px]">
+              <CacheStatusChip
+                text={pageCacheStatusText}
+                onRefresh={() => {
+                  void handleRefreshAccount();
+                }}
+                disabled={!selectedAccountCode || isLoadingAccount || isRefreshingAccount || isSaving}
+                refreshing={isRefreshingAccount}
+                refreshLabel="Refresh data"
+                tooltipText="Click to refresh data"
+                containerClassName="pointer-events-auto"
+                className="max-w-[min(90vw,32rem)]"
+              />
+            </div>
+          </div>
+        </div>
       ) : null}
 
       <ScheduleUploadDialog
@@ -795,6 +855,15 @@ function App() {
         cacheInvalidationToken={scheduleCacheInvalidationToken}
         invalidatedEstnum={invalidatedScheduleEstnum}
       />
+
+      {isPageBusy ? (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/25 backdrop-blur-[1.5px]">
+          <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-medium text-slate-700 shadow-soft">
+            <Loader2 className="size-4 animate-spin text-blue-600" />
+            <span>{pageBusyMessage}</span>
+          </div>
+        </div>
+      ) : null}
     </div>
   );
 }
