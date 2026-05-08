@@ -7,6 +7,7 @@ import {
   TRADSPHERE_CONTACTS_CHILD_ICON,
   TRADSPHERE_ESTNUMS_CHILD_ICON,
   TRADSPHERE_HOME_CHILD_ICON,
+  TRADSPHERE_STATIONS_CHILD_ICON,
   type AppNavChildItem,
   type AppNavItem,
 } from "@/components/layout/navigation";
@@ -353,6 +354,8 @@ function SidebarChildItem({
       ? TRADSPHERE_ESTNUMS_CHILD_ICON
       : child.route === "/tradsphere/contacts"
         ? TRADSPHERE_CONTACTS_CHILD_ICON
+        : child.route === "/tradsphere/stations"
+          ? TRADSPHERE_STATIONS_CHILD_ICON
         : TRADSPHERE_HOME_CHILD_ICON;
   return (
     <button

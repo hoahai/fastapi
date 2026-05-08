@@ -318,6 +318,23 @@
 - Contact modal should include a read-only `Used by Stations` section with station relationship details.
 - Contact modal should use a responsive two-section layout (`Contact` + `Used by Stations`) that renders as two columns on wide screens and stacked sections on narrower screens.
 - Contact modal form spacing should stay clean and avoid nested padded containers that compress field width.
+
+## TradSphere Stations Page
+- Route: `/tradsphere/stations`.
+- Purpose: search/manage stations and review delivery method + REP contact summaries.
+- Keep page search-first with no default station load.
+- Search is explicit-submit only (`Search` button/Enter); never search while typing.
+- Search form supports multi-field filters (station code/name, media type, language, affiliation, contact).
+- Search validity follows global rule: no required fields => enable search when at least one field has a value.
+- Submitted searches are cache-first/offline-first:
+  - show matching cached results immediately
+  - refresh in background for submitted params
+  - keep cached results visible during refresh
+  - on refresh failure with cache, keep cached results and show non-blocking warning
+- Show floating cache-status chip only after a submitted search context exists; chip refreshes current submitted search with `network-only`.
+- Use grouped station results with collapsible groups (prefer Media Type grouping; fallback to name initial).
+- Station result cards should mirror the compact read-only station relationship layout used in Contact modal `Used by Stations`, and include Delivery Method + REP contact rows.
+- `Add Station` and `Edit Station` must reuse the existing `StationModal` (no duplicate station form implementation).
 - Contact modal submit action label is `Save` and should follow dirty + valid modal rules (no submit action when pristine).
 - Required indicators in contact forms must align with backend schema rules (`email` required + valid).
 - Contact modal `Contact Type` should be editable via dropdown and persisted through existing stations-contact link update APIs when link rows exist.

@@ -38,6 +38,23 @@ function displayContactType(value?: string | null): string {
   return text || "REP";
 }
 
+function contactTypeChipClass(contactType: string): string {
+  switch (contactType) {
+    case "REP":
+      return "bg-indigo-100 text-indigo-700";
+    case "TRAFFIC":
+      return "bg-emerald-100 text-emerald-700";
+    case "BILLING":
+      return "bg-amber-100 text-amber-800";
+    case "SALES":
+      return "bg-cyan-100 text-cyan-700";
+    case "PROGRAMMING":
+      return "bg-fuchsia-100 text-fuchsia-700";
+    default:
+      return "bg-slate-100 text-slate-700";
+  }
+}
+
 function Field({
   label,
   value,
@@ -77,7 +94,11 @@ export function StationContactCard({
     <article className="space-y-2 rounded-md border border-slate-200/80 bg-white/70 p-2.5">
       <div className="flex items-center justify-between gap-2">
         <div className="flex items-center gap-1.5">
-          <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-700">{contactType}</span>
+          <span
+            className={`rounded-full px-1.5 py-0.5 text-[10px] font-medium ${contactTypeChipClass(contactType)}`}
+          >
+            {contactType}
+          </span>
           {contact.primaryContact ? (
             <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">Primary</span>
           ) : null}

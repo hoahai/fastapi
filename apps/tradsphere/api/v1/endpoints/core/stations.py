@@ -22,6 +22,11 @@ def get_stations_route(
     account_code: list[str] | None = Query(None, alias="accountCode"),
     est_num: list[str] | None = Query(None, alias="estNum"),
     name: str | None = Query(None, alias="name"),
+    affiliation: str | None = Query(None, alias="affiliation"),
+    media_types: list[str] | None = Query(None, alias="mediaTypes"),
+    media_type: list[str] | None = Query(None, alias="mediaType"),
+    languages: list[str] | None = Query(None, alias="languages"),
+    language: list[str] | None = Query(None, alias="language"),
     delivery_method_detail: bool = Query(False, alias="deliveryMethodDetail"),
     contact_detail: bool = Query(False, alias="contactDetail"),
 ):
@@ -39,6 +44,9 @@ def get_stations_route(
 
     Example request (station name filter):
         GET /api/tradsphere/v1/stations?name=los%20angeles
+
+    Example request (media/language filters):
+        GET /api/tradsphere/v1/stations?mediaTypes=TV,CA&languages=English
 
     Example response:
         {
@@ -107,24 +115,28 @@ def get_stations_route(
     Requirements:
         - Requires X-Tenant-Id header
         - Requires valid API key
-        - At least one of codes/code, accountCode, estNum, name is required
+        - At least one of codes/code, accountCode, estNum, name, affiliation, mediaType(s), language(s) is required
         - codes/code accepts comma-separated values (multiple supported)
         - accountCode accepts only one value
         - estNum accepts only one unsigned-integer value
         - name performs case-insensitive partial match on station name
+        - affiliation performs case-insensitive partial match
+        - mediaType/mediaTypes accepts comma-separated values and validates against tenant mediaType enum
+        - language/languages accepts comma-separated values and supports English/Spanish (aliases EN/ES)
         - deliveryMethodDetail controls deliveryMethod object detail (default false)
         - when deliveryMethodDetail=false, deliveryMethod returns id and name only
         - contactDetail controls REP contact detail (default false)
         - contacts are grouped by contactType
         - REP returns contact objects; non-REP returns email lists
         - when contactDetail=false, REP objects are short: {id, name, email}
-        - mediaTypes/mediaType and languages/language are not supported on this route
         - syscode is returned only when mediaType is CA; for other media types, syscode is omitted
         - deliveryMethodIds filtering is intentionally not supported on this route
     """
     normalized_codes = parse_csv_values(codes, code, uppercase=True)
     normalized_account_codes = parse_csv_values(account_code, uppercase=True)
     normalized_est_nums = parse_int_list(est_num)
+    normalized_media_types = parse_csv_values(media_types, media_type, uppercase=True)
+    normalized_languages = parse_csv_values(languages, language, uppercase=True)
 
     if len(normalized_account_codes) > 1:
         raise HTTPException(status_code=400, detail="accountCode accepts only one value")
@@ -140,6 +152,9 @@ def get_stations_route(
             account_code=selected_account_code,
             est_num=selected_est_num,
             station_name=name,
+            affiliation=affiliation,
+            media_types=normalized_media_types,
+            languages=normalized_languages,
             delivery_method_detail=delivery_method_detail,
             contact_detail=contact_detail,
         )

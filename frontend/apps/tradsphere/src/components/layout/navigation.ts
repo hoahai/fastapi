@@ -3,6 +3,7 @@ import {
   ContactRound,
   House,
   LayoutDashboard,
+  MapPinned,
   RadioTower,
   Search,
   type LucideIcon,
@@ -58,6 +59,12 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
         route: "/tradsphere/contacts",
         available: true,
       },
+      {
+        id: "tradsphere-stations",
+        label: "Stations",
+        route: "/tradsphere/stations",
+        available: true,
+      },
     ],
   },
   {
@@ -104,3 +111,4 @@ export const HOME_CHILD_ITEM: AppNavChildItem = {
 export const TRADSPHERE_HOME_CHILD_ICON = House;
 export const TRADSPHERE_ESTNUMS_CHILD_ICON = Search;
 export const TRADSPHERE_CONTACTS_CHILD_ICON = ContactRound;
+export const TRADSPHERE_STATIONS_CHILD_ICON = MapPinned;

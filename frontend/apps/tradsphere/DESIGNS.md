@@ -78,6 +78,22 @@ This app inherits global standards from `frontend/DESIGNS.md`.
 - Contacts modal should also show read-only `Used by EstNums` below `Used by Accounts`.
 - Contact copy action should output Gmail-ready text (`Full Name <email@example.com>` with email-only fallback).
 
+## Stations Page
+- Add and maintain `/tradsphere/stations` under the Tradsphere sidebar children.
+- Keep Stations page search-first with no default station load.
+- Search must be explicit-submit only (Search/Enter), never request-on-type.
+- Search form uses multi-field filters: Station Code, Station Name, Media Type, Language, Affiliation, Contact Name/Email.
+- Media Type and Language should be dropdown controls.
+- Market and Delivery Method are not part of Stations page search form.
+- If no required fields exist, search is valid when at least one field has a value.
+- Cache submitted station-search results by full submitted params and keep stale results visible during background refresh.
+- Show page-level loading overlay only when searching with no visible cache-backed results.
+- If refresh fails and cached results exist, keep cached results and show a non-blocking warning.
+- Show floating cache-status chip after a submitted search exists; chip refreshes current submitted search with `network-only`.
+- Group station results in collapsible sections (Media Type grouping first; fallback name initial).
+- Add/Edit station actions must reuse existing `StationModal` create/edit modes.
+- Station cards should follow the same compact read-only data presentation pattern as Contact modal `Used by Stations`, and include Delivery Method + REP contact rows.
+
 ## Station Modal
 - Delivery Method linked-stations usage should render as compact cards (not plain text rows), with responsive 2-column layout when space allows.
 - Linked-station cards should include subtle hover feedback and keep status metadata compact (for example media type and EstNum list when available).

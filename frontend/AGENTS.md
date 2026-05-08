@@ -13,6 +13,7 @@
 ## Routing and API Rules
 - Primary production frontend route is `/`.
 - Tradsphere frontend route is `/tradsphere/home`.
+- Tradsphere Stations route is `/tradsphere/stations`.
 - Frontend assets must resolve under `/assets`.
 - `/fe` and `/fe/...` are compatibility-only paths and should redirect/alias to root-based routes.
 - API calls must stay relative (for example: `/api/...`).

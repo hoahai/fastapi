@@ -1,6 +1,7 @@
 import { Copy, Waypoints } from "lucide-react";
 
 import { ActionIconButton } from "@/components/dashboard/ActionIconButton";
+import { cn } from "@/lib/utils";
 
 import type { ContactRecord } from "./types";
 
@@ -40,7 +41,12 @@ export function ContactResultCard({
           onEdit(contact);
         }
       }}
-      className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-blue-300 hover:shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+      className={cn(
+        "space-y-3 rounded-xl border p-4 shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
+        contact.active
+          ? "border-slate-200 bg-white hover:border-blue-300 hover:shadow"
+          : "border-slate-300 bg-slate-100 hover:border-slate-300 hover:shadow-sm",
+      )}
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
@@ -73,7 +79,7 @@ export function ContactResultCard({
       <div className="flex flex-wrap items-center gap-1.5">
         <span
           className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-            contact.active ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"
+            contact.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-200 text-slate-700"
           }`}
         >
           {contact.active ? "Active" : "Inactive"}

@@ -187,6 +187,23 @@
 - Contact modal should also show read-only `Used by EstNums` below `Used by Accounts`, derived from schedule + estNum/account mappings.
 - Contact copy action must use Gmail-ready format: `Full Name <email@example.com>` with email-only fallback.
 
+## Stations Page
+- Keep `/tradsphere/stations` as a dedicated, search-first Stations page.
+- Do not run default station load on page open.
+- Search must be explicit-submit only (`Search`/Enter); do not search while typing.
+- Keep search-submit validity global: enable submit when at least one field has a value.
+- Stations search form fields: `Station Code`, `Station Name`, `Media Type`, `Language`, `Affiliation`, `Contact Name/Email`.
+- `Media Type` and `Language` should use dropdown inputs.
+- Do not include `Market` or `Delivery Method` in Stations search form.
+- Preserve non-sensitive station search state across in-app route switches (draft, submitted params, results, cache metadata, group open state).
+- Cache station-search results by full submitted params and keep cached results mounted while refreshing.
+- On refresh failure with cache present, keep cached results and show non-blocking cached-data warning.
+- Show floating page cache-status chip only after submitted search context exists; chip refresh runs `network-only` for the same submitted search.
+- Group station results with collapsible sections (prefer Media Type grouping; fallback to name initial).
+- `Add Station` and `Edit Station` must reuse existing `StationModal` create/edit modes (no duplicate station modal/form).
+- Station result cards should mirror the compact read-only station card style used in Contact modal `Used by Stations`, with Delivery Method and REP contact rows included.
+- Avoid excessive per-station requests in search flows; use batched station/contact lookups.
+
 ## Station Item Interactions
 - Station cards may use the same hover-triggered floating attached action menu pattern used by EstNum cards for secondary actions.
 - `Add station` action opens Station modal in `create` mode.

@@ -243,6 +243,65 @@ def build_rep_contact_full_name(row: dict) -> str:
     return full_name
 
 
+def _build_rep_contacts_summary(contacts_group: dict[str, list[object]]) -> list[dict[str, object]]:
+    rep_contacts: list[dict[str, object]] = []
+    seen: set[tuple[str, str]] = set()
+    rep_rows = contacts_group.get("REP")
+    if not isinstance(rep_rows, list):
+        return rep_contacts
+
+    for row in rep_rows:
+        if isinstance(row, str):
+            email = str(row or "").strip().lower()
+            if not email:
+                continue
+            fingerprint = ("", email)
+            if fingerprint in seen:
+                continue
+            seen.add(fingerprint)
+            rep_contacts.append(
+                {
+                    "id": None,
+                    "fullName": "",
+                    "email": email,
+                    "primaryContact": False,
+                }
+            )
+            continue
+
+        if not isinstance(row, dict):
+            continue
+
+        full_name = (
+            str(row.get("name") or "").strip()
+            or build_rep_contact_full_name(row)
+        )
+        email = str(row.get("email") or "").strip().lower()
+        if not full_name and not email:
+            continue
+        fingerprint = (full_name.lower(), email)
+        if fingerprint in seen:
+            continue
+        seen.add(fingerprint)
+        rep_contacts.append(
+            {
+                "id": row.get("id"),
+                "fullName": full_name,
+                "email": email,
+                "primaryContact": bool(row.get("primaryContact")),
+            }
+        )
+
+    rep_contacts.sort(
+        key=lambda row: (
+            -int(bool(row.get("primaryContact"))),
+            str(row.get("fullName") or ""),
+            str(row.get("email") or ""),
+        )
+    )
+    return rep_contacts
+
+
 def _build_station_contacts_map(
     station_codes: list[str],
     *,
@@ -333,6 +392,9 @@ def list_stations_data(
     account_code: str | None = None,
     est_num: int | None = None,
     station_name: str | None = None,
+    affiliation: str | None = None,
+    media_types: list[str] | None = None,
+    languages: list[str] | None = None,
     delivery_method_detail: bool = False,
     contact_detail: bool = False,
 ) -> list[dict]:
@@ -345,6 +407,21 @@ def list_stations_data(
 
     normalized_account_code = str(account_code or "").strip().upper()
     normalized_station_name = str(station_name or "").strip()
+    normalized_affiliation = str(affiliation or "").strip()
+    normalized_media_types = list(
+        dict.fromkeys(
+            _ensure_media_type(value)
+            for value in (media_types or [])
+            if str(value or "").strip()
+        )
+    )
+    normalized_languages = list(
+        dict.fromkeys(
+            _ensure_language(value)
+            for value in (languages or [])
+            if str(value or "").strip()
+        )
+    )
 
     normalized_est_num: int | None = None
     if est_num is not None:
@@ -361,9 +438,12 @@ def list_stations_data(
         and not normalized_account_code
         and normalized_est_num is None
         and not normalized_station_name
+        and not normalized_affiliation
+        and not normalized_media_types
+        and not normalized_languages
     ):
         raise ValueError(
-            "At least one of codes, accountCode, estNum, name is required"
+            "At least one of codes, accountCode, estNum, name, affiliation, mediaType(s), language(s) is required"
         )
 
     rows = get_stations(
@@ -371,6 +451,9 @@ def list_stations_data(
         account_codes=[normalized_account_code] if normalized_account_code else [],
         est_nums=[normalized_est_num] if normalized_est_num is not None else [],
         station_name=normalized_station_name,
+        affiliation=normalized_affiliation,
+        media_types=normalized_media_types,
+        languages=normalized_languages,
         delivery_method_detail=delivery_method_detail,
     )
     serialized_rows = [
@@ -390,7 +473,9 @@ def list_stations_data(
         )
         for station in serialized_rows:
             station_code = str(station.get("code") or "").strip().upper()
-            station["contacts"] = station_contacts.get(station_code, {})
+            contacts_group = station_contacts.get(station_code, {})
+            station["contacts"] = contacts_group
+            station["repContacts"] = _build_rep_contacts_summary(contacts_group)
     return serialized_rows
 
 

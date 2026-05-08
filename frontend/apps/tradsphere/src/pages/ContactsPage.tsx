@@ -612,21 +612,22 @@ async function copyTextToClipboard(value: string): Promise<void> {
 }
 
 function buildGroups(items: ContactRecord[]): ContactGroup[] {
-  const buckets = new Map<string, { label: string; items: ContactRecord[] }>();
+  const buckets = new Map<string, { label: string; rank: number; items: ContactRecord[] }>();
   for (const item of items) {
-    const fallbackCompany = asString(item.company);
-    const groupLabel = fallbackCompany || "Uncategorized";
-    const groupKey = groupLabel.toUpperCase();
+    const groupLabel = item.active ? "Active" : "Inactive";
+    const groupKey = item.active ? "ACTIVE" : "INACTIVE";
+    const groupRank = item.active ? 0 : 1;
     const bucket = buckets.get(groupKey);
     if (bucket) {
       bucket.items.push(item);
     } else {
-      buckets.set(groupKey, { label: groupLabel, items: [item] });
+      buckets.set(groupKey, { label: groupLabel, rank: groupRank, items: [item] });
     }
   }
 
   const groups = [...buckets.entries()].map(([key, bucket]) => ({
     key,
+    rank: bucket.rank,
     label: bucket.label,
     items: [...bucket.items].sort((a, b) => {
       const byName = buildContactFullName(a).localeCompare(buildContactFullName(b));
@@ -637,7 +638,9 @@ function buildGroups(items: ContactRecord[]): ContactGroup[] {
     }),
   }));
 
-  return groups.sort((a, b) => a.label.localeCompare(b.label));
+  return groups
+    .sort((a, b) => a.rank - b.rank)
+    .map(({ rank: _rank, ...group }) => group);
 }
 
 function parseContacts(payload: unknown): ContactRecord[] {

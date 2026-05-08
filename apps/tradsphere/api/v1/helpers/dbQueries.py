@@ -1349,6 +1349,9 @@ def get_stations(
     account_codes: list[str] | None = None,
     est_nums: list[int] | None = None,
     station_name: str | None = None,
+    affiliation: str | None = None,
+    media_types: list[str] | None = None,
+    languages: list[str] | None = None,
     delivery_method_detail: bool = True,
 ) -> list[dict]:
     tables = get_db_tables()
@@ -1378,6 +1381,15 @@ def get_stations(
         [int(item) for item in (est_nums or [])]
     )
     normalized_station_name = str(station_name or "").strip().lower()
+    normalized_affiliation = str(affiliation or "").strip().lower()
+    normalized_media_types = _normalized_text_cache_values(
+        [_normalize_media_type(item) for item in (media_types or [])]
+    )
+    normalized_media_types = [item for item in normalized_media_types if item]
+    normalized_languages = _normalized_text_cache_values(
+        [str(item or "").strip().upper() for item in (languages or [])]
+    )
+    normalized_languages = [item for item in normalized_languages if item]
 
     if normalized_est_nums or normalized_account_codes:
         exists_clauses = ["UPPER(sc.stationCode) = UPPER(s.code)"]
@@ -1408,6 +1420,20 @@ def get_stations(
         where_clauses.append("LOWER(COALESCE(s.name, '')) LIKE %s")
         params.append(f"%{normalized_station_name}%")
 
+    if normalized_affiliation:
+        where_clauses.append("LOWER(COALESCE(s.affiliation, '')) LIKE %s")
+        params.append(f"%{normalized_affiliation}%")
+
+    if normalized_media_types:
+        placeholders = _build_in_placeholders(normalized_media_types)
+        where_clauses.append(f"UPPER(COALESCE(s.mediaType, '')) IN ({placeholders})")
+        params.extend(normalized_media_types)
+
+    if normalized_languages:
+        placeholders = _build_in_placeholders(normalized_languages)
+        where_clauses.append(f"UPPER(COALESCE(s.language, '')) IN ({placeholders})")
+        params.extend(normalized_languages)
+
     if not where_clauses:
         return []
 
@@ -1422,6 +1448,11 @@ def get_stations(
         + (",".join(normalized_account_codes) if normalized_account_codes else "*"),
         "est_nums=" + (",".join(map(str, normalized_est_nums)) if normalized_est_nums else "*"),
         f"station_name={normalized_station_name or '*'}",
+        f"affiliation={normalized_affiliation or '*'}",
+        "media_types="
+        + (",".join(normalized_media_types) if normalized_media_types else "*"),
+        "languages="
+        + (",".join(normalized_languages) if normalized_languages else "*"),
         f"delivery_method_detail={int(bool(delivery_method_detail))}",
     )
     cached_rows = _get_cached_list(
