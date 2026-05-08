@@ -21,7 +21,7 @@ export function UsedByStationsSection({ usage, className }: UsedByStationsSectio
         <div className="grid max-h-[380px] grid-cols-1 gap-1.5 overflow-y-auto pr-1 sm:grid-cols-2">
           {usage.map((item) => (
             <article
-              key={`${item.linkId ?? "link"}:${item.stationCode}:${item.contactType}`}
+              key={`${item.linkId ?? "link"}:${item.stationCode}`}
               className="rounded-md border border-slate-200/90 bg-white px-2.5 py-2 shadow-[0_1px_2px_rgba(15,23,42,0.05)] transition hover:border-blue-200 hover:shadow-sm"
             >
               <header className="flex items-start justify-between gap-2 border-b border-slate-100 pb-1.5">
@@ -40,7 +40,6 @@ export function UsedByStationsSection({ usage, className }: UsedByStationsSectio
               <dl className="mt-1.5 grid grid-cols-1 gap-x-3 gap-y-1 text-xs sm:grid-cols-2">
                 <UsageField label="Media Type" value={item.mediaType || "-"} />
                 <UsageField label="Market" value={item.market || "-"} />
-                <UsageField label="Contact Type" value={item.contactType || "-"} />
                 <UsageField label="Primary" value={item.primaryContact ? "Yes" : "No"} />
                 <UsageField label="Status" value={item.active ? "Active" : "Inactive"} />
               </dl>

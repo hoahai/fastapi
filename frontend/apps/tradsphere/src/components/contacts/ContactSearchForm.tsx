@@ -1,7 +1,6 @@
-import { useMemo, type ReactNode } from "react";
+import { type ReactNode } from "react";
 import { Loader2, Search, X } from "lucide-react";
 
-import { AppDropdown } from "@/components/ui/app-dropdown";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Section, SectionHeader } from "@shared/components";
@@ -10,7 +9,6 @@ import type { ContactSearchFormValues } from "./types";
 
 type ContactSearchFormProps = {
   value: ContactSearchFormValues;
-  contactTypeOptions: string[];
   onChange: <K extends keyof ContactSearchFormValues>(field: K, nextValue: ContactSearchFormValues[K]) => void;
   onSubmit: () => void;
   onClear: () => void;
@@ -22,7 +20,6 @@ type ContactSearchFormProps = {
 
 export function ContactSearchForm({
   value,
-  contactTypeOptions,
   onChange,
   onSubmit,
   onClear,
@@ -31,11 +28,6 @@ export function ContactSearchForm({
   resultText,
   message,
 }: ContactSearchFormProps) {
-  const typeOptions = useMemo(
-    () => [{ value: "", label: "" }, ...contactTypeOptions.map((item) => ({ value: item, label: item }))],
-    [contactTypeOptions],
-  );
-
   return (
     <Section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-soft">
       <SectionHeader
@@ -76,19 +68,6 @@ export function ContactSearchForm({
               id="contacts-search-company"
               value={value.company}
               onChange={(nextValue) => onChange("company", nextValue)}
-            />
-          </Field>
-
-          <Field label="Contact Type">
-            <AppDropdown
-              ariaLabel="Contact Type"
-              value={value.contactType}
-              onValueChange={(nextValue) => onChange("contactType", nextValue)}
-              options={typeOptions}
-              placeholder=""
-              searchable={false}
-              disabled={disabled || searching}
-              emptyText="No contact type found."
             />
           </Field>
 

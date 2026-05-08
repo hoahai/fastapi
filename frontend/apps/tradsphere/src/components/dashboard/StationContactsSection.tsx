@@ -47,7 +47,7 @@ export function StationContactsSection({
         <div className="flex-1 space-y-2 overflow-y-auto pr-1">
           {contacts.map((contact, index) => (
             <StationContactCard
-              key={`${contact.contactType}:${contact.contactId ?? contact.clientKey ?? index}:${contact.email ?? index}:${index}`}
+              key={`${contact.contactId ?? contact.clientKey ?? index}:${contact.email ?? index}:${index}`}
               contact={contact}
               isSubmitting={isSubmitting}
               onEdit={() => onEditContact(index)}

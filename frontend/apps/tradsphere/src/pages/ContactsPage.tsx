@@ -17,7 +17,7 @@ import { Button } from "@/components/ui/button";
 import { CacheStatusChip } from "@/components/ui/cache-status-chip";
 import { useToast } from "@/components/ui/toast";
 import { useApiRequest } from "@/hooks/useApiRequest";
-import { readBrowserCacheSnapshot, writeBrowserCache } from "@/lib/browserCache";
+import { readBrowserCacheSnapshot, removeBrowserCache, writeBrowserCache } from "@/lib/browserCache";
 import { shouldFetchNetwork, type CachePolicy } from "@shared/cache";
 
 const CONTACTS_SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -25,7 +25,6 @@ const CONTACT_DETAIL_CACHE_TTL_MS = 5 * 60 * 1000;
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspace.sidebar.collapsed";
 const LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY = "tradsphere:ui:sidebarCollapsed:v1";
 const SIDEBAR_COLLAPSED_EVENT = "workspace-sidebar-collapsed-change";
-const DEFAULT_CONTACT_TYPES = ["REP", "TRAFFIC", "BILLING"];
 
 type SearchUiState = "idle" | "loading" | "ready" | "empty" | "error";
 
@@ -49,6 +48,16 @@ type ContactUsageJoinRow = ContactUsageRow & {
 
 type StationAccountUsageMap = Record<string, ContactAccountUsage[]>;
 type StationEstNumUsageMap = Record<string, ContactEstNumUsage[]>;
+type EstNumUsageMeta = {
+  accountCode: string;
+  month: number | null;
+  quarter: number | null;
+  year: number | null;
+  periodLabel: string;
+  mediaType: string;
+  broadcastMonths: number[];
+  broadcastYears: number[];
+};
 
 type BuildSearchResult =
   | {
@@ -65,7 +74,6 @@ const INITIAL_SEARCH_FORM: ContactSearchFormValues = {
   name: "",
   email: "",
   company: "",
-  contactType: "",
   phone: "",
   station: "",
 };
@@ -136,6 +144,16 @@ function asStringArray(value: unknown): string[] {
     .filter(Boolean);
 }
 
+function asIntArray(value: unknown): number[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((item) => asNumber(item))
+    .filter((item): item is number => item !== null && Number.isFinite(item))
+    .map((item) => Math.trunc(item));
+}
+
 function uniqStrings(values: string[]): string[] {
   const seen = new Set<string>();
   const output: string[] = [];
@@ -155,7 +173,6 @@ function normalizeSearchForm(draft: ContactSearchFormValues): ContactSearchFormV
     name: asString(draft.name),
     email: asString(draft.email).toLowerCase(),
     company: asString(draft.company),
-    contactType: asString(draft.contactType).toUpperCase(),
     phone: asString(draft.phone),
     station: asString(draft.station),
   };
@@ -171,10 +188,9 @@ function buildSearchCacheKey(params: ContactSearchFormValues): string {
     `name=${encodeKeyPart(params.name)}`,
     `email=${encodeKeyPart(params.email)}`,
     `company=${encodeKeyPart(params.company)}`,
-    `contactType=${encodeKeyPart(params.contactType)}`,
     `phone=${encodeKeyPart(params.phone)}`,
     `station=${encodeKeyPart(params.station)}`,
-    "v2",
+    "v3",
   ].join(":");
 }
 
@@ -182,27 +198,99 @@ function buildContactDetailCacheKey(contactId: number): string {
   return `contacts:detail:${contactId}:v1`;
 }
 
-function normalizeContactRecords(items: ContactRecord[]): ContactRecord[] {
-  return items.map((item) => ({
-    ...item,
-    stationCodes: Array.isArray(item.stationCodes) ? item.stationCodes : [],
-    contactTypes: Array.isArray(item.contactTypes) ? item.contactTypes : [],
-    usage: Array.isArray(item.usage) ? item.usage : [],
-    usedByAccounts: Array.isArray(item.usedByAccounts) ? item.usedByAccounts : [],
-    usedByEstNums: Array.isArray(item.usedByEstNums) ? item.usedByEstNums : [],
-    usedByStationCount:
-      typeof item.usedByStationCount === "number"
-        ? item.usedByStationCount
-        : (Array.isArray(item.stationCodes) ? item.stationCodes.length : 0),
-    usedByAccountCount:
-      typeof item.usedByAccountCount === "number"
-        ? item.usedByAccountCount
-        : (Array.isArray(item.usedByAccounts) ? item.usedByAccounts.length : 0),
-    usedByEstNumCount:
-      typeof item.usedByEstNumCount === "number"
-        ? item.usedByEstNumCount
-        : (Array.isArray(item.usedByEstNums) ? item.usedByEstNums.length : 0),
-  }));
+function normalizeContactRecords(items: unknown): ContactRecord[] {
+  if (!Array.isArray(items)) {
+    return [];
+  }
+
+  const normalized: ContactRecord[] = [];
+  for (const item of items) {
+    if (!isRecord(item)) {
+      continue;
+    }
+    const id = asNumber(item.id);
+    if (id === null) {
+      continue;
+    }
+
+    const usage = Array.isArray(item.usage)
+      ? item.usage
+          .filter((row): row is Record<string, unknown> => isRecord(row))
+          .map((row) => ({
+            linkId: asNumber(row.linkId),
+            stationCode: asString(row.stationCode).toUpperCase(),
+            stationName: asString(row.stationName),
+            mediaType: asString(row.mediaType).toUpperCase(),
+            market: asString(row.market) || null,
+            contactType: asString(row.contactType).toUpperCase(),
+            primaryContact: asBoolean(row.primaryContact),
+            active: asBoolean(row.active),
+          }))
+      : [];
+
+    const usedByAccounts = Array.isArray(item.usedByAccounts)
+      ? item.usedByAccounts
+          .filter((row): row is Record<string, unknown> => isRecord(row))
+          .map((row) => ({
+            accountCode: asString(row.accountCode).toUpperCase(),
+            accountName: asString(row.accountName),
+          }))
+      : [];
+
+    const usedByEstNums = Array.isArray(item.usedByEstNums)
+      ? item.usedByEstNums
+          .filter((row): row is Record<string, unknown> => isRecord(row))
+          .map((row) => ({
+            estNum: asNumber(row.estNum) ?? 0,
+            accountCode: asString(row.accountCode).toUpperCase(),
+            accountName: asString(row.accountName),
+            month: asNumber(row.month),
+            quarter: asNumber(row.quarter),
+            year: asNumber(row.year),
+            periodLabel: asString(row.periodLabel),
+            mediaType: asString(row.mediaType).toUpperCase(),
+            broadcastMonths: asIntArray(row.broadcastMonths),
+            broadcastYears: asIntArray(row.broadcastYears),
+            stationCodes: Array.isArray(row.stationCodes)
+              ? row.stationCodes.map((code) => asString(code).toUpperCase()).filter(Boolean)
+              : [],
+          }))
+          .filter((row) => Number.isFinite(row.estNum) && row.estNum > 0)
+      : [];
+
+    const stationCodes = uniqStrings(asStringArray(item.stationCodes));
+    normalized.push({
+      id: Math.trunc(id),
+      email: asString(item.email).toLowerCase(),
+      firstName: asString(item.firstName),
+      lastName: asString(item.lastName),
+      fullName:
+        asString(item.fullName) ||
+        [asString(item.firstName), asString(item.lastName)].filter(Boolean).join(" ").trim(),
+      company: asString(item.company),
+      jobTitle: asString(item.jobTitle),
+      office: asString(item.office),
+      cell: asString(item.cell),
+      note: asString(item.note),
+      active: asBoolean(item.active),
+      stationCodes,
+      contactTypes: Array.isArray(item.contactTypes)
+        ? item.contactTypes.map((type) => asString(type).toUpperCase()).filter(Boolean)
+        : [],
+      usage,
+      usedByAccounts,
+      usedByEstNums,
+      usedByStationCount:
+        typeof item.usedByStationCount === "number" ? item.usedByStationCount : stationCodes.length,
+      usedByAccountCount:
+        typeof item.usedByAccountCount === "number" ? item.usedByAccountCount : usedByAccounts.length,
+      usedByEstNumCount:
+        typeof item.usedByEstNumCount === "number" ? item.usedByEstNumCount : usedByEstNums.length,
+      isPrimaryContact: asBoolean(item.isPrimaryContact),
+    });
+  }
+
+  return normalized;
 }
 
 function buildSearchSubmission(draft: ContactSearchFormValues): BuildSearchResult {
@@ -334,16 +422,11 @@ async function copyTextToClipboard(value: string): Promise<void> {
   }
 }
 
-function normalizeContactType(value: string): string {
-  return asString(value).toUpperCase();
-}
-
 function buildGroups(items: ContactRecord[]): ContactGroup[] {
   const buckets = new Map<string, { label: string; items: ContactRecord[] }>();
   for (const item of items) {
-    const firstType = item.contactTypes[0] ?? "";
     const fallbackCompany = asString(item.company);
-    const groupLabel = firstType || fallbackCompany || "Uncategorized";
+    const groupLabel = fallbackCompany || "Uncategorized";
     const groupKey = groupLabel.toUpperCase();
     const bucket = buckets.get(groupKey);
     if (bucket) {
@@ -494,9 +577,16 @@ function parseStationScheduleRows(payload: unknown): Array<{ stationCode: string
   return rows;
 }
 
-function parseEstNumAccountRows(payload: unknown): Map<number, string> {
+function deriveQuarterFromMonth(month: number | null): number | null {
+  if (month === null || month < 1 || month > 12) {
+    return null;
+  }
+  return Math.floor((month - 1) / 3) + 1;
+}
+
+function parseEstNumUsageMetaRows(payload: unknown): Map<number, EstNumUsageMeta> {
   const data = unwrapData(payload);
-  const map = new Map<number, string>();
+  const map = new Map<number, EstNumUsageMeta>();
   if (!Array.isArray(data)) {
     return map;
   }
@@ -510,7 +600,21 @@ function parseEstNumAccountRows(payload: unknown): Map<number, string> {
     if (estNum === null || !accountCode) {
       continue;
     }
-    map.set(Math.trunc(estNum), accountCode);
+    const broadcastMonths = asIntArray(row.broadcastMonths).filter((item) => item >= 1 && item <= 12);
+    const broadcastYears = asIntArray(row.broadcastYears).filter((item) => item >= 1901 && item <= 2155);
+    const month = asNumber(row.month) ?? (broadcastMonths.length === 1 ? broadcastMonths[0] : null);
+    const year = asNumber(row.year) ?? (broadcastYears.length === 1 ? broadcastYears[0] : null);
+    const quarter = asNumber(row.quarter) ?? deriveQuarterFromMonth(month);
+    map.set(Math.trunc(estNum), {
+      accountCode,
+      month: month !== null ? Math.trunc(month) : null,
+      quarter: quarter !== null ? Math.trunc(quarter) : null,
+      year: year !== null ? Math.trunc(year) : null,
+      periodLabel: asString(row.periodLabel),
+      mediaType: asString(row.mediaType).toUpperCase(),
+      broadcastMonths,
+      broadcastYears,
+    });
   }
   return map;
 }
@@ -537,12 +641,12 @@ function parseAccountNameMap(payload: unknown): Record<string, string> {
 
 function buildStationAccountUsageMap(
   scheduleRows: Array<{ stationCode: string; estNum: number }>,
-  estNumAccountMap: Map<number, string>,
+  estNumMetaMap: Map<number, EstNumUsageMeta>,
   accountNameMap: Record<string, string>,
 ): StationAccountUsageMap {
   const byStation = new Map<string, Map<string, ContactAccountUsage>>();
   for (const row of scheduleRows) {
-    const accountCode = estNumAccountMap.get(row.estNum);
+    const accountCode = estNumMetaMap.get(row.estNum)?.accountCode;
     if (!accountCode) {
       continue;
     }
@@ -564,15 +668,16 @@ function buildStationAccountUsageMap(
 
 function buildStationEstNumUsageMap(
   scheduleRows: Array<{ stationCode: string; estNum: number }>,
-  estNumAccountMap: Map<number, string>,
+  estNumMetaMap: Map<number, EstNumUsageMeta>,
   accountNameMap: Record<string, string>,
 ): StationEstNumUsageMap {
   const byStation = new Map<string, Map<number, ContactEstNumUsage>>();
   for (const row of scheduleRows) {
-    const accountCode = estNumAccountMap.get(row.estNum);
-    if (!accountCode) {
+    const meta = estNumMetaMap.get(row.estNum);
+    if (!meta?.accountCode) {
       continue;
     }
+    const accountCode = meta.accountCode;
     const stationCode = row.stationCode;
     const stationBucket = byStation.get(stationCode) ?? new Map<number, ContactEstNumUsage>();
     const existing = stationBucket.get(row.estNum);
@@ -587,6 +692,13 @@ function buildStationEstNumUsageMap(
         estNum: row.estNum,
         accountCode,
         accountName: asString(accountNameMap[accountCode]),
+        month: meta.month,
+        quarter: meta.quarter,
+        year: meta.year,
+        periodLabel: meta.periodLabel,
+        mediaType: meta.mediaType,
+        broadcastMonths: meta.broadcastMonths,
+        broadcastYears: meta.broadcastYears,
         stationCodes: [stationCode],
       });
     }
@@ -595,7 +707,7 @@ function buildStationEstNumUsageMap(
 
   const result: StationEstNumUsageMap = {};
   for (const [stationCode, bucket] of byStation.entries()) {
-    result[stationCode] = [...bucket.values()].sort((a, b) => a.estNum - b.estNum);
+    result[stationCode] = [...bucket.values()].sort((a, b) => b.estNum - a.estNum);
   }
   return result;
 }
@@ -674,11 +786,18 @@ function mergeContactUsage(
           estNum: item.estNum,
           accountCode: asString(item.accountCode).toUpperCase(),
           accountName: asString(item.accountName),
+          month: item.month,
+          quarter: item.quarter,
+          year: item.year,
+          periodLabel: asString(item.periodLabel),
+          mediaType: asString(item.mediaType).toUpperCase(),
+          broadcastMonths: item.broadcastMonths,
+          broadcastYears: item.broadcastYears,
           stationCodes: uniqStrings(item.stationCodes),
         });
       }
     }
-    const usedByEstNums = [...estNumBucket.values()].sort((a, b) => a.estNum - b.estNum);
+    const usedByEstNums = [...estNumBucket.values()].sort((a, b) => b.estNum - a.estNum);
 
     return {
       ...contact,
@@ -748,6 +867,8 @@ export default function ContactsPage() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [contacts, setContacts] = useState<ContactRecord[]>([]);
   const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null);
+  const [modalDetailCacheStatus, setModalDetailCacheStatus] = useState<CacheStatus | null>(null);
+  const [isModalDetailRefreshing, setIsModalDetailRefreshing] = useState(false);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<ContactModalMode>("create");
@@ -757,28 +878,21 @@ export default function ContactsPage() {
   const [sidebarVisuallyExpanded, setSidebarVisuallyExpanded] = useState<boolean>(() => !readSidebarCollapsedState());
 
   const requestTokenRef = useRef(0);
+  const modalDetailRequestTokenRef = useRef(0);
   const inFlightRef = useRef<Record<string, Promise<ContactRecord[]>>>({});
 
   const groups = useMemo(() => buildGroups(contacts), [contacts]);
   const resultText = contacts.length ? formatResultText(contacts.length) : null;
 
-  const discoveredContactTypes = useMemo(() => {
-    const values = new Set<string>(DEFAULT_CONTACT_TYPES);
-    for (const contact of contacts) {
-      for (const type of contact.contactTypes) {
-        const normalized = asString(type).toUpperCase();
-        if (normalized) {
-          values.add(normalized);
-        }
-      }
-    }
-    return [...values].sort((a, b) => a.localeCompare(b));
-  }, [contacts]);
-
   const cacheStatusText = isRefreshing
     ? "Refreshing..."
     : cacheStatus
       ? `Data source: ${cacheStatus.source}. Last updated ${formatRelativeTime(cacheStatus.fetchedAt)}.`
+      : "No cached data yet";
+  const modalDetailCacheStatusText = isModalDetailRefreshing
+    ? "Refreshing..."
+    : modalDetailCacheStatus
+      ? `Data source: ${modalDetailCacheStatus.source}. Last updated ${formatRelativeTime(modalDetailCacheStatus.fetchedAt)}.`
       : "No cached data yet";
 
   const showCacheChip = Boolean(submittedSearch && !isModalOpen);
@@ -823,9 +937,6 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
     if (search.params.email) {
       params.set("emails", search.params.email);
     }
-    if (search.params.contactType) {
-      params.set("contactType", search.params.contactType);
-    }
     if (search.params.company) {
       params.set("company", search.params.company);
     }
@@ -845,13 +956,6 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
       return [];
     }
 
-    if (search.params.contactType) {
-      const selectedType = normalizeContactType(search.params.contactType);
-      return parsedContacts.map((item) => ({
-        ...item,
-        contactTypes: selectedType ? [selectedType] : [],
-      }));
-    }
     return parsedContacts;
   }
 
@@ -909,8 +1013,8 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
           errorToast: false,
         },
       );
-      const estNumAccountMap = parseEstNumAccountRows(estNumsPayload);
-      const accountCodes = uniqStrings([...estNumAccountMap.values()]);
+      const estNumMetaMap = parseEstNumUsageMetaRows(estNumsPayload);
+      const accountCodes = uniqStrings([...estNumMetaMap.values()].map((item) => item.accountCode));
 
       let accountNameMap: Record<string, string> = {};
       if (accountCodes.length > 0) {
@@ -926,12 +1030,12 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
 
       stationAccountUsageMap = buildStationAccountUsageMap(
         stationScheduleRows,
-        estNumAccountMap,
+        estNumMetaMap,
         accountNameMap,
       );
       stationEstNumUsageMap = buildStationEstNumUsageMap(
         stationScheduleRows,
-        estNumAccountMap,
+        estNumMetaMap,
         accountNameMap,
       );
     }
@@ -950,29 +1054,61 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
     baseContact: ContactRecord,
     options: { policy: CachePolicy } = { policy: "stale-while-revalidate" },
   ): Promise<void> {
+    const requestToken = ++modalDetailRequestTokenRef.current;
     const normalizedBase = normalizeContactRecords([baseContact])[0];
     const cacheKey = buildContactDetailCacheKey(normalizedBase.id);
     const snapshot = readBrowserCacheSnapshot<ContactRecord>(cacheKey);
+    const snapshotDetailData = snapshot?.data;
+    const normalizedSnapshotDetail = snapshotDetailData ? normalizeContactRecords([snapshotDetailData]) : [];
+    const hasInvalidSnapshotShape =
+      snapshotDetailData !== null &&
+      snapshotDetailData !== undefined &&
+      normalizedSnapshotDetail.length === 0;
+    const effectiveSnapshot = hasInvalidSnapshotShape ? null : snapshot;
 
-    if (snapshot?.data && options.policy !== "network-only") {
-      const cached = normalizeContactRecords([snapshot.data])[0];
-      setModalContact(cached);
-    } else {
-      setModalContact(normalizedBase);
+    if (hasInvalidSnapshotShape) {
+      removeBrowserCache(cacheKey);
     }
 
-    const shouldFetch = shouldFetchNetwork(options.policy, snapshot);
+    if (normalizedSnapshotDetail.length > 0 && options.policy !== "network-only") {
+      const cached = normalizedSnapshotDetail[0];
+      setModalContact(cached);
+      setModalDetailCacheStatus({
+        source: "cache",
+        fetchedAt: snapshot?.fetchedAt ?? Date.now(),
+      });
+    } else {
+      setModalContact(normalizedBase);
+      setModalDetailCacheStatus(null);
+    }
+
+    const shouldFetch = shouldFetchNetwork(options.policy, effectiveSnapshot);
     if (!shouldFetch) {
+      if (requestToken === modalDetailRequestTokenRef.current) {
+        setIsModalDetailRefreshing(false);
+      }
       return;
     }
 
-    const detailed = await fetchContactDetailUsage(normalizedBase);
-    const normalizedDetailed = normalizeContactRecords([detailed])[0];
-    setModalContact(normalizedDetailed);
-    writeBrowserCache(cacheKey, normalizedDetailed, CONTACT_DETAIL_CACHE_TTL_MS, {
-      source: "network",
-      fetchedAt: Date.now(),
-    });
+    setIsModalDetailRefreshing(true);
+    try {
+      const detailed = await fetchContactDetailUsage(normalizedBase);
+      if (requestToken !== modalDetailRequestTokenRef.current) {
+        return;
+      }
+      const normalizedDetailed = normalizeContactRecords([detailed])[0];
+      const fetchedAt = Date.now();
+      setModalContact(normalizedDetailed);
+      setModalDetailCacheStatus({ source: "network", fetchedAt });
+      writeBrowserCache(cacheKey, normalizedDetailed, CONTACT_DETAIL_CACHE_TTL_MS, {
+        source: "network",
+        fetchedAt,
+      });
+    } finally {
+      if (requestToken === modalDetailRequestTokenRef.current) {
+        setIsModalDetailRefreshing(false);
+      }
+    }
   }
 
   async function loadSearchData(options: SearchLoadOptions, activeSearch: SubmittedSearch | null = submittedSearch): Promise<void> {
@@ -987,24 +1123,35 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
     const requestToken = ++requestTokenRef.current;
     const cacheKey = activeSearch.cacheKey;
     const snapshot = readBrowserCacheSnapshot<ContactRecord[]>(cacheKey);
+    const snapshotSearchData = snapshot?.data;
+    const normalizedSnapshotData = snapshotSearchData ? normalizeContactRecords(snapshotSearchData) : [];
+    const hasInvalidSnapshotShape =
+      snapshotSearchData !== null &&
+      snapshotSearchData !== undefined &&
+      (!Array.isArray(snapshotSearchData) ||
+        (snapshotSearchData.length > 0 && normalizedSnapshotData.length === 0));
+    const effectiveSnapshot = hasInvalidSnapshotShape ? null : snapshot;
 
-    if (snapshot?.data && options.policy !== "network-only") {
-      const normalizedSnapshotData = normalizeContactRecords(snapshot.data);
+    if (hasInvalidSnapshotShape) {
+      removeBrowserCache(cacheKey);
+    }
+
+    if (normalizedSnapshotData.length > 0 && options.policy !== "network-only") {
       setContacts(normalizedSnapshotData);
       setState(normalizedSnapshotData.length ? "ready" : "empty");
       setError(null);
       setCacheStatus({
         source: "cache",
-        fetchedAt: snapshot.fetchedAt,
+        fetchedAt: snapshot?.fetchedAt ?? Date.now(),
       });
     }
 
-    const shouldFetch = shouldFetchNetwork(options.policy, snapshot);
+    const shouldFetch = shouldFetchNetwork(options.policy, effectiveSnapshot);
     if (!shouldFetch) {
       return;
     }
 
-    if (snapshot?.data) {
+    if (normalizedSnapshotData.length > 0) {
       setIsRefreshing(true);
     } else {
       setState("loading");
@@ -1123,6 +1270,8 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
     setModalMode("create");
     setModalContact(null);
     setFocusUsageToken(0);
+    setModalDetailCacheStatus(null);
+    setIsModalDetailRefreshing(false);
     setIsModalOpen(true);
   }
 
@@ -1130,6 +1279,8 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
     setModalMode("edit");
     setModalContact(contact);
     setFocusUsageToken(0);
+    setModalDetailCacheStatus(null);
+    setIsModalDetailRefreshing(false);
     setIsModalOpen(true);
     void loadModalContactDetail(contact, { policy: "stale-while-revalidate" });
   }
@@ -1138,13 +1289,21 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
     setModalMode("edit");
     setModalContact(contact);
     setFocusUsageToken(Date.now());
+    setModalDetailCacheStatus(null);
+    setIsModalDetailRefreshing(false);
     setIsModalOpen(true);
     void loadModalContactDetail(contact, { policy: "stale-while-revalidate" });
   }
 
+  function handleRefreshModalContactDetail() {
+    if (modalMode !== "edit" || !modalContact) {
+      return;
+    }
+    void loadModalContactDetail(modalContact, { policy: "network-only" });
+  }
+
   async function handleModalSubmit(payload: ContactModalSubmitPayload): Promise<void> {
     const body = buildContactPayload(payload.form);
-    const selectedContactType = normalizeContactType(payload.form.contactType);
 
     if (payload.mode === "create") {
       await requestJson("/api/tradsphere/v1/contacts", {
@@ -1163,28 +1322,6 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
         },
         successToast: "Contact updated",
       });
-
-      const activeUsageRows = (modalContact?.usage ?? []).filter(
-        (row) => row.linkId !== null && Number.isFinite(row.linkId),
-      );
-      const shouldUpdateLinkType =
-        selectedContactType &&
-        activeUsageRows.length > 0 &&
-        activeUsageRows.some(
-          (row) => normalizeContactType(row.contactType) !== selectedContactType,
-        );
-
-      if (shouldUpdateLinkType) {
-        await requestJson("/api/tradsphere/v1/contacts/stationsContacts", {
-          method: "PUT",
-          headers: requestHeaders,
-          body: activeUsageRows.map((row) => ({
-            id: row.linkId,
-            contactType: selectedContactType,
-          })),
-          successToast: false,
-        });
-      }
     }
 
     if (submittedSearch) {
@@ -1204,7 +1341,6 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
 
       <ContactSearchForm
         value={draft}
-        contactTypeOptions={discoveredContactTypes}
         onChange={handleDraftChange}
         onSubmit={handleSubmitSearch}
         onClear={handleClearSearch}
@@ -1256,11 +1392,20 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
 
       <ContactModal
         open={isModalOpen}
-        onOpenChange={setIsModalOpen}
+        onOpenChange={(nextOpen) => {
+          setIsModalOpen(nextOpen);
+          if (!nextOpen) {
+            modalDetailRequestTokenRef.current += 1;
+            setIsModalDetailRefreshing(false);
+          }
+        }}
         mode={modalMode}
         initialContact={modalContact}
-        contactTypeOptions={discoveredContactTypes}
         focusUsageToken={focusUsageToken}
+        detailCacheStatusText={modalDetailCacheStatusText}
+        detailCacheRefreshing={isModalDetailRefreshing}
+        detailCacheRefreshDisabled={modalMode !== "edit" || !modalContact}
+        onRefreshDetailCache={handleRefreshModalContactDetail}
         onSubmit={handleModalSubmit}
       />
     </div>

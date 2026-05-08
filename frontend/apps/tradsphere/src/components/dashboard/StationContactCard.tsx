@@ -50,34 +50,6 @@ function Field({
   );
 }
 
-function getTypeTone(type: string): {
-  cardClassName: string;
-  badgeClassName: string;
-} {
-  if (type === "REP") {
-    return {
-      cardClassName: "border-blue-200/90 bg-blue-50/35",
-      badgeClassName: "bg-blue-100 text-blue-700",
-    };
-  }
-  if (type === "TRAFFIC") {
-    return {
-      cardClassName: "border-emerald-200/90 bg-emerald-50/35",
-      badgeClassName: "bg-emerald-100 text-emerald-700",
-    };
-  }
-  if (type === "BILLING") {
-    return {
-      cardClassName: "border-amber-200/90 bg-amber-50/35",
-      badgeClassName: "bg-amber-100 text-amber-700",
-    };
-  }
-  return {
-    cardClassName: "border-slate-200/80 bg-white/70",
-    badgeClassName: "bg-slate-100 text-slate-700",
-  };
-}
-
 export function StationContactCard({
   contact,
   isSubmitting,
@@ -85,7 +57,6 @@ export function StationContactCard({
   onRemove,
   onCopy,
 }: StationContactCardProps) {
-  const type = String(contact.contactType || "").trim().toUpperCase() || "UNKNOWN";
   const fullName = displayValue(contact.fullName);
   const email = displayValue(contact.email);
   const office = displayValue(contact.office);
@@ -95,19 +66,11 @@ export function StationContactCard({
     cell ? { label: "Cell", value: cell } : null,
   ].filter((item): item is { label: "Office" | "Cell"; value: string } => item !== null);
   const hasDetails = Boolean(fullName || email || phoneFields.length);
-  const tone = getTypeTone(type);
 
   return (
-    <article className={`space-y-2 rounded-md border p-2.5 ${tone.cardClassName}`}>
+    <article className="space-y-2 rounded-md border border-slate-200/80 bg-white/70 p-2.5">
       <div className="flex items-center justify-between gap-2">
-        <div className="flex items-center gap-2">
-          <p className={`rounded-full px-2 py-0.5 text-xs font-semibold tracking-wide ${tone.badgeClassName}`}>{type}</p>
-          {contact.primaryContact ? (
-            <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">
-              Primary
-            </span>
-          ) : null}
-        </div>
+        <div>{contact.primaryContact ? <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">Primary</span> : null}</div>
         <div className="flex items-center gap-0.5">
           <ActionIconButton
             icon={<Trash2 />}

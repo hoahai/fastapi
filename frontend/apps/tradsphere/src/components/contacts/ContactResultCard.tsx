@@ -51,7 +51,7 @@ export function ContactResultCard({
         <div className="flex items-center gap-0.5">
           <ActionIconButton
             icon={<Waypoints />}
-            tooltip="View usage details"
+            tooltip="View details"
             onClick={(event) => {
               event.stopPropagation();
               onViewUsage(contact);
@@ -71,19 +71,9 @@ export function ContactResultCard({
       </div>
 
       <div className="flex flex-wrap items-center gap-1.5">
-        {contact.contactTypes.length ? (
-          contact.contactTypes.map((type) => (
-            <span key={`${contact.id}:${type}`} className="rounded-full bg-blue-100 px-2 py-0.5 text-xs font-semibold text-blue-700">
-              {type}
-            </span>
-          ))
-        ) : (
-          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">No type</span>
-        )}
-
         <span
           className={`rounded-full px-2 py-0.5 text-xs font-medium ${
-            contact.active ? "bg-slate-100 text-slate-700" : "bg-rose-100 text-rose-700"
+            contact.active ? "bg-emerald-100 text-emerald-700" : "bg-rose-100 text-rose-700"
           }`}
         >
           {contact.active ? "Active" : "Inactive"}

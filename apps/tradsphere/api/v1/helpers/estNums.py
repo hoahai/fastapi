@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime
+from collections import OrderedDict
 from zoneinfo import ZoneInfo
 
 from apps.tradsphere.api.v1.helpers.accountValidation import (
@@ -23,6 +24,20 @@ from apps.tradsphere.api.v1.helpers.dbQueries import (
 _EST_NUMS_SEARCH_DEFAULT_LIMIT = 50
 _EST_NUMS_SEARCH_MAX_LIMIT = 200
 _EST_NUMS_SEARCH_TIMEZONE = "America/Chicago"
+_MONTH_ABBR = {
+    1: "JAN",
+    2: "FEB",
+    3: "MAR",
+    4: "APR",
+    5: "MAY",
+    6: "JUN",
+    7: "JUL",
+    8: "AUG",
+    9: "SEP",
+    10: "OCT",
+    11: "NOV",
+    12: "DEC",
+}
 
 
 def _normalize_billing_type(value: object | None) -> str:
@@ -382,7 +397,7 @@ def _build_broadcast_months_years_for_range(
     flight_start: date,
     flight_end: date,
     billing_type: str | None,
-) -> tuple[list[int], list[int]]:
+) -> tuple[list[int], list[int], int | None, int | None, int | None, str | None]:
     weeks = get_est_num_broadcast_weeks(
         flight_start=flight_start,
         flight_end=flight_end,
@@ -392,17 +407,54 @@ def _build_broadcast_months_years_for_range(
     years_seen: set[int] = set()
     months: list[int] = []
     years: list[int] = []
+    months_by_year: OrderedDict[int, list[int]] = OrderedDict()
     for week in weeks:
         week_end = week["weekEnd"]
         broadcast_month = int(week_end.month)
         broadcast_year = int(week_end.year)
+        year_months = months_by_year.setdefault(broadcast_year, [])
+        if broadcast_month not in year_months:
+            year_months.append(broadcast_month)
         if broadcast_month not in months_seen:
             months_seen.add(broadcast_month)
             months.append(broadcast_month)
         if broadcast_year not in years_seen:
             years_seen.add(broadcast_year)
             years.append(broadcast_year)
-    return months, years
+
+    def _format_period_segment(segment_months: list[int], year: int) -> str:
+        valid_months = sorted({month for month in segment_months if 1 <= month <= 12})
+        if not valid_months:
+            return f"Q?'{year % 100:02d}"
+        month_set = set(valid_months)
+        quarter_numbers = sorted({((month - 1) // 3) + 1 for month in valid_months})
+        full_quarters = all(
+            {quarter * 3 - 2, quarter * 3 - 1, quarter * 3}.issubset(month_set)
+            for quarter in quarter_numbers
+        )
+        if full_quarters and len(valid_months) == (len(quarter_numbers) * 3):
+            quarter_label = "Q" + ",".join(str(quarter) for quarter in quarter_numbers)
+            return f"{quarter_label}'{year % 100:02d}"
+        months_label = ",".join(_MONTH_ABBR[month] for month in valid_months)
+        return f"{months_label}'{year % 100:02d}"
+
+    period_segments = [
+        _format_period_segment(segment_months, year)
+        for year, segment_months in months_by_year.items()
+    ]
+    period_label = ", ".join(segment for segment in period_segments if segment).strip() or None
+    primary_year = years[0] if len(years) == 1 else None
+    primary_month = months[0] if primary_year is not None and len(months) == 1 else None
+    primary_quarter: int | None = None
+    if primary_year is not None:
+        if primary_month is not None:
+            primary_quarter = ((primary_month - 1) // 3) + 1
+        else:
+            quarters = sorted({((month - 1) // 3) + 1 for month in months if 1 <= month <= 12})
+            if len(quarters) == 1:
+                primary_quarter = quarters[0]
+
+    return months, years, primary_month, primary_quarter, primary_year, period_label
 
 
 def _sort_est_num_rows(rows: list[dict]) -> list[dict]:
@@ -479,7 +531,10 @@ def _enrich_est_num_rows(
             continue
 
     scheduled_est_nums = get_scheduled_est_nums(est_num_values)
-    broadcast_period_cache: dict[tuple[date, date, str], tuple[list[int], list[int]]] = {}
+    broadcast_period_cache: dict[
+        tuple[date, date, str],
+        tuple[list[int], list[int], int | None, int | None, int | None, str | None],
+    ] = {}
     for row in enriched_rows:
         raw_value = row.get("estNum")
         has_schedule = False
@@ -492,6 +547,10 @@ def _enrich_est_num_rows(
 
         months: list[int] = []
         years: list[int] = []
+        period_month: int | None = None
+        period_quarter: int | None = None
+        period_year: int | None = None
+        period_label: str | None = None
         try:
             flight_start = _coerce_db_date(row.get("flightStart"), field="flightStart")
             flight_end = _coerce_db_date(row.get("flightEnd"), field="flightEnd")
@@ -507,12 +566,24 @@ def _enrich_est_num_rows(
                         billing_type=billing_type,
                     )
                     broadcast_period_cache[cache_key] = cached
-                months, years = cached
+                (
+                    months,
+                    years,
+                    period_month,
+                    period_quarter,
+                    period_year,
+                    period_label,
+                ) = cached
         except ValueError:
             months, years = [], []
+            period_month, period_quarter, period_year, period_label = None, None, None, None
 
         row["broadcastMonths"] = months
         row["broadcastYears"] = years
+        row["month"] = period_month
+        row["quarter"] = period_quarter
+        row["year"] = period_year
+        row["periodLabel"] = period_label
 
     if sort_rows:
         return _sort_est_num_rows(enriched_rows)

@@ -197,7 +197,8 @@
 - Selector-style Station helper modals should disable primary action until the selection is valid and changed from current/baseline values.
 - Delivery Method add/edit form required fields must show red `*` indicators for required labels only (`name`, `url`, `username`, `deadline`).
 - Delivery Method and Contact helper forms should align label/input rows consistently with shared Tradsphere form geometry on desktop and stack on smaller widths.
-- Delivery Method edit helper modal should include a compact `Also used by` section listing other stations using the same method when frontend data is available.
+- Delivery Method edit helper modal should include a compact `Also used by`/linked-stations section listing other stations using the same method when frontend data is available.
+- Delivery Method linked-stations section should render compact responsive cards (2 columns when space allows), with subtle hover state and optional EstNum display when available.
 - Delivery Method action icons inside Station modal should be ordered left-to-right as `Add delivery method`, `Edit delivery method`, then `Select delivery method`, with matching tooltip and `aria-label`.
 - Station contact actions (`add existing`, `create`, `copy`, `edit`, `remove`) should be icon-based and stay draft-local until Station save submits bundled payload.
 - Keep Station form-row alignment strict: a stable label column and consistent value-column left edge across read-only values, inputs, dropdowns, and textareas.

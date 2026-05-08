@@ -1,7 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Loader2, Search, X } from "lucide-react";
 
-import { AppDropdown } from "@/components/ui/app-dropdown";
 import { Button } from "@/components/ui/button";
 import { CacheStatusChip } from "@/components/ui/cache-status-chip";
 import {
@@ -46,7 +45,6 @@ const DEFAULT_DELIVERY_METHOD_ID = 1;
 const DEFAULT_CONTACT_TYPE = "REP";
 const DELIVERY_METHOD_PASSWORD_STORED = "Stored";
 const DELIVERY_METHOD_PASSWORD_NOT_SET = "Not set";
-const CONTACT_TYPE_OPTIONS = ["REP", "TRAFFIC", "BILLING"];
 const SHARED_LABEL_CLASS = "text-sm font-medium leading-5 text-slate-600";
 const DELIVERY_METHOD_USAGE_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.DELIVERY_METHOD_USAGE_MEMORY;
 const DELIVERY_METHOD_OPTIONS_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.DELIVERY_METHOD_OPTIONS;
@@ -141,6 +139,7 @@ type DeliveryMethodUsageItem = {
   stationCode: string;
   stationName: string;
   mediaType: string;
+  estNums: number[];
 };
 
 type AddExistingContactFormState = {
@@ -252,6 +251,19 @@ function asBoolean(value: unknown): boolean {
     return ["1", "true", "yes", "y", "on"].includes(value.trim().toLowerCase());
   }
   return false;
+}
+
+function asEstNumList(value: unknown): number[] {
+  const rawValues = Array.isArray(value) ? value : [value];
+  const unique = new Set<number>();
+  for (const item of rawValues) {
+    const parsed = asNumber(item);
+    if (parsed === null) {
+      continue;
+    }
+    unique.add(Math.trunc(parsed));
+  }
+  return [...unique].filter((entry) => Number.isFinite(entry) && entry > 0).sort((a, b) => a - b);
 }
 
 function unwrapData(payload: unknown): unknown {
@@ -1802,6 +1814,7 @@ export function StationModal({
             stationCode,
             stationName: asString(item.name),
             mediaType: asString(item.mediaType).toUpperCase(),
+            estNums: [] as number[],
           };
         })
         .filter((item): item is DeliveryMethodUsageItem => item !== null)
@@ -1841,6 +1854,7 @@ export function StationModal({
             stationCode,
             stationName: asString(item.name),
             mediaType: asString(item.mediaType).toUpperCase(),
+            estNums: asEstNumList(item.estNums ?? item.estNum),
           };
         })
         .filter((item): item is DeliveryMethodUsageItem => item !== null)
@@ -2811,22 +2825,31 @@ export function StationModal({
 
             {deliveryMethodEditorForm.id !== null ? (
               <div className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2">
-                <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Also used by</p>
+                <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Also linked stations</p>
                 {isLoadingDeliveryMethodUsage ? (
                   <p className="mt-2 text-xs text-slate-500">Loading station usage...</p>
                 ) : deliveryMethodUsageError ? (
                   <p className="mt-2 text-xs text-amber-700">{deliveryMethodUsageError}</p>
                 ) : deliveryMethodUsage && deliveryMethodUsage.length ? (
-                  <ul className="mt-2 space-y-1 text-xs text-slate-700">
+                  <ul className="mt-2 grid grid-cols-1 gap-1.5 text-xs text-slate-700 sm:grid-cols-2">
                     {deliveryMethodUsage.map((usage) => (
-                      <li key={usage.stationCode} className="flex flex-wrap gap-x-2 gap-y-0.5">
-                        <span className="font-semibold text-slate-800">{usage.stationCode}</span>
-                        <span>{usage.stationName || "-"}</span>
-                        {usage.mediaType ? (
-                          <span className="rounded bg-slate-200 px-1.5 py-0.5 text-[10px] font-medium text-slate-700">
-                            {usage.mediaType}
-                          </span>
-                        ) : null}
+                      <li
+                        key={usage.stationCode}
+                        className="rounded-md border border-slate-200/90 bg-white px-2.5 py-2 shadow-[0_1px_2px_rgba(15,23,42,0.05)] transition hover:border-blue-200 hover:shadow-sm"
+                      >
+                        <div className="flex items-start justify-between gap-2">
+                          <span className="font-semibold text-slate-800">{usage.stationCode}</span>
+                          {usage.mediaType ? (
+                            <span className="rounded bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-700">
+                              {usage.mediaType}
+                            </span>
+                          ) : null}
+                        </div>
+                        <p className="mt-0.5 truncate text-[11px] text-slate-500">{usage.stationName || "-"}</p>
+                        <p className="mt-1 text-[11px] text-slate-600">
+                          <span className="text-slate-500">EstNum: </span>
+                          <span>{usage.estNums.length ? usage.estNums.join(", ") : "-"}</span>
+                        </p>
                       </li>
                     ))}
                   </ul>
@@ -2894,24 +2917,6 @@ export function StationModal({
           </DialogHeader>
 
           <div className="space-y-3">
-            <LabeledField
-              label={
-                <>
-                  Type<RequiredMark />
-                </>
-              }
-            >
-              <AppDropdown
-                ariaLabel="Contact type"
-                value={contactEditorForm.contactType}
-                options={CONTACT_TYPE_OPTIONS.map((type) => ({ value: type, label: type }))}
-                onValueChange={(value) => {
-                  setContactEditorForm((current) => ({ ...current, contactType: value }));
-                }}
-                searchable={false}
-                className="w-full"
-              />
-            </LabeledField>
             <LabeledField label="Name">
               <Input
                 value={contactEditorForm.fullName}
@@ -3120,17 +3125,6 @@ export function StationModal({
                 )}
               </div>
             </div>
-
-            <LabeledField label="Link Type">
-              <AppDropdown
-                ariaLabel="Link contact type"
-                value={selectedExistingContactType}
-                options={CONTACT_TYPE_OPTIONS.map((type) => ({ value: type, label: type }))}
-                onValueChange={setSelectedExistingContactType}
-                searchable={false}
-                className="w-full"
-              />
-            </LabeledField>
 
             <div className="sm:pl-[126px]">
               <label className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">

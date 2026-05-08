@@ -61,3 +61,7 @@ This app inherits global standards from `frontend/DESIGNS.md`.
   - dedicated section in Contact modal below `Used by Stations`
 - Contacts modal should also show read-only `Used by EstNums` below `Used by Accounts`.
 - Contact copy action should output Gmail-ready text (`Full Name <email@example.com>` with email-only fallback).
+
+## Station Modal
+- Delivery Method linked-stations usage should render as compact cards (not plain text rows), with responsive 2-column layout when space allows.
+- Linked-station cards should include subtle hover feedback and keep status metadata compact (for example media type and EstNum list when available).

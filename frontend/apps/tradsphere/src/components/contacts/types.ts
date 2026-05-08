@@ -2,7 +2,6 @@ export type ContactSearchFormValues = {
   name: string;
   email: string;
   company: string;
-  contactType: string;
   phone: string;
   station: string;
 };
@@ -27,6 +26,13 @@ export type ContactEstNumUsage = {
   estNum: number;
   accountCode: string;
   accountName: string;
+  month: number | null;
+  quarter: number | null;
+  year: number | null;
+  periodLabel: string;
+  mediaType: string;
+  broadcastMonths: number[];
+  broadcastYears: number[];
   stationCodes: string[];
 };
 

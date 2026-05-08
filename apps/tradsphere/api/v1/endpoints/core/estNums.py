@@ -50,6 +50,10 @@ def search_est_nums_route(
                 "buyer": "Elyse",
                 "note": "Prime time package",
                 "hasSchedule": true,
+                "month": null,
+                "quarter": 2,
+                "year": 2026,
+                "periodLabel": "APR,MAY'26",
                 "broadcastMonths": [4, 5],
                 "broadcastYears": [2026]
               }
@@ -71,7 +75,8 @@ def search_est_nums_route(
         - createdFrom must be on or before createdTo when both are provided
         - limit must be between 1 and 200
         - cursor/offset must be non-negative integers; cursor takes precedence when both are provided
-        - response includes hasSchedule and broadcastMonths/broadcastYears metadata
+        - response includes hasSchedule plus derived period metadata:
+          month/quarter/year (when uniquely resolvable), periodLabel, and broadcastMonths/broadcastYears
     """
     try:
         return search_est_nums_data(
@@ -125,6 +130,10 @@ def get_est_nums_route(
               "buyer": "Elyse",
               "note": "Prime time package",
               "hasSchedule": true,
+              "month": null,
+              "quarter": 2,
+              "year": 2026,
+              "periodLabel": "APR,MAY'26",
               "broadcastMonths": [4, 5],
               "broadcastYears": [2026]
             }
@@ -141,7 +150,8 @@ def get_est_nums_route(
         - month requires year
         - quarter requires year
         - response includes hasSchedule (true when at least one schedule exists for estNum)
-        - response includes broadcastMonths/broadcastYears derived from broadcast-week overlap of flightStart/flightEnd
+        - response includes derived period metadata:
+          month/quarter/year (when uniquely resolvable), periodLabel, and broadcastMonths/broadcastYears
         - for Calendar billing accounts, trailing overlap week (when flightEnd is a cross-month week end) is excluded from broadcastMonths/broadcastYears
         - response is sorted by: primary broadcast year DESC (uses lowest year when row spans multiple years), accountCode ASC, flightStart month ASC, estNum ASC
         - year/month/quarter filters use broadcast calendar semantics (broadcast week is Monday-Sunday, month/year from week-ending Sunday)
