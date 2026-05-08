@@ -213,6 +213,69 @@ function getRangeFromPreset(preset: FlightRangePresetState): { flightStart: stri
   return null;
 }
 
+function resolvePresetFromFlightRange(
+  flightStart: string,
+  flightEnd: string,
+): FlightRangePresetState | null {
+  const parsedStart = parseIsoDate(flightStart);
+  const parsedEnd = parseIsoDate(flightEnd);
+  if (!parsedStart || !parsedEnd) {
+    return null;
+  }
+
+  const candidateYears = new Set<number>([
+    parsedStart.year - 1,
+    parsedStart.year,
+    parsedStart.year + 1,
+    parsedEnd.year - 1,
+    parsedEnd.year,
+    parsedEnd.year + 1,
+  ]);
+
+  for (const year of candidateYears) {
+    if (!Number.isInteger(year)) {
+      continue;
+    }
+
+    for (let month = 1; month <= 12; month += 1) {
+      const range = getBroadcastMonthRange(month, year);
+      if (range.flightStart === flightStart && range.flightEnd === flightEnd) {
+        return {
+          rangeType: "MONTH",
+          rangeValue: String(month),
+          year: String(year),
+        };
+      }
+    }
+
+    for (let quarter = 1; quarter <= 4; quarter += 1) {
+      const range = getBroadcastQuarterRange(quarter as 1 | 2 | 3 | 4, year);
+      if (range.flightStart === flightStart && range.flightEnd === flightEnd) {
+        return {
+          rangeType: "QUARTER",
+          rangeValue: String(quarter),
+          year: String(year),
+        };
+      }
+    }
+
+    const yearRange = getBroadcastYearRange(year);
+    if (yearRange.flightStart === flightStart && yearRange.flightEnd === flightEnd) {
+      return {
+        rangeType: "YEAR",
+        rangeValue: "",
+        year: String(year),
+      };
+    }
+  }
+
+  return {
+    rangeType: "CUSTOM",
+    rangeValue: "",
+    year: String(parsedStart.year),
+  };
+}
+
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -642,15 +705,18 @@ export function EstimateNumberModal({
   }
 
   function updateFlightDateManually(field: "flightStart" | "flightEnd", value: string) {
-    setForm((current) => ({ ...current, [field]: value }));
+    const nextForm = { ...form, [field]: value };
+    setForm(nextForm);
     setFlightRangeError(null);
     setSubmitError(null);
-    setFlightRangePreset((current) => {
-      if (current.rangeType === "CUSTOM") {
-        return current;
-      }
-      return { ...current, rangeType: "CUSTOM", rangeValue: "" };
-    });
+    const resolvedPreset = resolvePresetFromFlightRange(nextForm.flightStart, nextForm.flightEnd);
+    if (resolvedPreset) {
+      setFlightRangePreset(resolvedPreset);
+      return;
+    }
+    setFlightRangePreset((current) =>
+      current.rangeType === "CUSTOM" ? current : { ...current, rangeType: "CUSTOM", rangeValue: "" },
+    );
   }
 
   function applyFlightRangePreset(range: { flightStart: string; flightEnd: string }) {

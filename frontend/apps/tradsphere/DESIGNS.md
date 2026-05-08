@@ -17,13 +17,17 @@ This app inherits global standards from `frontend/DESIGNS.md`.
 - Replace calendar-style schedule visualization with a bounded Gantt-style weekly timeline section.
 - Place timeline below the `Stations` section in the same right-column dashboard stack.
 - Keep section collapsible with default expanded behavior.
-- Rows: `StationCode · EstNum` (station name as secondary line when available).
+- Rows are grouped by `EstNum` with collapsible station child rows.
+- Child row label: station code primary, station name secondary.
 - Columns: broadcast weeks (Monday start) for the bounded visible period.
 - Left label column should stay sticky while horizontal scrolling.
 - Render all returned rows; if content is tall, keep the section height bounded and allow internal vertical scrolling.
 - Render contiguous active weeks as one bar segment and non-contiguous weeks as separate segments.
 - Bars are visual-only for activity ranges; do not display spot/gross text in bars.
-- Cache timeline payloads by account + visible range + schema version (`v2`), keep cached timeline mounted while background refresh runs, and avoid unbounded cache growth.
+- Previous/Next timeline controls must load only one adjacent bounded period per click and extend the currently loaded range (prepend/append), not replace it.
+- Keep each request bounded (<= 13 weeks), cap combined loaded range to 26 weeks, and block further expansion with subtle guidance when capped.
+- Cache timeline payloads by account + visible range + schema version (`v3`), keep cached timeline mounted while background refresh runs, and avoid unbounded cache growth.
+- Merge adjacent window payloads by week/item keys and dedupe active-week arrays so already-loaded periods are not refetched or duplicated.
 
 ## Interaction Guidance
 - Surface API/loading errors inline and close to related actions.

@@ -353,6 +353,13 @@ export function FlightDateRangeField({
       if (!(target instanceof Node)) {
         return;
       }
+      // AppDropdown menus render in a portal outside this container.
+      // Keep this popover open while users interact with quick-range dropdowns.
+      if (target instanceof Element) {
+        if (target.closest('[data-app-dropdown-menu="true"]')) {
+          return;
+        }
+      }
       if (!containerRef.current?.contains(target)) {
         setIsRangePickerOpen(false);
       }

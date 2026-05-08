@@ -43,7 +43,7 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
     children: [
       {
         id: "tradsphere-home",
-        label: "Tradsphere Home",
+        label: "Accounts",
         route: "/tradsphere/home",
         available: true,
       },

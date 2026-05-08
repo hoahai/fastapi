@@ -264,12 +264,15 @@
 - Keep `Schedule Timeline` directly below `Stations` and aligned to the same dashboard column/container width as `EstNums - Schedules` and `Stations`.
 - Do not render timeline as a full-page/full-width calendar block.
 - Timeline should render as a bounded horizontal Gantt-style lane view with a sticky left label column and horizontally scrollable week lanes.
-- Timeline rows represent `StationCode + EstNum`; timeline columns represent Monday-start broadcast weeks.
+- Timeline rows are grouped by `EstNum` (parent group) with station child rows under each group; timeline columns represent Monday-start broadcast weeks.
 - Show all timeline rows returned for the visible period; use internal vertical scroll instead of `+ more` collapsing.
 - Timeline section must be collapsible; default expanded and persisted with page state.
 - Default visible range is current broadcast week through next 8 weeks (9 weeks total).
 - Do not request unbounded history; API request window must stay bounded (max 13 weeks).
-- Timeline data cache key must include account + visible period range + schema version (for example `tradsphere:schedule-timeline:v2:<accountCode>:<startDate>:<endDate>`).
+- Timeline period extension uses adjacent-window loading (`Load previous period` prepends, `Load next period` appends) and must not replace already loaded periods.
+- Timeline total loaded range is capped (26 weeks max); when cap is reached, do not keep loading unlimited periods.
+- Timeline data cache key must include account + visible period range + schema version (for example `tradsphere:schedule-timeline:v3:<accountCode>:<startDate>:<endDate>`).
+- Each adjacent period request should be merged client-side without duplicate weeks/items/activeWeeks and without blanking the already-visible timeline.
 - Timeline bars should represent active contiguous weekly ranges; do not display spot counts inside bars.
 - Use shared `FormRow` + `ReadOnlyField` primitives for label/value alignment and responsive stack behavior; avoid ad-hoc padding offsets for alignment.
 - Use shared `ModalShell` + `ModalFooter` behavior for all Tradsphere modals:

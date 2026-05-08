@@ -693,6 +693,13 @@ function App() {
             />
 
             <div className="space-y-5">
+              <ScheduleTimelineSection
+                accountCode={selectedAccountCode}
+                esnums={esnums}
+                headers={requestHeaders}
+                disabled={isLoadingAccount || isSaving}
+              />
+
               <DashboardPanel
                 title="EstNums - Schedules"
                 icon={<CalendarDays className="size-5 text-blue-600" />}
@@ -770,12 +777,6 @@ function App() {
                   <p className="text-sm text-slate-500">No stations were returned for this account.</p>
                 ) : null}
               </DashboardPanel>
-
-              <ScheduleTimelineSection
-                accountCode={selectedAccountCode}
-                headers={requestHeaders}
-                disabled={isLoadingAccount || isSaving}
-              />
             </div>
           </main>
         </>

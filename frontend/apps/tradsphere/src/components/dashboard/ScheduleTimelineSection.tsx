@@ -8,7 +8,7 @@ import {
   Loader2,
 } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { ActionIconButton } from "@/components/dashboard/ActionIconButton";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CacheStatusChip } from "@/components/ui/cache-status-chip";
 import {
@@ -32,6 +32,7 @@ import {
   shouldFetchNetwork,
   type CachePolicy,
 } from "@shared/cache";
+import type { EsnumItem } from "./types";
 
 type TimelineWeek = {
   weekStart: string;
@@ -74,21 +75,35 @@ type TimelineDetail = {
   rangeEnd: string;
 };
 
+type EstGroup = {
+  estNum: string;
+  estNumName: string;
+  estNumNote: string;
+  mediaType: string;
+  rangeStart: string;
+  rangeEnd: string;
+  stations: TimelineItem[];
+};
+
+type GroupCollapseState = Record<string, boolean>;
+
 interface ScheduleTimelineSectionProps {
   accountCode: string;
+  esnums?: EsnumItem[];
   headers: HeadersInit;
   disabled?: boolean;
 }
 
 const TIMELINE_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.SCHEDULE_TIMELINE;
-const TIMELINE_CACHE_SCHEMA = "v2";
+const TIMELINE_CACHE_SCHEMA = "v3";
 const DEFAULT_WINDOW_WEEKS = 9;
-const MAX_WINDOW_WEEKS = 13;
-const TIMELINE_CACHE_ENTRY_CAP = 12;
-const LABEL_COLUMN_PX = 260;
+const MAX_EXPANDED_WEEKS = 26;
+const TIMELINE_CACHE_ENTRY_CAP = 18;
+const LABEL_COLUMN_PX = 300;
 const WEEK_COLUMN_PX = 84;
 const TIMELINE_COLLAPSED_STATE_KEY = "tradsphere.home.scheduleTimeline.collapsed.v1";
 const TIMELINE_VISIBLE_START_KEY = "tradsphere.home.scheduleTimeline.visibleStart.v1";
+const TIMELINE_GROUP_COLLAPSE_KEY = "tradsphere.home.scheduleTimeline.groupCollapse.v2";
 
 const MONTH_LABEL_FORMATTER = new Intl.DateTimeFormat("en-US", {
   timeZone: TRADSPHERE_BROADCAST_TIMEZONE,
@@ -151,6 +166,11 @@ function toIsoDate(year: number, month: number, day: number): string {
   return `${year.toString().padStart(4, "0")}-${month.toString().padStart(2, "0")}-${day
     .toString()
     .padStart(2, "0")}`;
+}
+
+function toStableUtcDate(year: number, month: number, day: number): Date {
+  // Use UTC noon so timezone rendering never shifts date/month backward.
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
 }
 
 function addDays(isoDate: string, days: number): string {
@@ -229,6 +249,13 @@ function isIsoDateString(value: unknown): value is string {
   return typeof value === "string" && parseIsoDate(value) !== null;
 }
 
+function isGroupCollapseState(value: unknown): value is GroupCollapseState {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return Object.values(value).every((item) => typeof item === "boolean");
+}
+
 function buildTimelineCacheKey(accountCode: string, startDate: string, endDate: string): string {
   return `tradsphere:schedule-timeline:${TIMELINE_CACHE_SCHEMA}:${accountCode.toUpperCase()}:${startDate}:${endDate}`;
 }
@@ -237,7 +264,7 @@ function pruneTimelineCacheEntries(accountCode: string): void {
   const prefix = `tradsphere:schedule-timeline:${TIMELINE_CACHE_SCHEMA}:${accountCode.toUpperCase()}:`;
   const snapshots = listBrowserCacheSnapshotsByPrefix<unknown>(prefix, {
     allowExpired: true,
-    limit: 200,
+    limit: 240,
   });
   if (snapshots.length <= TIMELINE_CACHE_ENTRY_CAP) {
     return;
@@ -277,7 +304,9 @@ function normalizeTimeline(payload: unknown): TimelineResponse | null {
 
   const weeks = (Array.isArray(unwrapped.weeks) ? unwrapped.weeks : [])
     .map((week) => normalizeWeek(week))
-    .filter((week): week is TimelineWeek => week !== null);
+    .filter((week): week is TimelineWeek => week !== null)
+    .sort((left, right) => left.weekStart.localeCompare(right.weekStart));
+
   const weekSet = new Set(weeks.map((week) => week.weekStart));
 
   const items = (Array.isArray(unwrapped.items) ? unwrapped.items : []).reduce<TimelineItem[]>((output, row) => {
@@ -311,11 +340,14 @@ function normalizeTimeline(payload: unknown): TimelineResponse | null {
   }, []);
 
   items.sort((left, right) => {
-    const stationCompare = left.stationCode.localeCompare(right.stationCode);
-    if (stationCompare !== 0) {
-      return stationCompare;
+    const estCompare = left.estNum.localeCompare(right.estNum, "en", {
+      numeric: true,
+      sensitivity: "base",
+    });
+    if (estCompare !== 0) {
+      return estCompare;
     }
-    return left.estNum.localeCompare(right.estNum);
+    return left.stationCode.localeCompare(right.stationCode);
   });
 
   return {
@@ -335,7 +367,7 @@ function buildMonthGroups(weeks: TimelineWeek[]): MonthGroup[] {
     if (!parsed) {
       continue;
     }
-    const monthDate = new Date(Date.UTC(parsed.year, parsed.month - 1, 1));
+    const monthDate = toStableUtcDate(parsed.year, parsed.month, 1);
     const key = `${parsed.year}-${parsed.month}`;
     const label = MONTH_LABEL_FORMATTER.format(monthDate);
     const previous = groups[groups.length - 1];
@@ -407,20 +439,87 @@ function colorForRow(seed: string): {
   };
 }
 
-function formatPeriodRange(startDate: string, endDate: string): string {
-  const start = parseIsoDate(startDate);
-  const end = parseIsoDate(endDate);
-  if (!start || !end) {
-    return `${startDate} - ${endDate}`;
+function formatIsoDateMmDdYyyy(isoDate: string): string {
+  const parsed = parseIsoDate(isoDate);
+  if (!parsed) {
+    return isoDate;
+  }
+  return DATE_LABEL_FORMATTER.format(toStableUtcDate(parsed.year, parsed.month, parsed.day));
+}
+
+function mergeTimelineData(current: TimelineResponse | null, incoming: TimelineResponse): TimelineResponse {
+  if (!current) {
+    return incoming;
   }
 
-  const startText = DATE_LABEL_FORMATTER.format(new Date(Date.UTC(start.year, start.month - 1, start.day)));
-  const endText = DATE_LABEL_FORMATTER.format(new Date(Date.UTC(end.year, end.month - 1, end.day)));
-  return `${startText} - ${endText}`;
+  const weekByStart = new Map<string, TimelineWeek>();
+  for (const week of current.weeks) {
+    weekByStart.set(week.weekStart, week);
+  }
+  for (const week of incoming.weeks) {
+    weekByStart.set(week.weekStart, week);
+  }
+
+  const mergedWeeks = [...weekByStart.values()].sort((left, right) => left.weekStart.localeCompare(right.weekStart));
+  const mergedWeekStarts = new Set(mergedWeeks.map((week) => week.weekStart));
+
+  const itemByKey = new Map<string, TimelineItem>();
+  for (const row of [...current.items, ...incoming.items]) {
+    const key = `${row.estNum}::${row.stationCode}`;
+    const existing = itemByKey.get(key);
+    if (!existing) {
+      itemByKey.set(key, {
+        stationCode: row.stationCode,
+        stationName: row.stationName,
+        estNum: row.estNum,
+        mediaType: row.mediaType,
+        activeWeeks: [...new Set(row.activeWeeks)].filter((week) => mergedWeekStarts.has(week)).sort(),
+      });
+      continue;
+    }
+
+    const mergedActiveWeeks = [...new Set([...existing.activeWeeks, ...row.activeWeeks])]
+      .filter((week) => mergedWeekStarts.has(week))
+      .sort();
+
+    itemByKey.set(key, {
+      stationCode: existing.stationCode,
+      stationName: existing.stationName || row.stationName,
+      estNum: existing.estNum,
+      mediaType: existing.mediaType || row.mediaType,
+      activeWeeks: mergedActiveWeeks,
+    });
+  }
+
+  const mergedItems = [...itemByKey.values()].filter((item) => item.activeWeeks.length > 0);
+  mergedItems.sort((left, right) => {
+    const estCompare = left.estNum.localeCompare(right.estNum, "en", {
+      numeric: true,
+      sensitivity: "base",
+    });
+    if (estCompare !== 0) {
+      return estCompare;
+    }
+    return left.stationCode.localeCompare(right.stationCode);
+  });
+
+  return {
+    accountCode: incoming.accountCode || current.accountCode,
+    timezone: incoming.timezone || current.timezone,
+    startDate: mergedWeeks[0]?.weekStart ?? current.startDate,
+    endDate: mergedWeeks[mergedWeeks.length - 1]?.weekEnd ?? current.endDate,
+    weeks: mergedWeeks,
+    items: mergedItems,
+  };
+}
+
+function clampInitialAnchor(anchorStart: string): string {
+  return mondayOfIsoDate(anchorStart);
 }
 
 export function ScheduleTimelineSection({
   accountCode,
+  esnums = [],
   headers,
   disabled = false,
 }: ScheduleTimelineSectionProps) {
@@ -436,133 +535,37 @@ export function ScheduleTimelineSection({
     currentWeekStart,
     { storage: "session", validate: isIsoDateString },
   );
+  const [collapsedGroups, setCollapsedGroups] = usePersistentState<GroupCollapseState>(
+    TIMELINE_GROUP_COLLAPSE_KEY,
+    {},
+    { storage: "session", validate: isGroupCollapseState },
+  );
 
   const [timeline, setTimeline] = useState<TimelineResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isLoadingPrevious, setIsLoadingPrevious] = useState(false);
+  const [isLoadingNext, setIsLoadingNext] = useState(false);
+  const [rangeLimitMessage, setRangeLimitMessage] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null);
   const [selectedDetail, setSelectedDetail] = useState<TimelineDetail | null>(null);
+
+  const loadedWindowKeysRef = useRef<Set<string>>(new Set());
+  const loadedWindowsRef = useRef<Array<{ start: string; end: string }>>([]);
+  const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const requestIdRef = useRef(0);
 
-  const requestedEnd = useMemo(
-    () => addDays(visibleStart, DEFAULT_WINDOW_WEEKS * 7 - 1),
+  const canInteract = Boolean(accountCode) && !disabled;
+
+  const fallbackWeeks = useMemo(
+    () => buildWeeksFromStart(clampInitialAnchor(visibleStart), DEFAULT_WINDOW_WEEKS),
     [visibleStart],
   );
-
-  const cacheKey = useMemo(() => {
-    if (!accountCode) {
-      return "";
-    }
-    return buildTimelineCacheKey(accountCode, visibleStart, requestedEnd);
-  }, [accountCode, requestedEnd, visibleStart]);
-
-  useEffect(() => {
-    if (!accountCode) {
-      setTimeline(null);
-      setCacheStatus(null);
-      setError(null);
-      setIsLoading(false);
-      setIsRefreshing(false);
-      return;
-    }
-
-    if (isCollapsed) {
-      return;
-    }
-
-    void fetchTimeline("stale-while-revalidate");
-  }, [accountCode, cacheKey, isCollapsed]);
-
-  async function fetchTimeline(policy: CachePolicy): Promise<void> {
-    if (!accountCode || !cacheKey) {
-      return;
-    }
-
-    const requestId = ++requestIdRef.current;
-    const snapshot = readBrowserCacheSnapshot<unknown>(cacheKey);
-    const cachedTimeline = normalizeTimeline(snapshot?.data);
-    const canUseCache = policy !== "network-only" && cachedTimeline !== null;
-    const shouldFetchFromNetwork = shouldFetchNetwork(policy, snapshot);
-
-    if (canUseCache && cachedTimeline) {
-      setTimeline(cachedTimeline);
-      setCacheStatus({ source: "cache", fetchedAt: snapshot?.fetchedAt ?? Date.now() });
-      setError(null);
-      if (visibleStart !== cachedTimeline.startDate) {
-        setVisibleStart(cachedTimeline.startDate);
-      }
-    }
-
-    if (!shouldFetchFromNetwork) {
-      setIsLoading(false);
-      setIsRefreshing(false);
-      return;
-    }
-
-    setIsLoading(!canUseCache);
-    setIsRefreshing(canUseCache);
-    if (!canUseCache) {
-      setError(null);
-    }
-
-    try {
-      const query = new URLSearchParams({
-        accountCode: accountCode.toUpperCase(),
-        startDate: visibleStart,
-        endDate: requestedEnd,
-        timezone: TRADSPHERE_BROADCAST_TIMEZONE,
-      });
-
-      const payload = await requestJson(`/api/tradsphere/v1/schedules/timeline?${query.toString()}`, {
-        headers,
-      });
-      const normalized = normalizeTimeline(payload);
-      if (!normalized) {
-        throw new Error("Timeline response was empty or invalid.");
-      }
-
-      writeBrowserCache(cacheKey, normalized, TIMELINE_CACHE_TTL_MS, { source: "network" });
-      pruneTimelineCacheEntries(accountCode);
-
-      if (requestId !== requestIdRef.current) {
-        return;
-      }
-
-      setTimeline(normalized);
-      setCacheStatus({ source: "network", fetchedAt: Date.now() });
-      setError(null);
-      if (visibleStart !== normalized.startDate) {
-        setVisibleStart(normalized.startDate);
-      }
-    } catch (requestError) {
-      if (requestId !== requestIdRef.current) {
-        return;
-      }
-      const message =
-        requestError instanceof Error && requestError.message
-          ? requestError.message
-          : "Unable to load schedule timeline.";
-      if (!canUseCache) {
-        setTimeline(null);
-        setError(message);
-      } else {
-        setError(null);
-      }
-    } finally {
-      if (requestId === requestIdRef.current) {
-        setIsLoading(false);
-        setIsRefreshing(false);
-      }
-    }
-  }
-
-  const weeks = timeline?.weeks ?? buildWeeksFromStart(visibleStart, DEFAULT_WINDOW_WEEKS);
+  const weeks = timeline?.weeks.length ? timeline.weeks : fallbackWeeks;
   const items = timeline?.items ?? [];
-  const timelineStart = timeline?.startDate ?? visibleStart;
-  const timelineEnd = timeline?.endDate ?? requestedEnd;
-  const periodText = formatPeriodRange(timelineStart, timelineEnd);
-  const canInteract = Boolean(accountCode) && !disabled;
+
+  const maxReached = weeks.length >= MAX_EXPANDED_WEEKS;
 
   const statusText = useMemo(() => {
     if (isLoading) {
@@ -586,64 +589,423 @@ export function ScheduleTimelineSection({
     return output;
   }, [weeks]);
 
+  const weekByStart = useMemo(() => {
+    const output = new Map<string, TimelineWeek>();
+    for (const week of weeks) {
+      output.set(week.weekStart, week);
+    }
+    return output;
+  }, [weeks]);
+
+  const groupedRows = useMemo<EstGroup[]>(() => {
+    const esnumMetaByKey = new Map<string, { name: string; note: string }>();
+    for (const esnum of esnums) {
+      const key = String(esnum.estnum);
+      esnumMetaByKey.set(key, {
+        name: String(esnum.name ?? "").trim(),
+        note: String(esnum.note ?? "").trim(),
+      });
+    }
+
+    const groupMap = new Map<string, TimelineItem[]>();
+    for (const row of items) {
+      const list = groupMap.get(row.estNum);
+      if (list) {
+        list.push(row);
+      } else {
+        groupMap.set(row.estNum, [row]);
+      }
+    }
+
+    const groups: EstGroup[] = [];
+    for (const [estNum, stations] of groupMap.entries()) {
+      stations.sort((left, right) => left.stationCode.localeCompare(right.stationCode));
+      const mediaTypes = [...new Set(stations.map((row) => row.mediaType).filter(Boolean))];
+      const allWeeks = [...new Set(stations.flatMap((row) => row.activeWeeks))].sort();
+      const firstWeek = allWeeks[0];
+      const lastWeek = allWeeks[allWeeks.length - 1];
+      const rangeStart = firstWeek ?? "";
+      const rangeEnd = lastWeek ? weekByStart.get(lastWeek)?.weekEnd ?? lastWeek : "";
+      const estnumMeta = esnumMetaByKey.get(estNum);
+
+      groups.push({
+        estNum,
+        estNumName: estnumMeta?.name || estNum,
+        estNumNote: estnumMeta?.note || "",
+        mediaType: mediaTypes.join(" / "),
+        rangeStart,
+        rangeEnd,
+        stations,
+      });
+    }
+
+    groups.sort((left, right) =>
+      left.estNum.localeCompare(right.estNum, "en", {
+        numeric: true,
+        sensitivity: "base",
+      }),
+    );
+    return groups;
+  }, [esnums, items, weekByStart]);
+
   const timelinePixelWidth = weeks.length * WEEK_COLUMN_PX;
+
+  function isGroupCollapsed(estNum: string): boolean {
+    const groupKey = `${accountCode.toUpperCase()}::${estNum}`;
+    // Default behavior: collapsed unless explicitly expanded.
+    return collapsedGroups[groupKey] !== false;
+  }
+
+  function setGroupCollapsed(estNum: string, collapsed: boolean): void {
+    const groupKey = `${accountCode.toUpperCase()}::${estNum}`;
+    setCollapsedGroups((current) => ({
+      ...current,
+      [groupKey]: collapsed,
+    }));
+  }
+
+  function applyWindowData(incoming: TimelineResponse, mode: "replace" | "prepend" | "append"): number {
+    let prependedWeeks = 0;
+    setTimeline((current) => {
+      if (mode === "replace" || !current) {
+        return incoming;
+      }
+
+      const currentFirstWeek = current.weeks[0]?.weekStart;
+      const merged = mergeTimelineData(current, incoming);
+      if (mode === "prepend" && currentFirstWeek) {
+        prependedWeeks = merged.weeks.filter((week) => week.weekStart < currentFirstWeek).length;
+      }
+      return merged;
+    });
+    return prependedWeeks;
+  }
+
+  function upsertLoadedWindow(start: string, end: string): void {
+    const nextKey = `${start}::${end}`;
+    const withoutDuplicate = loadedWindowsRef.current.filter(
+      (windowValue) => `${windowValue.start}::${windowValue.end}` !== nextKey,
+    );
+    withoutDuplicate.push({ start, end });
+    withoutDuplicate.sort((left, right) => left.start.localeCompare(right.start));
+    loadedWindowsRef.current = withoutDuplicate;
+  }
+
+  async function fetchWindow({
+    startDate,
+    endDate,
+    mode,
+    policy,
+    requestId,
+  }: {
+    startDate: string;
+    endDate: string;
+    mode: "replace" | "prepend" | "append";
+    policy: CachePolicy;
+    requestId: number;
+  }): Promise<void> {
+    const normalizedStart = mondayOfIsoDate(startDate);
+    const normalizedEnd = endDate;
+    const cacheKey = buildTimelineCacheKey(accountCode, normalizedStart, normalizedEnd);
+
+    const snapshot = readBrowserCacheSnapshot<unknown>(cacheKey);
+    const cachedTimeline = normalizeTimeline(snapshot?.data);
+    const canUseCache = policy !== "network-only" && cachedTimeline !== null;
+    const shouldFetchFromNetwork = shouldFetchNetwork(policy, snapshot);
+
+    if (canUseCache && cachedTimeline) {
+      const prependedWeeks = applyWindowData(cachedTimeline, mode);
+      loadedWindowKeysRef.current.add(cacheKey);
+      upsertLoadedWindow(normalizedStart, normalizedEnd);
+      setCacheStatus({ source: "cache", fetchedAt: snapshot?.fetchedAt ?? Date.now() });
+      setError(null);
+
+      if (mode === "prepend" && prependedWeeks > 0) {
+        const previousLeft = scrollContainerRef.current?.scrollLeft ?? 0;
+        requestAnimationFrame(() => {
+          if (!scrollContainerRef.current) {
+            return;
+          }
+          scrollContainerRef.current.scrollLeft = previousLeft + prependedWeeks * WEEK_COLUMN_PX;
+        });
+      }
+    }
+
+    if (!shouldFetchFromNetwork) {
+      return;
+    }
+
+    try {
+      const query = new URLSearchParams({
+        accountCode: accountCode.toUpperCase(),
+        startDate: normalizedStart,
+        endDate: normalizedEnd,
+        timezone: TRADSPHERE_BROADCAST_TIMEZONE,
+      });
+
+      const payload = await requestJson(`/api/tradsphere/v1/schedules/timeline?${query.toString()}`, {
+        headers,
+      });
+      const normalized = normalizeTimeline(payload);
+      if (!normalized) {
+        throw new Error("Timeline response was empty or invalid.");
+      }
+
+      writeBrowserCache(cacheKey, normalized, TIMELINE_CACHE_TTL_MS, { source: "network" });
+      pruneTimelineCacheEntries(accountCode);
+
+      if (requestId !== requestIdRef.current) {
+        return;
+      }
+
+      const prependedWeeks = applyWindowData(normalized, mode);
+      loadedWindowKeysRef.current.add(cacheKey);
+      upsertLoadedWindow(normalizedStart, normalizedEnd);
+      setCacheStatus({ source: "network", fetchedAt: Date.now() });
+      setError(null);
+
+      if (mode === "prepend" && prependedWeeks > 0) {
+        const previousLeft = scrollContainerRef.current?.scrollLeft ?? 0;
+        requestAnimationFrame(() => {
+          if (!scrollContainerRef.current) {
+            return;
+          }
+          scrollContainerRef.current.scrollLeft = previousLeft + prependedWeeks * WEEK_COLUMN_PX;
+        });
+      }
+    } catch (requestError) {
+      if (requestId !== requestIdRef.current) {
+        return;
+      }
+
+      const message =
+        requestError instanceof Error && requestError.message
+          ? requestError.message
+          : "Unable to load schedule timeline.";
+      if (!canUseCache && mode === "replace") {
+        setTimeline(null);
+      }
+      setError(message);
+    }
+  }
+
+  async function loadInitialWindow(policy: CachePolicy): Promise<void> {
+    if (!accountCode || isCollapsed) {
+      return;
+    }
+
+    const requestId = ++requestIdRef.current;
+    const start = clampInitialAnchor(visibleStart);
+    const end = addDays(start, DEFAULT_WINDOW_WEEKS * 7 - 1);
+
+    setRangeLimitMessage(null);
+    setIsLoading(true);
+    setIsRefreshing(false);
+    setError(null);
+    setTimeline(null);
+    loadedWindowKeysRef.current = new Set();
+    loadedWindowsRef.current = [];
+
+    await fetchWindow({
+      startDate: start,
+      endDate: end,
+      mode: "replace",
+      policy,
+      requestId,
+    });
+
+    if (requestId === requestIdRef.current) {
+      setIsLoading(false);
+      setIsRefreshing(false);
+    }
+  }
+
+  async function loadAdjacentWindow(direction: "previous" | "next"): Promise<void> {
+    if (!canInteract || isLoading || isLoadingPrevious || isLoadingNext) {
+      return;
+    }
+
+    const baseWeeks = timeline?.weeks.length ?? fallbackWeeks.length;
+    const remainingWeeks = MAX_EXPANDED_WEEKS - baseWeeks;
+    if (remainingWeeks <= 0) {
+      setRangeLimitMessage("Maximum timeline range loaded.");
+      return;
+    }
+    const requestWeeks = Math.min(DEFAULT_WINDOW_WEEKS, remainingWeeks);
+
+    setRangeLimitMessage(null);
+    const requestId = ++requestIdRef.current;
+
+    const effectiveStart = timeline?.startDate ?? fallbackWeeks[0]?.weekStart ?? clampInitialAnchor(visibleStart);
+    const effectiveEnd =
+      timeline?.endDate ?? fallbackWeeks[fallbackWeeks.length - 1]?.weekEnd ?? addDays(effectiveStart, DEFAULT_WINDOW_WEEKS * 7 - 1);
+
+    const adjacentStart =
+      direction === "previous"
+        ? addDays(mondayOfIsoDate(effectiveStart), -requestWeeks * 7)
+        : addDays(mondayOfIsoDate(effectiveEnd), 1);
+    const adjacentEnd = addDays(adjacentStart, requestWeeks * 7 - 1);
+    const cacheKey = buildTimelineCacheKey(accountCode, adjacentStart, adjacentEnd);
+
+    if (loadedWindowKeysRef.current.has(cacheKey)) {
+      return;
+    }
+
+    if (direction === "previous") {
+      setIsLoadingPrevious(true);
+    } else {
+      setIsLoadingNext(true);
+    }
+
+    await fetchWindow({
+      startDate: adjacentStart,
+      endDate: adjacentEnd,
+      mode: direction === "previous" ? "prepend" : "append",
+      policy: "stale-while-revalidate",
+      requestId,
+    });
+
+    if (requestId === requestIdRef.current) {
+      if (direction === "previous") {
+        setIsLoadingPrevious(false);
+      } else {
+        setIsLoadingNext(false);
+      }
+    }
+  }
+
+  async function handleRefreshVisibleWindows(): Promise<void> {
+    if (!accountCode || !timeline || !timeline.weeks.length) {
+      return;
+    }
+
+    const requestId = ++requestIdRef.current;
+    setIsRefreshing(true);
+
+    const windows = loadedWindowsRef.current.map((windowValue, index) => ({
+      start: windowValue.start,
+      end: windowValue.end,
+      mode: index === 0 ? ("replace" as const) : ("append" as const),
+    }));
+    if (!windows.length) {
+      return;
+    }
+
+    loadedWindowKeysRef.current = new Set();
+    loadedWindowsRef.current = [];
+
+    for (const windowRequest of windows) {
+      await fetchWindow({
+        startDate: windowRequest.start,
+        endDate: windowRequest.end,
+        mode: windowRequest.mode,
+        policy: "network-only",
+        requestId,
+      });
+      if (requestId !== requestIdRef.current) {
+        break;
+      }
+    }
+
+    if (requestId === requestIdRef.current) {
+      setIsRefreshing(false);
+    }
+  }
+
+  function handleCurrentPeriod(): void {
+    if (visibleStart === currentWeekStart) {
+      void loadInitialWindow("stale-while-revalidate");
+      return;
+    }
+    setVisibleStart(currentWeekStart);
+  }
+
+  useEffect(() => {
+    if (!accountCode) {
+      setTimeline(null);
+      setCacheStatus(null);
+      setError(null);
+      setIsLoading(false);
+      setIsRefreshing(false);
+      setIsLoadingPrevious(false);
+      setIsLoadingNext(false);
+      setRangeLimitMessage(null);
+      loadedWindowKeysRef.current = new Set();
+      loadedWindowsRef.current = [];
+      return;
+    }
+
+    if (isCollapsed) {
+      return;
+    }
+
+    void loadInitialWindow("stale-while-revalidate");
+  }, [accountCode, isCollapsed, visibleStart]);
 
   return (
     <>
       <Card>
         <CardHeader className="border-b border-blue-100 bg-secondary/60 py-4">
-          <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="flex items-center justify-between gap-3">
             <CardTitle className="flex items-center gap-3">
               <CalendarRange className="size-5 text-blue-600" />
               <span className="text-lg font-semibold text-blue-700">Schedule Timeline</span>
             </CardTitle>
-            <div className="flex items-center gap-2">
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setVisibleStart((current) => addDays(current, -DEFAULT_WINDOW_WEEKS * 7))}
-                disabled={!canInteract || isLoading}
-              >
-                <ChevronLeft className="size-4" />
-                Previous period
-              </Button>
-              <Button
-                variant="outline"
-                size="sm"
-                onClick={() => setVisibleStart((current) => addDays(current, DEFAULT_WINDOW_WEEKS * 7))}
-                disabled={!canInteract || isLoading}
-              >
-                Next period
-                <ChevronRight className="size-4" />
-              </Button>
-              <Button
-                variant="secondary"
-                size="sm"
-                onClick={() => setVisibleStart(currentWeekStart)}
-                disabled={!canInteract || isLoading}
-              >
-                Current period
-              </Button>
-              <Button
-                variant="ghost"
-                size="icon"
-                aria-label={isCollapsed ? "Expand schedule timeline" : "Collapse schedule timeline"}
-                onClick={() => setIsCollapsed((current) => !current)}
-              >
-                {isCollapsed ? <ChevronDown className="size-4" /> : <ChevronUp className="size-4" />}
-              </Button>
-            </div>
+            <ActionIconButton
+              aria-label={isCollapsed ? "Expand schedule timeline" : "Collapse schedule timeline"}
+              tooltip={isCollapsed ? "Expand timeline" : "Collapse timeline"}
+              onClick={() => setIsCollapsed((current) => !current)}
+              icon={isCollapsed ? <ChevronDown className="size-5" /> : <ChevronUp className="size-5" />}
+            />
           </div>
-          <p className="pt-2 text-sm text-slate-600">
-            Weekly broadcast schedule activity by station and estimate number.
-          </p>
-          <p className="text-xs font-medium text-slate-500">
-            {periodText} · Bounded window ({DEFAULT_WINDOW_WEEKS} weeks default, {MAX_WINDOW_WEEKS} weeks max)
-          </p>
+          {rangeLimitMessage ? <p className="pt-1 text-xs text-slate-500">{rangeLimitMessage}</p> : null}
         </CardHeader>
 
         {!isCollapsed ? (
           <CardContent className="space-y-4 p-5">
+            <div className="flex items-center justify-end">
+              <div className="flex items-center gap-1">
+                <ActionIconButton
+                  aria-label="Load previous period"
+                  tooltip="Load previous period"
+                  onClick={() => {
+                    void loadAdjacentWindow("previous");
+                  }}
+                  disabled={!canInteract || isLoading || isLoadingPrevious || maxReached}
+                  icon={
+                    isLoadingPrevious ? (
+                      <Loader2 className="size-5 animate-spin" />
+                    ) : (
+                      <ChevronLeft className="size-5" />
+                    )
+                  }
+                />
+                <ActionIconButton
+                  aria-label="Current period"
+                  tooltip="Current period"
+                  onClick={handleCurrentPeriod}
+                  disabled={!canInteract || isLoading}
+                  icon={<CalendarRange className="size-5" />}
+                />
+                <ActionIconButton
+                  aria-label="Load next period"
+                  tooltip="Load next period"
+                  onClick={() => {
+                    void loadAdjacentWindow("next");
+                  }}
+                  disabled={!canInteract || isLoading || isLoadingNext || maxReached}
+                  icon={
+                    isLoadingNext ? (
+                      <Loader2 className="size-5 animate-spin" />
+                    ) : (
+                      <ChevronRight className="size-5" />
+                    )
+                  }
+                />
+              </div>
+            </div>
+
+            <>
             {!accountCode ? (
               <p className="text-sm text-slate-500">Load an account to view schedule timeline.</p>
             ) : null}
@@ -663,7 +1025,7 @@ export function ScheduleTimelineSection({
 
             {accountCode && items.length > 0 ? (
               <div className="overflow-hidden rounded-lg border border-slate-200">
-                <div className="max-h-[30rem] overflow-auto">
+                <div ref={scrollContainerRef} className="max-h-[32rem] overflow-auto">
                   <div className="min-w-max" style={{ width: LABEL_COLUMN_PX + timelinePixelWidth }}>
                     <div className="sticky top-0 z-30 border-b border-slate-200 bg-slate-100/95 backdrop-blur">
                       <div className="flex h-8 border-b border-slate-200">
@@ -671,7 +1033,7 @@ export function ScheduleTimelineSection({
                           className="sticky left-0 z-40 flex items-center border-r border-slate-200 bg-slate-100 px-3 text-xs font-semibold uppercase tracking-wide text-slate-600"
                           style={{ width: LABEL_COLUMN_PX, minWidth: LABEL_COLUMN_PX }}
                         >
-                          Station / EstNum
+                          EstNum / Station
                         </div>
                         <div className="flex" style={{ width: timelinePixelWidth, minWidth: timelinePixelWidth }}>
                           {monthGroups.map((group) => (
@@ -710,66 +1072,143 @@ export function ScheduleTimelineSection({
                     </div>
 
                     <div>
-                      {items.map((item) => {
-                        const color = colorForRow(`${item.stationCode}:${item.estNum}`);
-                        const segments = buildSegments(item.activeWeeks, weekIndexByStart);
+                      {groupedRows.map((group) => {
+                        const collapsed = isGroupCollapsed(group.estNum);
+                        const groupActiveWeeks = [...new Set(group.stations.flatMap((station) => station.activeWeeks))].sort();
+                        const groupSegments = buildSegments(groupActiveWeeks, weekIndexByStart);
+                        const groupColor = colorForRow(`group:${group.estNum}`);
 
                         return (
-                          <div key={`${item.stationCode}:${item.estNum}`} className="flex border-b border-slate-200 last:border-b-0">
-                            <div
-                              className="sticky left-0 z-20 border-r border-slate-200 bg-white px-3 py-2"
-                              style={{ width: LABEL_COLUMN_PX, minWidth: LABEL_COLUMN_PX }}
+                          <div key={`group:${group.estNum}`} className="border-b border-slate-200 last:border-b-0">
+                            <button
+                              type="button"
+                              className="flex w-full border-b border-slate-200 bg-slate-50/60 text-left hover:bg-slate-100/70"
+                              aria-label={collapsed ? `Expand EstNum ${group.estNum}` : `Collapse EstNum ${group.estNum}`}
+                              onClick={() => setGroupCollapsed(group.estNum, !collapsed)}
                             >
-                              <p className="text-sm font-medium text-slate-900">
-                                {item.stationCode} · {item.estNum}
-                              </p>
-                              <p className="text-xs text-slate-500">{item.stationName || "Station name unavailable"}</p>
-                            </div>
-
-                            <div className="relative h-14" style={{ width: timelinePixelWidth, minWidth: timelinePixelWidth }}>
-                              <div className="absolute inset-0 flex">
-                                {weeks.map((week) => {
-                                  const isCurrentWeek = week.weekStart === currentWeekStart;
-                                  return (
-                                    <div
-                                      key={`${item.stationCode}:${item.estNum}:${week.weekStart}`}
-                                      className={`h-full border-r border-slate-200 ${isCurrentWeek ? "bg-blue-50/70" : "bg-white"}`}
-                                      style={{ width: WEEK_COLUMN_PX, minWidth: WEEK_COLUMN_PX }}
-                                    />
-                                  );
-                                })}
+                              <div
+                                className="sticky left-0 z-20 flex items-center gap-2 border-r border-slate-200 bg-slate-50 px-3 py-2"
+                                style={{ width: LABEL_COLUMN_PX, minWidth: LABEL_COLUMN_PX }}
+                              >
+                                <span className="inline-flex size-6 items-center justify-center text-slate-600">
+                                  {collapsed ? <ChevronRight className="size-3" /> : <ChevronDown className="size-3" />}
+                                </span>
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-semibold text-slate-900">EstNum {group.estNum}</p>
+                                  <p className="truncate text-xs text-slate-500">{group.estNumName}</p>
+                                  {group.estNumNote ? (
+                                    <p className="truncate text-xs text-slate-500">{group.estNumNote}</p>
+                                  ) : null}
+                                </div>
                               </div>
 
-                              {segments.map((segment, segmentIndex) => {
-                                const left = segment.startIndex * WEEK_COLUMN_PX + 6;
-                                const width = (segment.endIndex - segment.startIndex + 1) * WEEK_COLUMN_PX - 12;
-                                const rangeStart = segment.activeWeeks[0] ?? weeks[segment.startIndex]?.weekStart ?? "";
-                                const rangeEnd = segment.activeWeeks[segment.activeWeeks.length - 1] ?? weeks[segment.endIndex]?.weekEnd ?? "";
+                              <div className="relative h-12" style={{ width: timelinePixelWidth, minWidth: timelinePixelWidth }}>
+                                <div className="absolute inset-0 flex">
+                                  {weeks.map((week) => {
+                                    const isCurrentWeek = week.weekStart === currentWeekStart;
+                                    return (
+                                      <div
+                                        key={`group:${group.estNum}:${week.weekStart}`}
+                                        className={`h-full border-r border-slate-200 ${isCurrentWeek ? "bg-blue-50/70" : "bg-slate-50/20"}`}
+                                        style={{ width: WEEK_COLUMN_PX, minWidth: WEEK_COLUMN_PX }}
+                                      />
+                                    );
+                                  })}
+                                </div>
+                                {collapsed
+                                  ? groupSegments.map((segment, segmentIndex) => {
+                                      const left = segment.startIndex * WEEK_COLUMN_PX + 6;
+                                      const width = (segment.endIndex - segment.startIndex + 1) * WEEK_COLUMN_PX - 12;
+                                      const rangeStart =
+                                        segment.activeWeeks[0] ?? weeks[segment.startIndex]?.weekStart ?? "";
+                                      const rangeEnd =
+                                        segment.activeWeeks[segment.activeWeeks.length - 1] ??
+                                        weeks[segment.endIndex]?.weekEnd ??
+                                        "";
+                                      return (
+                                        <div
+                                          key={`group:${group.estNum}:segment:${segmentIndex}`}
+                                          className="absolute top-2.5 h-7 rounded-full border shadow-sm"
+                                          style={{
+                                            left,
+                                            width: Math.max(width, 16),
+                                            backgroundColor: groupColor.background,
+                                            borderColor: groupColor.border,
+                                          }}
+                                          title={`EstNum ${group.estNum} · ${formatIsoDateMmDdYyyy(rangeStart)} to ${formatIsoDateMmDdYyyy(rangeEnd)}`}
+                                        />
+                                      );
+                                    })
+                                  : null}
+                              </div>
+                            </button>
 
-                                return (
-                                  <button
-                                    key={`${item.stationCode}:${item.estNum}:segment:${segmentIndex}`}
-                                    type="button"
-                                    className="absolute top-3 h-8 rounded-full border shadow-sm transition-all hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                    style={{
-                                      left,
-                                      width: Math.max(width, 16),
-                                      backgroundColor: color.background,
-                                      borderColor: color.border,
-                                    }}
-                                    title={`${item.stationCode} · ${item.estNum} · ${rangeStart} to ${rangeEnd}`}
-                                    onClick={() =>
-                                      setSelectedDetail({
-                                        item,
-                                        segment,
-                                        rangeStart,
-                                        rangeEnd,
-                                      })
-                                    }
-                                  />
-                                );
-                              })}
-                            </div>
+                            {!collapsed
+                              ? group.stations.map((item) => {
+                                  const color = colorForRow(`${item.stationCode}:${item.estNum}`);
+                                  const segments = buildSegments(item.activeWeeks, weekIndexByStart);
+
+                                  return (
+                                    <div key={`${item.stationCode}:${item.estNum}`} className="flex border-b border-slate-200 last:border-b-0">
+                                      <div
+                                        className="sticky left-0 z-20 border-r border-slate-200 bg-white px-3 py-2"
+                                        style={{ width: LABEL_COLUMN_PX, minWidth: LABEL_COLUMN_PX }}
+                                      >
+                                        <p className="text-sm font-medium text-slate-900">{item.stationCode}</p>
+                                        <p className="text-xs text-slate-500">{item.stationName || "Station name unavailable"}</p>
+                                      </div>
+
+                                      <div className="relative h-14" style={{ width: timelinePixelWidth, minWidth: timelinePixelWidth }}>
+                                        <div className="absolute inset-0 flex">
+                                          {weeks.map((week) => {
+                                            const isCurrentWeek = week.weekStart === currentWeekStart;
+                                            return (
+                                              <div
+                                                key={`${item.stationCode}:${item.estNum}:${week.weekStart}`}
+                                                className={`h-full border-r border-slate-200 ${isCurrentWeek ? "bg-blue-50/70" : "bg-white"}`}
+                                                style={{ width: WEEK_COLUMN_PX, minWidth: WEEK_COLUMN_PX }}
+                                              />
+                                            );
+                                          })}
+                                        </div>
+
+                                        {segments.map((segment, segmentIndex) => {
+                                          const left = segment.startIndex * WEEK_COLUMN_PX + 6;
+                                          const width = (segment.endIndex - segment.startIndex + 1) * WEEK_COLUMN_PX - 12;
+                                          const rangeStart = segment.activeWeeks[0] ?? weeks[segment.startIndex]?.weekStart ?? "";
+                                          const rangeEnd =
+                                            segment.activeWeeks[segment.activeWeeks.length - 1] ??
+                                            weeks[segment.endIndex]?.weekEnd ??
+                                            "";
+
+                                          return (
+                                            <button
+                                              key={`${item.stationCode}:${item.estNum}:segment:${segmentIndex}`}
+                                              type="button"
+                                              className="absolute top-3 h-8 rounded-full border shadow-sm transition-all hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                              style={{
+                                                left,
+                                                width: Math.max(width, 16),
+                                                backgroundColor: color.background,
+                                                borderColor: color.border,
+                                              }}
+                                              title={`${item.stationCode} · ${item.estNum} · ${rangeStart} to ${rangeEnd}`}
+                                              onClick={() =>
+                                                setSelectedDetail({
+                                                  item,
+                                                  segment,
+                                                  rangeStart,
+                                                  rangeEnd,
+                                                })
+                                              }
+                                            />
+                                          );
+                                        })}
+                                      </div>
+                                    </div>
+                                  );
+                                })
+                              : null}
                           </div>
                         );
                       })}
@@ -780,20 +1219,21 @@ export function ScheduleTimelineSection({
             ) : null}
 
             {statusText ? (
-              <div className="flex justify-end">
+              <div className="flex justify-start">
                 <CacheStatusChip
                   text={statusText}
                   onRefresh={() => {
-                    void fetchTimeline("network-only");
+                    void handleRefreshVisibleWindows();
                   }}
-                  disabled={!canInteract || isRefreshing || isLoading}
+                  disabled={!canInteract || isRefreshing || isLoading || isLoadingNext || isLoadingPrevious}
                   refreshing={isRefreshing}
                   refreshLabel="Refresh timeline"
-                  tooltipText="Refresh timeline for the current account and visible range"
+                  tooltipText="Refresh timeline for the current account and loaded visible range"
                   className="max-w-[min(90vw,34rem)]"
                 />
               </div>
             ) : null}
+            </>
           </CardContent>
         ) : null}
       </Card>
