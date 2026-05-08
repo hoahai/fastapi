@@ -17,15 +17,25 @@ import { Button } from "@/components/ui/button";
 import { CacheStatusChip } from "@/components/ui/cache-status-chip";
 import { useToast } from "@/components/ui/toast";
 import { useApiRequest } from "@/hooks/useApiRequest";
-import { readBrowserCacheSnapshot, removeBrowserCache, writeBrowserCache } from "@/lib/browserCache";
+import { usePersistentState } from "@/hooks/usePersistentState";
+import {
+  listBrowserCacheSnapshotsByPrefix,
+  readBrowserCacheSnapshot,
+  removeBrowserCache,
+  writeBrowserCache,
+} from "@/lib/browserCache";
 import { shouldFetchNetwork, type CachePolicy } from "@shared/cache";
 import { hasAtLeastOneSearchCriterion, shouldFetchSubmittedSearchNetwork } from "@shared/search";
 
 const CONTACTS_SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
 const CONTACT_DETAIL_CACHE_TTL_MS = 5 * 60 * 1000;
+const CONTACTS_SEARCH_COLLECTION_PREFIX = "contacts:search:";
+const CONTACTS_SEARCH_COLLECTION_LIMIT = 40;
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspace.sidebar.collapsed";
 const LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY = "tradsphere:ui:sidebarCollapsed:v1";
 const SIDEBAR_COLLAPSED_EVENT = "workspace-sidebar-collapsed-change";
+const CONTACTS_SEARCH_DRAFT_STORAGE_KEY = "tradsphere.contacts.searchDraft.v1";
+const CONTACTS_SUBMITTED_SEARCH_STORAGE_KEY = "tradsphere.contacts.submittedSearch.v1";
 
 type SearchUiState = "idle" | "loading" | "ready" | "empty" | "error";
 
@@ -179,6 +189,19 @@ function normalizeSearchForm(draft: ContactSearchFormValues): ContactSearchFormV
   };
 }
 
+function isContactSearchFormValues(value: unknown): value is ContactSearchFormValues {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.name === "string" &&
+    typeof value.email === "string" &&
+    typeof value.company === "string" &&
+    typeof value.phone === "string" &&
+    typeof value.station === "string"
+  );
+}
+
 function encodeKeyPart(value: string): string {
   return encodeURIComponent(value.trim().toLowerCase());
 }
@@ -311,6 +334,181 @@ function buildSearchSubmission(draft: ContactSearchFormValues): BuildSearchResul
     submitted: {
       params: normalized,
       cacheKey: buildSearchCacheKey(normalized),
+    },
+  };
+}
+
+function isSubmittedSearch(value: unknown): value is SubmittedSearch {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return isContactSearchFormValues(value.params) && typeof value.cacheKey === "string";
+}
+
+function normalizeSearchText(value: string): string {
+  return value.trim().toLowerCase();
+}
+
+function normalizePhoneText(value: string): string {
+  return value.replace(/\D+/g, "");
+}
+
+function isContactMatchSubmittedSearch(contact: ContactRecord, submitted: SubmittedSearch): boolean {
+  const params = submitted.params;
+
+  const nameQuery = normalizeSearchText(params.name);
+  if (nameQuery) {
+    const nameCandidates = [
+      contact.fullName,
+      contact.firstName,
+      contact.lastName,
+      [contact.firstName, contact.lastName].filter(Boolean).join(" "),
+    ]
+      .map((item) => normalizeSearchText(asString(item)))
+      .filter(Boolean);
+    if (!nameCandidates.some((item) => item.includes(nameQuery))) {
+      return false;
+    }
+  }
+
+  const emailQuery = normalizeSearchText(params.email);
+  if (emailQuery) {
+    const email = normalizeSearchText(asString(contact.email));
+    if (!email.includes(emailQuery)) {
+      return false;
+    }
+  }
+
+  const companyQuery = normalizeSearchText(params.company);
+  if (companyQuery) {
+    const company = normalizeSearchText(asString(contact.company));
+    if (!company.includes(companyQuery)) {
+      return false;
+    }
+  }
+
+  const phoneQuery = normalizePhoneText(params.phone);
+  if (phoneQuery) {
+    const phoneCandidates = [contact.office, contact.cell]
+      .map((value) => normalizePhoneText(asString(value)))
+      .filter(Boolean);
+    if (!phoneCandidates.some((value) => value.includes(phoneQuery))) {
+      return false;
+    }
+  }
+
+  const stationQuery = normalizeSearchText(params.station);
+  if (stationQuery) {
+    const stationCandidates = [
+      ...contact.stationCodes,
+      ...contact.usage.map((item) => item.stationCode),
+      ...contact.usage.map((item) => item.stationName),
+    ]
+      .map((value) => normalizeSearchText(asString(value)))
+      .filter(Boolean);
+    if (!stationCandidates.some((value) => value.includes(stationQuery))) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+function sortContactRecords(items: ContactRecord[]): ContactRecord[] {
+  return [...items].sort((a, b) => {
+    const nameDiff = buildContactFullName(a).localeCompare(buildContactFullName(b));
+    if (nameDiff !== 0) {
+      return nameDiff;
+    }
+    return asString(a.email).localeCompare(asString(b.email));
+  });
+}
+
+function buildLocalCachedContactsResult(submitted: SubmittedSearch): {
+  contacts: ContactRecord[];
+  fetchedAt: number | null;
+  isPartial: boolean;
+} {
+  const exactSnapshot = readBrowserCacheSnapshot<ContactRecord[]>(submitted.cacheKey);
+  const exactContacts = normalizeContactRecords(exactSnapshot?.data);
+  const deduped: ContactRecord[] = [];
+  const seen = new Set<number>();
+  let newestFetchedAt = exactSnapshot?.fetchedAt ?? 0;
+
+  const appendContact = (contact: ContactRecord) => {
+    if (seen.has(contact.id)) {
+      return;
+    }
+    seen.add(contact.id);
+    deduped.push(contact);
+  };
+
+  for (const contact of exactContacts) {
+    appendContact(contact);
+  }
+
+  const cacheEntries = listBrowserCacheSnapshotsByPrefix<ContactRecord[]>(
+    CONTACTS_SEARCH_COLLECTION_PREFIX,
+    {
+      allowExpired: true,
+      limit: CONTACTS_SEARCH_COLLECTION_LIMIT,
+    },
+  );
+
+  for (const entry of cacheEntries) {
+    newestFetchedAt = Math.max(newestFetchedAt, entry.snapshot.fetchedAt);
+    const contacts = normalizeContactRecords(entry.snapshot.data);
+    for (const contact of contacts) {
+      if (!isContactMatchSubmittedSearch(contact, submitted)) {
+        continue;
+      }
+      appendContact(contact);
+    }
+  }
+
+  if (deduped.length === 0 && exactSnapshot && Array.isArray(exactSnapshot.data)) {
+    return {
+      contacts: [],
+      fetchedAt: exactSnapshot.fetchedAt,
+      isPartial: false,
+    };
+  }
+
+  return {
+    contacts: sortContactRecords(deduped),
+    fetchedAt: newestFetchedAt || null,
+    isPartial: exactContacts.length === 0 && deduped.length > 0,
+  };
+}
+
+function resolveInitialContactsSearchView(submittedSearch: SubmittedSearch | null): {
+  state: SearchUiState;
+  contacts: ContactRecord[];
+  cacheStatus: CacheStatus | null;
+} {
+  if (!submittedSearch) {
+    return {
+      state: "idle",
+      contacts: [],
+      cacheStatus: null,
+    };
+  }
+
+  const localResult = buildLocalCachedContactsResult(submittedSearch);
+  if (!localResult.contacts.length && localResult.fetchedAt === null) {
+    return {
+      state: "idle",
+      contacts: [],
+      cacheStatus: null,
+    };
+  }
+
+  return {
+    state: localResult.contacts.length ? "ready" : "empty",
+    contacts: localResult.contacts,
+    cacheStatus: {
+      source: "cache",
+      fetchedAt: localResult.fetchedAt ?? Date.now(),
     },
   };
 }
@@ -858,17 +1056,25 @@ export default function ContactsPage() {
   const { requestJson } = useApiRequest();
   const requestHeaders = useMemo(() => buildAuthHeaders(false), []);
 
-  const [draft, setDraft] = useState<ContactSearchFormValues>(INITIAL_SEARCH_FORM);
-  const [submittedSearch, setSubmittedSearch] = useState<SubmittedSearch | null>(null);
+  const [draft, setDraft] = usePersistentState<ContactSearchFormValues>(
+    CONTACTS_SEARCH_DRAFT_STORAGE_KEY,
+    INITIAL_SEARCH_FORM,
+    { storage: "session", validate: isContactSearchFormValues },
+  );
+  const [submittedSearch, setSubmittedSearch] = usePersistentState<SubmittedSearch | null>(
+    CONTACTS_SUBMITTED_SEARCH_STORAGE_KEY,
+    null,
+    { storage: "session", validate: (value): value is SubmittedSearch | null => value === null || isSubmittedSearch(value) },
+  );
   const [submissionVersion, setSubmissionVersion] = useState(0);
   const [searchMessage, setSearchMessage] = useState<string | null>(null);
   const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
 
-  const [state, setState] = useState<SearchUiState>("idle");
+  const [state, setState] = useState<SearchUiState>(() => resolveInitialContactsSearchView(submittedSearch).state);
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
-  const [contacts, setContacts] = useState<ContactRecord[]>([]);
-  const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null);
+  const [contacts, setContacts] = useState<ContactRecord[]>(() => resolveInitialContactsSearchView(submittedSearch).contacts);
+  const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(() => resolveInitialContactsSearchView(submittedSearch).cacheStatus);
   const [modalDetailCacheStatus, setModalDetailCacheStatus] = useState<CacheStatus | null>(null);
   const [isModalDetailRefreshing, setIsModalDetailRefreshing] = useState(false);
 
@@ -885,8 +1091,11 @@ export default function ContactsPage() {
 
   const groups = useMemo(() => buildGroups(contacts), [contacts]);
   const resultText = contacts.length ? formatResultText(contacts.length) : null;
+  const normalizedDraft = useMemo(() => normalizeSearchForm(draft), [draft]);
+  const canClearDraft = useMemo(() => hasAtLeastOneSearchCriterion(normalizedDraft), [normalizedDraft]);
   const draftSearchResult = useMemo(() => buildSearchSubmission(draft), [draft]);
   const canSubmitSearch = draftSearchResult.ok;
+  const shouldShowBlockingResultsOverlay = state === "loading" && contacts.length === 0;
 
   const cacheStatusText = isRefreshing
     ? "Refreshing..."
@@ -1130,6 +1339,7 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
     const snapshot = readBrowserCacheSnapshot<ContactRecord[]>(cacheKey);
     const snapshotSearchData = snapshot?.data;
     const normalizedSnapshotData = snapshotSearchData ? normalizeContactRecords(snapshotSearchData) : [];
+    const localCacheResult = buildLocalCachedContactsResult(activeSearch);
     const hasInvalidSnapshotShape =
       snapshotSearchData !== null &&
       snapshotSearchData !== undefined &&
@@ -1141,16 +1351,19 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
       removeBrowserCache(cacheKey);
     }
 
-    if (normalizedSnapshotData.length > 0 && options.policy !== "network-only") {
-      setContacts(normalizedSnapshotData);
-      setState(normalizedSnapshotData.length ? "ready" : "empty");
+    if (localCacheResult.contacts.length > 0 && options.policy !== "network-only") {
+      setContacts(localCacheResult.contacts);
+      setState("ready");
       setError(null);
       setCacheStatus({
         source: "cache",
-        fetchedAt: snapshot?.fetchedAt ?? Date.now(),
+        fetchedAt: localCacheResult.fetchedAt ?? Date.now(),
       });
-    } else {
+      setRefreshMessage(localCacheResult.isPartial ? "Cached matches shown while refreshing." : null);
+    } else if (options.policy !== "network-only") {
       setContacts([]);
+      setState("empty");
+      setCacheStatus(null);
     }
 
     const shouldFetch = shouldFetchSubmittedSearchNetwork(options.policy, effectiveSnapshot);
@@ -1158,11 +1371,12 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
       return;
     }
 
-    if (normalizedSnapshotData.length > 0) {
+    if (localCacheResult.contacts.length > 0) {
       setIsRefreshing(true);
     } else {
       setState("loading");
       setError(null);
+      setRefreshMessage(null);
     }
 
     const requestKey = `${cacheKey}:first`;
@@ -1193,7 +1407,7 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
       if (requestToken !== requestTokenRef.current) {
         return;
       }
-      const hasVisibleCachedResults = normalizedSnapshotData.length > 0;
+      const hasVisibleCachedResults = localCacheResult.contacts.length > 0;
       if (hasVisibleCachedResults) {
         setRefreshMessage("Showing cached results. Could not refresh.");
         setState("ready");
@@ -1251,7 +1465,7 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
     setRefreshMessage(null);
     const isSameSearch = submittedSearch?.cacheKey === result.submitted.cacheKey;
     if (isSameSearch) {
-      void loadSearchData({ policy: "network-only" }, result.submitted);
+      void loadSearchData({ policy: "stale-while-revalidate" }, result.submitted);
       return;
     }
 
@@ -1260,9 +1474,24 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
   }
 
   function handleClearSearch() {
+    const draftCacheKey = buildSearchCacheKey(normalizedDraft);
+    const shouldClearSubmittedResults = Boolean(submittedSearch && submittedSearch.cacheKey === draftCacheKey);
+
     setDraft(INITIAL_SEARCH_FORM);
     setSearchMessage(null);
     setRefreshMessage(null);
+
+    if (!shouldClearSubmittedResults) {
+      return;
+    }
+
+    requestTokenRef.current += 1;
+    setSubmittedSearch(null);
+    setState("idle");
+    setContacts([]);
+    setError(null);
+    setCacheStatus(null);
+    setIsRefreshing(false);
   }
 
   function handleRefreshSearch() {
@@ -1366,10 +1595,11 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
         onSubmit={handleSubmitSearch}
         onClear={handleClearSearch}
         canSubmit={canSubmitSearch}
+        canClear={canClearDraft}
         searching={state === "loading"}
         disabled={isRefreshing}
         resultText={resultText}
-        message={searchMessage ?? (!draftSearchResult.ok ? draftSearchResult.message : null)}
+        message={searchMessage}
       />
 
       {refreshMessage ? (
@@ -1387,11 +1617,11 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
           onViewUsage={handleViewUsage}
         />
 
-        {state === "loading" || isRefreshing ? (
+        {shouldShowBlockingResultsOverlay ? (
           <div className="absolute inset-0 z-20 flex items-center justify-center rounded-2xl bg-white/70 backdrop-blur-[1px]">
             <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-medium text-slate-700 shadow-soft">
               <Loader2 className="size-4 animate-spin text-blue-600" />
-              <span>{isRefreshing ? "Refreshing contacts..." : "Searching contacts..."}</span>
+              <span>Searching contacts...</span>
             </div>
           </div>
         ) : null}

@@ -14,6 +14,7 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { canModalClose, shouldBlockOutsideClose } from "@/components/ui/modal-close-guard";
+import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { UnsavedChangesDialog } from "@/components/ui/unsaved-changes-dialog";
 import { useToast } from "@/components/ui/toast";
@@ -43,6 +44,7 @@ const DEFAULT_LANGUAGE = "English";
 const DEFAULT_DEADLINE = "10 AM";
 const DEFAULT_DELIVERY_METHOD_ID = 1;
 const DEFAULT_CONTACT_TYPE = "REP";
+const FALLBACK_CONTACT_TYPE_OPTIONS = ["REP", "TRAFFIC", "BILLING"] as const;
 const DELIVERY_METHOD_PASSWORD_STORED = "Stored";
 const DELIVERY_METHOD_PASSWORD_NOT_SET = "Not set";
 const SHARED_LABEL_CLASS = "text-sm font-medium leading-5 text-slate-600";
@@ -92,6 +94,8 @@ type DeliveryMethodEditorForm = {
 
 type ContactEditorForm = {
   contactType: string;
+  firstName: string;
+  lastName: string;
   fullName: string;
   email: string;
   office: string;
@@ -298,6 +302,67 @@ function normalizeContactType(value: unknown): string {
   return normalized;
 }
 
+function composeFullName(firstName: string, lastName: string): string {
+  return [asString(firstName), asString(lastName)].filter(Boolean).join(" ").trim();
+}
+
+function toNameCase(value: string): string {
+  const raw = asString(value).replace(/\s+/g, " ");
+  if (!raw) {
+    return "";
+  }
+  let output = "";
+  let shouldUppercase = true;
+  for (const character of raw.toLowerCase()) {
+    if (character >= "a" && character <= "z") {
+      output += shouldUppercase ? character.toUpperCase() : character;
+      shouldUppercase = false;
+      continue;
+    }
+    output += character;
+    shouldUppercase =
+      character === " " ||
+      character === "-" ||
+      character === "'" ||
+      character === "’";
+  }
+  return output.trim();
+}
+
+function parseNameParts(fullName: string): { firstName: string; lastName: string } {
+  const parts = asString(fullName)
+    .split(/\s+/)
+    .map((part) => part.trim())
+    .filter(Boolean);
+  if (!parts.length) {
+    return { firstName: "", lastName: "" };
+  }
+  return {
+    firstName: parts[0],
+    lastName: parts.slice(1).join(" "),
+  };
+}
+
+function buildContactTypeOptions(values: unknown[]): Array<{ value: string; label: string }> {
+  const ordered: string[] = [];
+  const seen = new Set<string>();
+
+  for (const rawValue of [...FALLBACK_CONTACT_TYPE_OPTIONS, ...values]) {
+    const normalized = normalizeContactType(rawValue);
+    if (!normalized || seen.has(normalized)) {
+      continue;
+    }
+    seen.add(normalized);
+    ordered.push(normalized);
+  }
+
+  if (!seen.has(DEFAULT_CONTACT_TYPE)) {
+    ordered.unshift(DEFAULT_CONTACT_TYPE);
+  }
+
+  return ordered.map((value) => ({ value, label: value }));
+}
+
 function resolveDeliveryMethodPasswordStatus(value: unknown, fallbackStored = false): string {
   if (!isRecord(value)) {
     return fallbackStored ? DELIVERY_METHOD_PASSWORD_STORED : DELIVERY_METHOD_PASSWORD_NOT_SET;
@@ -402,6 +467,8 @@ function toComparableDeliveryMethodEditorForm(form: DeliveryMethodEditorForm): D
 function toComparableContactEditorForm(form: ContactEditorForm): ContactEditorForm {
   return {
     contactType: normalizeContactType(form.contactType),
+    firstName: asString(form.firstName),
+    lastName: asString(form.lastName),
     fullName: asString(form.fullName),
     email: asString(form.email).toLowerCase(),
     office: asString(form.office),
@@ -1160,9 +1227,14 @@ function buildDeliveryMethodEditorForm(source?: StationDraftDeliveryMethod | nul
 }
 
 function buildContactEditorForm(source?: StationDraftContact | null): ContactEditorForm {
+  const firstName = asString(source?.firstName);
+  const lastName = asString(source?.lastName);
+  const fullName = asString(source?.fullName) || composeFullName(firstName, lastName);
   return {
     contactType: normalizeContactType(source?.contactType),
-    fullName: asString(source?.fullName),
+    firstName,
+    lastName,
+    fullName,
     email: asString(source?.email),
     office: asString(source?.office),
     cell: asString(source?.cell),
@@ -1316,6 +1388,7 @@ export function StationModal({
   const [contactEditorBaseline, setContactEditorBaseline] = useState<ContactEditorForm>(buildContactEditorForm());
   const [contactEditorIndex, setContactEditorIndex] = useState<number | null>(null);
   const [contactEditorError, setContactEditorError] = useState<string | null>(null);
+  const [isContactEditorFullNameManuallyEdited, setIsContactEditorFullNameManuallyEdited] = useState(false);
   const [isContactEditorDiscardDialogOpen, setIsContactEditorDiscardDialogOpen] = useState(false);
 
   const [isAddExistingContactOpen, setIsAddExistingContactOpen] = useState(false);
@@ -1373,6 +1446,15 @@ export function StationModal({
     selectedExistingContactType,
     selectedExistingPrimaryContact,
   });
+  const contactTypeOptions = useMemo(
+    () =>
+      buildContactTypeOptions([
+        ...draft.contacts.map((contact) => contact.contactType),
+        contactEditorForm.contactType,
+        selectedExistingContactType,
+      ]),
+    [contactEditorForm.contactType, draft.contacts, selectedExistingContactType],
+  );
   const hasAddExistingContactChanges = !formsEqual(addExistingContactState, addExistingContactBaseline);
   const canAddExistingContact = Boolean(
     selectedExistingContactId &&
@@ -1435,6 +1517,7 @@ export function StationModal({
       setContactEditorBaseline(buildContactEditorForm());
       setContactEditorIndex(null);
       setContactEditorError(null);
+      setIsContactEditorFullNameManuallyEdited(false);
       setIsContactEditorDiscardDialogOpen(false);
       setIsAddExistingContactOpen(false);
       setExistingContactsCacheStatus(null);
@@ -2062,6 +2145,7 @@ export function StationModal({
     setContactEditorForm(initialForm);
     setContactEditorBaseline(initialForm);
     setContactEditorError(null);
+    setIsContactEditorFullNameManuallyEdited(false);
     setIsContactEditorOpen(true);
   }
 
@@ -2075,7 +2159,33 @@ export function StationModal({
     setContactEditorForm(initialForm);
     setContactEditorBaseline(initialForm);
     setContactEditorError(null);
+    setIsContactEditorFullNameManuallyEdited(false);
     setIsContactEditorOpen(true);
+  }
+
+  function updateContactEditorNameField(field: "firstName" | "lastName", value: string) {
+    setContactEditorForm((current) => {
+      const next = {
+        ...current,
+        [field]: value,
+      };
+      if (!isContactEditorFullNameManuallyEdited) {
+        next.fullName = composeFullName(next.firstName, next.lastName);
+      }
+      return next;
+    });
+  }
+
+  function applyContactEditorFullNameFromUserInput(rawValue: string) {
+    const normalizedFullName = toNameCase(rawValue);
+    const parsed = parseNameParts(normalizedFullName);
+    setContactEditorForm((current) => ({
+      ...current,
+      fullName: normalizedFullName,
+      firstName: toNameCase(parsed.firstName),
+      lastName: toNameCase(parsed.lastName),
+    }));
+    setIsContactEditorFullNameManuallyEdited(false);
   }
 
   function saveContactEditor() {
@@ -2122,8 +2232,8 @@ export function StationModal({
       linkNote: asNullableString(contactEditorForm.linkNote),
       contactType: normalizedType,
       contactId: baseContact?.contactId ?? null,
-      firstName: baseContact?.firstName ?? null,
-      lastName: baseContact?.lastName ?? null,
+      firstName: asNullableString(contactEditorForm.firstName),
+      lastName: asNullableString(contactEditorForm.lastName),
       fullName: normalizedFullName,
       email: normalizedEmail,
       office: asNullableString(contactEditorForm.office),
@@ -2917,13 +3027,44 @@ export function StationModal({
           </DialogHeader>
 
           <div className="space-y-3">
-            <LabeledField label="Name">
+            <LabeledField label="Full Name">
               <Input
                 value={contactEditorForm.fullName}
                 onChange={(event) => {
+                  setIsContactEditorFullNameManuallyEdited(true);
                   setContactEditorForm((current) => ({ ...current, fullName: event.target.value }));
                 }}
-                placeholder="Full name"
+                onBlur={(event) => applyContactEditorFullNameFromUserInput(event.target.value)}
+                onPaste={(event) => {
+                  const pasted = event.clipboardData.getData("text");
+                  if (!pasted.trim()) {
+                    return;
+                  }
+                  event.preventDefault();
+                  applyContactEditorFullNameFromUserInput(pasted);
+                }}
+                placeholder="Full Name"
+                autoComplete="off"
+                maxLength={255}
+              />
+            </LabeledField>
+            <LabeledField label="First Name">
+              <Input
+                value={contactEditorForm.firstName}
+                onChange={(event) => updateContactEditorNameField("firstName", event.target.value)}
+                onBlur={(event) => updateContactEditorNameField("firstName", toNameCase(event.target.value))}
+                placeholder="First Name"
+                autoComplete="off"
+                maxLength={255}
+              />
+            </LabeledField>
+            <LabeledField label="Last Name">
+              <Input
+                value={contactEditorForm.lastName}
+                onChange={(event) => updateContactEditorNameField("lastName", event.target.value)}
+                onBlur={(event) => updateContactEditorNameField("lastName", toNameCase(event.target.value))}
+                placeholder="Last Name"
+                autoComplete="off"
                 maxLength={255}
               />
             </LabeledField>
@@ -3002,6 +3143,22 @@ export function StationModal({
                 }}
                 placeholder="Contact note"
                 maxLength={2048}
+              />
+            </LabeledField>
+            <LabeledField
+              label={
+                <>
+                  Contact Type<RequiredMark />
+                </>
+              }
+            >
+              <Select
+                value={normalizeContactType(contactEditorForm.contactType)}
+                onValueChange={(value) => {
+                  setContactEditorForm((current) => ({ ...current, contactType: normalizeContactType(value) }));
+                  setContactEditorError(null);
+                }}
+                options={contactTypeOptions}
               />
             </LabeledField>
           </div>
@@ -3125,6 +3282,24 @@ export function StationModal({
                 )}
               </div>
             </div>
+
+            <LabeledField
+              label={
+                <>
+                  Contact Type<RequiredMark />
+                </>
+              }
+            >
+              <Select
+                value={normalizeContactType(selectedExistingContactType)}
+                onValueChange={(value) => {
+                  setSelectedExistingContactType(normalizeContactType(value));
+                  setExistingContactsError(null);
+                }}
+                options={contactTypeOptions}
+                disabled={isLoadingExistingContacts}
+              />
+            </LabeledField>
 
             <div className="sm:pl-[126px]">
               <label className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">

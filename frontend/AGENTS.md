@@ -54,12 +54,18 @@
   - ignore stale/out-of-order responses from older submissions
 - Search form validity rule (global across all apps/pages):
   - do not run search while typing; search runs only on submit
+  - do not show validation errors before user action on untouched empty search forms
   - search submit action must be hidden or disabled until the form is valid
+  - clear action must stay hidden until at least one search field has a value
   - empty/invalid search form submits must not trigger backend requests
   - when no required fields exist, require at least one searchable field value before enabling search
+  - page search state should be preserved when navigating away and back (draft, submitted params, current results, cache-status metadata)
 - Offline-friendly search rule:
   - if refresh fails and cached results exist, keep cached results visible and show a non-blocking cached-data message
   - if refresh fails and no cached results exist, show normal error state
+- Global loading-overlay rule:
+  - page-level blocking busy overlays are allowed only when there is no cache-backed data to render
+  - when cached data is visible and a background refresh is running, use non-blocking refresh indicators (for example cache-status chips), not blocking overlays
 - Manual refresh actions must use `network-only` and update cache on success.
 - Mutations (`create/update/delete`) must patch relevant cache entries and invalidate or mark related cache keys stale.
 - Never persist sensitive values (`passwords`, tokens, secrets) to `localStorage`/`sessionStorage`; use in-memory cache for sensitive data.

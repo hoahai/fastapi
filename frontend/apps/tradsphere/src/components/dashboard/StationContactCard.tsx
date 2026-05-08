@@ -33,6 +33,11 @@ function displayValue(value?: string | null): string {
   return text;
 }
 
+function displayContactType(value?: string | null): string {
+  const text = String(value ?? "").trim().toUpperCase();
+  return text || "REP";
+}
+
 function Field({
   label,
   value,
@@ -61,6 +66,7 @@ export function StationContactCard({
   const email = displayValue(contact.email);
   const office = displayValue(contact.office);
   const cell = displayValue(contact.cell);
+  const contactType = displayContactType(contact.contactType);
   const phoneFields = [
     office ? { label: "Office", value: office } : null,
     cell ? { label: "Cell", value: cell } : null,
@@ -70,7 +76,12 @@ export function StationContactCard({
   return (
     <article className="space-y-2 rounded-md border border-slate-200/80 bg-white/70 p-2.5">
       <div className="flex items-center justify-between gap-2">
-        <div>{contact.primaryContact ? <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">Primary</span> : null}</div>
+        <div className="flex items-center gap-1.5">
+          <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-medium text-slate-700">{contactType}</span>
+          {contact.primaryContact ? (
+            <span className="rounded-full bg-blue-100 px-1.5 py-0.5 text-[10px] font-medium text-blue-700">Primary</span>
+          ) : null}
+        </div>
         <div className="flex items-center gap-0.5">
           <ActionIconButton
             icon={<Trash2 />}

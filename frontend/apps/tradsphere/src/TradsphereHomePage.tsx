@@ -628,12 +628,14 @@ function App() {
         ? `Data source: ${dashboardCacheStatus.source}. Last updated ${formatRelativeTime(dashboardCacheStatus.fetchedAt)}.`
         : null;
   const pageCacheStatusText = dashboardStatusText ?? selectionsStatusText;
-  const isPageBusy = isLoadingSelections || isRefreshingSelections || isLoadingAccount || isRefreshingAccount || isSaving;
+  const shouldBlockForSelectionsLoad = isLoadingSelections && accountSelections.length === 0;
+  const shouldBlockForAccountLoad = isLoadingAccount && !hasLoadedDashboard;
+  const isPageBusy = shouldBlockForSelectionsLoad || shouldBlockForAccountLoad || isSaving;
   const pageBusyMessage = isSaving
     ? "Saving account changes..."
-    : isLoadingAccount || isRefreshingAccount
+    : shouldBlockForAccountLoad
       ? "Loading account dashboard..."
-      : "Loading account selections...";
+    : "Loading account selections...";
   const isAnyModalOpen = isScheduleModalOpen || isEstimateNumberModalOpen || isStationModalOpen || isScheduleUploadOpen;
 
   return (

@@ -13,6 +13,7 @@ type ContactSearchFormProps = {
   onSubmit: () => void;
   onClear: () => void;
   canSubmit: boolean;
+  canClear: boolean;
   searching: boolean;
   disabled?: boolean;
   resultText?: string | null;
@@ -25,6 +26,7 @@ export function ContactSearchForm({
   onSubmit,
   onClear,
   canSubmit,
+  canClear,
   searching,
   disabled,
   resultText,
@@ -93,9 +95,11 @@ export function ContactSearchForm({
 
         <div className="flex flex-wrap items-center justify-end gap-2">
           <p className="text-xs text-slate-500">{resultText ?? ""}</p>
-          <Button type="button" variant="outline" onClick={onClear} disabled={disabled || searching}>
-            Clear
-          </Button>
+          {canClear ? (
+            <Button type="button" variant="outline" onClick={onClear} disabled={disabled || searching}>
+              Clear
+            </Button>
+          ) : null}
           {canSubmit || searching ? (
             <Button type="submit" disabled={disabled || searching || !canSubmit}>
               {searching ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}

@@ -16,9 +16,12 @@ This app inherits global standards from `frontend/DESIGNS.md`.
 - Surface API/loading errors inline and close to related actions.
 - Preserve optimistic/local cache behaviors unless requirements change.
 - Search flows are submit-only: never run backend search while typing.
+- Do not show validation errors on untouched empty search forms.
 - Search submit button/action should stay hidden or disabled until the form is valid.
+- Search clear button/action should stay hidden until at least one field has a value.
 - Empty/invalid search should never trigger backend requests.
 - For forms without required fields, enable search only when at least one field is filled.
+- Preserve non-sensitive search page state across in-app route switches (draft, submitted params, results, cache metadata).
 - Submitted searches should be cache-first:
   - show matching cached results immediately when available
   - refresh in background from network for the same submitted params
@@ -27,6 +30,7 @@ This app inherits global standards from `frontend/DESIGNS.md`.
 - Offline-friendly behavior:
   - cached results + refresh failure => keep cached results and show non-blocking cached-data message
   - no cache + refresh failure => show normal error state
+- When cache-backed page content is visible, refresh should stay non-blocking; page-level blocking overlays are for no-cache loads only.
 
 ## Estimate Numbers Page
 - Add and maintain a dedicated `/tradsphere/estnums` page focused on fast search.

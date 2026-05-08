@@ -22,6 +22,7 @@ import { useToast } from "@/components/ui/toast";
 import { useApiRequest } from "@/hooks/useApiRequest";
 import { usePersistentState } from "@/hooks/usePersistentState";
 import {
+  listBrowserCacheSnapshotsByPrefix,
   readBrowserCacheSnapshot,
   removeBrowserCacheByPrefix,
   writeBrowserCache,
@@ -31,12 +32,14 @@ import {
   shouldFetchNetwork,
   type CachePolicy,
 } from "@shared/cache";
-import { shouldFetchSubmittedSearchNetwork } from "@shared/search";
+import { hasAtLeastOneSearchCriterion, shouldFetchSubmittedSearchNetwork } from "@shared/search";
 
 const SEARCH_LIMIT = 50;
 const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
 const SEARCH_TIMEZONE = "America/Chicago";
 const ESTNUMS_PAGE_CACHE_VERSION = "v4";
+const ESTNUMS_SEARCH_CACHE_COLLECTION_PREFIX = "estnums:form-search:";
+const ESTNUMS_SEARCH_CACHE_COLLECTION_LIMIT = 40;
 const SELECTIONS_CACHE_KEY = "tradsphere:main:selections:v2";
 const SELECTIONS_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.SELECTIONS;
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspace.sidebar.collapsed";
@@ -907,6 +910,132 @@ function isSubmittedSearch(value: unknown): value is SubmittedSearch {
   );
 }
 
+function isEstimateSearchItem(value: unknown): value is EstimateSearchItem {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return typeof value.estNum === "number" && Number.isFinite(value.estNum) && typeof value.accountCode === "string";
+}
+
+function isEstimateSearchPage(value: unknown): value is EstimateSearchPage {
+  if (!isRecord(value) || !Array.isArray(value.items)) {
+    return false;
+  }
+  return value.items.every((item) => isEstimateSearchItem(item));
+}
+
+function buildLocalCachedSearchPage(submitted: SubmittedSearch): {
+  page: EstimateSearchPage | null;
+  fetchedAt: number | null;
+  isPartial: boolean;
+} {
+  const exactSnapshot = readBrowserCacheSnapshot<EstimateSearchPage>(submitted.cacheKey);
+  const exactPage = isEstimateSearchPage(exactSnapshot?.data) ? exactSnapshot?.data : null;
+  const matchedItems: EstimateSearchItem[] = [];
+  const seen = new Set<string>();
+  let newestFetchedAt = exactSnapshot?.fetchedAt ?? 0;
+
+  const appendItem = (item: EstimateSearchItem) => {
+    const dedupeKey = `${item.accountCode.toUpperCase()}:${item.estNum}`;
+    if (seen.has(dedupeKey)) {
+      return;
+    }
+    seen.add(dedupeKey);
+    matchedItems.push(withDerivedPeriod(item));
+  };
+
+  if (exactPage?.items?.length) {
+    for (const item of exactPage.items) {
+      appendItem(item);
+    }
+  }
+
+  const cacheEntries = listBrowserCacheSnapshotsByPrefix<EstimateSearchPage>(
+    ESTNUMS_SEARCH_CACHE_COLLECTION_PREFIX,
+    {
+      allowExpired: true,
+      limit: ESTNUMS_SEARCH_CACHE_COLLECTION_LIMIT,
+    },
+  );
+
+  for (const entry of cacheEntries) {
+    newestFetchedAt = Math.max(newestFetchedAt, entry.snapshot.fetchedAt);
+    const cachedPage = isEstimateSearchPage(entry.snapshot.data) ? entry.snapshot.data : null;
+    if (!cachedPage?.items?.length) {
+      continue;
+    }
+    for (const item of cachedPage.items) {
+      if (!isEstimateItemMatchSubmittedSearch(item, submitted)) {
+        continue;
+      }
+      appendItem(item);
+    }
+  }
+
+  if (!matchedItems.length && exactPage) {
+    return {
+      page: exactPage,
+      fetchedAt: exactSnapshot?.fetchedAt ?? Date.now(),
+      isPartial: false,
+    };
+  }
+
+  if (!matchedItems.length) {
+    return {
+      page: null,
+      fetchedAt: null,
+      isPartial: false,
+    };
+  }
+
+  const nextPage: EstimateSearchPage = {
+    items: sortItems(matchedItems),
+    total: exactPage?.total ?? matchedItems.length,
+    limit: exactPage?.limit ?? SEARCH_LIMIT,
+    nextCursor: exactPage?.nextCursor ?? null,
+    nextOffset: exactPage?.nextOffset ?? null,
+    backendMode: exactPage?.backendMode ?? (submitted.plan.type === "search" ? "search" : "legacy-exact"),
+  };
+
+  return {
+    page: nextPage,
+    fetchedAt: newestFetchedAt || Date.now(),
+    isPartial: !exactPage,
+  };
+}
+
+function resolveInitialEstimateSearchView(submittedSearch: SubmittedSearch | null): {
+  state: SearchUiState;
+  page: EstimateSearchPage | null;
+  cacheStatus: CacheStatus | null;
+} {
+  if (!submittedSearch) {
+    return {
+      state: "idle",
+      page: null,
+      cacheStatus: null,
+    };
+  }
+
+  const localResult = buildLocalCachedSearchPage(submittedSearch);
+  if (!localResult.page) {
+    return {
+      state: "idle",
+      page: null,
+      cacheStatus: null,
+    };
+  }
+
+  return {
+    state: localResult.page.items.length ? "ready" : "empty",
+    page: localResult.page,
+    cacheStatus: {
+      source: "cache",
+      fetchedAt: localResult.fetchedAt ?? Date.now(),
+    },
+  };
+}
+
 function toQuarterLabel(quarter: number): string {
   return `Q${quarter}`;
 }
@@ -1254,12 +1383,12 @@ export default function EstimateNumbersPage() {
   const [searchMessage, setSearchMessage] = useState<string | null>(null);
   const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
 
-  const [state, setState] = useState<SearchUiState>("idle");
+  const [state, setState] = useState<SearchUiState>(() => resolveInitialEstimateSearchView(submittedSearch).state);
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
-  const [page, setPage] = useState<EstimateSearchPage | null>(null);
-  const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null);
+  const [page, setPage] = useState<EstimateSearchPage | null>(() => resolveInitialEstimateSearchView(submittedSearch).page);
+  const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(() => resolveInitialEstimateSearchView(submittedSearch).cacheStatus);
   const [backendSearchUnavailable, setBackendSearchUnavailable] = useState(false);
 
   const [isScheduleModalOpen, setIsScheduleModalOpen] = useState(false);
@@ -1290,9 +1419,10 @@ export default function EstimateNumbersPage() {
 
   const groupedResults = useMemo(() => buildGroups(displayPage?.items ?? []), [displayPage]);
   const resultText = useMemo(() => formatResultText(displayPage), [displayPage]);
+  const normalizedDraft = useMemo(() => normalizeDraft(draft), [draft]);
+  const canClearDraft = useMemo(() => hasAtLeastOneSearchCriterion(normalizedDraft), [normalizedDraft]);
   const draftSearchPlan = useMemo(() => buildSearchPlan(draft), [draft]);
   const canSubmitSearch = draftSearchPlan.ok;
-  const draftValidationMessage = !draftSearchPlan.ok ? draftSearchPlan.message : null;
 
   const estimateModalAccountOptions = useMemo(
     () =>
@@ -1529,15 +1659,18 @@ export default function EstimateNumbersPage() {
     const cacheKey = activeSearch.cacheKey;
 
     const snapshot = !options.append ? readBrowserCacheSnapshot<EstimateSearchPage>(cacheKey) : null;
+    const localCacheResult = !options.append ? buildLocalCachedSearchPage(activeSearch) : null;
 
-    if (!options.append && snapshot?.data && options.policy !== "network-only") {
-      setPage(snapshot.data);
-      setState(snapshot.data.items.length ? "ready" : "empty");
+    if (!options.append && localCacheResult?.page && options.policy !== "network-only") {
+      setPage(localCacheResult.page);
+      pageRef.current = localCacheResult.page;
+      setState(localCacheResult.page.items.length ? "ready" : "empty");
       setError(null);
       setCacheStatus({
         source: "cache",
-        fetchedAt: snapshot.fetchedAt,
+        fetchedAt: localCacheResult.fetchedAt ?? Date.now(),
       });
+      setRefreshMessage(localCacheResult.isPartial ? "Cached matches shown while refreshing." : null);
     }
 
     const shouldFetch = options.append ? true : shouldFetchSubmittedSearchNetwork(options.policy, snapshot);
@@ -1547,11 +1680,14 @@ export default function EstimateNumbersPage() {
 
     if (options.append) {
       setIsLoadingMore(true);
-    } else if (snapshot?.data) {
+    } else if (localCacheResult?.page) {
       setIsRefreshing(true);
     } else {
+      setPage(null);
+      pageRef.current = null;
       setState("loading");
       setError(null);
+      setRefreshMessage(null);
     }
 
     const currentPage = pageRef.current;
@@ -1686,7 +1822,7 @@ export default function EstimateNumbersPage() {
     const isSameSubmittedSearch = submittedSearch?.cacheKey === result.submitted.cacheKey;
     if (isSameSubmittedSearch) {
       void loadPageData({
-        policy: "network-only",
+        policy: "stale-while-revalidate",
         append: false,
       });
       return;
@@ -1696,9 +1832,26 @@ export default function EstimateNumbersPage() {
   }
 
   function handleClearDraft() {
+    const draftCacheKey = buildSearchCacheKey(normalizedDraft);
+    const shouldClearSubmittedResults = Boolean(submittedSearch && submittedSearch.cacheKey === draftCacheKey);
+
     setDraft(INITIAL_SEARCH_FORM);
     setSearchMessage(null);
     setRefreshMessage(null);
+
+    if (!shouldClearSubmittedResults) {
+      return;
+    }
+
+    requestTokenRef.current += 1;
+    setSubmittedSearch(null);
+    setState("idle");
+    setError(null);
+    setPage(null);
+    pageRef.current = null;
+    setCacheStatus(null);
+    setIsRefreshing(false);
+    setIsLoadingMore(false);
   }
 
   function handleRefreshSearch() {
@@ -1809,11 +1962,12 @@ export default function EstimateNumbersPage() {
         onChange={handleDraftChange}
         onSubmit={handleSubmitSearch}
         onClear={handleClearDraft}
+        canClear={canClearDraft}
         searching={state === "loading"}
         disabled={isLoadingMore || isRefreshing || isLoadingAccountSelections}
         resultText={resultText}
         canSubmit={canSubmitSearch}
-        message={searchMessage ?? draftValidationMessage}
+        message={searchMessage}
       />
 
       {refreshMessage ? (

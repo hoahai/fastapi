@@ -20,6 +20,7 @@
 - Cache status controls should be floating chips with button semantics, not layout content that pushes cards/tables/forms.
 - Page-level cache chips should stay fixed near the viewport bottom during scroll.
 - Modal-level cache chips should stay fixed/sticky to modal bottom while modal body/table areas scroll.
+- Page-level blocking busy overlays should appear only for no-cache loads; when cache-backed data is visible, refresh should be non-blocking.
 - Clicking a cache chip must trigger the existing context refresh path with `network-only` behavior and keep current cache metadata updates.
 - Cache chips must include hover/focus tooltip text and accessible labels (for example `aria-label`).
 - For Schedule/report tables, keep cache chips anchored to modal footer/shell, not inside table scroll content.
@@ -128,7 +129,9 @@
 - Keep `/tradsphere/estnums` as a dedicated search-first page for EstNums and schedules.
 - Do not run any default EstNum search when the page opens (no auto load for planning/current quarter/year windows).
 - Use explicit multi-field form submit only (Enter/Search), never request-on-type and never debounce-while-typing behavior.
+- Do not show validation errors on untouched empty search forms.
 - Search button/action must be hidden or disabled until the current draft search is valid.
+- Clear button/action must stay hidden until at least one draft search field has a value.
 - Search form fields should include: `Estimate Number`, `Account`, `Buyer`, `Media Type`, `Month / Note`, `Year`, `Quarter`, and `Created today`.
 - Empty submit (all fields blank and `Created today` off) should clear results and return to empty-state guidance.
 - `Created today` must be an explicit form option and must use America/Chicago date semantics through backend filters.
@@ -138,6 +141,7 @@
 - On valid submit, use cache-first render + background network refresh for the submitted search params; do not wait for network before showing cache.
 - Keep cached EstNum results visible while refreshing, and ignore stale/out-of-order responses.
 - If refresh fails and cached results exist, keep cached results visible and show non-blocking cached-data message.
+- Preserve non-sensitive EstNum search state across in-app route switches (draft, submitted params, current results, cache metadata).
 - Include page-level floating cache-status chip only after search results exist; refresh runs network-only for the last submitted search context.
 - Group search results by account first and then by period grouping (year/quarter) when practical.
 - Scheduled EstNums open the existing `ScheduleModal`; unscheduled EstNums must remain visually normal and non-opening.
@@ -149,13 +153,16 @@
 - Keep `/tradsphere/contacts` as a dedicated, search-first Contacts page.
 - Do not run any default contacts load when the page opens.
 - Use explicit multi-field submit search (`Search` button or Enter); do not search while typing.
+- Do not show validation errors on untouched empty search forms.
 - Search button/action must be hidden or disabled until the current draft search is valid.
+- Clear button/action must stay hidden until at least one draft search field has a value.
 - Empty submit must not run requests and should show a short guidance message.
 - Cache contact-search results by full submitted params and preserve stale results during revalidation.
 - If no required fields are defined, require at least one field value before enabling search submit.
 - On valid submit, show cached search results immediately when available, then refresh from network in background.
 - Keep cached results mounted while refreshing and ignore stale/out-of-order responses.
 - If refresh fails and cached results exist, keep cached results visible and show non-blocking cached-data message.
+- Preserve non-sensitive contact/station search state across in-app route switches (draft, submitted params, current results, cache metadata).
 - Page-level cache-status chip should appear only after a submitted search exists, and refresh should run `network-only` for that submitted search.
 - Search request path should load lightweight contact-card data only; avoid loading full usage graph during search.
 - Do not load all contacts for client-side filtering when backend filters are insufficient; show a limitation and propose backend fielded search support.

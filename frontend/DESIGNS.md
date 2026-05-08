@@ -37,14 +37,19 @@
 - Validation feedback should be concise and placed near fields.
 - Keep form field spacing consistent.
 - Search forms are submit-only and must never trigger backend search requests while typing.
+- Do not show search validation errors on untouched empty forms.
 - Search submit actions must stay hidden or disabled until search criteria are valid.
+- Search clear actions should stay hidden until at least one field has a value.
 - Empty/invalid search submits must not call backend APIs.
 - If a search form has no required fields, default validity is `at least one searchable field is filled`.
+- Search pages should preserve non-sensitive state across in-app navigation (draft, submitted criteria, results, cache metadata).
 
 ## Search Cache UX
 - On valid submit, show matching cached results immediately when present.
 - After showing cache, always run a background network refresh for the submitted params.
 - Keep cached results visible while refreshing; do not blank result areas during revalidation.
+- Do not show blocking page-level busy overlays while cache-backed content is visible and only a refresh is running.
+- Blocking overlays are reserved for initial/no-cache loading states.
 - Manual refresh actions (if present) should use network-only for the current submitted search context.
 - Ignore stale/out-of-order responses from older submissions so results always match the latest valid submit.
 - If refresh fails and cache exists, keep cached results visible and show a small non-blocking cached-data message.

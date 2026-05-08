@@ -11,6 +11,10 @@ import {
 
 export type BrowserCacheSource = CacheSource;
 export type BrowserCacheSnapshot<T> = CacheSnapshot<T>;
+export type BrowserCacheSnapshotEntry<T> = {
+  key: string;
+  snapshot: BrowserCacheSnapshot<T>;
+};
 
 type WriteBrowserCacheOptions = {
   source?: BrowserCacheSource;
@@ -38,6 +42,54 @@ export function readBrowserCache<T>(key: string, options?: { allowExpired?: bool
     ...cacheBaseOptions,
     allowExpired: Boolean(options?.allowExpired),
   });
+}
+
+export function listBrowserCacheSnapshotsByPrefix<T>(
+  prefix: string,
+  options?: { allowExpired?: boolean; limit?: number },
+): BrowserCacheSnapshotEntry<T>[] {
+  if (typeof window === "undefined") {
+    return [];
+  }
+
+  const allowExpired = options?.allowExpired ?? true;
+  const matches: BrowserCacheSnapshotEntry<T>[] = [];
+
+  try {
+    for (let index = 0; index < window.localStorage.length; index += 1) {
+      const storageKey = window.localStorage.key(index);
+      if (!storageKey || !storageKey.startsWith(CACHE_NAMESPACE)) {
+        continue;
+      }
+
+      const logicalKey = storageKey.slice(CACHE_NAMESPACE.length);
+      if (!logicalKey.startsWith(prefix)) {
+        continue;
+      }
+
+      const snapshot = readCacheSnapshot<T>(logicalKey, {
+        ...cacheBaseOptions,
+        allowExpired,
+      });
+      if (!snapshot) {
+        continue;
+      }
+
+      matches.push({
+        key: logicalKey,
+        snapshot,
+      });
+    }
+  } catch {
+    return matches;
+  }
+
+  matches.sort((a, b) => b.snapshot.fetchedAt - a.snapshot.fetchedAt);
+  if (typeof options?.limit === "number" && options.limit > 0 && matches.length > options.limit) {
+    return matches.slice(0, options.limit);
+  }
+
+  return matches;
 }
 
 export function writeBrowserCache<T>(
