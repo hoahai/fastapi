@@ -18,6 +18,18 @@ export type ContactUsageRow = {
   active: boolean;
 };
 
+export type ContactAccountUsage = {
+  accountCode: string;
+  accountName: string;
+};
+
+export type ContactEstNumUsage = {
+  estNum: number;
+  accountCode: string;
+  accountName: string;
+  stationCodes: string[];
+};
+
 export type ContactRecord = {
   id: number;
   email: string;
@@ -33,7 +45,11 @@ export type ContactRecord = {
   stationCodes: string[];
   contactTypes: string[];
   usage: ContactUsageRow[];
+  usedByAccounts: ContactAccountUsage[];
+  usedByEstNums: ContactEstNumUsage[];
   usedByStationCount: number;
+  usedByAccountCount: number;
+  usedByEstNumCount: number;
   isPrimaryContact: boolean;
 };
 

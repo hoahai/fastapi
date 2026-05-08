@@ -21,7 +21,6 @@ export function ContactResultCard({
 }: ContactResultCardProps) {
   const name = contact.fullName || "-";
   const email = contact.email || "-";
-  const usedByStationsText = contact.stationCodes.length ? contact.stationCodes.join(", ") : "-";
 
   return (
     <article
@@ -52,7 +51,7 @@ export function ContactResultCard({
         <div className="flex items-center gap-0.5">
           <ActionIconButton
             icon={<Waypoints />}
-            tooltip="View used by stations"
+            tooltip="View usage details"
             onClick={(event) => {
               event.stopPropagation();
               onViewUsage(contact);
@@ -96,7 +95,6 @@ export function ContactResultCard({
         <Meta label="Job Title" value={contact.jobTitle} />
         <Meta label="Office" value={contact.office} />
         <Meta label="Cell" value={contact.cell} />
-        <Meta label="Used by stations" value={usedByStationsText} />
       </div>
     </article>
   );

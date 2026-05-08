@@ -100,6 +100,11 @@
 - Prefer label-input row layouts on desktop (label column + control column) and stacked layout on mobile.
 - Mark required fields with a red asterisk and keep validation feedback close to inputs.
 - Include a top-right close button (`X`) and a primary submit action in the footer.
+- Modal primary form action labels should be concise (`Save` in edit contexts unless domain wording requires otherwise).
+- Modal primary submit actions should follow dirty + valid rules globally:
+  - hide submit action when pristine
+  - disable submit when dirty but invalid/loading/submitting
+  - allow submit only when dirty + valid + not submitting
 - When forms map to backend payloads, keep UI labels user-friendly but preserve exact payload keys in submit logic.
 - When a modal mirrors an existing detail form (for example TradSphere Estimate Number vs Account Information), reuse the same label/value row styling and control proportions.
 - Read-only fields should look non-editable without resembling disabled text inputs (avoid bordered disabled-input appearance when plain read-only value text is clearer).
@@ -293,5 +298,14 @@
 - Show floating page cache-status chip only after a submitted search exists; chip refresh runs `network-only` on the current submitted search.
 - Group results primarily by contact type; fallback grouping uses company when contact type is unavailable.
 - Contact modal should include a read-only `Used by Stations` section with station relationship details.
+- Contact modal should use a responsive two-section layout (`Contact` + `Used by Stations`) that renders as two columns on wide screens and stacked sections on narrower screens.
+- Contact modal form spacing should stay clean and avoid nested padded containers that compress field width.
+- Contact modal submit action label is `Save` and should follow dirty + valid modal rules (no submit action when pristine).
+- Required indicators in contact forms must align with backend schema rules (`email` required + valid).
+- Contact modal `Contact Type` should be editable via dropdown and persisted through existing stations-contact link update APIs when link rows exist.
+- Contact form `Active` control should be an accessible toggle/switch.
+- Contact phone fields should auto-format US display values while keeping backend-safe payload compatibility.
+- Contact name fields should auto-case and support Full Name parsing/sync with First Name + Last Name.
+- `Used by Stations` details should render as compact read-only cards with internal scroll for larger lists (not a table).
 - Contact copy format should be `Full Name <email@example.com>` with email-only fallback.
 - Avoid client-side full dataset scans and avoid per-contact request fan-out; use batched backend queries.

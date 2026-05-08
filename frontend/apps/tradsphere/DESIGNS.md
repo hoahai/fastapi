@@ -43,6 +43,21 @@ This app inherits global standards from `frontend/DESIGNS.md`.
 - Contact-search cache keys must include all submitted fields and use stale-while-revalidate behavior.
 - Keep cached result groups visible during refresh; show a results-area loading overlay.
 - Show floating cache-status chip only after a submitted search exists; chip refreshes current submitted search with network-only behavior.
+- Search requests should load lightweight contact-card data only; usage graph details should not load during search.
 - Group results by contact type by default; fallback to company grouping when type data is absent.
 - Contact modal supports add/edit with dirty-state guard, close by `X`, no cancel button, and read-only `Used by Stations` details.
+- Contact modal open should load full usage graph cache-first, then refresh from network.
+- Contact modal should use responsive two-section layout (`Contact` + `Used by Stations`): two columns on wide desktop, stacked on medium/small screens.
+- Contact modal should avoid nested padded form boxes that narrow inputs; keep cleaner station-style spacing/alignment.
+- Contact modal submit label is `Save` and should follow dirty + valid modal submit rules.
+- Required indicators must follow backend contact schema rules (`email` required + valid for create/update contact payloads).
+- `Contact Type` should be editable in the Contact modal via dropdown and save through existing stations-contact link APIs when link rows are present.
+- `Active` should be an accessible toggle/switch control, not a checkbox.
+- Phone inputs (`office`, `cell`) should auto-format US numbers while preserving backend-compatible values.
+- Name inputs should auto-case (including common hyphenated names) and keep Full Name <-> First/Last sync behavior.
+- `Used by Stations` should render compact read-only cards with internal scroll for larger usage sets (not a table).
+- Contacts UI should also show read-only `Used by Accounts`:
+  - no used-by summary on contact result cards (modal-focused detail)
+  - dedicated section in Contact modal below `Used by Stations`
+- Contacts modal should also show read-only `Used by EstNums` below `Used by Accounts`.
 - Contact copy action should output Gmail-ready text (`Full Name <email@example.com>` with email-only fallback).

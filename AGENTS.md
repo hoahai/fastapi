@@ -1225,6 +1225,13 @@ git push
 -   Do not add explanations
 -   Return **only the command block**
 
+## Frontend Modal Submit Rule (Global)
+
+-   For frontend modal forms, submit action must follow dirty + valid rule:
+    -   hide submit when pristine
+    -   disable submit when invalid/loading/submitting
+    -   keep concise edit label `Save` unless domain wording requires different text
+
 
 ## Common Commands
 
@@ -1287,4 +1294,3 @@ npm --prefix frontend/apps/tradsphere run build
 rm -rf apps/tradsphere/ui_dist/assets apps/tradsphere/ui_dist/index.html
 cp -R frontend/apps/tradsphere/dist/* apps/tradsphere/ui_dist/
 uvicorn main:app --reload --host 0.0.0.0 --port 8000
-

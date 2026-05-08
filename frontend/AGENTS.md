@@ -29,6 +29,10 @@
 - Avoid one-off modal shells/footers/form-row styling when existing shared primitives can be reused.
 - Icon-only action controls must include tooltip and `aria-label`.
 - Dirty-form close behavior must use shared guard/confirmation patterns, not ad-hoc close logic.
+- Modal submit buttons should follow global dirty + valid rules:
+  - hide submit action when form is pristine
+  - disable submit while invalid/loading/submitting
+  - use concise `Save` label in edit flows unless domain-specific wording is required
 - Cache/status chips must use a shared chip component and stay in low-emphasis page/modal bottom placement.
 
 ## Backend Safety Rules

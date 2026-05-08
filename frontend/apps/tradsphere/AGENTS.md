@@ -148,10 +148,27 @@
 - Empty submit must not run requests and should show a short guidance message.
 - Cache contact-search results by full submitted params and preserve stale results during revalidation.
 - Page-level cache-status chip should appear only after a submitted search exists, and refresh should run `network-only` for that submitted search.
-- Prefer batched backend requests for contact + station-usage assembly; avoid per-contact request fan-out.
+- Search request path should load lightweight contact-card data only; avoid loading full usage graph during search.
 - Do not load all contacts for client-side filtering when backend filters are insufficient; show a limitation and propose backend fielded search support.
 - Group contacts by contact type where available, with company fallback grouping.
 - Contact modal should support add/edit modes, no footer cancel button, dirty-close guard, and a read-only `Used by Stations` section.
+- Contact modal open should load full usage graph cache-first (stations/accounts/estnums), then refresh from network.
+- Contact modal layout should use responsive two-section behavior: `Contact` + `Used by Stations` in two columns on wide screens and stacked on narrower screens.
+- Contact modal form section should avoid nested padded boxes that compress field width; keep one clean modal shell spacing system.
+- Contact modal submit uses `Save` label and follows dirty + valid visibility/enablement rules (no submit when pristine).
+- Contact modal required indicators must follow backend schema rules; for contacts create/update, `email` is required and must be valid.
+- Contact modal `Contact Type` should be editable through dropdown UI and persisted via existing stations-contact link updates when link rows exist.
+- Contact modal `Active` control should use an accessible toggle/switch pattern (keyboard + screen reader friendly).
+- Contact modal phone fields should auto-format US numbers and keep backend-compatible values (`office` supports optional `x####` extension, `cell` does not).
+- Contact modal name fields should auto-case and support full-name sync:
+  - Full Name parse -> First/Last on blur/paste.
+  - First/Last edits -> Full Name sync unless Full Name was intentionally edited separately.
+- `Used by Stations` should render compact read-only cards (not a table) with internal scroll for long lists.
+- Contacts experiences should also show `Used by Accounts`:
+  - Contact result cards should not include used-by summaries to keep cards lightweight.
+  - Contact modal includes a read-only `Used by Accounts` section below `Used by Stations`.
+  - Account usage is derived from existing station/schedule/estNum/account APIs (no per-contact fan-out).
+- Contact modal should also show read-only `Used by EstNums` below `Used by Accounts`, derived from schedule + estNum/account mappings.
 - Contact copy action must use Gmail-ready format: `Full Name <email@example.com>` with email-only fallback.
 
 ## Station Item Interactions

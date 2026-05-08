@@ -4,7 +4,14 @@ import { Loader2 } from "lucide-react";
 import { ContactModal, type ContactModalMode, type ContactModalSubmitPayload } from "@/components/contacts/ContactModal";
 import { ContactResults } from "@/components/contacts/ContactResults";
 import { ContactSearchForm } from "@/components/contacts/ContactSearchForm";
-import type { ContactGroup, ContactRecord, ContactSearchFormValues, ContactUsageRow } from "@/components/contacts/types";
+import type {
+  ContactAccountUsage,
+  ContactEstNumUsage,
+  ContactGroup,
+  ContactRecord,
+  ContactSearchFormValues,
+  ContactUsageRow,
+} from "@/components/contacts/types";
 import { PageBanner } from "@/components/layout/PageBanner";
 import { Button } from "@/components/ui/button";
 import { CacheStatusChip } from "@/components/ui/cache-status-chip";
@@ -14,6 +21,7 @@ import { readBrowserCacheSnapshot, writeBrowserCache } from "@/lib/browserCache"
 import { shouldFetchNetwork, type CachePolicy } from "@shared/cache";
 
 const CONTACTS_SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
+const CONTACT_DETAIL_CACHE_TTL_MS = 5 * 60 * 1000;
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspace.sidebar.collapsed";
 const LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY = "tradsphere:ui:sidebarCollapsed:v1";
 const SIDEBAR_COLLAPSED_EVENT = "workspace-sidebar-collapsed-change";
@@ -38,6 +46,9 @@ type SearchLoadOptions = {
 type ContactUsageJoinRow = ContactUsageRow & {
   contactId: number;
 };
+
+type StationAccountUsageMap = Record<string, ContactAccountUsage[]>;
+type StationEstNumUsageMap = Record<string, ContactEstNumUsage[]>;
 
 type BuildSearchResult =
   | {
@@ -163,8 +174,35 @@ function buildSearchCacheKey(params: ContactSearchFormValues): string {
     `contactType=${encodeKeyPart(params.contactType)}`,
     `phone=${encodeKeyPart(params.phone)}`,
     `station=${encodeKeyPart(params.station)}`,
-    "v1",
+    "v2",
   ].join(":");
+}
+
+function buildContactDetailCacheKey(contactId: number): string {
+  return `contacts:detail:${contactId}:v1`;
+}
+
+function normalizeContactRecords(items: ContactRecord[]): ContactRecord[] {
+  return items.map((item) => ({
+    ...item,
+    stationCodes: Array.isArray(item.stationCodes) ? item.stationCodes : [],
+    contactTypes: Array.isArray(item.contactTypes) ? item.contactTypes : [],
+    usage: Array.isArray(item.usage) ? item.usage : [],
+    usedByAccounts: Array.isArray(item.usedByAccounts) ? item.usedByAccounts : [],
+    usedByEstNums: Array.isArray(item.usedByEstNums) ? item.usedByEstNums : [],
+    usedByStationCount:
+      typeof item.usedByStationCount === "number"
+        ? item.usedByStationCount
+        : (Array.isArray(item.stationCodes) ? item.stationCodes.length : 0),
+    usedByAccountCount:
+      typeof item.usedByAccountCount === "number"
+        ? item.usedByAccountCount
+        : (Array.isArray(item.usedByAccounts) ? item.usedByAccounts.length : 0),
+    usedByEstNumCount:
+      typeof item.usedByEstNumCount === "number"
+        ? item.usedByEstNumCount
+        : (Array.isArray(item.usedByEstNums) ? item.usedByEstNums.length : 0),
+  }));
 }
 
 function buildSearchSubmission(draft: ContactSearchFormValues): BuildSearchResult {
@@ -186,10 +224,6 @@ function buildSearchSubmission(draft: ContactSearchFormValues): BuildSearchResul
       cacheKey: buildSearchCacheKey(normalized),
     },
   };
-}
-
-function normalizePhoneForSearch(value: string): string {
-  return value.replace(/[^0-9a-z]/gi, "").toLowerCase();
 }
 
 function formatResultText(total: number): string {
@@ -300,6 +334,10 @@ async function copyTextToClipboard(value: string): Promise<void> {
   }
 }
 
+function normalizeContactType(value: string): string {
+  return asString(value).toUpperCase();
+}
+
 function buildGroups(items: ContactRecord[]): ContactGroup[] {
   const buckets = new Map<string, { label: string; items: ContactRecord[] }>();
   for (const item of items) {
@@ -365,7 +403,11 @@ function parseContacts(payload: unknown): ContactRecord[] {
       stationCodes: uniqStrings(asStringArray(row.stationCodes)),
       contactTypes: [],
       usage: [],
+      usedByAccounts: [],
+      usedByEstNums: [],
       usedByStationCount: 0,
+      usedByAccountCount: 0,
+      usedByEstNumCount: 0,
       isPrimaryContact: false,
     });
   }
@@ -431,10 +473,139 @@ function parseStationMap(payload: unknown): Record<string, { name: string; media
   return map;
 }
 
+function parseStationScheduleRows(payload: unknown): Array<{ stationCode: string; estNum: number }> {
+  const data = unwrapData(payload);
+  if (!Array.isArray(data)) {
+    return [];
+  }
+
+  const rows: Array<{ stationCode: string; estNum: number }> = [];
+  for (const row of data) {
+    if (!isRecord(row)) {
+      continue;
+    }
+    const stationCode = asString(row.stationCode).toUpperCase();
+    const estNum = asNumber(row.estNum);
+    if (!stationCode || estNum === null) {
+      continue;
+    }
+    rows.push({ stationCode, estNum: Math.trunc(estNum) });
+  }
+  return rows;
+}
+
+function parseEstNumAccountRows(payload: unknown): Map<number, string> {
+  const data = unwrapData(payload);
+  const map = new Map<number, string>();
+  if (!Array.isArray(data)) {
+    return map;
+  }
+
+  for (const row of data) {
+    if (!isRecord(row)) {
+      continue;
+    }
+    const estNum = asNumber(row.estNum);
+    const accountCode = asString(row.accountCode).toUpperCase();
+    if (estNum === null || !accountCode) {
+      continue;
+    }
+    map.set(Math.trunc(estNum), accountCode);
+  }
+  return map;
+}
+
+function parseAccountNameMap(payload: unknown): Record<string, string> {
+  const data = unwrapData(payload);
+  if (!Array.isArray(data)) {
+    return {};
+  }
+
+  const map: Record<string, string> = {};
+  for (const row of data) {
+    if (!isRecord(row)) {
+      continue;
+    }
+    const accountCode = asString(row.accountCode).toUpperCase();
+    if (!accountCode) {
+      continue;
+    }
+    map[accountCode] = asString(row.name);
+  }
+  return map;
+}
+
+function buildStationAccountUsageMap(
+  scheduleRows: Array<{ stationCode: string; estNum: number }>,
+  estNumAccountMap: Map<number, string>,
+  accountNameMap: Record<string, string>,
+): StationAccountUsageMap {
+  const byStation = new Map<string, Map<string, ContactAccountUsage>>();
+  for (const row of scheduleRows) {
+    const accountCode = estNumAccountMap.get(row.estNum);
+    if (!accountCode) {
+      continue;
+    }
+    const stationCode = row.stationCode;
+    const stationBucket = byStation.get(stationCode) ?? new Map<string, ContactAccountUsage>();
+    stationBucket.set(accountCode, {
+      accountCode,
+      accountName: asString(accountNameMap[accountCode]),
+    });
+    byStation.set(stationCode, stationBucket);
+  }
+
+  const result: StationAccountUsageMap = {};
+  for (const [stationCode, bucket] of byStation.entries()) {
+    result[stationCode] = [...bucket.values()].sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+  }
+  return result;
+}
+
+function buildStationEstNumUsageMap(
+  scheduleRows: Array<{ stationCode: string; estNum: number }>,
+  estNumAccountMap: Map<number, string>,
+  accountNameMap: Record<string, string>,
+): StationEstNumUsageMap {
+  const byStation = new Map<string, Map<number, ContactEstNumUsage>>();
+  for (const row of scheduleRows) {
+    const accountCode = estNumAccountMap.get(row.estNum);
+    if (!accountCode) {
+      continue;
+    }
+    const stationCode = row.stationCode;
+    const stationBucket = byStation.get(stationCode) ?? new Map<number, ContactEstNumUsage>();
+    const existing = stationBucket.get(row.estNum);
+    if (existing) {
+      const nextStationCodes = uniqStrings([...existing.stationCodes, stationCode]);
+      stationBucket.set(row.estNum, {
+        ...existing,
+        stationCodes: nextStationCodes,
+      });
+    } else {
+      stationBucket.set(row.estNum, {
+        estNum: row.estNum,
+        accountCode,
+        accountName: asString(accountNameMap[accountCode]),
+        stationCodes: [stationCode],
+      });
+    }
+    byStation.set(stationCode, stationBucket);
+  }
+
+  const result: StationEstNumUsageMap = {};
+  for (const [stationCode, bucket] of byStation.entries()) {
+    result[stationCode] = [...bucket.values()].sort((a, b) => a.estNum - b.estNum);
+  }
+  return result;
+}
+
 function mergeContactUsage(
   contacts: ContactRecord[],
   usageRows: ContactUsageJoinRow[],
   stationMap: Record<string, { name: string; mediaType: string; market: string | null }>,
+  stationAccountUsageMap: StationAccountUsageMap,
+  stationEstNumUsageMap: StationEstNumUsageMap,
 ): ContactRecord[] {
   const byContactId = new Map<number, ContactUsageRow[]>();
 
@@ -472,51 +643,55 @@ function mergeContactUsage(
     const types = uniqStrings(usage.map((item) => asString(item.contactType).toUpperCase()).filter(Boolean));
     const usageStationCodes = uniqStrings(usage.map((item) => item.stationCode));
     const combinedStationCodes = uniqStrings([...contact.stationCodes, ...usageStationCodes]);
+    const accountBucket = new Map<string, ContactAccountUsage>();
+    for (const stationCode of usageStationCodes) {
+      const accounts = stationAccountUsageMap[stationCode] || [];
+      for (const account of accounts) {
+        const normalizedCode = asString(account.accountCode).toUpperCase();
+        if (!normalizedCode || accountBucket.has(normalizedCode)) {
+          continue;
+        }
+        accountBucket.set(normalizedCode, {
+          accountCode: normalizedCode,
+          accountName: asString(account.accountName),
+        });
+      }
+    }
+    const usedByAccounts = [...accountBucket.values()].sort((a, b) => a.accountCode.localeCompare(b.accountCode));
+    const estNumBucket = new Map<number, ContactEstNumUsage>();
+    for (const stationCode of usageStationCodes) {
+      const estNums = stationEstNumUsageMap[stationCode] || [];
+      for (const item of estNums) {
+        const existing = estNumBucket.get(item.estNum);
+        if (existing) {
+          estNumBucket.set(item.estNum, {
+            ...existing,
+            stationCodes: uniqStrings([...existing.stationCodes, ...item.stationCodes]),
+          });
+          continue;
+        }
+        estNumBucket.set(item.estNum, {
+          estNum: item.estNum,
+          accountCode: asString(item.accountCode).toUpperCase(),
+          accountName: asString(item.accountName),
+          stationCodes: uniqStrings(item.stationCodes),
+        });
+      }
+    }
+    const usedByEstNums = [...estNumBucket.values()].sort((a, b) => a.estNum - b.estNum);
 
     return {
       ...contact,
       stationCodes: combinedStationCodes,
       contactTypes: types,
       usage,
+      usedByAccounts,
+      usedByEstNums,
       usedByStationCount: usageStationCodes.length,
+      usedByAccountCount: usedByAccounts.length,
+      usedByEstNumCount: usedByEstNums.length,
       isPrimaryContact: usage.some((item) => item.primaryContact),
     };
-  });
-}
-
-function applyRefinementFilters(items: ContactRecord[], params: ContactSearchFormValues): ContactRecord[] {
-  const normalizedCompany = asString(params.company).toLowerCase();
-  const normalizedPhone = normalizePhoneForSearch(asString(params.phone));
-  const normalizedStation = asString(params.station).toLowerCase();
-
-  return items.filter((item) => {
-    if (normalizedCompany) {
-      const company = asString(item.company).toLowerCase();
-      if (!company.includes(normalizedCompany)) {
-        return false;
-      }
-    }
-
-    if (normalizedPhone) {
-      const office = normalizePhoneForSearch(item.office);
-      const cell = normalizePhoneForSearch(item.cell);
-      if (!office.includes(normalizedPhone) && !cell.includes(normalizedPhone)) {
-        return false;
-      }
-    }
-
-    if (normalizedStation) {
-      const stationMatched = item.usage.some((usage) => {
-        const stationCode = asString(usage.stationCode).toLowerCase();
-        const stationName = asString(usage.stationName).toLowerCase();
-        return stationCode.includes(normalizedStation) || stationName.includes(normalizedStation);
-      });
-      if (!stationMatched) {
-        return false;
-      }
-    }
-
-    return true;
   });
 }
 
@@ -640,7 +815,7 @@ export default function ContactsPage() {
     };
   }, []);
 
-  async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactRecord[]> {
+async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactRecord[]> {
     const params = new URLSearchParams();
     if (search.params.name) {
       params.set("name", search.params.name);
@@ -670,36 +845,134 @@ export default function ContactsPage() {
       return [];
     }
 
-    const contactIds = uniqStrings(parsedContacts.map((item) => String(item.id)));
+    if (search.params.contactType) {
+      const selectedType = normalizeContactType(search.params.contactType);
+      return parsedContacts.map((item) => ({
+        ...item,
+        contactTypes: selectedType ? [selectedType] : [],
+      }));
+    }
+    return parsedContacts;
+  }
+
+  async function fetchContactDetailUsage(baseContact: ContactRecord): Promise<ContactRecord> {
     const usagePayload = await requestJson(
-      `/api/tradsphere/v1/contacts/stationsContacts?contactIds=${encodeURIComponent(contactIds.join(","))}&active=true`,
+      `/api/tradsphere/v1/contacts/stationsContacts?contactIds=${encodeURIComponent(String(baseContact.id))}&active=true`,
       {
         headers: requestHeaders,
         errorToast: false,
       },
     );
     const usageRows = parseUsageRows(usagePayload);
-
     const stationCodes = uniqStrings(
       usageRows
         .map((item) => asString(item.stationCode).toUpperCase())
         .filter(Boolean),
     );
+    if (!stationCodes.length) {
+      return {
+        ...baseContact,
+        usage: [],
+        usedByAccounts: [],
+        usedByEstNums: [],
+        usedByStationCount: 0,
+        usedByAccountCount: 0,
+        usedByEstNumCount: 0,
+      };
+    }
 
-    let stationMap: Record<string, { name: string; mediaType: string; market: string | null }> = {};
-    if (stationCodes.length > 0) {
-      const stationsPayload = await requestJson(
-        `/api/tradsphere/v1/stations?codes=${encodeURIComponent(stationCodes.join(","))}&deliveryMethodDetail=false&contactDetail=false`,
+    const stationsPayload = await requestJson(
+      `/api/tradsphere/v1/stations?codes=${encodeURIComponent(stationCodes.join(","))}&deliveryMethodDetail=false&contactDetail=false`,
+      {
+        headers: requestHeaders,
+        errorToast: false,
+      },
+    );
+    const stationMap = parseStationMap(stationsPayload);
+
+    const schedulesPayload = await requestJson(
+      `/api/tradsphere/v1/schedules?stationCodes=${encodeURIComponent(stationCodes.join(","))}`,
+      {
+        headers: requestHeaders,
+        errorToast: false,
+      },
+    );
+    const stationScheduleRows = parseStationScheduleRows(schedulesPayload);
+    const scheduleEstNums = uniqStrings(stationScheduleRows.map((row) => String(row.estNum)));
+    let stationAccountUsageMap: StationAccountUsageMap = {};
+    let stationEstNumUsageMap: StationEstNumUsageMap = {};
+    if (scheduleEstNums.length > 0) {
+      const estNumsPayload = await requestJson(
+        `/api/tradsphere/v1/estNums?estNums=${encodeURIComponent(scheduleEstNums.join(","))}`,
         {
           headers: requestHeaders,
           errorToast: false,
         },
       );
-      stationMap = parseStationMap(stationsPayload);
+      const estNumAccountMap = parseEstNumAccountRows(estNumsPayload);
+      const accountCodes = uniqStrings([...estNumAccountMap.values()]);
+
+      let accountNameMap: Record<string, string> = {};
+      if (accountCodes.length > 0) {
+        const accountsPayload = await requestJson(
+          `/api/tradsphere/v1/accounts?accountCodes=${encodeURIComponent(accountCodes.join(","))}&active=false`,
+          {
+            headers: requestHeaders,
+            errorToast: false,
+          },
+        );
+        accountNameMap = parseAccountNameMap(accountsPayload);
+      }
+
+      stationAccountUsageMap = buildStationAccountUsageMap(
+        stationScheduleRows,
+        estNumAccountMap,
+        accountNameMap,
+      );
+      stationEstNumUsageMap = buildStationEstNumUsageMap(
+        stationScheduleRows,
+        estNumAccountMap,
+        accountNameMap,
+      );
     }
 
-    const withUsage = mergeContactUsage(parsedContacts, usageRows, stationMap);
-    return applyRefinementFilters(withUsage, search.params);
+    const merged = mergeContactUsage(
+      [baseContact],
+      usageRows,
+      stationMap,
+      stationAccountUsageMap,
+      stationEstNumUsageMap,
+    );
+    return merged[0] ?? baseContact;
+  }
+
+  async function loadModalContactDetail(
+    baseContact: ContactRecord,
+    options: { policy: CachePolicy } = { policy: "stale-while-revalidate" },
+  ): Promise<void> {
+    const normalizedBase = normalizeContactRecords([baseContact])[0];
+    const cacheKey = buildContactDetailCacheKey(normalizedBase.id);
+    const snapshot = readBrowserCacheSnapshot<ContactRecord>(cacheKey);
+
+    if (snapshot?.data && options.policy !== "network-only") {
+      const cached = normalizeContactRecords([snapshot.data])[0];
+      setModalContact(cached);
+    } else {
+      setModalContact(normalizedBase);
+    }
+
+    const shouldFetch = shouldFetchNetwork(options.policy, snapshot);
+    if (!shouldFetch) {
+      return;
+    }
+
+    const detailed = await fetchContactDetailUsage(normalizedBase);
+    const normalizedDetailed = normalizeContactRecords([detailed])[0];
+    setModalContact(normalizedDetailed);
+    writeBrowserCache(cacheKey, normalizedDetailed, CONTACT_DETAIL_CACHE_TTL_MS, {
+      source: "network",
+      fetchedAt: Date.now(),
+    });
   }
 
   async function loadSearchData(options: SearchLoadOptions, activeSearch: SubmittedSearch | null = submittedSearch): Promise<void> {
@@ -716,8 +989,9 @@ export default function ContactsPage() {
     const snapshot = readBrowserCacheSnapshot<ContactRecord[]>(cacheKey);
 
     if (snapshot?.data && options.policy !== "network-only") {
-      setContacts(snapshot.data);
-      setState(snapshot.data.length ? "ready" : "empty");
+      const normalizedSnapshotData = normalizeContactRecords(snapshot.data);
+      setContacts(normalizedSnapshotData);
+      setState(normalizedSnapshotData.length ? "ready" : "empty");
       setError(null);
       setCacheStatus({
         source: "cache",
@@ -749,13 +1023,14 @@ export default function ContactsPage() {
       if (requestToken !== requestTokenRef.current) {
         return;
       }
+      const normalizedNextContacts = normalizeContactRecords(nextContacts);
 
-      setContacts(nextContacts);
-      setState(nextContacts.length ? "ready" : "empty");
+      setContacts(normalizedNextContacts);
+      setState(normalizedNextContacts.length ? "ready" : "empty");
       setError(null);
       setCacheStatus({ source: "network", fetchedAt: Date.now() });
 
-      writeBrowserCache(cacheKey, nextContacts, CONTACTS_SEARCH_CACHE_TTL_MS, {
+      writeBrowserCache(cacheKey, normalizedNextContacts, CONTACTS_SEARCH_CACHE_TTL_MS, {
         source: "network",
         fetchedAt: Date.now(),
       });
@@ -856,6 +1131,7 @@ export default function ContactsPage() {
     setModalContact(contact);
     setFocusUsageToken(0);
     setIsModalOpen(true);
+    void loadModalContactDetail(contact, { policy: "stale-while-revalidate" });
   }
 
   function handleViewUsage(contact: ContactRecord) {
@@ -863,10 +1139,12 @@ export default function ContactsPage() {
     setModalContact(contact);
     setFocusUsageToken(Date.now());
     setIsModalOpen(true);
+    void loadModalContactDetail(contact, { policy: "stale-while-revalidate" });
   }
 
   async function handleModalSubmit(payload: ContactModalSubmitPayload): Promise<void> {
     const body = buildContactPayload(payload.form);
+    const selectedContactType = normalizeContactType(payload.form.contactType);
 
     if (payload.mode === "create") {
       await requestJson("/api/tradsphere/v1/contacts", {
@@ -885,6 +1163,28 @@ export default function ContactsPage() {
         },
         successToast: "Contact updated",
       });
+
+      const activeUsageRows = (modalContact?.usage ?? []).filter(
+        (row) => row.linkId !== null && Number.isFinite(row.linkId),
+      );
+      const shouldUpdateLinkType =
+        selectedContactType &&
+        activeUsageRows.length > 0 &&
+        activeUsageRows.some(
+          (row) => normalizeContactType(row.contactType) !== selectedContactType,
+        );
+
+      if (shouldUpdateLinkType) {
+        await requestJson("/api/tradsphere/v1/contacts/stationsContacts", {
+          method: "PUT",
+          headers: requestHeaders,
+          body: activeUsageRows.map((row) => ({
+            id: row.linkId,
+            contactType: selectedContactType,
+          })),
+          successToast: false,
+        });
+      }
     }
 
     if (submittedSearch) {
@@ -959,6 +1259,7 @@ export default function ContactsPage() {
         onOpenChange={setIsModalOpen}
         mode={modalMode}
         initialContact={modalContact}
+        contactTypeOptions={discoveredContactTypes}
         focusUsageToken={focusUsageToken}
         onSubmit={handleModalSubmit}
       />
