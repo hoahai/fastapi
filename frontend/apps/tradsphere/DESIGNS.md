@@ -35,3 +35,14 @@ This app inherits global standards from `frontend/DESIGNS.md`.
 - Add/Edit actions should use existing Estimate Number modal behavior.
 - Do not show Copy EstNum action on Estimate Numbers results.
 - Flight-date display should be `MM/DD/YYYY → MM/DD/YYYY` (display only).
+
+## Contacts Page
+- Add and maintain `/tradsphere/contacts` under the Tradsphere sidebar children.
+- Keep Contacts page search-first with no default data load.
+- Search must be submit-only (`Search` / Enter), not request-on-type.
+- Contact-search cache keys must include all submitted fields and use stale-while-revalidate behavior.
+- Keep cached result groups visible during refresh; show a results-area loading overlay.
+- Show floating cache-status chip only after a submitted search exists; chip refreshes current submitted search with network-only behavior.
+- Group results by contact type by default; fallback to company grouping when type data is absent.
+- Contact modal supports add/edit with dirty-state guard, close by `X`, no cancel button, and read-only `Used by Stations` details.
+- Contact copy action should output Gmail-ready text (`Full Name <email@example.com>` with email-only fallback).

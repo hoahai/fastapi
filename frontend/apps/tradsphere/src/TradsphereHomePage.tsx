@@ -863,7 +863,7 @@ function App() {
       />
 
       {isPageBusy ? (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/25 backdrop-blur-[1.5px]">
+        <div className="fixed inset-0 z-30 flex items-center justify-center bg-slate-950/25 backdrop-blur-[1.5px]">
           <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-medium text-slate-700 shadow-soft">
             <Loader2 className="size-4 animate-spin text-blue-600" />
             <span>{pageBusyMessage}</span>

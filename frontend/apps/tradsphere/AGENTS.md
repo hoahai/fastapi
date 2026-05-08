@@ -141,6 +141,19 @@
 - Do not show `Copy EstNum` action in Estimate Numbers search results.
 - Display flight dates in Estimate Numbers results as `MM/DD/YYYY → MM/DD/YYYY` (display-only formatting).
 
+## Contacts Page
+- Keep `/tradsphere/contacts` as a dedicated, search-first Contacts page.
+- Do not run any default contacts load when the page opens.
+- Use explicit multi-field submit search (`Search` button or Enter); do not search while typing.
+- Empty submit must not run requests and should show a short guidance message.
+- Cache contact-search results by full submitted params and preserve stale results during revalidation.
+- Page-level cache-status chip should appear only after a submitted search exists, and refresh should run `network-only` for that submitted search.
+- Prefer batched backend requests for contact + station-usage assembly; avoid per-contact request fan-out.
+- Do not load all contacts for client-side filtering when backend filters are insufficient; show a limitation and propose backend fielded search support.
+- Group contacts by contact type where available, with company fallback grouping.
+- Contact modal should support add/edit modes, no footer cancel button, dirty-close guard, and a read-only `Used by Stations` section.
+- Contact copy action must use Gmail-ready format: `Full Name <email@example.com>` with email-only fallback.
+
 ## Station Item Interactions
 - Station cards may use the same hover-triggered floating attached action menu pattern used by EstNum cards for secondary actions.
 - `Add station` action opens Station modal in `create` mode.

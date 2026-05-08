@@ -16,7 +16,6 @@ import {
 import { ScheduleModal } from "@/components/dashboard/ScheduleModal";
 import type { AccountSelection, EsnumItem } from "@/components/dashboard/types";
 import { PageBanner } from "@/components/layout/PageBanner";
-import { AppDropdown } from "@/components/ui/app-dropdown";
 import { Button } from "@/components/ui/button";
 import { CacheStatusChip } from "@/components/ui/cache-status-chip";
 import { useToast } from "@/components/ui/toast";
@@ -1217,7 +1216,6 @@ export default function EstimateNumbersPage() {
   const [estimateModalMode, setEstimateModalMode] = useState<EstimateNumberModalMode>("create");
   const [estimateModalInitialData, setEstimateModalInitialData] = useState<EstimateNumberModalData | null>(null);
   const [estimateModalAccountCode, setEstimateModalAccountCode] = useState("");
-  const [createAccountCode, setCreateAccountCode] = useState("");
 
   const pageRef = useRef<EstimateSearchPage | null>(null);
   const requestTokenRef = useRef(0);
@@ -1238,7 +1236,7 @@ export default function EstimateNumbersPage() {
   const groupedResults = useMemo(() => buildGroups(displayPage?.items ?? []), [displayPage]);
   const resultText = useMemo(() => formatResultText(displayPage), [displayPage]);
 
-  const createAccountOptions = useMemo(
+  const estimateModalAccountOptions = useMemo(
     () =>
       accountDirectory.map((item) => ({
         value: item.accountCode,
@@ -1246,8 +1244,6 @@ export default function EstimateNumbersPage() {
       })),
     [accountDirectory],
   );
-
-  const estimateModalAccountName = accountDirectoryByCode[estimateModalAccountCode]?.name || estimateModalAccountCode;
 
   const canLoadMore = Boolean(
     submittedSearch?.plan.type === "search" &&
@@ -1327,7 +1323,6 @@ export default function EstimateNumbersPage() {
           selectionBackedDirectory = accountDirectoryFromSelections(cachedSelections);
           if (!cancelled) {
             setAccountDirectory(selectionBackedDirectory);
-            setCreateAccountCode((current) => current || selectionBackedDirectory[0]?.accountCode || "");
           }
         }
 
@@ -1348,7 +1343,6 @@ export default function EstimateNumbersPage() {
           selectionBackedDirectory = accountDirectoryFromSelections(selections);
           if (!cancelled) {
             setAccountDirectory(selectionBackedDirectory);
-            setCreateAccountCode((current) => current || selectionBackedDirectory[0]?.accountCode || "");
           }
         }
 
@@ -1363,7 +1357,6 @@ export default function EstimateNumbersPage() {
         const billingDirectory = parseAccountDirectory(accountPayload);
         const merged = mergeDirectoryWithBillingTypes(selectionBackedDirectory, billingDirectory);
         setAccountDirectory(merged);
-        setCreateAccountCode((current) => current || merged[0]?.accountCode || "");
       } catch (loadError) {
         if (cancelled) {
           return;
@@ -1683,12 +1676,12 @@ export default function EstimateNumbersPage() {
   }
 
   function handleOpenCreate() {
-    if (!createAccountCode) {
-      toast.error("Account required", "Select an account before adding an estimate number.");
+    if (!estimateModalAccountOptions.length) {
+      toast.error("Accounts unavailable", "Unable to load TradSphere accounts.");
       return;
     }
     setEstimateModalMode("create");
-    setEstimateModalAccountCode(createAccountCode);
+    setEstimateModalAccountCode("");
     setEstimateModalInitialData(null);
     setIsEstimateModalOpen(true);
   }
@@ -1728,22 +1721,9 @@ export default function EstimateNumbersPage() {
         description="Search estimate numbers and open schedules."
         gradientVariant="app"
         action={
-          <div className="flex flex-col items-start gap-2 sm:flex-row sm:items-center">
-            <div className="w-[280px] max-w-full">
-              <AppDropdown
-                value={createAccountCode}
-                options={createAccountOptions}
-                onValueChange={setCreateAccountCode}
-                ariaLabel="Select account for new estimate"
-                placeholder="Select account"
-                size="sm"
-                emptyText="No accounts found."
-              />
-            </div>
-            <Button onClick={handleOpenCreate} disabled={!createAccountCode}>
-              Add Estimate
-            </Button>
-          </div>
+          <Button onClick={handleOpenCreate} disabled={isLoadingAccountSelections || !estimateModalAccountOptions.length}>
+            Add Estimate
+          </Button>
         }
       />
 
@@ -1802,7 +1782,8 @@ export default function EstimateNumbersPage() {
         mode={estimateModalMode}
         initialData={estimateModalInitialData}
         accountCode={estimateModalAccountCode}
-        accountName={estimateModalAccountName}
+        accountName={accountDirectoryByCode[estimateModalAccountCode]?.name || estimateModalAccountCode}
+        accountOptions={estimateModalAccountOptions}
         headers={requestHeaders}
         onSuccess={handleEstimateSaved}
       />
@@ -1817,7 +1798,7 @@ export default function EstimateNumbersPage() {
       />
 
       {isPageBusy ? (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-slate-950/25 backdrop-blur-[1.5px]">
+        <div className="fixed inset-0 z-30 flex items-center justify-center bg-slate-950/25 backdrop-blur-[1.5px]">
           <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-medium text-slate-700 shadow-soft">
             <Loader2 className="size-4 animate-spin text-blue-600" />
             <span>{pageBusyMessage}</span>

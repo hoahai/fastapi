@@ -7,7 +7,7 @@ import {
   getBroadcastQuarterRange,
   getBroadcastYearRange,
 } from "@/lib/broadcastCalendar";
-import { AppDropdown } from "@/components/ui/app-dropdown";
+import { AppDropdown, type AppDropdownOption } from "@/components/ui/app-dropdown";
 import { Button } from "@/components/ui/button";
 import { CacheStatusChip } from "@/components/ui/cache-status-chip";
 import {
@@ -74,6 +74,7 @@ interface EstimateNumberModalProps {
   initialData?: EstimateNumberModalData | null;
   accountCode: string;
   accountName?: string;
+  accountOptions?: AppDropdownOption[];
   headers: HeadersInit;
   onSuccess?: (result: EstimateNumberModalSaveResult) => Promise<void> | void;
 }
@@ -451,6 +452,7 @@ export function EstimateNumberModal({
   initialData,
   accountCode,
   accountName,
+  accountOptions = [],
   headers,
   onSuccess,
 }: EstimateNumberModalProps) {
@@ -874,7 +876,20 @@ export function EstimateNumberModal({
                 </>
               }
             >
-              <ReadOnlyValue value={accountName?.trim() || form.accountCode} />
+              {isEditMode ? (
+                <ReadOnlyValue value={accountName?.trim() || form.accountCode} />
+              ) : (
+                <AppDropdown
+                  ariaLabel="Account"
+                  value={form.accountCode}
+                  options={accountOptions}
+                  onValueChange={(value) => updateForm("accountCode", value.trim().toUpperCase())}
+                  placeholder="Select account"
+                  disabled={isSubmitting}
+                  className="w-full"
+                  emptyText="No accounts found."
+                />
+              )}
             </LabeledField>
 
             <LabeledField

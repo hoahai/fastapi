@@ -1,5 +1,6 @@
 import {
   CalendarClock,
+  ContactRound,
   House,
   LayoutDashboard,
   RadioTower,
@@ -51,6 +52,12 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
         route: "/tradsphere/estnums",
         available: true,
       },
+      {
+        id: "tradsphere-contacts",
+        label: "Contacts",
+        route: "/tradsphere/contacts",
+        available: true,
+      },
     ],
   },
   {
@@ -96,3 +103,4 @@ export const HOME_CHILD_ITEM: AppNavChildItem = {
 
 export const TRADSPHERE_HOME_CHILD_ICON = House;
 export const TRADSPHERE_ESTNUMS_CHILD_ICON = Search;
+export const TRADSPHERE_CONTACTS_CHILD_ICON = ContactRound;

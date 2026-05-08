@@ -4,6 +4,7 @@ import { useEffect, useState, type ComponentType, type FocusEvent } from "react"
 import { Button } from "@/components/ui/button";
 import {
   APP_NAV_ITEMS,
+  TRADSPHERE_CONTACTS_CHILD_ICON,
   TRADSPHERE_ESTNUMS_CHILD_ICON,
   TRADSPHERE_HOME_CHILD_ICON,
   type AppNavChildItem,
@@ -347,7 +348,12 @@ function SidebarChildItem({
   onCloseMobile,
 }: SidebarChildItemProps) {
   const active = child.available && currentPath === child.route;
-  const ChildIcon = child.route === "/tradsphere/estnums" ? TRADSPHERE_ESTNUMS_CHILD_ICON : TRADSPHERE_HOME_CHILD_ICON;
+  const ChildIcon =
+    child.route === "/tradsphere/estnums"
+      ? TRADSPHERE_ESTNUMS_CHILD_ICON
+      : child.route === "/tradsphere/contacts"
+        ? TRADSPHERE_CONTACTS_CHILD_ICON
+        : TRADSPHERE_HOME_CHILD_ICON;
   return (
     <button
       type="button"

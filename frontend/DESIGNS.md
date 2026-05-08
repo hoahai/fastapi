@@ -280,3 +280,18 @@
 - Add/Edit flows must reuse the existing EstimateNumberModal (create/edit modes), not a duplicated form implementation.
 - Do not show `Copy EstNum` action in Estimate Numbers search results.
 - Flight-date display in results should be `MM/DD/YYYY → MM/DD/YYYY` while backend payload remains ISO.
+
+## TradSphere Contacts Page
+- Route: `/tradsphere/contacts`.
+- Purpose: search contacts, edit contact details, review station usage, and copy Gmail-ready contact values.
+- Keep this page search-first with no default contact load on open.
+- Search must be explicit-submit only (`Search` button or Enter), never request-on-type.
+- Empty submit should not run a request and should show guidance/validation.
+- Cache submitted contact-search results by full submitted form params.
+- Use stale-while-revalidate behavior for repeated submitted searches and keep cached results mounted during refresh.
+- Show loading as a results-area overlay while searching/refreshing.
+- Show floating page cache-status chip only after a submitted search exists; chip refresh runs `network-only` on the current submitted search.
+- Group results primarily by contact type; fallback grouping uses company when contact type is unavailable.
+- Contact modal should include a read-only `Used by Stations` section with station relationship details.
+- Contact copy format should be `Full Name <email@example.com>` with email-only fallback.
+- Avoid client-side full dataset scans and avoid per-contact request fan-out; use batched backend queries.
