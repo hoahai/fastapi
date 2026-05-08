@@ -49,7 +49,7 @@ export function ContactSearchForm({
           onSubmit();
         }}
       >
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-3">
+        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
           <Field label="Name">
             <ClearableInput
               id="contacts-search-name"
@@ -64,14 +64,6 @@ export function ContactSearchForm({
               value={value.email}
               onChange={(nextValue) => onChange("email", nextValue)}
               inputMode="email"
-            />
-          </Field>
-
-          <Field label="Company">
-            <ClearableInput
-              id="contacts-search-company"
-              value={value.company}
-              onChange={(nextValue) => onChange("company", nextValue)}
             />
           </Field>
 

@@ -56,7 +56,6 @@ type SearchLoadOptions = {
 type ContactUsageJoinRow = ContactUsageRow & {
   contactId: number;
 };
-
 type StationAccountUsageMap = Record<string, ContactAccountUsage[]>;
 type StationEstNumUsageMap = Record<string, ContactEstNumUsage[]>;
 type EstNumUsageMeta = {
@@ -84,7 +83,6 @@ type BuildSearchResult =
 const INITIAL_SEARCH_FORM: ContactSearchFormValues = {
   name: "",
   email: "",
-  company: "",
   phone: "",
   station: "",
 };
@@ -183,7 +181,6 @@ function normalizeSearchForm(draft: ContactSearchFormValues): ContactSearchFormV
   return {
     name: asString(draft.name),
     email: asString(draft.email).toLowerCase(),
-    company: asString(draft.company),
     phone: asString(draft.phone),
     station: asString(draft.station),
   };
@@ -196,7 +193,6 @@ function isContactSearchFormValues(value: unknown): value is ContactSearchFormVa
   return (
     typeof value.name === "string" &&
     typeof value.email === "string" &&
-    typeof value.company === "string" &&
     typeof value.phone === "string" &&
     typeof value.station === "string"
   );
@@ -211,10 +207,9 @@ function buildSearchCacheKey(params: ContactSearchFormValues): string {
     "contacts:search",
     `name=${encodeKeyPart(params.name)}`,
     `email=${encodeKeyPart(params.email)}`,
-    `company=${encodeKeyPart(params.company)}`,
     `phone=${encodeKeyPart(params.phone)}`,
     `station=${encodeKeyPart(params.station)}`,
-    "v3",
+    "v4",
   ].join(":");
 }
 
@@ -245,6 +240,9 @@ function normalizeContactRecords(items: unknown): ContactRecord[] {
             stationCode: asString(row.stationCode).toUpperCase(),
             stationName: asString(row.stationName),
             mediaType: asString(row.mediaType).toUpperCase(),
+            language: asString(row.language) || null,
+            syscode: asString(row.syscode) || null,
+            affiliation: asString(row.affiliation) || null,
             market: asString(row.market) || null,
             contactType: asString(row.contactType).toUpperCase(),
             primaryContact: asBoolean(row.primaryContact),
@@ -375,14 +373,6 @@ function isContactMatchSubmittedSearch(contact: ContactRecord, submitted: Submit
   if (emailQuery) {
     const email = normalizeSearchText(asString(contact.email));
     if (!email.includes(emailQuery)) {
-      return false;
-    }
-  }
-
-  const companyQuery = normalizeSearchText(params.company);
-  if (companyQuery) {
-    const company = normalizeSearchText(asString(contact.company));
-    if (!company.includes(companyQuery)) {
       return false;
     }
   }
@@ -719,9 +709,12 @@ function parseUsageRows(payload: unknown): ContactUsageJoinRow[] {
       contactId: Math.trunc(contactId),
       linkId: linkId !== null ? Math.trunc(linkId) : null,
       stationCode: asString(row.stationCode).toUpperCase(),
-      stationName: "",
-      mediaType: "",
-      market: null,
+      stationName: asString(row.stationName),
+      mediaType: asString(row.mediaType).toUpperCase(),
+      language: asString(row.language) || null,
+      syscode: asString(row.syscode) || null,
+      affiliation: asString(row.affiliation) || null,
+      market: asString(row.market) || null,
       contactType: asString(row.contactType).toUpperCase(),
       primaryContact: asBoolean(row.primaryContact),
       active: asBoolean(row.active),
@@ -729,30 +722,6 @@ function parseUsageRows(payload: unknown): ContactUsageJoinRow[] {
   }
 
   return rows;
-}
-
-function parseStationMap(payload: unknown): Record<string, { name: string; mediaType: string; market: string | null }> {
-  const data = unwrapData(payload);
-  if (!Array.isArray(data)) {
-    return {};
-  }
-
-  const map: Record<string, { name: string; mediaType: string; market: string | null }> = {};
-  for (const row of data) {
-    if (!isRecord(row)) {
-      continue;
-    }
-    const code = asString(row.code).toUpperCase();
-    if (!code) {
-      continue;
-    }
-    map[code] = {
-      name: asString(row.name),
-      mediaType: asString(row.mediaType).toUpperCase(),
-      market: asString(row.market) || null,
-    };
-  }
-  return map;
 }
 
 function parseStationScheduleRows(payload: unknown): Array<{ stationCode: string; estNum: number }> {
@@ -914,7 +883,6 @@ function buildStationEstNumUsageMap(
 function mergeContactUsage(
   contacts: ContactRecord[],
   usageRows: ContactUsageJoinRow[],
-  stationMap: Record<string, { name: string; mediaType: string; market: string | null }>,
   stationAccountUsageMap: StationAccountUsageMap,
   stationEstNumUsageMap: StationEstNumUsageMap,
 ): ContactRecord[] {
@@ -922,13 +890,15 @@ function mergeContactUsage(
 
   for (const row of usageRows) {
     const contactId = row.contactId;
-    const stationInfo = stationMap[row.stationCode] || { name: "", mediaType: "", market: null };
     const normalized: ContactUsageRow = {
       linkId: row.linkId,
       stationCode: row.stationCode,
-      stationName: stationInfo.name,
-      mediaType: stationInfo.mediaType,
-      market: stationInfo.market,
+      stationName: row.stationName,
+      mediaType: row.mediaType,
+      language: row.language,
+      syscode: row.syscode,
+      affiliation: row.affiliation,
+      market: row.market,
       contactType: row.contactType,
       primaryContact: row.primaryContact,
       active: row.active,
@@ -1150,9 +1120,6 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
     if (search.params.email) {
       params.set("emails", search.params.email);
     }
-    if (search.params.company) {
-      params.set("company", search.params.company);
-    }
     if (search.params.phone) {
       params.set("phone", search.params.phone);
     }
@@ -1197,15 +1164,6 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
         usedByEstNumCount: 0,
       };
     }
-
-    const stationsPayload = await requestJson(
-      `/api/tradsphere/v1/stations?codes=${encodeURIComponent(stationCodes.join(","))}&deliveryMethodDetail=false&contactDetail=false`,
-      {
-        headers: requestHeaders,
-        errorToast: false,
-      },
-    );
-    const stationMap = parseStationMap(stationsPayload);
 
     const schedulesPayload = await requestJson(
       `/api/tradsphere/v1/schedules?stationCodes=${encodeURIComponent(stationCodes.join(","))}`,
@@ -1256,7 +1214,6 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
     const merged = mergeContactUsage(
       [baseContact],
       usageRows,
-      stationMap,
       stationAccountUsageMap,
       stationEstNumUsageMap,
     );
@@ -1611,7 +1568,6 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
           state={state}
           groups={groups}
           error={error}
-          disabled={isRefreshing}
           onCopy={handleCopyContact}
           onEdit={handleEditContact}
           onViewUsage={handleViewUsage}

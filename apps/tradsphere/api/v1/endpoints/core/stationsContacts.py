@@ -39,6 +39,11 @@ def get_stations_contacts_route(
             {
               "id": 44,
               "stationCode": "KABC",
+              "stationName": "KABC Los Angeles",
+              "mediaType": "CA",
+              "language": "English",
+              "affiliation": "ABC",
+              "syscode": 1001,
               "contactId": 12,
               "contactType": "REP",
               "primaryContact": 1,
@@ -53,6 +58,8 @@ def get_stations_contacts_route(
         - Requires valid API key
         - ids/id, contactIds/contactId accept comma-separated integers
         - stationCodes/stationCode accept comma-separated values
+        - Includes station metadata fields for linked cards: stationName, mediaType, language, affiliation, syscode
+        - syscode is populated only when station mediaType is CA
     """
     try:
         normalized_ids = parse_int_list(ids, row_id)

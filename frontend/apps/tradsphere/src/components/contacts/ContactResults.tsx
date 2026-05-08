@@ -73,7 +73,7 @@ export function ContactResults({
               <ContactResultCard
                 key={contact.id}
                 contact={contact}
-                disabled={disabled || state === "loading"}
+                disabled={disabled}
                 onCopy={onCopy}
                 onEdit={onEdit}
                 onViewUsage={onViewUsage}

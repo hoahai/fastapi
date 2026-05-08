@@ -128,45 +128,63 @@ export function EstimateNumberSearch({
           </Field>
 
           <Field label="Months">
-            <AppDropdown
-              ariaLabel="Months"
-              value=""
-              values={value.months}
-              onValueChange={() => {}}
-              onValuesChange={(nextValues) => onChange("months", nextValues)}
-              options={MONTH_OPTIONS}
-              placeholder=""
-              searchable={false}
-              multiple
+            <ClearableDropdown
+              canClear={value.months.length > 0}
               disabled={disabled || searching}
-              emptyText="No month found."
-            />
+              onClear={() => onChange("months", [])}
+            >
+              <AppDropdown
+                ariaLabel="Months"
+                value=""
+                values={value.months}
+                onValueChange={() => {}}
+                onValuesChange={(nextValues) => onChange("months", nextValues)}
+                options={MONTH_OPTIONS}
+                placeholder=""
+                searchable={false}
+                multiple
+                disabled={disabled || searching}
+                emptyText="No month found."
+              />
+            </ClearableDropdown>
           </Field>
 
           <Field label="Quater">
-            <AppDropdown
-              ariaLabel="Quater"
-              value={value.quarter}
-              onValueChange={(nextValue) => onChange("quarter", nextValue)}
-              options={QUARTER_OPTIONS}
-              placeholder=""
-              searchable={false}
+            <ClearableDropdown
+              canClear={value.quarter.trim().length > 0}
               disabled={disabled || searching}
-              emptyText="No quarter found."
-            />
+              onClear={() => onChange("quarter", "")}
+            >
+              <AppDropdown
+                ariaLabel="Quater"
+                value={value.quarter}
+                onValueChange={(nextValue) => onChange("quarter", nextValue)}
+                options={QUARTER_OPTIONS}
+                placeholder=""
+                searchable={false}
+                disabled={disabled || searching}
+                emptyText="No quarter found."
+              />
+            </ClearableDropdown>
           </Field>
 
           <Field label="Year">
-            <AppDropdown
-              ariaLabel="Year"
-              value={value.year}
-              onValueChange={(nextValue) => onChange("year", nextValue)}
-              options={yearOptions}
-              placeholder=""
-              searchable={false}
+            <ClearableDropdown
+              canClear={value.year.trim().length > 0}
               disabled={disabled || searching}
-              emptyText="No year found."
-            />
+              onClear={() => onChange("year", "")}
+            >
+              <AppDropdown
+                ariaLabel="Year"
+                value={value.year}
+                onValueChange={(nextValue) => onChange("year", nextValue)}
+                options={yearOptions}
+                placeholder=""
+                searchable={false}
+                disabled={disabled || searching}
+                emptyText="No year found."
+              />
+            </ClearableDropdown>
           </Field>
 
           <div className="flex items-end">
@@ -246,6 +264,43 @@ function ClearableInput({
         className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 opacity-0 transition hover:text-slate-600 focus-visible:opacity-100 focus-visible:outline-none group-hover:opacity-100 group-focus-within:opacity-100"
         style={{ visibility: hasValue ? "visible" : "hidden" }}
         tabIndex={hasValue ? 0 : -1}
+      >
+        <X className="size-3.5" />
+      </button>
+    </div>
+  );
+}
+
+function ClearableDropdown({
+  children,
+  canClear,
+  disabled,
+  onClear,
+}: {
+  children: ReactNode;
+  canClear: boolean;
+  disabled?: boolean;
+  onClear: () => void;
+}) {
+  const canInteract = canClear && !disabled;
+  return (
+    <div className="group relative">
+      <div className="pr-6">{children}</div>
+      <button
+        type="button"
+        aria-label="Clear field"
+        disabled={!canInteract}
+        onClick={(event) => {
+          event.preventDefault();
+          event.stopPropagation();
+          if (!canInteract) {
+            return;
+          }
+          onClear();
+        }}
+        className="absolute right-8 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 opacity-0 transition hover:text-slate-600 focus-visible:opacity-100 focus-visible:outline-none group-hover:opacity-100 group-focus-within:opacity-100"
+        style={{ visibility: canInteract ? "visible" : "hidden" }}
+        tabIndex={canInteract ? 0 : -1}
       >
         <X className="size-3.5" />
       </button>

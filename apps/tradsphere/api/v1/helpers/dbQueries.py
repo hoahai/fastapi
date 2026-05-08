@@ -2077,13 +2077,14 @@ def get_stations_contacts(
 ) -> list[dict]:
     tables = get_db_tables()
     stations_contacts_table = _quote_table_name(tables["STATIONSCONTACTS"])
+    stations_table = _quote_table_name(tables["STATIONS"])
     where_clauses: list[str] = []
     params: list[object] = []
 
     normalized_ids = [int(item) for item in (ids or [])]
     if normalized_ids:
         placeholders = _build_in_placeholders(normalized_ids)
-        where_clauses.append(f"id IN ({placeholders})")
+        where_clauses.append(f"sc.id IN ({placeholders})")
         params.extend(normalized_ids)
 
     normalized_station_codes = [
@@ -2092,26 +2093,39 @@ def get_stations_contacts(
     normalized_station_codes = [item for item in normalized_station_codes if item]
     if normalized_station_codes:
         placeholders = _build_in_placeholders(normalized_station_codes)
-        where_clauses.append(f"UPPER(stationCode) IN ({placeholders})")
+        where_clauses.append(f"UPPER(sc.stationCode) IN ({placeholders})")
         params.extend(normalized_station_codes)
 
     normalized_contact_ids = [int(item) for item in (contact_ids or [])]
     if normalized_contact_ids:
         placeholders = _build_in_placeholders(normalized_contact_ids)
-        where_clauses.append(f"contactId IN ({placeholders})")
+        where_clauses.append(f"sc.contactId IN ({placeholders})")
         params.extend(normalized_contact_ids)
 
     if active is not None:
-        where_clauses.append("active = %s")
+        where_clauses.append("sc.active = %s")
         params.append(1 if active else 0)
 
     query = (
-        "SELECT id, stationCode, contactId, contactType, primaryContact, note, active "
-        f"FROM {stations_contacts_table}"
+        "SELECT "
+        "sc.id AS id, "
+        "UPPER(sc.stationCode) AS stationCode, "
+        "s.name AS stationName, "
+        "UPPER(COALESCE(s.mediaType, '')) AS mediaType, "
+        "s.language AS language, "
+        "s.affiliation AS affiliation, "
+        "CASE WHEN UPPER(COALESCE(s.mediaType, '')) = 'CA' THEN s.syscode ELSE NULL END AS syscode, "
+        "sc.contactId AS contactId, "
+        "sc.contactType AS contactType, "
+        "sc.primaryContact AS primaryContact, "
+        "sc.note AS note, "
+        "sc.active AS active "
+        f"FROM {stations_contacts_table} sc "
+        f"LEFT JOIN {stations_table} s ON UPPER(s.code) = UPPER(sc.stationCode)"
     )
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
-    query += " ORDER BY id ASC"
+    query += " ORDER BY sc.id ASC"
     return fetch_all(query, tuple(params))
 
 

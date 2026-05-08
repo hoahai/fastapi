@@ -1,7 +1,6 @@
 export type ContactSearchFormValues = {
   name: string;
   email: string;
-  company: string;
   phone: string;
   station: string;
 };
@@ -11,6 +10,9 @@ export type ContactUsageRow = {
   stationCode: string;
   stationName: string;
   mediaType: string;
+  language: string | null;
+  syscode: string | null;
+  affiliation: string | null;
   market: string | null;
   contactType: string;
   primaryContact: boolean;

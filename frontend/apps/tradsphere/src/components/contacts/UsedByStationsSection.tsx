@@ -39,9 +39,9 @@ export function UsedByStationsSection({ usage, className }: UsedByStationsSectio
               </header>
               <dl className="mt-1.5 grid grid-cols-1 gap-x-3 gap-y-1 text-xs sm:grid-cols-2">
                 <UsageField label="Media Type" value={item.mediaType || "-"} />
-                <UsageField label="Market" value={item.market || "-"} />
-                <UsageField label="Primary" value={item.primaryContact ? "Yes" : "No"} />
-                <UsageField label="Status" value={item.active ? "Active" : "Inactive"} />
+                <UsageField label="Language" value={item.language || "-"} />
+                <UsageField label="Affiliation" value={item.affiliation || "-"} />
+                {item.syscode ? <UsageField label="Syscode" value={item.syscode} /> : null}
               </dl>
             </article>
           ))}
