@@ -59,6 +59,9 @@
 - Cards/panels should use subtle elevation or border separation.
 - Keep title, actions, and content areas clearly separated.
 - Avoid dense wall-of-text layouts.
+- When a page stacks related sections (for example Tradsphere dashboard), keep new sections in the same content column rhythm unless a full-width requirement is explicit.
+- For weekly schedule visualization, prefer timeline-style week buckets over month-grid calendars when business data is week-centric.
+- Prefer bounded Gantt-style horizontal timelines (sticky label column + internal scroll) over unbounded full-history grids for schedule activity views.
 
 ## Layout Rules
 - Prefer responsive grid/flex layouts.

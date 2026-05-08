@@ -870,6 +870,79 @@ def get_schedules(
     return rows
 
 
+def get_schedule_timeline_rows(
+    *,
+    account_code: str,
+    start_date: str,
+    end_date: str,
+    timezone: str,
+) -> list[dict]:
+    tables = get_db_tables()
+    schedules_table = _quote_table_name(tables["SCHEDULES"])
+    schedules_weeks_table = _quote_table_name(tables["SCHEDULESWEEKS"])
+    est_nums_table = _quote_table_name(tables["ESTNUMS"])
+    stations_table = _quote_table_name(tables["STATIONS"])
+
+    normalized_account_code = _normalize_account_code(account_code)
+    if not normalized_account_code:
+        raise ValueError("accountCode is required")
+
+    normalized_start_date = str(start_date or "").strip()
+    normalized_end_date = str(end_date or "").strip()
+    if not normalized_start_date or not normalized_end_date:
+        raise ValueError("startDate and endDate are required")
+
+    normalized_timezone = str(timezone or "").strip() or "America/Chicago"
+
+    cache_key = _build_db_read_cache_key(
+        "schedule_timeline",
+        "schema=v2",
+        f"schedules_table={schedules_table}",
+        f"schedules_weeks_table={schedules_weeks_table}",
+        f"est_nums_table={est_nums_table}",
+        f"stations_table={stations_table}",
+        f"account_code={normalized_account_code}",
+        f"start_date={normalized_start_date}",
+        f"end_date={normalized_end_date}",
+        f"timezone={normalized_timezone}",
+    )
+    cached_rows = _get_cached_list(
+        cache_key,
+        ttl_key="db_schedule_timeline_ttl_time",
+    )
+    if cached_rows is not None:
+        return cached_rows
+
+    week_start_expr = "DATE_SUB(sw.weekStart, INTERVAL WEEKDAY(sw.weekStart) DAY)"
+    query = (
+        "SELECT DISTINCT "
+        "s.stationCode AS stationCode, "
+        "st.name AS stationName, "
+        "s.estNum AS estNum, "
+        "s.mediaType AS mediaType, "
+        f"{week_start_expr} AS weekStart "
+        f"FROM {schedules_weeks_table} sw "
+        f"INNER JOIN {schedules_table} s ON s.id = sw.scheduleId "
+        f"INNER JOIN {est_nums_table} en ON en.estNum = s.estNum "
+        f"LEFT JOIN {stations_table} st ON UPPER(st.code) = UPPER(s.stationCode) "
+        "WHERE UPPER(en.accountCode) = %s "
+        "AND sw.weekEnd >= %s "
+        "AND sw.weekStart <= %s "
+        "AND COALESCE(sw.spots, 0) > 0 "
+        "ORDER BY s.stationCode ASC, s.estNum ASC, weekStart ASC"
+    )
+    rows = fetch_all(
+        query,
+        (
+            normalized_account_code,
+            normalized_start_date,
+            normalized_end_date,
+        ),
+    )
+    _set_cached_value(cache_key, rows)
+    return rows
+
+
 def get_schedules_by_match_keys(match_keys: list[str]) -> list[dict]:
     normalized_match_keys = [str(item or "").strip() for item in (match_keys or [])]
     normalized_match_keys = [item for item in normalized_match_keys if item]

@@ -21,6 +21,7 @@ import {
 } from "@/components/dashboard/EstimateNumberModal";
 import { HeroBanner } from "@/components/dashboard/HeroBanner";
 import { ScheduleCard } from "@/components/dashboard/ScheduleCard";
+import { ScheduleTimelineSection } from "@/components/dashboard/ScheduleTimelineSection";
 import { ScheduleModal } from "@/components/dashboard/ScheduleModal";
 import { ScheduleUploadDialog } from "@/components/dashboard/ScheduleUploadDialog";
 import { StationCard } from "@/components/dashboard/StationCard";
@@ -769,6 +770,12 @@ function App() {
                   <p className="text-sm text-slate-500">No stations were returned for this account.</p>
                 ) : null}
               </DashboardPanel>
+
+              <ScheduleTimelineSection
+                accountCode={selectedAccountCode}
+                headers={requestHeaders}
+                disabled={isLoadingAccount || isSaving}
+              />
             </div>
           </main>
         </>

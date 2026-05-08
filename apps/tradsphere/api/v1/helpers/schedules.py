@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, timedelta
 from decimal import Decimal, InvalidOperation
 import hashlib
 import uuid
@@ -21,6 +21,7 @@ from apps.tradsphere.api.v1.helpers.clientBillingCode import (
 from apps.tradsphere.api.v1.helpers.config import get_media_types
 from apps.tradsphere.api.v1.helpers.dbQueries import (
     get_est_nums,
+    get_schedule_timeline_rows,
     get_schedules_by_match_keys,
     get_schedule_weeks,
     get_schedules,
@@ -41,6 +42,8 @@ _PDF_SCHEDULE_CACHE_BUCKET = "db_reads"
 _PDF_SCHEDULE_CACHE_PREFIX = "tradsphere_pdf::schedules_data::"
 _PDF_SCHEDULE_CACHE_TTL_SECONDS = 60 * 60 * 24 * 90
 _PDF_SCHEDULE_CACHE_SCHEMA = "v1"
+_TIMELINE_DEFAULT_TIMEZONE = "America/Chicago"
+_TIMELINE_MAX_WEEKS = 13
 _SCHEDULE_CREATE_REQUIRED_FIELDS: tuple[str, ...] = (
     "scheduleId",
     "lineNum",
@@ -749,6 +752,142 @@ def list_schedules_data(
         end_date_from=end_date_from,
         end_date_to=end_date_to,
     )
+
+
+def _to_iso_date(value: object, *, field: str) -> date:
+    text = str(value or "").strip()
+    if not text:
+        raise ValueError(f"{field} is required")
+    try:
+        return date.fromisoformat(text[:10])
+    except ValueError as exc:
+        raise ValueError(f"{field} must be ISO date YYYY-MM-DD") from exc
+
+
+def _build_timeline_weeks(*, start: date, end: date) -> list[dict[str, str]]:
+    first_week_start = start - timedelta(days=start.weekday())
+    last_week_start = end - timedelta(days=end.weekday())
+    out: list[dict[str, str]] = []
+    current = first_week_start
+    while current <= last_week_start:
+        week_end = current + timedelta(days=6)
+        out.append(
+            {
+                "weekStart": current.isoformat(),
+                "weekEnd": week_end.isoformat(),
+                "label": f"{current.month}/{current.day}",
+            }
+        )
+        current = current + timedelta(days=7)
+    return out
+
+
+def list_schedule_timeline_data(
+    *,
+    account_code: str,
+    start_date: str,
+    end_date: str,
+    timezone: str | None = None,
+) -> dict[str, object]:
+    normalized_account_code = str(account_code or "").strip().upper()
+    if not normalized_account_code:
+        raise ValueError("accountCode is required")
+
+    start_obj = _to_iso_date(start_date, field="startDate")
+    end_obj = _to_iso_date(end_date, field="endDate")
+    if start_obj > end_obj:
+        raise ValueError("startDate must be on or before endDate")
+
+    normalized_timezone = str(timezone or "").strip() or _TIMELINE_DEFAULT_TIMEZONE
+    if len(normalized_timezone) > 64:
+        raise ValueError("timezone must be <= 64 characters")
+
+    first_week_start = start_obj - timedelta(days=start_obj.weekday())
+    max_allowed_end = first_week_start + timedelta(days=_TIMELINE_MAX_WEEKS * 7 - 1)
+    if end_obj > max_allowed_end:
+        end_obj = max_allowed_end
+
+    weeks = _build_timeline_weeks(start=start_obj, end=end_obj)
+    if len(weeks) > _TIMELINE_MAX_WEEKS:
+        weeks = weeks[:_TIMELINE_MAX_WEEKS]
+        end_obj = date.fromisoformat(weeks[-1]["weekEnd"])
+    if not weeks:
+        return {
+            "accountCode": normalized_account_code,
+            "timezone": normalized_timezone,
+            "startDate": start_obj.isoformat(),
+            "endDate": end_obj.isoformat(),
+            "weeks": [],
+            "items": [],
+        }
+
+    rows = get_schedule_timeline_rows(
+        account_code=normalized_account_code,
+        start_date=weeks[0]["weekStart"],
+        end_date=weeks[-1]["weekEnd"],
+        timezone=normalized_timezone,
+    )
+    weeks_by_start = {
+        str(week["weekStart"]): {
+            "weekStart": str(week["weekStart"]),
+            "weekEnd": str(week["weekEnd"]),
+            "label": str(week["label"]),
+        }
+        for week in weeks
+    }
+
+    grouped: dict[tuple[str, str], dict[str, object]] = {}
+    for row in rows:
+        station_code = str(row.get("stationCode") or "").strip().upper()
+        if not station_code:
+            continue
+        est_num_text = str(row.get("estNum") or "").strip()
+        if not est_num_text:
+            continue
+        week_start = str(row.get("weekStart") or "").strip()[:10]
+        week = weeks_by_start.get(week_start)
+        if week is None:
+            continue
+
+        key = (station_code, est_num_text)
+        item = grouped.get(key)
+        if item is None:
+            item = {
+                "stationCode": station_code,
+                "stationName": str(row.get("stationName") or "").strip(),
+                "estNum": est_num_text,
+                "mediaType": str(row.get("mediaType") or "").strip().upper(),
+                "activeWeeks": [],
+            }
+            grouped[key] = item
+
+        active_weeks = item.get("activeWeeks")
+        if not isinstance(active_weeks, list):
+            active_weeks = []
+            item["activeWeeks"] = active_weeks
+        if week["weekStart"] not in active_weeks:
+            active_weeks.append(week["weekStart"])
+
+    items = list(grouped.values())
+    items.sort(
+        key=lambda item: (
+            str(item.get("stationCode") or ""),
+            str(item.get("estNum") or ""),
+        )
+    )
+    for item in items:
+        active_weeks = item.get("activeWeeks")
+        if isinstance(active_weeks, list):
+            active_weeks.sort()
+
+    return {
+        "accountCode": normalized_account_code,
+        "timezone": normalized_timezone,
+        "startDate": start_obj.isoformat(),
+        "endDate": end_obj.isoformat(),
+        "weeks": weeks,
+        "items": items,
+    }
 
 
 def create_schedules_data(

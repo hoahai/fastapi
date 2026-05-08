@@ -11,6 +11,19 @@ This app inherits global standards from `frontend/DESIGNS.md`.
 - Prefer existing `src/components/ui` primitives and dashboard components.
 - Keep table/list filtering interactions lightweight and responsive.
 - Preserve existing visual hierarchy and spacing rhythm.
+- Tradsphere Home `Schedule Timeline` must follow the same card rhythm and column alignment as `EstNums - Schedules` and `Stations` (no full-width calendar layout).
+
+## Schedule Timeline
+- Replace calendar-style schedule visualization with a bounded Gantt-style weekly timeline section.
+- Place timeline below the `Stations` section in the same right-column dashboard stack.
+- Keep section collapsible with default expanded behavior.
+- Rows: `StationCode · EstNum` (station name as secondary line when available).
+- Columns: broadcast weeks (Monday start) for the bounded visible period.
+- Left label column should stay sticky while horizontal scrolling.
+- Render all returned rows; if content is tall, keep the section height bounded and allow internal vertical scrolling.
+- Render contiguous active weeks as one bar segment and non-contiguous weeks as separate segments.
+- Bars are visual-only for activity ranges; do not display spot/gross text in bars.
+- Cache timeline payloads by account + visible range + schema version (`v2`), keep cached timeline mounted while background refresh runs, and avoid unbounded cache growth.
 
 ## Interaction Guidance
 - Surface API/loading errors inline and close to related actions.

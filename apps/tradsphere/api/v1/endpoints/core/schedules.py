@@ -11,6 +11,7 @@ from apps.tradsphere.api.v1.helpers.queryParsing import (
 from apps.tradsphere.api.v1.helpers.schedules import (
     create_schedules_data,
     get_pdf_schedule_data,
+    list_schedule_timeline_data,
     list_schedules_data,
     modify_schedules_data,
 )
@@ -127,6 +128,72 @@ def get_schedules_route(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except HTTPException:
         raise
+
+
+@router.get("/timeline")
+def get_schedules_timeline_route(
+    account_code: str = Query(..., alias="accountCode"),
+    start_date: str = Query(..., alias="startDate"),
+    end_date: str = Query(..., alias="endDate"),
+    timezone: str = Query("America/Chicago", alias="timezone"),
+):
+    """
+    Return compact weekly active-schedule timeline rows grouped by station + estimate number.
+
+    Example request:
+        GET /api/tradsphere/v1/schedules/timeline?accountCode=DCNY&startDate=2026-05-01&endDate=2026-05-31&timezone=America/Chicago
+
+    Example response:
+        {
+          "meta": {"timestamp": "2026-05-08T23:00:00+07:00", "duration_ms": 6},
+          "data": {
+            "accountCode": "DCNY",
+            "timezone": "America/Chicago",
+            "startDate": "2026-05-01",
+            "endDate": "2026-05-31",
+            "weeks": [
+              {"weekStart": "2026-04-27", "weekEnd": "2026-05-03", "label": "4/27"},
+              {"weekStart": "2026-05-04", "weekEnd": "2026-05-10", "label": "5/4"}
+            ],
+            "items": [
+              {
+                "stationCode": "KUPB",
+                "stationName": "KUPB-TV",
+                "estNum": "1987",
+                "mediaType": "TV",
+                "activeWeeks": ["2026-05-04", "2026-05-11", "2026-05-18"]
+              }
+            ]
+          }
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - accountCode is required
+        - startDate and endDate are required ISO dates (YYYY-MM-DD)
+        - startDate must be on or before endDate
+        - Request window is bounded to a maximum of 13 broadcast weeks
+        - If endDate exceeds max range from startDate, endDate is clamped to the allowed boundary
+        - weeks use Monday-start broadcast-style buckets for timeline columns
+        - response is compact timeline data only (no full schedule row payload, no spot/gross aggregates)
+    """
+    parsed_start_date = parse_optional_date(start_date, field="startDate")
+    parsed_end_date = parse_optional_date(end_date, field="endDate")
+    if parsed_start_date is None:
+        raise HTTPException(status_code=400, detail="startDate is required")
+    if parsed_end_date is None:
+        raise HTTPException(status_code=400, detail="endDate is required")
+
+    try:
+        return list_schedule_timeline_data(
+            account_code=account_code,
+            start_date=parsed_start_date.isoformat(),
+            end_date=parsed_end_date.isoformat(),
+            timezone=timezone,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/pdf")

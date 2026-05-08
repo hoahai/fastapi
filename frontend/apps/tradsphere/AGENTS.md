@@ -258,6 +258,19 @@
 
 ## Reusable UI Enforcement
 - Use a shared `Section` + `SectionHeader` pattern for repeated areas such as basic info, delivery method, contacts, account info, estimate numbers, stations, and schedules.
+
+## Schedule Timeline Section
+- Schedule Calendar experiments were replaced by a `Schedule Timeline` section on Tradsphere Home.
+- Keep `Schedule Timeline` directly below `Stations` and aligned to the same dashboard column/container width as `EstNums - Schedules` and `Stations`.
+- Do not render timeline as a full-page/full-width calendar block.
+- Timeline should render as a bounded horizontal Gantt-style lane view with a sticky left label column and horizontally scrollable week lanes.
+- Timeline rows represent `StationCode + EstNum`; timeline columns represent Monday-start broadcast weeks.
+- Show all timeline rows returned for the visible period; use internal vertical scroll instead of `+ more` collapsing.
+- Timeline section must be collapsible; default expanded and persisted with page state.
+- Default visible range is current broadcast week through next 8 weeks (9 weeks total).
+- Do not request unbounded history; API request window must stay bounded (max 13 weeks).
+- Timeline data cache key must include account + visible period range + schema version (for example `tradsphere:schedule-timeline:v2:<accountCode>:<startDate>:<endDate>`).
+- Timeline bars should represent active contiguous weekly ranges; do not display spot counts inside bars.
 - Use shared `FormRow` + `ReadOnlyField` primitives for label/value alignment and responsive stack behavior; avoid ad-hoc padding offsets for alignment.
 - Use shared `ModalShell` + `ModalFooter` behavior for all Tradsphere modals:
   - close by `X`

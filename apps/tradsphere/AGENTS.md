@@ -232,6 +232,11 @@ Authorization:
   - returns structured schedule-table JSON for frontend report rendering
   - reuses schedule report-generation logic so compact/detail table math stays aligned
   - does not modify existing PDF generation behavior
+- `GET /schedules/timeline`:
+  - returns compact weekly activity timeline data for UI (rows by `stationCode + estNum`, columns by broadcast weeks)
+  - filters by `accountCode` + visible date range and returns only required timeline fields (`activeWeeks`), without spot/gross totals
+  - uses one aggregated SQL query per account/period request (no week-by-week or station-by-station N+1 queries)
+  - enforces bounded range behavior for SQL-resource safety (max 13 broadcast weeks)
 
 ## 9. MySQL Database Schema
 
@@ -301,6 +306,7 @@ All routes require `X-Tenant-Id` + valid API key unless route docs/state says ot
 | POST | `/api/tradsphere/v1/stations/deliveryMethods` | `create_delivery_methods_route` | `TradSphere_DeliveryMethods` | Upserts delivery methods; invalidates caches. |
 | PUT | `/api/tradsphere/v1/stations/deliveryMethods` | `update_delivery_methods_route` | `TradSphere_DeliveryMethods` | Updates delivery methods; invalidates caches. |
 | GET | `/api/tradsphere/v1/schedules` | `get_schedules_route` | `TradSphere_Schedules` | Read only. |
+| GET | `/api/tradsphere/v1/schedules/timeline` | `get_schedules_timeline_route` | `TradSphere_ScheduleWeeks`, `TradSphere_Schedules`, `TradSphere_EstNums`, `TradSphere_Stations` | Compact weekly timeline activity only (account + bounded date-range scoped, no spot/gross aggregate payload). |
 | GET | `/api/tradsphere/v1/schedules/table` | `get_schedules_table_route` | `TradSphere_Schedules`, `TradSphere_ScheduleWeeks`, `TradSphere_Stations`, `TradSphere_EstNums` | Returns structured compact/detail schedule table JSON; reused report logic; PDF route unchanged. |
 | GET | `/api/tradsphere/v1/schedules/pdf` | `get_schedules_pdf_route` | `TradSphere_Schedules`, `TradSphere_ScheduleWeeks`, `TradSphere_Stations`, `TradSphere_EstNums` | Generates PDF bytes; uses/refreshes tenant-scoped PDF cache. |
 | POST | `/api/tradsphere/v1/schedules` | `create_schedules_route` | `TradSphere_Schedules`, `TradSphere_ScheduleWeeks` | Upserts schedules + weeks; invalidates validation + PDF caches. |
