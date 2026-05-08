@@ -19,6 +19,7 @@ import { useToast } from "@/components/ui/toast";
 import { useApiRequest } from "@/hooks/useApiRequest";
 import { readBrowserCacheSnapshot, removeBrowserCache, writeBrowserCache } from "@/lib/browserCache";
 import { shouldFetchNetwork, type CachePolicy } from "@shared/cache";
+import { hasAtLeastOneSearchCriterion, shouldFetchSubmittedSearchNetwork } from "@shared/search";
 
 const CONTACTS_SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
 const CONTACT_DETAIL_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -295,7 +296,7 @@ function normalizeContactRecords(items: unknown): ContactRecord[] {
 
 function buildSearchSubmission(draft: ContactSearchFormValues): BuildSearchResult {
   const normalized = normalizeSearchForm(draft);
-  const hasAnyInput = Object.values(normalized).some((value) => Boolean(asString(value)));
+  const hasAnyInput = hasAtLeastOneSearchCriterion(normalized);
 
   if (!hasAnyInput) {
     return {
@@ -861,6 +862,7 @@ export default function ContactsPage() {
   const [submittedSearch, setSubmittedSearch] = useState<SubmittedSearch | null>(null);
   const [submissionVersion, setSubmissionVersion] = useState(0);
   const [searchMessage, setSearchMessage] = useState<string | null>(null);
+  const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
 
   const [state, setState] = useState<SearchUiState>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -883,6 +885,8 @@ export default function ContactsPage() {
 
   const groups = useMemo(() => buildGroups(contacts), [contacts]);
   const resultText = contacts.length ? formatResultText(contacts.length) : null;
+  const draftSearchResult = useMemo(() => buildSearchSubmission(draft), [draft]);
+  const canSubmitSearch = draftSearchResult.ok;
 
   const cacheStatusText = isRefreshing
     ? "Refreshing..."
@@ -1117,6 +1121,7 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
       setError(null);
       setContacts([]);
       setCacheStatus(null);
+      setRefreshMessage(null);
       return;
     }
 
@@ -1144,9 +1149,11 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
         source: "cache",
         fetchedAt: snapshot?.fetchedAt ?? Date.now(),
       });
+    } else {
+      setContacts([]);
     }
 
-    const shouldFetch = shouldFetchNetwork(options.policy, effectiveSnapshot);
+    const shouldFetch = shouldFetchSubmittedSearchNetwork(options.policy, effectiveSnapshot);
     if (!shouldFetch) {
       return;
     }
@@ -1175,6 +1182,7 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
       setContacts(normalizedNextContacts);
       setState(normalizedNextContacts.length ? "ready" : "empty");
       setError(null);
+      setRefreshMessage(null);
       setCacheStatus({ source: "network", fetchedAt: Date.now() });
 
       writeBrowserCache(cacheKey, normalizedNextContacts, CONTACTS_SEARCH_CACHE_TTL_MS, {
@@ -1185,8 +1193,15 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
       if (requestToken !== requestTokenRef.current) {
         return;
       }
-      setState("error");
-      setError(getErrorMessage(loadError, "Could not load contacts. Please try again."));
+      const hasVisibleCachedResults = normalizedSnapshotData.length > 0;
+      if (hasVisibleCachedResults) {
+        setRefreshMessage("Showing cached results. Could not refresh.");
+        setState("ready");
+        setError(null);
+      } else {
+        setState("error");
+        setError(getErrorMessage(loadError, "Could not load contacts. Please try again."));
+      }
     } finally {
       if (inFlightRef.current[requestKey] === requestPromise) {
         delete inFlightRef.current[requestKey];
@@ -1212,10 +1227,13 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
     if (searchMessage) {
       setSearchMessage(null);
     }
+    if (refreshMessage) {
+      setRefreshMessage(null);
+    }
   }
 
   function handleSubmitSearch() {
-    const result = buildSearchSubmission(draft);
+    const result = draftSearchResult;
     if (!result.ok) {
       setSearchMessage(result.message);
       if (result.clearResults) {
@@ -1224,11 +1242,13 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
         setContacts([]);
         setError(null);
         setCacheStatus(null);
+        setRefreshMessage(null);
       }
       return;
     }
 
     setSearchMessage(null);
+    setRefreshMessage(null);
     const isSameSearch = submittedSearch?.cacheKey === result.submitted.cacheKey;
     if (isSameSearch) {
       void loadSearchData({ policy: "network-only" }, result.submitted);
@@ -1242,6 +1262,7 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
   function handleClearSearch() {
     setDraft(INITIAL_SEARCH_FORM);
     setSearchMessage(null);
+    setRefreshMessage(null);
   }
 
   function handleRefreshSearch() {
@@ -1344,11 +1365,16 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
         onChange={handleDraftChange}
         onSubmit={handleSubmitSearch}
         onClear={handleClearSearch}
+        canSubmit={canSubmitSearch}
         searching={state === "loading"}
         disabled={isRefreshing}
         resultText={resultText}
-        message={searchMessage}
+        message={searchMessage ?? (!draftSearchResult.ok ? draftSearchResult.message : null)}
       />
+
+      {refreshMessage ? (
+        <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">{refreshMessage}</p>
+      ) : null}
 
       <div className="relative">
         <ContactResults

@@ -31,6 +31,7 @@ import {
   shouldFetchNetwork,
   type CachePolicy,
 } from "@shared/cache";
+import { shouldFetchSubmittedSearchNetwork } from "@shared/search";
 
 const SEARCH_LIMIT = 50;
 const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -1251,6 +1252,7 @@ export default function EstimateNumbersPage() {
   );
   const [submissionVersion, setSubmissionVersion] = useState(0);
   const [searchMessage, setSearchMessage] = useState<string | null>(null);
+  const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
 
   const [state, setState] = useState<SearchUiState>("idle");
   const [error, setError] = useState<string | null>(null);
@@ -1288,6 +1290,9 @@ export default function EstimateNumbersPage() {
 
   const groupedResults = useMemo(() => buildGroups(displayPage?.items ?? []), [displayPage]);
   const resultText = useMemo(() => formatResultText(displayPage), [displayPage]);
+  const draftSearchPlan = useMemo(() => buildSearchPlan(draft), [draft]);
+  const canSubmitSearch = draftSearchPlan.ok;
+  const draftValidationMessage = !draftSearchPlan.ok ? draftSearchPlan.message : null;
 
   const estimateModalAccountOptions = useMemo(
     () =>
@@ -1316,14 +1321,12 @@ export default function EstimateNumbersPage() {
   const showCacheChip = Boolean(
     submittedSearch && !isAnyModalOpen && state === "ready" && (displayPage?.items.length ?? 0) > 0,
   );
-  const isPageBusy = isLoadingAccountSelections || state === "loading" || isRefreshing || isLoadingMore;
+  const isPageBusy = isLoadingAccountSelections || state === "loading" || isLoadingMore;
   const pageBusyMessage = isLoadingAccountSelections
     ? "Loading account selections..."
     : isLoadingMore
       ? "Loading more estimate numbers..."
-      : isRefreshing
-        ? "Refreshing estimate numbers..."
-        : "Searching estimate numbers...";
+      : "Searching estimate numbers...";
 
   useEffect(() => {
     pageRef.current = page;
@@ -1512,6 +1515,7 @@ export default function EstimateNumbersPage() {
         setError(null);
         setPage(null);
         setCacheStatus(null);
+        setRefreshMessage(null);
       }
       return;
     }
@@ -1536,7 +1540,7 @@ export default function EstimateNumbersPage() {
       });
     }
 
-    const shouldFetch = options.append ? true : shouldFetchNetwork(options.policy, snapshot);
+    const shouldFetch = options.append ? true : shouldFetchSubmittedSearchNetwork(options.policy, snapshot);
     if (!shouldFetch) {
       return;
     }
@@ -1579,6 +1583,7 @@ export default function EstimateNumbersPage() {
       pageRef.current = resolvedPage;
       setState(resolvedPage.items.length ? "ready" : "empty");
       setError(null);
+      setRefreshMessage(null);
       setCacheStatus({
         source: "network",
         fetchedAt: Date.now(),
@@ -1599,16 +1604,29 @@ export default function EstimateNumbersPage() {
         return;
       }
 
+      const hasVisibleCachedResults = !options.append && (pageRef.current?.items.length ?? 0) > 0;
       const message = getErrorMessage(loadError, "Unable to load estimate numbers.");
       if (activeSearch.plan.type === "search" && isSearchEndpointMissing(loadError)) {
         setBackendSearchUnavailable(true);
-        setState("error");
-        setError(
-          "Backend EstNum search endpoint is unavailable. Proposed backend support: GET /api/tradsphere/v1/estNums/search with fielded params (estnum, account, buyer, note, months, year, quarter, createdToday).",
-        );
+        if (hasVisibleCachedResults) {
+          setRefreshMessage("Showing cached results. Could not refresh.");
+          setState("ready");
+          setError(null);
+        } else {
+          setState("error");
+          setError(
+            "Backend EstNum search endpoint is unavailable. Proposed backend support: GET /api/tradsphere/v1/estNums/search with fielded params (estnum, account, buyer, note, months, year, quarter, createdToday).",
+          );
+        }
       } else {
-        setState("error");
-        setError(message);
+        if (hasVisibleCachedResults) {
+          setRefreshMessage("Showing cached results. Could not refresh.");
+          setState("ready");
+          setError(null);
+        } else {
+          setState("error");
+          setError(message);
+        }
       }
     } finally {
       if (inFlightRef.current[requestKey] === requestPromise) {
@@ -1642,10 +1660,13 @@ export default function EstimateNumbersPage() {
     if (searchMessage) {
       setSearchMessage(null);
     }
+    if (refreshMessage) {
+      setRefreshMessage(null);
+    }
   }
 
   function handleSubmitSearch() {
-    const result = buildSearchPlan(draft);
+    const result = draftSearchPlan;
     if (!result.ok) {
       setSearchMessage(result.message);
       if (result.clearResults) {
@@ -1653,12 +1674,14 @@ export default function EstimateNumbersPage() {
         setPage(null);
         setError(null);
         setCacheStatus(null);
+        setRefreshMessage(null);
         setState("idle");
       }
       return;
     }
 
     setSearchMessage(null);
+    setRefreshMessage(null);
     setBackendSearchUnavailable(false);
     const isSameSubmittedSearch = submittedSearch?.cacheKey === result.submitted.cacheKey;
     if (isSameSubmittedSearch) {
@@ -1675,6 +1698,7 @@ export default function EstimateNumbersPage() {
   function handleClearDraft() {
     setDraft(INITIAL_SEARCH_FORM);
     setSearchMessage(null);
+    setRefreshMessage(null);
   }
 
   function handleRefreshSearch() {
@@ -1788,8 +1812,13 @@ export default function EstimateNumbersPage() {
         searching={state === "loading"}
         disabled={isLoadingMore || isRefreshing || isLoadingAccountSelections}
         resultText={resultText}
-        message={searchMessage}
+        canSubmit={canSubmitSearch}
+        message={searchMessage ?? draftValidationMessage}
       />
+
+      {refreshMessage ? (
+        <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">{refreshMessage}</p>
+      ) : null}
 
       {backendSearchUnavailable && submittedSearch?.plan.type === "search" ? (
         <p className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">

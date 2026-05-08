@@ -22,6 +22,7 @@ type EstimateNumberSearchProps = {
   onChange: <K extends keyof EstimateNumberSearchFormValues>(field: K, nextValue: EstimateNumberSearchFormValues[K]) => void;
   onSubmit: () => void;
   onClear: () => void;
+  canSubmit: boolean;
   searching: boolean;
   disabled?: boolean;
   resultText?: string | null;
@@ -56,6 +57,7 @@ export function EstimateNumberSearch({
   onChange,
   onSubmit,
   onClear,
+  canSubmit,
   searching,
   disabled,
   resultText,
@@ -81,7 +83,7 @@ export function EstimateNumberSearch({
         className="space-y-4 px-1"
         onSubmit={(event) => {
           event.preventDefault();
-          if (disabled || searching) {
+          if (disabled || searching || !canSubmit) {
             return;
           }
           onSubmit();
@@ -185,10 +187,12 @@ export function EstimateNumberSearch({
             <Button type="button" variant="outline" onClick={onClear} disabled={disabled || searching}>
               Clear
             </Button>
-            <Button type="submit" disabled={disabled || searching}>
-              {searching ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
-              Search
-            </Button>
+            {canSubmit || searching ? (
+              <Button type="submit" disabled={disabled || searching || !canSubmit}>
+                {searching ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
+                Search
+              </Button>
+            ) : null}
           </div>
         </div>
       </form>

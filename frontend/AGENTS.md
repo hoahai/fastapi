@@ -47,6 +47,19 @@
 ## Shared Cache Rules
 - Use shared cache utilities under `frontend/shared/cache/` for frontend data caching.
 - Default data-loading policy is `stale-while-revalidate`.
+- Search-submit revalidation rule:
+  - on valid search submit, render matching cached results immediately when available
+  - always send a fresh network request in the background for the submitted params
+  - keep cached results mounted while refreshing and update UI/cache when fresh data returns
+  - ignore stale/out-of-order responses from older submissions
+- Search form validity rule (global across all apps/pages):
+  - do not run search while typing; search runs only on submit
+  - search submit action must be hidden or disabled until the form is valid
+  - empty/invalid search form submits must not trigger backend requests
+  - when no required fields exist, require at least one searchable field value before enabling search
+- Offline-friendly search rule:
+  - if refresh fails and cached results exist, keep cached results visible and show a non-blocking cached-data message
+  - if refresh fails and no cached results exist, show normal error state
 - Manual refresh actions must use `network-only` and update cache on success.
 - Mutations (`create/update/delete`) must patch relevant cache entries and invalidate or mark related cache keys stale.
 - Never persist sensitive values (`passwords`, tokens, secrets) to `localStorage`/`sessionStorage`; use in-memory cache for sensitive data.

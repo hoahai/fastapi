@@ -36,6 +36,19 @@
 - Inputs use clear labels and visible focus states.
 - Validation feedback should be concise and placed near fields.
 - Keep form field spacing consistent.
+- Search forms are submit-only and must never trigger backend search requests while typing.
+- Search submit actions must stay hidden or disabled until search criteria are valid.
+- Empty/invalid search submits must not call backend APIs.
+- If a search form has no required fields, default validity is `at least one searchable field is filled`.
+
+## Search Cache UX
+- On valid submit, show matching cached results immediately when present.
+- After showing cache, always run a background network refresh for the submitted params.
+- Keep cached results visible while refreshing; do not blank result areas during revalidation.
+- Manual refresh actions (if present) should use network-only for the current submitted search context.
+- Ignore stale/out-of-order responses from older submissions so results always match the latest valid submit.
+- If refresh fails and cache exists, keep cached results visible and show a small non-blocking cached-data message.
+- If refresh fails and no cache exists, show the normal error state.
 
 ## Cards and Panels
 - Cards/panels should use subtle elevation or border separation.
