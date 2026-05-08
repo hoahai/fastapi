@@ -28,9 +28,5 @@ export function shouldFetchSubmittedSearchNetwork(
   policy: CachePolicy,
   snapshot: CacheSnapshot<unknown> | null,
 ): boolean {
-  if (policy === "stale-while-revalidate") {
-    return true;
-  }
-
   return shouldFetchNetwork(policy, snapshot);
 }
