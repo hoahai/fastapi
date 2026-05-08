@@ -1,4 +1,4 @@
-import { Copy, Pencil, Waypoints } from "lucide-react";
+import { Copy, Waypoints } from "lucide-react";
 
 import { ActionIconButton } from "@/components/dashboard/ActionIconButton";
 
@@ -21,9 +21,28 @@ export function ContactResultCard({
 }: ContactResultCardProps) {
   const name = contact.fullName || "-";
   const email = contact.email || "-";
+  const usedByStationsText = contact.stationCodes.length ? contact.stationCodes.join(", ") : "-";
 
   return (
-    <article className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+    <article
+      role="button"
+      tabIndex={disabled ? -1 : 0}
+      onClick={() => {
+        if (!disabled) {
+          onEdit(contact);
+        }
+      }}
+      onKeyDown={(event) => {
+        if (disabled) {
+          return;
+        }
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onEdit(contact);
+        }
+      }}
+      className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-blue-300 hover:shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+    >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="truncate text-base font-semibold text-slate-900">{name}</p>
@@ -32,22 +51,22 @@ export function ContactResultCard({
 
         <div className="flex items-center gap-0.5">
           <ActionIconButton
-            icon={<Copy />}
-            tooltip="Copy contact"
-            onClick={() => onCopy(contact)}
-            disabled={disabled || !contact.email}
-          />
-          <ActionIconButton
-            icon={<Pencil />}
-            tooltip="Edit contact"
-            onClick={() => onEdit(contact)}
-            disabled={disabled}
-          />
-          <ActionIconButton
             icon={<Waypoints />}
             tooltip="View used by stations"
-            onClick={() => onViewUsage(contact)}
+            onClick={(event) => {
+              event.stopPropagation();
+              onViewUsage(contact);
+            }}
             disabled={disabled}
+          />
+          <ActionIconButton
+            icon={<Copy />}
+            tooltip="Copy contact"
+            onClick={(event) => {
+              event.stopPropagation();
+              onCopy(contact);
+            }}
+            disabled={disabled || !contact.email}
           />
         </div>
       </div>
@@ -63,10 +82,6 @@ export function ContactResultCard({
           <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600">No type</span>
         )}
 
-        {contact.isPrimaryContact ? (
-          <span className="rounded-full bg-emerald-100 px-2 py-0.5 text-xs font-medium text-emerald-700">Primary</span>
-        ) : null}
-
         <span
           className={`rounded-full px-2 py-0.5 text-xs font-medium ${
             contact.active ? "bg-slate-100 text-slate-700" : "bg-rose-100 text-rose-700"
@@ -81,7 +96,7 @@ export function ContactResultCard({
         <Meta label="Job Title" value={contact.jobTitle} />
         <Meta label="Office" value={contact.office} />
         <Meta label="Cell" value={contact.cell} />
-        <Meta label="Used by stations" value={String(contact.usedByStationCount)} />
+        <Meta label="Used by stations" value={usedByStationsText} />
       </div>
     </article>
   );

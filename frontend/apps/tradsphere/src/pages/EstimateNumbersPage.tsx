@@ -20,6 +20,7 @@ import { Button } from "@/components/ui/button";
 import { CacheStatusChip } from "@/components/ui/cache-status-chip";
 import { useToast } from "@/components/ui/toast";
 import { useApiRequest } from "@/hooks/useApiRequest";
+import { usePersistentState } from "@/hooks/usePersistentState";
 import {
   readBrowserCacheSnapshot,
   removeBrowserCacheByPrefix,
@@ -40,6 +41,8 @@ const SELECTIONS_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.SELECTIONS;
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspace.sidebar.collapsed";
 const LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY = "tradsphere:ui:sidebarCollapsed:v1";
 const SIDEBAR_COLLAPSED_EVENT = "workspace-sidebar-collapsed-change";
+const ESTNUMS_SEARCH_DRAFT_STORAGE_KEY = "tradsphere.estnums.searchDraft.v1";
+const ESTNUMS_SUBMITTED_SEARCH_STORAGE_KEY = "tradsphere.estnums.submittedSearch.v1";
 
 type SearchUiState = "idle" | "loading" | "ready" | "empty" | "error";
 
@@ -861,6 +864,48 @@ function normalizeDraft(draft: EstimateNumberSearchFormValues): EstimateNumberSe
   };
 }
 
+function isEstimateNumberSearchFormValues(value: unknown): value is EstimateNumberSearchFormValues {
+  if (!isRecord(value)) {
+    return false;
+  }
+  const months = value.months;
+  return (
+    typeof value.estimateNumber === "string" &&
+    typeof value.account === "string" &&
+    typeof value.buyer === "string" &&
+    typeof value.note === "string" &&
+    Array.isArray(months) &&
+    months.every((item) => typeof item === "string") &&
+    typeof value.year === "string" &&
+    typeof value.quarter === "string" &&
+    typeof value.createdToday === "boolean"
+  );
+}
+
+function isSearchPlan(value: unknown): value is SearchPlan {
+  if (!isRecord(value) || typeof value.type !== "string" || typeof value.query !== "string") {
+    return false;
+  }
+  if (value.type === "list") {
+    return true;
+  }
+  if (value.type === "search") {
+    return typeof value.includeCreatedToday === "boolean";
+  }
+  return false;
+}
+
+function isSubmittedSearch(value: unknown): value is SubmittedSearch {
+  if (!isRecord(value)) {
+    return false;
+  }
+  return (
+    typeof value.cacheKey === "string" &&
+    isEstimateNumberSearchFormValues(value.params) &&
+    isSearchPlan(value.plan)
+  );
+}
+
 function toQuarterLabel(quarter: number): string {
   return `Q${quarter}`;
 }
@@ -1194,8 +1239,16 @@ export default function EstimateNumbersPage() {
   const [isLoadingAccountSelections, setIsLoadingAccountSelections] = useState(true);
   const [sidebarVisuallyExpanded, setSidebarVisuallyExpanded] = useState<boolean>(() => !readSidebarCollapsedState());
 
-  const [draft, setDraft] = useState<EstimateNumberSearchFormValues>(INITIAL_SEARCH_FORM);
-  const [submittedSearch, setSubmittedSearch] = useState<SubmittedSearch | null>(null);
+  const [draft, setDraft] = usePersistentState<EstimateNumberSearchFormValues>(
+    ESTNUMS_SEARCH_DRAFT_STORAGE_KEY,
+    INITIAL_SEARCH_FORM,
+    { storage: "session", validate: isEstimateNumberSearchFormValues },
+  );
+  const [submittedSearch, setSubmittedSearch] = usePersistentState<SubmittedSearch | null>(
+    ESTNUMS_SUBMITTED_SEARCH_STORAGE_KEY,
+    null,
+    { storage: "session", validate: (value): value is SubmittedSearch | null => value === null || isSubmittedSearch(value) },
+  );
   const [submissionVersion, setSubmissionVersion] = useState(0);
   const [searchMessage, setSearchMessage] = useState<string | null>(null);
 

@@ -298,12 +298,18 @@ def list_contacts_data(
     *,
     emails: list[str] | None = None,
     name: str | None = None,
+    company: str | None = None,
+    phone: str | None = None,
+    station: str | None = None,
     contact_type: str | None = None,
     active: bool | None = None,
 ) -> list[dict]:
     rows = get_contacts(
         emails=emails or [],
         name=name,
+        company=company,
+        phone=phone,
+        station=station,
         contact_type=_normalize_contact_type(contact_type) if contact_type else None,
         active=active,
     )

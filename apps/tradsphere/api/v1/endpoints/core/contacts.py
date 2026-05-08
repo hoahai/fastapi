@@ -18,19 +18,25 @@ def get_contacts_route(
     emails: list[str] | None = Query(None, alias="emails"),
     email: list[str] | None = Query(None, alias="email"),
     name: str | None = Query(None),
+    company: str | None = Query(None),
+    phone: str | None = Query(None),
+    station: str | None = Query(None),
     contact_types: str | None = Query(None, alias="contactTypes"),
     contact_type: str | None = Query(None, alias="contactType"),
     contact_type_lower: str | None = Query(None, alias="contacttype"),
     active: bool | None = Query(None),
 ):
     """
-    Return contact rows filtered by email, name, contact type, and/or active.
+    Return contact rows filtered by keyword fields, contact type, and/or active.
 
     Example request (partial email, multiple values):
         GET /api/tradsphere/v1/contacts?emails=ops,billing@station.com&active=true
 
     Example request (partial name/contact type):
         GET /api/tradsphere/v1/contacts?name=ari&contactType=REP
+
+    Example request (station and phone partial match):
+        GET /api/tradsphere/v1/contacts?station=KABC&phone=8324886150
 
     Example response:
         {
@@ -55,11 +61,14 @@ def get_contacts_route(
     Requirements:
         - Requires X-Tenant-Id header
         - Requires valid API key
-        - At least one filter is required: emails/email, name, contactType/contactTypes/contacttype, or active
+        - At least one filter is required: emails/email, name, company, phone, station, contactType/contactTypes/contacttype, or active
         - emails/email accepts comma-separated values
         - emails/email uses case-insensitive partial match on contact email
         - when multiple emails/email values are provided, they are combined with OR (match any value)
         - name uses case-insensitive partial match across firstName, lastName, and full name
+        - company uses case-insensitive partial match
+        - station uses case-insensitive partial match on station code or station name
+        - phone uses non-exact match and ignores common formatting characters (for example: 8324886150, 832-488-6150, (832) 488-6150)
         - contactType/contactTypes/contacttype accepts exactly one value
         - contactType values must match tenant enum tradsphere.ENUMS.contactType
     """
@@ -80,16 +89,22 @@ def get_contacts_route(
                 ),
             )
         normalized_name = str(name or "").strip() or None
+        normalized_company = str(company or "").strip() or None
+        normalized_phone = str(phone or "").strip() or None
+        normalized_station = str(station or "").strip() or None
         if (
             not normalized_emails
             and not normalized_name
+            and not normalized_company
+            and not normalized_phone
+            and not normalized_station
             and not normalized_contact_types
             and active is None
         ):
             raise HTTPException(
                 status_code=400,
                 detail=(
-                    "At least one filter is required: emails/email, name, "
+                    "At least one filter is required: emails/email, name, company, phone, station, "
                     "contactType/contactTypes/contacttype, or active"
                 ),
             )
@@ -97,6 +112,9 @@ def get_contacts_route(
         return list_contacts_data(
             emails=normalized_emails,
             name=normalized_name,
+            company=normalized_company,
+            phone=normalized_phone,
+            station=normalized_station,
             contact_type=normalized_contact_type,
             active=active,
         )

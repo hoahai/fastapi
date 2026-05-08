@@ -80,6 +80,27 @@ def _normalize_email(value: object) -> str:
     return _normalize_compact_token(value).lower()
 
 
+def _normalize_phone_search(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return ""
+    return "".join(ch for ch in text if ch.isdigit())
+
+
+def _build_phone_match_sql(column: str) -> str:
+    return (
+        "REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE(REPLACE("
+        f"LOWER(COALESCE({column}, '')), "
+        "' ', ''), "
+        "'(', ''), "
+        "')', ''), "
+        "'-', ''), "
+        "'.', ''), "
+        "'+', ''), "
+        "'/', '')"
+    )
+
+
 def _build_in_placeholders(values: list[object]) -> str:
     if not values:
         raise ValueError("Cannot build IN placeholder for empty values")
@@ -1749,12 +1770,16 @@ def get_contacts(
     *,
     emails: list[str] | None = None,
     name: str | None = None,
+    company: str | None = None,
+    phone: str | None = None,
+    station: str | None = None,
     contact_type: str | None = None,
     active: bool | None = None,
 ) -> list[dict]:
     tables = get_db_tables()
     contacts_table = _quote_table_name(tables["CONTACTS"])
     stations_contacts_table = _quote_table_name(tables["STATIONSCONTACTS"])
+    stations_table = _quote_table_name(tables["STATIONS"])
     where_clauses: list[str] = []
     params: list[object] = []
 
@@ -1779,9 +1804,52 @@ def get_contacts(
         )
         params.extend([like_value, like_value, like_value])
 
+    normalized_company = str(company or "").strip().lower()
+    if normalized_company:
+        where_clauses.append("LOWER(COALESCE(c.company, '')) LIKE %s")
+        params.append(f"%{normalized_company}%")
+
+    normalized_phone = _normalize_phone_search(phone)
+    if normalized_phone:
+        phone_like_value = f"%{normalized_phone}%"
+        where_clauses.append(
+            "("
+            f"{_build_phone_match_sql('c.office')} LIKE %s "
+            f"OR {_build_phone_match_sql('c.cell')} LIKE %s"
+            ")"
+        )
+        params.extend([phone_like_value, phone_like_value])
+
+    normalized_station = str(station or "").strip()
+    if normalized_station:
+        normalized_station_upper = normalized_station.upper()
+        normalized_station_lower = normalized_station.lower()
+        where_clauses.append(
+            "EXISTS ("
+            "SELECT 1 "
+            f"FROM {stations_contacts_table} sc_filter "
+            f"LEFT JOIN {stations_table} s_filter ON UPPER(s_filter.code) = UPPER(sc_filter.stationCode) "
+            "WHERE sc_filter.contactId = c.id "
+            "AND sc_filter.active = 1 "
+            "AND ("
+            "UPPER(COALESCE(sc_filter.stationCode, '')) LIKE %s "
+            "OR LOWER(COALESCE(s_filter.name, '')) LIKE %s"
+            ")"
+            ")"
+        )
+        params.extend([f"%{normalized_station_upper}%", f"%{normalized_station_lower}%"])
+
     normalized_contact_type = _normalize_contact_type(contact_type) if contact_type else ""
     if normalized_contact_type:
-        where_clauses.append("UPPER(sc.contactType) = %s")
+        where_clauses.append(
+            "EXISTS ("
+            "SELECT 1 "
+            f"FROM {stations_contacts_table} sc_filter "
+            "WHERE sc_filter.contactId = c.id "
+            "AND sc_filter.active = 1 "
+            "AND UPPER(sc_filter.contactType) = %s"
+            ")"
+        )
         params.append(normalized_contact_type)
 
     if active is not None:

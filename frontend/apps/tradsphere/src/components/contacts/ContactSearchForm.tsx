@@ -110,17 +110,15 @@ export function ContactSearchForm({
           </Field>
         </div>
 
-        <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-end gap-2">
           <p className="text-xs text-slate-500">{resultText ?? ""}</p>
-          <div className="flex items-center gap-2">
-            <Button type="button" variant="outline" onClick={onClear} disabled={disabled || searching}>
-              Clear
-            </Button>
-            <Button type="submit" disabled={disabled || searching}>
-              {searching ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
-              Search
-            </Button>
-          </div>
+          <Button type="button" variant="outline" onClick={onClear} disabled={disabled || searching}>
+            Clear
+          </Button>
+          <Button type="submit" disabled={disabled || searching}>
+            {searching ? <Loader2 className="size-4 animate-spin" /> : <Search className="size-4" />}
+            Search
+          </Button>
         </div>
       </form>
 

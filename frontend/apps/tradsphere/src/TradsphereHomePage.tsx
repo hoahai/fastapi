@@ -343,10 +343,10 @@ function App() {
       return;
     }
 
-    hasAttemptedDashboardRestoreRef.current = true;
     if (!selectedAccountCode || hasLoadedDashboard || isLoadingAccount || isSaving) {
       return;
     }
+    hasAttemptedDashboardRestoreRef.current = true;
 
     const cacheSnapshot = readBrowserCacheSnapshot<unknown>(getLoadCacheKey(selectedAccountCode));
     const cachedDashboard = normalizeCachedMainLoadResponse(cacheSnapshot?.data);

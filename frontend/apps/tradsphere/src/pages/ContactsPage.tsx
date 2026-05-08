@@ -179,16 +179,6 @@ function buildSearchSubmission(draft: ContactSearchFormValues): BuildSearchResul
     };
   }
 
-  const hasServerFilter = Boolean(normalized.name || normalized.email || normalized.contactType);
-  if (!hasServerFilter) {
-    return {
-      ok: false,
-      clearResults: false,
-      message:
-        "Current backend search requires Name, Email, or Contact Type. Company, Phone, and Station are applied after server search.",
-    };
-  }
-
   return {
     ok: true,
     submitted: {
@@ -661,9 +651,14 @@ export default function ContactsPage() {
     if (search.params.contactType) {
       params.set("contactType", search.params.contactType);
     }
-
-    if (!params.toString()) {
-      throw new Error("Search requires Name, Email, or Contact Type.");
+    if (search.params.company) {
+      params.set("company", search.params.company);
+    }
+    if (search.params.phone) {
+      params.set("phone", search.params.phone);
+    }
+    if (search.params.station) {
+      params.set("station", search.params.station);
     }
 
     const contactsPayload = await requestJson(`/api/tradsphere/v1/contacts?${params.toString()}`, {
