@@ -15,7 +15,7 @@ Main capabilities:
 - Manage contacts and station-contact links.
 - Manage schedules + weekly spot rows, including import from fixed-width `.txt`.
 - Generate schedule PDF reports (compact/detail modes).
-- Provide UI helper endpoints (`/ui/main/selections`, `/ui/main/load`) for frontend dropdown/load payloads.
+- Provide UI helper endpoints (`/ui/main/selections`, `/ui/accounts/load`, deprecated `/ui/main/load`) for frontend dropdown/load payloads.
 - Compute broadcast calendar values.
 
 Core flow (high-level):
@@ -24,6 +24,17 @@ Core flow (high-level):
 3. Endpoint handlers call helper layer for validation/business logic.
 4. Helper layer calls `dbQueries.py` for SQL reads/writes.
 5. Shared tenant-scoped file cache (`caches.json`) is used for validation/read caches and PDF payload cache.
+
+UI route/data-loading practice (global hybrid rule):
+- Keep one lightweight dashboard/page load route for core initial-render data that is always required together.
+- Keep heavy, optional/collapsible, date-windowed, search, modal/detail, and write/transactional data on separate lazy routes.
+- Avoid one giant "everything" route and avoid unnecessary fragmented requests for always-together data.
+- Avoid N+1 loading patterns.
+- Cache by natural scope:
+  - dashboard/page load by entity/page key
+  - timeline/date-window routes by entity + date range
+  - detail routes by entity id
+  - search routes by submitted params
 
 ## 2. Tech Stack
 
@@ -324,7 +335,8 @@ All routes require `X-Tenant-Id` + valid API key unless route docs/state says ot
 | PUT | `/api/tradsphere/v1/contacts/stationsContacts/deactivate` | `deactivate_stations_contacts_route` | `TradSphere_StationsContacts` | Sets `active=0` for given IDs; invalidates caches when changed. |
 | GET | `/api/tradsphere/v1/broadcastCalendar` | `get_broadcast_calendar_route` | none | Broadcast date computation only. |
 | GET | `/api/tradsphere/v1/ui/main/selections` | `get_ui_main_selections_route` | `TradSphere_Accounts`, `Accounts` | Read only, active account selections. |
-| GET | `/api/tradsphere/v1/ui/main/load` | `get_ui_main_load_route` | multiple (`Accounts`, `EstNums`, `Schedules`, `Stations`) | Read-only aggregate payload for frontend load. |
+| GET | `/api/tradsphere/v1/ui/accounts/load` | `get_ui_accounts_load_route` | multiple (`Accounts`, `EstNums`, `Schedules`, `Stations`) | Read-only core Accounts dashboard load payload (lightweight initial page data). |
+| GET | `/api/tradsphere/v1/ui/main/load` | `get_ui_main_load_route` | multiple (`Accounts`, `EstNums`, `Schedules`, `Stations`) | Deprecated compatibility alias for `/ui/accounts/load`; same response shape/behavior. |
 
 Notes:
 - All route handlers include structured docstrings with examples and requirements.
@@ -337,7 +349,13 @@ No frontend application code was found under `apps/tradsphere`.
 What exists:
 - Backend UI-support endpoints:
   - `/ui/main/selections`: account dropdown list.
-  - `/ui/main/load`: account + estnum + station payload for a selected account.
+  - `/ui/accounts/load`: account + estnum + station payload for a selected account (primary).
+  - `/ui/main/load`: compatibility-only deprecated alias of `/ui/accounts/load`.
+
+UI loading pattern:
+- Keep `/ui/accounts/load` as lightweight core dashboard payload for initial render.
+- Keep Schedule Timeline on separate lazy, date-windowed route(s) (`/schedules/timeline`) rather than expanding dashboard load payload.
+- Keep modal detail and search flows on scoped routes with scoped cache keys.
 
 Implication:
 - TradSphere UI is likely external or in another repository/module.

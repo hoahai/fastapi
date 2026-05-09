@@ -428,7 +428,7 @@ function App() {
 
     try {
       const payload = await requestJson(
-        `/api/tradsphere/v1/ui/main/load?accountCode=${encodeURIComponent(selectedAccountCode)}`,
+        `/api/tradsphere/v1/ui/accounts/load?accountCode=${encodeURIComponent(selectedAccountCode)}`,
         {
           headers: requestHeaders,
         },

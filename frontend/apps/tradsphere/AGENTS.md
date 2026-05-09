@@ -6,6 +6,12 @@
 
 ## API and Routing
 - Keep API requests relative to backend routes (for example: `/api/tradsphere/v1/...`).
+- Accounts dashboard core load route is `GET /api/tradsphere/v1/ui/accounts/load?accountCode=...`.
+- Legacy `GET /api/tradsphere/v1/ui/main/load?accountCode=...` is compatibility-only/deprecated and should not be used for new frontend calls.
+- Keep hybrid route/data-loading structure:
+  - one lightweight dashboard load route for core account data required together at initial render
+  - separate lazy routes for heavy, optional/collapsible, date-windowed, modal/detail, search, and transactional flows
+  - keep Schedule Timeline on its separate date-windowed route (do not fold timeline payload into Accounts dashboard load)
 - Route API calls through a shared frontend request helper/hook so toast behavior is global and consistent.
 - API failures should always surface a toast with backend-provided message/detail when available.
 - Mutation requests should emit success toasts by default; customize title/message per action instead of duplicating manual toast logic in each component.

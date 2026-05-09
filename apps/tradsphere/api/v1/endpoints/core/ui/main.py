@@ -21,7 +21,7 @@ from apps.tradsphere.api.v1.helpers.estNums import (
 from apps.tradsphere.api.v1.helpers.schedules import list_schedules_data
 from apps.tradsphere.api.v1.helpers.stations import build_rep_contact_full_name
 
-router = APIRouter(prefix="/ui/main")
+router = APIRouter(prefix="/ui")
 _MONTH_ABBR = (
     "",
     "JAN",
@@ -164,7 +164,7 @@ def _build_station_rep_contacts_map(
     return grouped
 
 
-@router.get("/selections")
+@router.get("/main/selections")
 def get_ui_main_selections_route():
     """
     Return TradSphere account selections for UI dropdowns.
@@ -202,12 +202,198 @@ def get_ui_main_selections_route():
     ]
 
 
-@router.get("/load")
+def _build_ui_accounts_load_payload(account_code: str) -> dict:
+    normalized_account_code = require_account_code(account_code)
+    ensure_tradsphere_account_codes_exist([normalized_account_code])
+
+    account_rows = list_accounts(
+        account_codes=[normalized_account_code],
+        active=False,
+    )
+    account_row = next(
+        (
+            row
+            for row in account_rows
+            if str(row.get("accountCode") or "").strip().upper()
+            == normalized_account_code
+        ),
+        None,
+    )
+    if not isinstance(account_row, dict):
+        raise ValueError(f"Unknown TradSphere accountCode values: {normalized_account_code}")
+
+    account_billing_type = str(account_row.get("billingType") or "").strip()
+
+    est_num_rows = list_est_nums_data(account_codes=[normalized_account_code])
+    estnum_items_with_sort: list[tuple[dict, date]] = []
+    est_nums: list[int] = []
+    for row in est_num_rows:
+        est_num = _to_int(row.get("estNum"))
+        if est_num is None:
+            continue
+        name, latest_sort_date = _build_est_num_name_and_sort_date(
+            row,
+            billing_type=account_billing_type,
+        )
+        estnum_items_with_sort.append(
+            (
+                {
+                    "estnum": est_num,
+                    "name": name,
+                    "hasSchedule": bool(row.get("hasSchedule")),
+                    "note": str(row.get("note") or "").strip() or None,
+                },
+                latest_sort_date,
+            )
+        )
+        est_nums.append(est_num)
+
+    estnum_items_with_sort.sort(
+        key=lambda item: (
+            -item[1].toordinal(),
+            -int(item[0]["estnum"]),
+        )
+    )
+    estnums = [item[0] for item in estnum_items_with_sort]
+
+    schedules = list_schedules_data(est_nums=est_nums) if est_nums else []
+    station_latest_schedule_end: dict[str, date] = {}
+    for row in schedules:
+        station_code = str(row.get("stationCode") or "").strip().upper()
+        if not station_code:
+            continue
+        end_date = _coerce_iso_date(row.get("endDate"))
+        if end_date is None:
+            end_date = _coerce_iso_date(row.get("startDate"))
+        if end_date is None:
+            continue
+        current = station_latest_schedule_end.get(station_code)
+        if current is None or end_date > current:
+            station_latest_schedule_end[station_code] = end_date
+
+    stations_rows = get_stations(
+        codes=[],
+        account_codes=[normalized_account_code],
+        est_nums=[],
+        station_name=None,
+        delivery_method_detail=False,
+    )
+    station_items_index: dict[str, dict] = {}
+    for row in stations_rows:
+        station_code = str(row.get("code") or "").strip().upper()
+        if not station_code:
+            continue
+        station_items_index[station_code] = {
+            "code": station_code,
+            "name": str(row.get("name") or "").strip(),
+            "_latestEndDate": station_latest_schedule_end.get(
+                station_code,
+                date.min,
+            ),
+            "_mediaType": str(row.get("mediaType") or "").strip().upper(),
+        }
+
+    for station_code, latest_end_date in station_latest_schedule_end.items():
+        if station_code in station_items_index:
+            continue
+        station_items_index[station_code] = {
+            "code": station_code,
+            "name": "",
+            "_latestEndDate": latest_end_date,
+            "_mediaType": "",
+        }
+
+    station_items = sorted(station_items_index.values(), key=_station_sort_key)
+    station_rep_contacts = _build_station_rep_contacts_map(
+        [str(item.get("code") or "").strip().upper() for item in station_items]
+    )
+    stations = [
+        {
+            "code": str(item.get("code") or "").strip(),
+            "name": str(item.get("name") or "").strip(),
+            "repContacts": station_rep_contacts.get(
+                str(item.get("code") or "").strip().upper(),
+                [],
+            ),
+        }
+        for item in station_items
+        if str(item.get("code") or "").strip()
+    ]
+
+    return {
+        "account": {
+            "code": str(account_row.get("accountCode") or "").strip().upper(),
+            "name": str(account_row.get("name") or "").strip(),
+            "logoUrl": account_row.get("logoUrl"),
+            "billingType": account_row.get("billingType"),
+            "market": account_row.get("market"),
+            "note": account_row.get("note"),
+        },
+        "esnums": estnums,
+        "stations": stations,
+    }
+
+
+@router.get("/accounts/load")
+def get_ui_accounts_load_route(
+    account_code: str = Query(..., alias="accountCode"),
+):
+    """
+    Return core Accounts dashboard load payload for a TradSphere account.
+
+    Example request:
+        GET /api/tradsphere/v1/ui/accounts/load?accountCode=TAAA
+
+    Example response:
+        {
+          "meta": {"timestamp": "2026-04-29T09:00:00+07:00", "duration_ms": 5},
+          "data": {
+            "account": {
+              "code": "TAAA",
+              "name": "Alpha Motors",
+              "logoUrl": "https://cdn.example.com/logos/taaa.png",
+              "billingType": "Calendar",
+              "market": "Los Angeles",
+              "note": "Primary west-coast account"
+            },
+            "esnums": [
+              {"estnum": 26001, "name": "Q3'26 TV", "hasSchedule": true, "note": "Prime time package"}
+            ],
+            "stations": [
+              {
+                "code": "KABC",
+                "name": "ABC Los Angeles",
+                "repContacts": [
+                  {"fullName": "Mina Tran", "email": "rep@kabc.com"}
+                ]
+              }
+            ]
+          }
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - accountCode is required and must exist in TradSphere accounts
+        - Designed as lightweight core page load data for Accounts dashboard initial render
+        - Heavy/lazy sections (for example Schedule Timeline date-window data) must stay in separate routes
+        - estnums are sorted by latest period descending
+        - for Calendar billing accounts, trailing overlap week at flight end is excluded when building estnum period labels
+        - stations are sorted by most recent related schedule descending, then mediaType order (TV, RA, CA, else)
+        - station repContacts includes active REP contacts with fullName and email
+    """
+    try:
+        return _build_ui_accounts_load_payload(account_code)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/main/load")
 def get_ui_main_load_route(
     account_code: str = Query(..., alias="accountCode"),
 ):
     """
-    Return UI load payload for a TradSphere account, including account, estnums, and stations.
+    Compatibility alias for the Accounts dashboard load route.
 
     Example request:
         GET /api/tradsphere/v1/ui/main/load?accountCode=TAAA
@@ -242,143 +428,10 @@ def get_ui_main_load_route(
     Requirements:
         - Requires X-Tenant-Id header
         - Requires valid API key
-        - accountCode is required and must exist in TradSphere accounts
-        - estnums are sorted by latest period descending
-        - for Calendar billing accounts, trailing overlap week at flight end is excluded when building estnum period labels
-        - stations are sorted by most recent related schedule descending, then mediaType order (TV, RA, CA, else)
-        - station repContacts includes active REP contacts with fullName and email
+        - Deprecated compatibility path; use `/api/tradsphere/v1/ui/accounts/load`
+        - Response shape and behavior match `/ui/accounts/load`
     """
     try:
-        normalized_account_code = require_account_code(account_code)
-        ensure_tradsphere_account_codes_exist([normalized_account_code])
-
-        account_rows = list_accounts(
-            account_codes=[normalized_account_code],
-            active=False,
-        )
-        account_row = next(
-            (
-                row
-                for row in account_rows
-                if str(row.get("accountCode") or "").strip().upper()
-                == normalized_account_code
-            ),
-            None,
-        )
-        if not isinstance(account_row, dict):
-            raise ValueError(
-                f"Unknown TradSphere accountCode values: {normalized_account_code}"
-            )
-
-        account_billing_type = str(account_row.get("billingType") or "").strip()
-
-        est_num_rows = list_est_nums_data(account_codes=[normalized_account_code])
-        estnum_items_with_sort: list[tuple[dict, date]] = []
-        est_nums: list[int] = []
-        for row in est_num_rows:
-            est_num = _to_int(row.get("estNum"))
-            if est_num is None:
-                continue
-            name, latest_sort_date = _build_est_num_name_and_sort_date(
-                row,
-                billing_type=account_billing_type,
-            )
-            estnum_items_with_sort.append(
-                (
-                    {
-                        "estnum": est_num,
-                        "name": name,
-                        "hasSchedule": bool(row.get("hasSchedule")),
-                        "note": str(row.get("note") or "").strip() or None,
-                    },
-                    latest_sort_date,
-                )
-            )
-            est_nums.append(est_num)
-
-        estnum_items_with_sort.sort(
-            key=lambda item: (
-                -item[1].toordinal(),
-                -int(item[0]["estnum"]),
-            )
-        )
-        estnums = [item[0] for item in estnum_items_with_sort]
-
-        schedules = list_schedules_data(est_nums=est_nums) if est_nums else []
-        station_latest_schedule_end: dict[str, date] = {}
-        for row in schedules:
-            station_code = str(row.get("stationCode") or "").strip().upper()
-            if not station_code:
-                continue
-            end_date = _coerce_iso_date(row.get("endDate"))
-            if end_date is None:
-                end_date = _coerce_iso_date(row.get("startDate"))
-            if end_date is None:
-                continue
-            current = station_latest_schedule_end.get(station_code)
-            if current is None or end_date > current:
-                station_latest_schedule_end[station_code] = end_date
-
-        stations_rows = get_stations(
-            codes=[],
-            account_codes=[normalized_account_code],
-            est_nums=[],
-            station_name=None,
-            delivery_method_detail=False,
-        )
-        station_items_index: dict[str, dict] = {}
-        for row in stations_rows:
-            station_code = str(row.get("code") or "").strip().upper()
-            if not station_code:
-                continue
-            station_items_index[station_code] = {
-                "code": station_code,
-                "name": str(row.get("name") or "").strip(),
-                "_latestEndDate": station_latest_schedule_end.get(
-                    station_code,
-                    date.min,
-                ),
-                "_mediaType": str(row.get("mediaType") or "").strip().upper(),
-            }
-
-        for station_code, latest_end_date in station_latest_schedule_end.items():
-            if station_code in station_items_index:
-                continue
-            station_items_index[station_code] = {
-                "code": station_code,
-                "name": "",
-                "_latestEndDate": latest_end_date,
-                "_mediaType": "",
-            }
-
-        station_items = sorted(station_items_index.values(), key=_station_sort_key)
-        station_rep_contacts = _build_station_rep_contacts_map(
-            [str(item.get("code") or "").strip().upper() for item in station_items]
-        )
-        stations = [
-            {
-                "code": str(item.get("code") or "").strip(),
-                "name": str(item.get("name") or "").strip(),
-                "repContacts": station_rep_contacts.get(
-                    str(item.get("code") or "").strip().upper(),
-                    [],
-                ),
-            }
-            for item in station_items
-            if str(item.get("code") or "").strip()
-        ]
-
-        return {
-            "account": {
-                "code": str(account_row.get("accountCode") or "").strip().upper(),
-                "name": str(account_row.get("name") or "").strip(),
-                "logoUrl": account_row.get("logoUrl"),
-                "billingType": account_row.get("billingType"),
-                "market": account_row.get("market"),
-                "note": account_row.get("note"),
-            },
-            "esnums": estnums,
-            "stations": stations,
-        }
+        return _build_ui_accounts_load_payload(account_code)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

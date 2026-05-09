@@ -70,6 +70,18 @@
 - Keep content width bounded for readability.
 - Use reusable layout primitives before custom page-level overrides.
 
+## Hybrid Route/Data Loading
+- Use one lightweight page/dashboard load route for core data that must be rendered together initially.
+- Use separate lazy routes for heavy sections, optional/collapsible sections, date-windowed sections, search pages, modal/detail data, and write/transactional operations.
+- Avoid one giant aggregate endpoint that loads everything for a page.
+- Avoid fragmented request patterns for data that is always required together.
+- Avoid N+1 data-loading/request patterns.
+- Cache by natural scope:
+  - dashboard load: entity/page key
+  - timeline/date-window data: entity + date range
+  - detail data: entity id
+  - search data: submitted params
+
 ## Frontend Portal Pattern
 - The frontend workspace root is `/` and should render the Workspace Home portal page.
 - The frontend uses a shared app shell for workspace pages, not page-specific wrappers.

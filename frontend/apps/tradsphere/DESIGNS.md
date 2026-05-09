@@ -6,6 +6,11 @@ This app inherits global standards from `frontend/DESIGNS.md`.
 - Maintain dashboard-centric information density with clear grouping.
 - Use cards/panels for account, schedules, and station sections.
 - Keep primary flow focused on account selection -> dashboard load -> edits.
+- Accounts dashboard core payload should be loaded from `GET /api/tradsphere/v1/ui/accounts/load?accountCode=...`.
+- Keep route loading hybrid:
+  - lightweight core dashboard load on initial render
+  - separate lazy/date-windowed route for Schedule Timeline
+  - separate detail/search/transactional routes for modal/search/write workflows
 
 ## Component Guidance
 - Prefer existing `src/components/ui` primitives and dashboard components.

@@ -47,6 +47,16 @@
 
 ## Shared Cache Rules
 - Use shared cache utilities under `frontend/shared/cache/` for frontend data caching.
+- Use the global hybrid route/data-loading pattern across apps/pages:
+  - one lightweight page/dashboard load route for core data required together at initial render
+  - separate lazy routes for heavy sections, optional/collapsible sections, date-windowed data, search pages, modal/detail data, and write/transactional operations
+  - avoid one giant "everything" route and avoid unnecessary small requests for data that is always needed together
+  - avoid N+1 request patterns
+  - scope cache keys by natural data boundary:
+    - dashboard load route by entity/page key
+    - timeline/date-window route by entity + date range
+    - detail route by entity id
+    - search route by submitted params
 - Default data-loading policy is `stale-while-revalidate`.
 - Search-submit revalidation rule:
   - on valid search submit, render matching cached results immediately when available
