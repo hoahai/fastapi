@@ -6,13 +6,14 @@ import {
   getFilteredRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { AlertCircle, CalendarDays, CloudUpload, Loader2, Monitor, Plus } from "lucide-react";
+import { AlertCircle, CalendarDays, CloudUpload, Loader2, Monitor, Plus, X } from "lucide-react";
 
 import { AccountInformationCard } from "@/components/dashboard/AccountInformationCard";
 import { ActionIconButton } from "@/components/dashboard/ActionIconButton";
 import { AccountSelector } from "@/components/dashboard/AccountSelector";
 import { AppHeader } from "@/components/dashboard/AppHeader";
 import { DashboardPanel } from "@/components/dashboard/DashboardPanel";
+import { AccountEditableFields, ACCOUNT_BILLING_OPTIONS } from "@/components/dashboard/AccountEditableFields";
 import {
   EstimateNumberModal,
   type EstimateNumberModalData,
@@ -30,7 +31,20 @@ import {
   type StationModalMode,
   type StationModalSaveResult,
 } from "@/components/dashboard/StationModal";
+import { LabeledField } from "@/components/dashboard/FormFieldRow";
+import { Button } from "@/components/ui/button";
 import { CacheStatusChip } from "@/components/ui/cache-status-chip";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { canModalClose, shouldBlockOutsideClose } from "@/components/ui/modal-close-guard";
 import type {
   AccountInfo,
   AccountSelection,
@@ -40,6 +54,7 @@ import type {
   StationItem,
 } from "@/components/dashboard/types";
 import { Separator } from "@/components/ui/separator";
+import { UnsavedChangesDialog } from "@/components/ui/unsaved-changes-dialog";
 import { useToast } from "@/components/ui/toast";
 import { useApiRequest, type ApiRequestOptions } from "@/hooks/useApiRequest";
 import { usePersistentState } from "@/hooks/usePersistentState";
@@ -68,6 +83,20 @@ const SIDEBAR_COLLAPSED_EVENT = "workspace-sidebar-collapsed-change";
 type CacheStatus = {
   source: "cache" | "network";
   fetchedAt: number;
+};
+
+type CreateAccountFormState = {
+  accountCode: string;
+  billingType: string;
+  market: string;
+  note: string;
+};
+
+const CREATE_ACCOUNT_DEFAULT_FORM: CreateAccountFormState = {
+  accountCode: "",
+  billingType: ACCOUNT_BILLING_OPTIONS[0].value,
+  market: "",
+  note: "",
 };
 
 const scheduleFilterFn: FilterFn<EsnumItem> = (row, _columnId, filterValue) => {
@@ -155,6 +184,11 @@ function App() {
   const [selectedScheduleEstnum, setSelectedScheduleEstnum] = useState<EsnumItem | null>(null);
   const [scheduleCacheInvalidationToken, setScheduleCacheInvalidationToken] = useState(0);
   const [invalidatedScheduleEstnum, setInvalidatedScheduleEstnum] = useState<number | null>(null);
+  const [isCreateAccountModalOpen, setIsCreateAccountModalOpen] = useState(false);
+  const [isCreateAccountUnsavedDialogOpen, setIsCreateAccountUnsavedDialogOpen] = useState(false);
+  const [isCreatingAccount, setIsCreatingAccount] = useState(false);
+  const [createAccountForm, setCreateAccountForm] = useState<CreateAccountFormState>({ ...CREATE_ACCOUNT_DEFAULT_FORM });
+  const [createAccountError, setCreateAccountError] = useState<string | null>(null);
   const [isEstimateNumberModalOpen, setIsEstimateNumberModalOpen] = useState(false);
   const [estimateModalMode, setEstimateModalMode] = useState<EstimateNumberModalMode>("create");
   const [estimateModalInitialData, setEstimateModalInitialData] = useState<EstimateNumberModalData | null>(null);
@@ -614,6 +648,106 @@ function App() {
     setIsScheduleModalOpen(true);
   }
 
+  function resetCreateAccountForm() {
+    setCreateAccountForm({ ...CREATE_ACCOUNT_DEFAULT_FORM });
+    setCreateAccountError(null);
+  }
+
+  function hasCreateAccountUnsavedChanges() {
+    return (
+      createAccountForm.accountCode !== CREATE_ACCOUNT_DEFAULT_FORM.accountCode ||
+      createAccountForm.billingType !== CREATE_ACCOUNT_DEFAULT_FORM.billingType ||
+      createAccountForm.market !== CREATE_ACCOUNT_DEFAULT_FORM.market ||
+      createAccountForm.note !== CREATE_ACCOUNT_DEFAULT_FORM.note
+    );
+  }
+
+  function getCreateAccountValidationError(): string | null {
+    const accountCode = createAccountForm.accountCode.trim().toUpperCase();
+    const market = createAccountForm.market.trim();
+    const note = createAccountForm.note.trim();
+    if (!accountCode) {
+      return "Account code is required.";
+    }
+    if (market.length > 255) {
+      return "Market must be 255 characters or fewer.";
+    }
+    if (note.length > 2048) {
+      return "Note must be 2048 characters or fewer.";
+    }
+    return null;
+  }
+
+  function openCreateAccountModal() {
+    resetCreateAccountForm();
+    setIsCreateAccountModalOpen(true);
+  }
+
+  function handleCreateAccountDialogOpenChange(nextOpen: boolean) {
+    if (
+      canModalClose({
+        nextOpen,
+        isBusy: isCreatingAccount,
+        hasUnsavedChanges: hasCreateAccountUnsavedChanges(),
+      })
+    ) {
+      setIsCreateAccountModalOpen(nextOpen);
+      if (!nextOpen) {
+        setIsCreateAccountUnsavedDialogOpen(false);
+        resetCreateAccountForm();
+      }
+      return;
+    }
+    setIsCreateAccountUnsavedDialogOpen(true);
+  }
+
+  async function handleCreateAccount() {
+    const validationError = getCreateAccountValidationError();
+    if (validationError) {
+      setCreateAccountError(validationError);
+      return;
+    }
+
+    const accountCode = createAccountForm.accountCode.trim().toUpperCase();
+    setIsCreatingAccount(true);
+    setCreateAccountError(null);
+
+    try {
+      await requestJson("/api/tradsphere/v1/accounts", {
+        method: "POST",
+        headers: requestHeaders,
+        body: {
+          accountCode,
+          billingType: createAccountForm.billingType,
+          market: createAccountForm.market.trim(),
+          note: createAccountForm.note.trim(),
+        },
+        successToast: {
+          title: "Account created",
+          message: `Account ${accountCode} was created successfully.`,
+        },
+        errorToast: {
+          title: "Create failed",
+        },
+      });
+
+      removeBrowserCacheByPrefix(SELECTIONS_CACHE_KEY);
+      await fetchSelections("network-only");
+      handleAccountChange(accountCode);
+      setIsCreateAccountModalOpen(false);
+      setIsCreateAccountUnsavedDialogOpen(false);
+      resetCreateAccountForm();
+    } catch (error) {
+      setCreateAccountError(getErrorMessage(error, "Unable to create account."));
+    } finally {
+      setIsCreatingAccount(false);
+    }
+  }
+
+  const createAccountValidationError = getCreateAccountValidationError();
+  const canCreateAccount = !createAccountValidationError;
+  const shouldShowCreateAccountSubmit = canCreateAccount || isCreatingAccount;
+
   const selectionsStatusText = isLoadingSelections
     ? "Loading..."
     : isRefreshingSelections
@@ -642,7 +776,13 @@ function App() {
   return (
     <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-6 pb-12">
       <AppHeader />
-      <HeroBanner />
+      <HeroBanner
+        action={
+          <Button onClick={openCreateAccountModal} className="min-w-40">
+            Add Account
+          </Button>
+        }
+      />
 
       <AccountSelector
         selectedAccountCode={selectedAccountCode}
@@ -816,6 +956,115 @@ function App() {
           setScheduleCacheInvalidationToken((current) => current + 1);
           removeBrowserCacheByPrefix(`schedule-table:${selectedAccountCode.toUpperCase()}:`);
           void loadAccountDashboard("network-only");
+        }}
+      />
+
+      <Dialog open={isCreateAccountModalOpen} onOpenChange={handleCreateAccountDialogOpenChange}>
+        <DialogContent
+          className="max-w-[620px] rounded-xl bg-white p-6"
+          onEscapeKeyDown={(event) => {
+            if (isCreatingAccount) {
+              event.preventDefault();
+            }
+          }}
+          onInteractOutside={(event) => {
+            if (
+              shouldBlockOutsideClose({
+                isBusy: isCreatingAccount,
+                hasUnsavedChanges: hasCreateAccountUnsavedChanges(),
+              })
+            ) {
+              event.preventDefault();
+            }
+          }}
+        >
+          <DialogClose
+            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
+            aria-label="Close create account modal"
+            disabled={isCreatingAccount}
+          >
+            <X className="size-4" />
+          </DialogClose>
+
+          <DialogHeader>
+            <DialogTitle>Create Account</DialogTitle>
+            <DialogDescription>Add a TradSphere account mapping for an existing master account code.</DialogDescription>
+          </DialogHeader>
+
+          <div className="mt-4 space-y-4">
+            <LabeledField
+              label={
+                <>
+                  Account Code<RequiredMark />
+                </>
+              }
+            >
+              <Input
+                value={createAccountForm.accountCode}
+                onChange={(event) => {
+                  const value = event.target.value.toUpperCase();
+                  setCreateAccountForm((current) => ({ ...current, accountCode: value }));
+                  if (createAccountError) {
+                    setCreateAccountError(null);
+                  }
+                }}
+                placeholder="e.g. TAAA"
+                disabled={isCreatingAccount}
+              />
+            </LabeledField>
+
+            <AccountEditableFields
+              billingType={createAccountForm.billingType}
+              market={createAccountForm.market}
+              note={createAccountForm.note}
+              onBillingTypeChange={(value) => {
+                setCreateAccountForm((current) => ({ ...current, billingType: value }));
+              }}
+              onMarketChange={(value) => {
+                setCreateAccountForm((current) => ({ ...current, market: value }));
+                if (createAccountError) {
+                  setCreateAccountError(null);
+                }
+              }}
+              onNoteChange={(value) => {
+                setCreateAccountForm((current) => ({ ...current, note: value }));
+                if (createAccountError) {
+                  setCreateAccountError(null);
+                }
+              }}
+              disabled={isCreatingAccount}
+              billingAriaLabel="Create account billing type"
+              marketPlaceholder="e.g. Los Angeles"
+              notePlaceholder="Optional note"
+            />
+
+            {createAccountError ? <p className="text-sm text-rose-600">{createAccountError}</p> : null}
+
+            <DialogFooter>
+              {shouldShowCreateAccountSubmit ? (
+                <Button onClick={handleCreateAccount} disabled={!canCreateAccount || isCreatingAccount}>
+                  {isCreatingAccount ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      Creating
+                    </>
+                  ) : (
+                    "Create Account"
+                  )}
+                </Button>
+              ) : null}
+            </DialogFooter>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <UnsavedChangesDialog
+        open={isCreateAccountUnsavedDialogOpen}
+        onKeepEditing={() => setIsCreateAccountUnsavedDialogOpen(false)}
+        onDiscardChanges={() => {
+          setIsCreateAccountUnsavedDialogOpen(false);
+          setIsCreateAccountModalOpen(false);
+          resetCreateAccountForm();
         }}
       />
 
@@ -1210,6 +1459,10 @@ function getErrorMessage(error: unknown, fallback: string): string {
     return error.message;
   }
   return fallback;
+}
+
+function RequiredMark() {
+  return <span className="pl-1 text-rose-600">*</span>;
 }
 
 async function saveAccountChanges(

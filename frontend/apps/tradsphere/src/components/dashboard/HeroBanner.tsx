@@ -1,11 +1,17 @@
 import { PageBanner } from "@/components/layout/PageBanner";
+import type { ReactNode } from "react";
 
-export function HeroBanner() {
+type HeroBannerProps = {
+  action?: ReactNode;
+};
+
+export function HeroBanner({ action }: HeroBannerProps) {
   return (
     <PageBanner
-      eyebrow="Media Trading Dashboard"
+      eyebrow="tradsphere"
       title="Accounts"
       description="Manage account-level schedules, stations, and estimate operations."
+      action={action}
     />
   );
 }

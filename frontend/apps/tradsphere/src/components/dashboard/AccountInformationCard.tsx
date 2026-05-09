@@ -1,7 +1,6 @@
 import { useState } from "react";
 import { Save, X } from "lucide-react";
 
-import { AppDropdown } from "@/components/ui/app-dropdown";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import {
@@ -9,11 +8,10 @@ import {
   DialogClose,
   DialogContent,
 } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import { Textarea } from "@/components/ui/textarea";
 
 import { LabeledField, ReadOnlyValue } from "./FormFieldRow";
+import { AccountEditableFields } from "./AccountEditableFields";
 import type { AccountInfo } from "./types";
 
 interface AccountInformationCardProps {
@@ -26,11 +24,6 @@ interface AccountInformationCardProps {
   onNoteChange: (value: string) => void;
   onSave: () => void;
 }
-
-const BILLING_OPTIONS = [
-  { label: "Calendar", value: "Calendar" },
-  { label: "Broadcast", value: "Broadcast" },
-];
 
 export function AccountInformationCard({
   account,
@@ -61,35 +54,16 @@ export function AccountInformationCard({
             <ReadOnlyValue value={account?.name} />
           </LabeledField>
 
-          <LabeledField label="Billing Type">
-            <AppDropdown
-              ariaLabel="Billing type"
-              value={account?.billingType || BILLING_OPTIONS[0].value}
-              onValueChange={onBillingTypeChange}
-              options={BILLING_OPTIONS.map((option) => ({ value: option.value, label: option.label }))}
-              disabled={editableDisabled}
-              searchable={false}
-              className="w-full"
-              placeholder="Select billing type"
-              emptyText="No billing type found."
-            />
-          </LabeledField>
-
-          <LabeledField label="Market">
-            <Input
-              value={account?.market ?? ""}
-              disabled={editableDisabled}
-              onChange={(event) => onMarketChange(event.target.value)}
-            />
-          </LabeledField>
-
-          <LabeledField label="Note" alignStart>
-            <Textarea
-              value={account?.note ?? ""}
-              disabled={editableDisabled}
-              onChange={(event) => onNoteChange(event.target.value)}
-            />
-          </LabeledField>
+          <AccountEditableFields
+            billingType={account?.billingType ?? ""}
+            market={account?.market ?? ""}
+            note={account?.note ?? ""}
+            onBillingTypeChange={onBillingTypeChange}
+            onMarketChange={onMarketChange}
+            onNoteChange={onNoteChange}
+            disabled={editableDisabled}
+            billingAriaLabel="Billing type"
+          />
         </div>
 
         {saveError ? <p className="text-sm text-rose-600">{saveError}</p> : null}
