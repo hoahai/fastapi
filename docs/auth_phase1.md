@@ -4,6 +4,12 @@
 
 Phase 1 introduces Supabase JWT authentication and tenant/app authorization for Tradsphere first, while keeping legacy API-key compatibility.
 
+Related setup docs:
+
+- [auth_phase1_env_example.md](/Users/haitruongh/Developer/fastapi/docs/auth_phase1_env_example.md)
+- [auth_phase1_local_setup.md](/Users/haitruongh/Developer/fastapi/docs/auth_phase1_local_setup.md)
+- [supabase_phase1_seed_example.sql](/Users/haitruongh/Developer/fastapi/docs/supabase_phase1_seed_example.sql)
+
 ## Auth Flags
 
 Local/dev defaults:
@@ -119,6 +125,18 @@ Phase 1 ships invite APIs (no admin UI yet):
 - `tenant_app_roles`
 - `role_permissions`
 - `invitations`
+
+Schema file:
+
+- [supabase_phase1_schema.sql](/Users/haitruongh/Developer/fastapi/docs/supabase_phase1_schema.sql)
+
+Schema readiness notes (suggestions only, not applied yet):
+
+- Add index for `tenant_users(user_id, tenant_id, status)` for membership checks.
+- Add index for `tenant_app_roles(user_id, tenant_id, app_id)` for role lookup.
+- Add index for `role_permissions(role)` for permission expansion.
+- Add index for `invitations(token)` already covered by unique constraint.
+- Optionally enforce lowercase policy for `tenants.slug` and `apps.code` via check constraints if desired.
 
 ## Future Cutover Plan
 
