@@ -6,10 +6,17 @@ import ContactsPage from "@/pages/ContactsPage";
 import StationsPage from "@/pages/StationsPage";
 import { WorkspaceNotFoundPage } from "@home/WorkspaceNotFoundPage";
 import { WorkspacePortalPage } from "@home/WorkspacePortalPage";
+import { AuthCallbackPage } from "@home/auth/AuthCallbackPage";
+import { InviteAcceptPage } from "@home/auth/InviteAcceptPage";
+import { LoginPage } from "@home/auth/LoginPage";
+import { PendingInvitePage } from "@home/auth/PendingInvitePage";
+import { UnauthorizedPage } from "@home/auth/UnauthorizedPage";
 import { AppShell } from "@/components/layout/AppShell";
 import { HOME_ROUTE } from "@/components/layout/navigation";
 import { ToastProvider } from "@/components/ui/toast";
 import { useRouteScrollRestoration } from "@/hooks/useRouteScrollRestoration";
+import { AuthProvider } from "@shared/auth/AuthProvider";
+import { RequireAuth, RequirePermission, RequireTenantAccess } from "@shared/auth/guards";
 
 function getFrontendPath(pathname: string): string {
   const normalizedPath = pathname || "/";
@@ -84,6 +91,10 @@ function App() {
   const knownRoutes = useMemo(() => {
     return new Set<string>([
       HOME_ROUTE,
+      "/auth/login",
+      "/auth/callback",
+      "/auth/unauthorized",
+      "/auth/invite/pending",
       "/tradsphere/home",
       "/tradsphere/estnums",
       "/tradsphere/contacts",
@@ -101,17 +112,44 @@ function App() {
     setFrontendPath(route);
   }
 
+  const inviteToken = useMemo(() => {
+    if (!frontendPath.startsWith("/auth/invite/")) {
+      return null;
+    }
+    const token = frontendPath.replace("/auth/invite/", "").trim();
+    return token || null;
+  }, [frontendPath]);
+
+  function renderTradsphereRoute() {
+    return (
+      <RequireAuth fallback={<LoginPage />}>
+        <RequireTenantAccess fallback={<UnauthorizedPage />}>
+          <RequirePermission permission="tradsphere.viewer" fallback={<UnauthorizedPage />}>
+            {frontendPath === "/tradsphere/home" ? <TradsphereHomePage /> : null}
+            {frontendPath === "/tradsphere/estnums" ? <EstimateNumbersPage /> : null}
+            {frontendPath === "/tradsphere/contacts" ? <ContactsPage /> : null}
+            {frontendPath === "/tradsphere/stations" ? <StationsPage /> : null}
+          </RequirePermission>
+        </RequireTenantAccess>
+      </RequireAuth>
+    );
+  }
+
   return (
-    <ToastProvider>
-      <AppShell currentPath={frontendPath} onNavigate={navigate}>
-        {frontendPath === "/tradsphere/home" ? <TradsphereHomePage /> : null}
-        {frontendPath === "/tradsphere/estnums" ? <EstimateNumbersPage /> : null}
-        {frontendPath === "/tradsphere/contacts" ? <ContactsPage /> : null}
-        {frontendPath === "/tradsphere/stations" ? <StationsPage /> : null}
-        {frontendPath === HOME_ROUTE ? <WorkspacePortalPage onNavigate={navigate} /> : null}
-        {!knownRoutes.has(frontendPath) ? <WorkspaceNotFoundPage onNavigate={navigate} /> : null}
-      </AppShell>
-    </ToastProvider>
+    <AuthProvider>
+      <ToastProvider>
+        <AppShell currentPath={frontendPath} onNavigate={navigate}>
+          {frontendPath === "/auth/login" ? <LoginPage /> : null}
+          {frontendPath === "/auth/callback" ? <AuthCallbackPage /> : null}
+          {frontendPath === "/auth/unauthorized" ? <UnauthorizedPage /> : null}
+          {frontendPath === "/auth/invite/pending" ? <PendingInvitePage /> : null}
+          {inviteToken ? <InviteAcceptPage token={inviteToken} /> : null}
+          {frontendPath.startsWith("/tradsphere/") ? renderTradsphereRoute() : null}
+          {frontendPath === HOME_ROUTE ? <WorkspacePortalPage onNavigate={navigate} /> : null}
+          {!knownRoutes.has(frontendPath) && !inviteToken ? <WorkspaceNotFoundPage onNavigate={navigate} /> : null}
+        </AppShell>
+      </ToastProvider>
+    </AuthProvider>
   );
 }
 

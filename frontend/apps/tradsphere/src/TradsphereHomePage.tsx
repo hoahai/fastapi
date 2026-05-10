@@ -63,7 +63,9 @@ import {
   removeBrowserCacheByPrefix,
   writeBrowserCache,
 } from "@/lib/browserCache";
+import { buildAuthHeaders as buildSharedAuthHeaders } from "@shared/api/authHeaders";
 import { TRADSPHERE_CACHE_TTL_MS, shouldFetchNetwork, type CachePolicy } from "@shared/cache";
+import { useAuth } from "@shared/auth/useAuth";
 
 const scheduleColumns: ColumnDef<EsnumItem>[] = [{ accessorKey: "estnum" }, { accessorKey: "name" }];
 
@@ -142,6 +144,7 @@ function readSidebarCollapsedState(): boolean {
 function App() {
   const toast = useToast();
   const { requestJson } = useApiRequest();
+  const auth = useAuth();
   const [sidebarVisuallyExpanded, setSidebarVisuallyExpanded] = useState<boolean>(() => !readSidebarCollapsedState());
   const [accountSelections, setAccountSelections] = useState<AccountSelection[]>([]);
   const [selectedAccountCode, setSelectedAccountCode] = usePersistentState<string>(
@@ -197,7 +200,10 @@ function App() {
   const [stationModalCode, setStationModalCode] = useState<string | null>(null);
   const [scheduleUploadSuccessMessage, setScheduleUploadSuccessMessage] = useState<string | null>(null);
   const hasAttemptedDashboardRestoreRef = useRef(false);
-  const requestHeaders = useMemo(() => buildAuthHeaders(false), []);
+  const requestHeaders = useMemo(
+    () => buildSharedAuthHeaders(auth.session, auth.tenantSlug, false),
+    [auth.session, auth.tenantSlug],
+  );
 
   useEffect(() => {
     void fetchSelections("stale-while-revalidate");
@@ -1443,15 +1449,6 @@ function formatRelativeTime(timestamp: number): string {
 
   const days = Math.floor(hours / 24);
   return `${days} day${days > 1 ? "s" : ""} ago`;
-}
-
-function buildAuthHeaders(includeJsonContentType: boolean): HeadersInit {
-  return {
-    "X-API-Key": "6ad13c1f7c17c32fb5a4582b4be42df5",
-    "X-Tenant-Id": "taaa",
-    "X-User-Name": "Hai Truong",
-    ...(includeJsonContentType ? { "Content-Type": "application/json" } : {}),
-  };
 }
 
 function getErrorMessage(error: unknown, fallback: string): string {

@@ -34,6 +34,12 @@ from shared.response import (
     wrap_error,
     wrap_success,
 )
+from shared.auth.config import (
+    get_auth_mode,
+    is_legacy_api_key_fallback_enabled,
+    should_protect_tradsphere,
+)
+from shared.auth.dependencies import authorize_bearer_for_tenant_app
 _API_KEY_REGISTRY: dict[str, str] | None = None
 _API_LOGGER = get_logger("api")
 
@@ -94,9 +100,32 @@ def _get_public_paths(request: Request) -> set[str]:
     return _normalize_public_paths(paths)
 
 
-def _is_public_path(path: str, public_paths: set[str]) -> bool:
+def _get_public_path_prefixes(request: Request) -> tuple[str, ...]:
+    prefixes = getattr(request.app.state, "public_path_prefixes", None)
+    if prefixes is None:
+        return tuple()
+    if isinstance(prefixes, str):
+        values = [prefixes]
+    else:
+        try:
+            values = list(prefixes)
+        except TypeError:
+            return tuple()
+    normalized: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text:
+            continue
+        normalized.append(text)
+    return tuple(normalized)
+
+
+def _is_public_path(request: Request, path: str, public_paths: set[str]) -> bool:
     normalized = _normalize_path(path)
-    return normalized in public_paths
+    if normalized in public_paths:
+        return True
+    prefixes = _get_public_path_prefixes(request)
+    return any(path.startswith(prefix) for prefix in prefixes)
 
 
 def _should_wrap_response(
@@ -268,10 +297,14 @@ async def tenant_context_middleware(request: Request, call_next):
     start_time = time.perf_counter()
     path = request.url.path or ""
     public_paths = _get_public_paths(request)
-    if _is_docs_path(path) or _is_public_path(path, public_paths):
+    if _is_docs_path(path) or _is_public_path(request, path, public_paths):
         request.state.tenant_id = None
         return await call_next(request)
-    requires_tenant = path.startswith("/api") or path.startswith("/spendsphere/api")
+    is_auth_api = path.startswith("/api/auth/")
+    requires_tenant = (
+        (path.startswith("/api") or path.startswith("/spendsphere/api"))
+        and not is_auth_api
+    )
     tenant_header = request.headers.get("x-tenant-id")
     token = None
     app_scope_token = None
@@ -394,6 +427,17 @@ def _extract_api_key(request: Request) -> str | None:
         return token or None
 
     return None
+
+
+def _extract_bearer_token(request: Request) -> str | None:
+    auth_header = request.headers.get("authorization")
+    if not auth_header:
+        return None
+    text = auth_header.strip()
+    if not text.lower().startswith("bearer "):
+        return None
+    token = text[7:].strip()
+    return token or None
 
 
 def _match_api_key(api_key: str, registry: dict[str, str]) -> str | None:
@@ -563,19 +607,66 @@ async def api_key_auth_middleware(request: Request, call_next):
     start_time = time.perf_counter()
     path = request.url.path or ""
     public_paths = _get_public_paths(request)
-    if _is_docs_path(path) or _is_public_path(path, public_paths):
+    if _is_docs_path(path) or _is_public_path(request, path, public_paths):
         return await call_next(request)
     is_api_route = (
         path == "/api"
         or path.startswith("/api/")
         or path.startswith("/spendsphere/api")
     )
+    is_tradsphere_api = path.startswith("/api/tradsphere/")
+    is_auth_api = path.startswith("/api/auth/")
+    auth_mode = get_auth_mode()
+    legacy_fallback_enabled = is_legacy_api_key_fallback_enabled()
+    protect_tradsphere = should_protect_tradsphere()
 
     if request.method == "OPTIONS":
         return await call_next(request)
 
     client_token = None
     try:
+        if is_auth_api:
+            # Auth endpoints rely on bearer-token dependencies (or explicit public route allowlist).
+            request.state.client_id = "Auth API"
+            client_token = set_client_id(request.state.client_id)
+            response = await call_next(request)
+            response.headers["X-API-Client"] = request.state.client_id
+            return response
+
+        if is_tradsphere_api and protect_tradsphere:
+            bearer_token = _extract_bearer_token(request)
+            if bearer_token:
+                try:
+                    result = authorize_bearer_for_tenant_app(
+                        request=request,
+                        app_code="tradsphere",
+                    )
+                except Exception as exc:
+                    detail = getattr(exc, "detail", None) or "Invalid bearer token"
+                    status_code = getattr(exc, "status_code", 401)
+                    return _error_response(
+                        request,
+                        status_code=int(status_code),
+                        detail=detail,
+                        duration_s=_duration_since(request, start_time),
+                    )
+
+                request.state.client_id = f"supabase:{result.principal.user_id}"
+                client_token = set_client_id(request.state.client_id)
+                response = await call_next(request)
+                response.headers["X-API-Client"] = request.state.client_id
+                return response
+
+            if auth_mode == "jwt_only" or not legacy_fallback_enabled:
+                request.state.client_id = "Unauthenticated"
+                client_token = set_client_id(request.state.client_id)
+                return _error_response(
+                    request,
+                    status_code=401,
+                    detail="Missing bearer token",
+                    duration_s=_duration_since(request, start_time),
+                )
+
         try:
             registry = _get_api_key_registry()
         except ValueError:
@@ -620,9 +711,24 @@ async def api_key_auth_middleware(request: Request, call_next):
                 )
 
             request.state.client_id = client_id
+            if is_tradsphere_api and protect_tradsphere:
+                request.state.auth_mode = "legacy_api_key"
             client_token = set_client_id(client_id)
             response = await call_next(request)
             response.headers["X-API-Client"] = client_id
+            if is_tradsphere_api and protect_tradsphere:
+                response.headers["X-Auth-Deprecated"] = "api-key-fallback"
+                _API_LOGGER.warning(
+                    "Legacy API key fallback used for Tradsphere route",
+                    extra={
+                        "extra_fields": {
+                            "event": "legacy_api_key_fallback",
+                            "path": path,
+                            "tenant_id": getattr(request.state, "tenant_id", None),
+                            "client_id": client_id,
+                        }
+                    },
+                )
             return response
 
         if api_key:

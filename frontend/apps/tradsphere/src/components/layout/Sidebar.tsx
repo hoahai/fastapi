@@ -1,5 +1,5 @@
 import { ChevronDown, ChevronLeft, ChevronRight, LayoutDashboard, Menu } from "lucide-react";
-import { useEffect, useState, type ComponentType, type FocusEvent } from "react";
+import { useEffect, useMemo, useState, type ComponentType, type FocusEvent } from "react";
 
 import { Button } from "@/components/ui/button";
 import {
@@ -12,6 +12,8 @@ import {
   type AppNavItem,
 } from "@/components/layout/navigation";
 import { cn } from "@/lib/utils";
+import { shouldProtectTradsphereFrontend } from "@shared/auth/guards";
+import { useAuth } from "@shared/auth/useAuth";
 
 type SidebarProps = {
   currentPath: string;
@@ -36,13 +38,23 @@ export function Sidebar({
   onToggleMobile,
   onCloseMobile,
 }: SidebarProps) {
+  const auth = useAuth();
   const [expandedById, setExpandedById] = useState<Record<string, boolean>>(() => ({}));
   const isCompact = !visuallyExpanded;
+  const protectionEnabled = shouldProtectTradsphereFrontend();
+  const canAccessTradsphere = !protectionEnabled || Boolean(auth.accessProfile?.permissions?.includes("tradsphere.viewer"));
+  const navItems = useMemo(
+    () =>
+      APP_NAV_ITEMS.map((item) =>
+        item.id === "tradsphere" ? { ...item, available: canAccessTradsphere } : item,
+      ),
+    [canAccessTradsphere],
+  );
 
   useEffect(() => {
     setExpandedById((current) => {
       const next = { ...current };
-      for (const item of APP_NAV_ITEMS) {
+      for (const item of navItems) {
         if (!item.children?.length) {
           continue;
         }
@@ -52,7 +64,7 @@ export function Sidebar({
       }
       return next;
     });
-  }, [currentPath]);
+  }, [currentPath, navItems]);
 
   function toggleExpanded(itemId: string) {
     setExpandedById((current) => ({
@@ -171,7 +183,7 @@ export function Sidebar({
             onNavigate={onNavigate}
             onCloseMobile={onCloseMobile}
           />
-          {APP_NAV_ITEMS.map((topLevel) => {
+          {navItems.map((topLevel) => {
             const hasChildren = !isCompact && Boolean(topLevel.children?.length);
             const expanded = Boolean(expandedById[topLevel.id]);
             const parentActive = isTopLevelActive(topLevel, currentPath);

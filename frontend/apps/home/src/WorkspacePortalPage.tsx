@@ -1,15 +1,27 @@
 import { ArrowRight } from "lucide-react";
+import { useMemo } from "react";
 
 import { APP_NAV_ITEMS } from "@/components/layout/navigation";
 import { PageBanner } from "@/components/layout/PageBanner";
 import { Button } from "@/components/ui/button";
 import { Section, SectionHeader } from "@shared/components";
+import { shouldProtectTradsphereFrontend } from "@shared/auth/guards";
+import { useAuth } from "@shared/auth/useAuth";
 
 type WorkspacePortalPageProps = {
   onNavigate: (route: string) => void;
 };
 
 export function WorkspacePortalPage({ onNavigate }: WorkspacePortalPageProps) {
+  const auth = useAuth();
+  const appNavItems = useMemo(() => {
+    const protectionEnabled = shouldProtectTradsphereFrontend();
+    const canAccessTradsphere = !protectionEnabled || Boolean(auth.accessProfile?.permissions?.includes("tradsphere.viewer"));
+    return APP_NAV_ITEMS.map((item) =>
+      item.id === "tradsphere" ? { ...item, available: canAccessTradsphere } : item,
+    );
+  }, [auth.accessProfile]);
+
   return (
     <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-6">
       <PageBanner
@@ -37,7 +49,7 @@ export function WorkspacePortalPage({ onNavigate }: WorkspacePortalPageProps) {
         <SectionHeader title="Apps" description="Open an available app or preview upcoming workspaces." />
 
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 md:grid-cols-3">
-          {APP_NAV_ITEMS.map((app) => {
+          {appNavItems.map((app) => {
             const Icon = app.icon;
             return (
               <article

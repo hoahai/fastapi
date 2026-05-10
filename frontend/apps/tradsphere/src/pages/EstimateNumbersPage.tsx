@@ -32,6 +32,8 @@ import {
   shouldFetchNetwork,
   type CachePolicy,
 } from "@shared/cache";
+import { buildAuthHeaders as buildSharedAuthHeaders } from "@shared/api/authHeaders";
+import { useAuth } from "@shared/auth/useAuth";
 import { hasAtLeastOneSearchCriterion, shouldFetchSubmittedSearchNetwork } from "@shared/search";
 
 const SEARCH_LIMIT = 50;
@@ -785,15 +787,6 @@ function readSidebarCollapsedState(): boolean {
   }
 }
 
-function buildAuthHeaders(includeJsonContentType: boolean): HeadersInit {
-  return {
-    "X-API-Key": "6ad13c1f7c17c32fb5a4582b4be42df5",
-    "X-Tenant-Id": "taaa",
-    "X-User-Name": "Hai Truong",
-    ...(includeJsonContentType ? { "Content-Type": "application/json" } : {}),
-  };
-}
-
 function withDirectoryAccountNames(
   page: EstimateSearchPage | null,
   directoryByCode: Record<string, AccountDirectoryItem>,
@@ -1363,7 +1356,11 @@ function buildSearchPlan(draft: EstimateNumberSearchFormValues): BuildSearchPlan
 export default function EstimateNumbersPage() {
   const toast = useToast();
   const { requestJson } = useApiRequest();
-  const requestHeaders = useMemo(() => buildAuthHeaders(false), []);
+  const auth = useAuth();
+  const requestHeaders = useMemo(
+    () => buildSharedAuthHeaders(auth.session, auth.tenantSlug, false),
+    [auth.session, auth.tenantSlug],
+  );
 
   const [accountDirectory, setAccountDirectory] = useState<AccountDirectoryItem[]>([]);
   const [isLoadingAccountSelections, setIsLoadingAccountSelections] = useState(true);

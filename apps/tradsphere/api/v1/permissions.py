@@ -1,0 +1,3 @@
+TRADSPHERE_VIEWER_PERMISSION = "tradsphere.viewer"
+TRADSPHERE_EDITOR_PERMISSION = "tradsphere.editor"
+TRADSPHERE_ADMIN_PERMISSION = "tradsphere.admin"

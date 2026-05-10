@@ -24,7 +24,9 @@ import {
   removeBrowserCache,
   writeBrowserCache,
 } from "@/lib/browserCache";
+import { buildAuthHeaders as buildSharedAuthHeaders } from "@shared/api/authHeaders";
 import { shouldFetchNetwork, type CachePolicy } from "@shared/cache";
+import { useAuth } from "@shared/auth/useAuth";
 import { hasAtLeastOneSearchCriterion, shouldFetchSubmittedSearchNetwork } from "@shared/search";
 
 const CONTACTS_SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -553,15 +555,6 @@ function readSidebarCollapsedState(): boolean {
   }
 }
 
-function buildAuthHeaders(includeJsonContentType: boolean): HeadersInit {
-  return {
-    "X-API-Key": "6ad13c1f7c17c32fb5a4582b4be42df5",
-    "X-Tenant-Id": "taaa",
-    "X-User-Name": "Hai Truong",
-    ...(includeJsonContentType ? { "Content-Type": "application/json" } : {}),
-  };
-}
-
 function buildContactFullName(contact: {
   firstName: string;
   lastName: string;
@@ -1027,7 +1020,11 @@ function buildContactPayload(form: ContactModalSubmitPayload["form"]): Record<st
 export default function ContactsPage() {
   const toast = useToast();
   const { requestJson } = useApiRequest();
-  const requestHeaders = useMemo(() => buildAuthHeaders(false), []);
+  const auth = useAuth();
+  const requestHeaders = useMemo(
+    () => buildSharedAuthHeaders(auth.session, auth.tenantSlug, false),
+    [auth.session, auth.tenantSlug],
+  );
 
   const [draft, setDraft] = usePersistentState<ContactSearchFormValues>(
     CONTACTS_SEARCH_DRAFT_STORAGE_KEY,

@@ -25,6 +25,8 @@ import {
   removeBrowserCache,
   writeBrowserCache,
 } from "@/lib/browserCache";
+import { buildAuthHeaders as buildSharedAuthHeaders } from "@shared/api/authHeaders";
+import { useAuth } from "@shared/auth/useAuth";
 import { shouldFetchSubmittedSearchNetwork } from "@shared/search";
 import { hasAtLeastOneSearchCriterion } from "@shared/search";
 import { type CachePolicy } from "@shared/cache";
@@ -601,15 +603,6 @@ function readSidebarCollapsedState(): boolean {
   }
 }
 
-function buildAuthHeaders(includeJsonContentType: boolean): HeadersInit {
-  return {
-    "X-API-Key": "6ad13c1f7c17c32fb5a4582b4be42df5",
-    "X-Tenant-Id": "taaa",
-    "X-User-Name": "Hai Truong",
-    ...(includeJsonContentType ? { "Content-Type": "application/json" } : {}),
-  };
-}
-
 function chunkNumbers(values: number[], size: number): number[][] {
   if (values.length === 0 || size <= 0) {
     return [];
@@ -650,7 +643,11 @@ function stationToCatalogItem(station: StationRecord): {
 
 export default function StationsPage() {
   const { requestJson } = useApiRequest();
-  const requestHeaders = useMemo(() => buildAuthHeaders(false), []);
+  const auth = useAuth();
+  const requestHeaders = useMemo(
+    () => buildSharedAuthHeaders(auth.session, auth.tenantSlug, false),
+    [auth.session, auth.tenantSlug],
+  );
 
   const [draft, setDraft] = usePersistentState<StationSearchFormValues>(
     STATIONS_SEARCH_DRAFT_STORAGE_KEY,

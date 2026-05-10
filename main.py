@@ -9,6 +9,7 @@ from apps.shiftzy.api.main import app as shiftzy_app
 from apps.fundsphere.api.main import app as fundsphere_app
 from apps.tradsphere.api.main import app as tradsphere_app
 from apps.opssphere.api.main import app as opssphere_app
+from apps.auth.api.main import app as auth_app
 from apps.opssphere.public.router import router as opssphere_public_router
 from apps.spendsphere.api.v1.helpers.config import (
     validate_tenant_config as validate_spendsphere_tenant_config,
@@ -39,6 +40,12 @@ _STATIC_DIR = Path(__file__).resolve().parent / "static"
 _TRADSPHERE_FE_DIST = Path(__file__).resolve().parent / "apps" / "tradsphere" / "ui_dist"
 _FRONTEND_INDEX = _TRADSPHERE_FE_DIST / "index.html"
 app.state.public_paths = {"/", "/ping"}
+app.state.public_path_prefixes = {
+    "/assets/",
+    "/fe/assets/",
+    "/auth/",
+    "/public/opssphere/advWebsiteReport/reports/cta",
+}
 app.state.tenant_validator_registry = [
     (
         ("/api/spendsphere", "/spendsphere/api"),
@@ -62,6 +69,7 @@ app.mount("/api/shiftzy", shiftzy_app)
 app.mount("/api/fundsphere", fundsphere_app)
 app.mount("/api/tradsphere", tradsphere_app)
 app.mount("/api/opssphere", opssphere_app)
+app.mount("/api/auth", auth_app)
 if _TRADSPHERE_FE_DIST.exists():
     app.mount(
         "/assets",

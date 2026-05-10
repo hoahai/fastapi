@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from apps.tradsphere.api.v1.endpoints.core import (
     accounts,
@@ -13,8 +13,12 @@ from apps.tradsphere.api.v1.endpoints.core import (
     stationsContacts,
 )
 from apps.tradsphere.api.v1.endpoints.core.ui import main as uiMain
+from shared.auth.dependencies import enforce_tradsphere_permission
 
-router = APIRouter(prefix="/v1")
+router = APIRouter(
+    prefix="/v1",
+    dependencies=[Depends(enforce_tradsphere_permission)],
+)
 router.include_router(accounts.router, tags=["tradsphere"])
 router.include_router(estNums.router, tags=["tradsphere"])
 router.include_router(stations.router, tags=["tradsphere"])

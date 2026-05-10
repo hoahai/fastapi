@@ -1,6 +1,8 @@
 import { useCallback } from "react";
 
 import { useToast } from "@/components/ui/toast";
+import { buildAuthHeaders } from "@shared/api/authHeaders";
+import { useAuth } from "@shared/auth/useAuth";
 
 export type ApiMethod = "GET" | "POST" | "PUT" | "PATCH" | "DELETE";
 
@@ -79,13 +81,17 @@ async function parseResponsePayload(response: Response): Promise<unknown> {
 
 export function useApiRequest() {
   const toast = useToast();
+  const auth = useAuth();
 
   const requestJson = useCallback(
     async (url: string, options: ApiRequestOptions = {}): Promise<unknown> => {
       const method = options.method ?? "GET";
       const hasBody = options.body !== undefined;
       const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
-      const requestHeaders = new Headers(options.headers ?? {});
+      const baseHeaders = buildAuthHeaders(auth.session, auth.tenantSlug, false);
+      const requestHeaders = new Headers(baseHeaders);
+      const callerHeaders = new Headers(options.headers ?? {});
+      callerHeaders.forEach((value, key) => requestHeaders.set(key, value));
 
       let body: BodyInit | undefined;
       if (hasBody) {
@@ -129,7 +135,7 @@ export function useApiRequest() {
 
       return payload;
     },
-    [toast],
+    [auth.session, auth.tenantSlug, toast],
   );
 
   return { requestJson };
