@@ -44,6 +44,14 @@ Backend:
 - `SUPABASE_ANON_KEY`
 - `SUPABASE_SERVICE_ROLE_KEY`
 
+Notes:
+
+- `SUPABASE_ANON_KEY` may be legacy JWT `anon` or new `sb_publishable_*`.
+- `SUPABASE_SERVICE_ROLE_KEY` may be legacy JWT `service_role` or new `sb_secret_*`.
+- New `sb_*` keys are not JWTs and must not be sent as `Authorization: Bearer ...`.
+- For backend Supabase REST table access with new keys, use `apikey` header with the service key.
+- `Authorization: Bearer ...` is reserved for real user access tokens.
+
 Frontend (`VITE_*`):
 
 - `VITE_SUPABASE_URL`

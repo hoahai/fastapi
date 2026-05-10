@@ -22,6 +22,16 @@ class SupabaseAuthError(SupabaseClientError):
     pass
 
 
+def _is_sb_api_key(value: str) -> bool:
+    text = str(value or "").strip()
+    return text.startswith("sb_secret_") or text.startswith("sb_publishable_")
+
+
+def _is_jwt_like(value: str) -> bool:
+    text = str(value or "").strip()
+    return text.count(".") == 2
+
+
 class SupabaseRestClient:
     def __init__(self) -> None:
         self.base_url = get_supabase_url()
@@ -36,6 +46,33 @@ class SupabaseRestClient:
         if not self.service_role_key:
             raise SupabaseClientError("SUPABASE_SERVICE_ROLE_KEY is not configured")
 
+    def _reload_from_env(self) -> None:
+        # Keep client in sync with runtime env, especially for local/dev shell changes.
+        self.base_url = get_supabase_url()
+        self.anon_key = get_supabase_anon_key()
+        self.service_role_key = get_supabase_service_role_key()
+
+    def _build_headers(
+        self,
+        *,
+        bearer_token: str | None,
+        use_service_role: bool,
+    ) -> dict[str, str]:
+        selected_key = self.service_role_key if use_service_role else self.anon_key
+        headers: dict[str, str] = {"apikey": selected_key}
+
+        if bearer_token:
+            # Authorization bearer is only for real JWTs (for example user access tokens).
+            headers["Authorization"] = f"Bearer {bearer_token}"
+            return headers
+
+        # Backward compatibility for legacy JWT-format anon/service keys.
+        # For sb_* keys, never send Authorization bearer with the key itself.
+        if _is_jwt_like(selected_key) and not _is_sb_api_key(selected_key):
+            headers["Authorization"] = f"Bearer {selected_key}"
+
+        return headers
+
     def _request(
         self,
         *,
@@ -46,16 +83,16 @@ class SupabaseRestClient:
         bearer_token: str | None = None,
         use_service_role: bool = False,
     ) -> Any:
+        self._reload_from_env()
         self._require_configured()
         qs = ""
         if query:
             qs = "?" + urlencode(query)
 
-        token = self.service_role_key if use_service_role else self.anon_key
-        headers = {
-            "apikey": self.anon_key,
-            "Authorization": f"Bearer {bearer_token or token}",
-        }
+        headers = self._build_headers(
+            bearer_token=bearer_token,
+            use_service_role=use_service_role,
+        )
 
         data: bytes | None = None
         if body is not None:

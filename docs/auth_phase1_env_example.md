@@ -30,8 +30,14 @@ SUPABASE_SERVICE_ROLE_KEY=<PASTE_SUPABASE_SERVICE_ROLE_KEY>
 Where to find values in Supabase dashboard:
 
 - `SUPABASE_URL`: Project Settings -> Data API -> Project URL
-- `SUPABASE_ANON_KEY`: Project Settings -> Data API -> Project API keys -> `anon` `public`
-- `SUPABASE_SERVICE_ROLE_KEY`: Project Settings -> Data API -> Project API keys -> `service_role` `secret`
+- `SUPABASE_ANON_KEY`: Project Settings -> API Keys -> `publishable` (`sb_publishable_*`) or legacy `anon`
+- `SUPABASE_SERVICE_ROLE_KEY`: Project Settings -> API Keys -> `secret` (`sb_secret_*`) or legacy `service_role`
+
+Backend request behavior:
+
+- For Supabase REST permission/invitation table reads, backend uses `apikey: SUPABASE_SERVICE_ROLE_KEY`.
+- If service key is `sb_secret_*`, backend does not send it in `Authorization: Bearer ...`.
+- `Authorization: Bearer ...` is used only for real user JWTs (for example session access tokens).
 
 ## Frontend Template (`frontend/apps/tradsphere/.env.local`)
 
@@ -51,6 +57,6 @@ VITE_LEGACY_USER_NAME=local-dev
 ## Security Rules
 
 - `SUPABASE_SERVICE_ROLE_KEY` is backend-only. Never place it in frontend env files.
+- `sb_secret_*` is not a JWT and must never be used as an Authorization bearer token.
 - `VITE_*` values are bundled into browser code. Only use public/anon Supabase values there.
 - Never commit real keys or tokens.
-
