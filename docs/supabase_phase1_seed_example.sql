@@ -64,7 +64,7 @@ set email = excluded.email,
 
 -- 4) Tenant membership
 insert into tenant_users (tenant_id, user_id, status)
-select t.id, '<PASTE_AUTH_USER_ID>'::uuid, 'active'
+select t.id, '762fec4b-1da3-4ba7-80e2-dd21622b6e0d'::uuid, 'active'
 from tenants t
 where t.slug = 'taaa'
 on conflict (tenant_id, user_id) do update
@@ -75,7 +75,7 @@ set status = excluded.status,
 -- Choose one role:
 --   tradsphere.viewer | tradsphere.editor | tradsphere.admin
 insert into tenant_app_roles (tenant_id, user_id, app_id, role)
-select t.id, '<PASTE_AUTH_USER_ID>'::uuid, a.id, 'tradsphere.admin'
+select t.id, '762fec4b-1da3-4ba7-80e2-dd21622b6e0d'::uuid, a.id, 'tradsphere.admin'
 from tenants t
 join apps a on a.code = 'tradsphere'
 where t.slug = 'taaa'
