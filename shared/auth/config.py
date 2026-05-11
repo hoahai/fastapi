@@ -5,6 +5,7 @@ import os
 
 AUTH_MODE_COMPAT = "compat"
 AUTH_MODE_JWT_ONLY = "jwt_only"
+AUTH_PROVIDER_SUPABASE = "supabase"
 
 
 SUPABASE_ENV_KEYS = (
@@ -37,6 +38,13 @@ def get_auth_mode() -> str:
     raw = str(os.getenv("AUTH_MODE", AUTH_MODE_COMPAT)).strip().lower()
     if raw not in {AUTH_MODE_COMPAT, AUTH_MODE_JWT_ONLY}:
         return AUTH_MODE_COMPAT
+    return raw
+
+
+def get_auth_provider_name() -> str:
+    raw = str(os.getenv("AUTH_PROVIDER", AUTH_PROVIDER_SUPABASE)).strip().lower()
+    if raw != AUTH_PROVIDER_SUPABASE:
+        return AUTH_PROVIDER_SUPABASE
     return raw
 
 

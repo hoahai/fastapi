@@ -7,7 +7,6 @@ This validates existing Phase 1 auth/authz implementation with a real Supabase p
 1. Create a Supabase project.
 2. In Authentication -> Providers, enable:
    1. Email/password
-   2. Email magic link
 
 ## 2) Collect Supabase Keys
 
@@ -42,7 +41,7 @@ Run SQL from:
 
 ## 5) Create a Real Auth User
 
-1. Sign up once via `/auth/login` (password or magic link), or create a user in Supabase dashboard.
+1. Sign up once via `/auth/login` (email/password), or create a user in Supabase dashboard.
 2. Find user id:
    1. Supabase -> Authentication -> Users -> copy UID.
 
@@ -86,4 +85,3 @@ Run SQL from:
 
 - If Tradsphere route fails with tenant/app membership errors, verify `tenant_users` and `tenant_app_roles` rows for the same `auth.users.id`.
 - Keep legacy fallback enabled only during migration window.
-

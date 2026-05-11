@@ -80,18 +80,42 @@ export async function signInWithPassword(email: string, password: string): Promi
   };
 }
 
-export async function sendMagicLink(email: string, redirectTo?: string): Promise<void> {
-  await requestJson("/auth/v1/otp", {
+export async function refreshSession(refreshToken: string): Promise<SupabaseSession> {
+  const normalizedRefreshToken = String(refreshToken || "").trim();
+  if (!normalizedRefreshToken) {
+    throw new Error("Supabase refresh token is missing.");
+  }
+
+  const payload = await requestJson("/auth/v1/token?grant_type=refresh_token", {
     method: "POST",
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({
-      email,
-      create_user: true,
-      email_redirect_to: redirectTo || undefined,
-    }),
+    body: JSON.stringify({ refresh_token: normalizedRefreshToken }),
   });
+
+  const record = (payload && typeof payload === "object" ? payload : {}) as Record<string, unknown>;
+  return parseSession(record);
+}
+
+export async function signUpWithPassword(
+  email: string,
+  password: string,
+): Promise<{ session: SupabaseSession | null; user: AuthUser | null }> {
+  const payload = await requestJson("/auth/v1/signup", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ email, password }),
+  });
+
+  const record = (payload && typeof payload === "object" ? payload : {}) as Record<string, unknown>;
+  const user = record.user && typeof record.user === "object" ? parseUser(record.user) : null;
+  const accessToken = String(record.access_token || "").trim();
+  const session = accessToken ? parseSession(record) : null;
+
+  return { session, user };
 }
 
 export async function getUser(accessToken: string): Promise<AuthUser> {
@@ -102,25 +126,4 @@ export async function getUser(accessToken: string): Promise<AuthUser> {
     },
   });
   return parseUser(payload);
-}
-
-export function extractSessionFromCallbackUrl(url: string): SupabaseSession | null {
-  const hashIndex = url.indexOf("#");
-  if (hashIndex < 0) {
-    return null;
-  }
-  const hash = url.slice(hashIndex + 1);
-  const params = new URLSearchParams(hash);
-  const accessToken = String(params.get("access_token") || "").trim();
-  if (!accessToken) {
-    return null;
-  }
-  const refreshToken = String(params.get("refresh_token") || "").trim();
-  const expiresIn = Number(params.get("expires_in") || NaN);
-  const expiresAt = Number.isFinite(expiresIn) ? Math.floor(Date.now() / 1000 + expiresIn) : null;
-  return {
-    accessToken,
-    refreshToken: refreshToken || null,
-    expiresAt,
-  };
 }

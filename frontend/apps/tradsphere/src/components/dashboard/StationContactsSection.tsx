@@ -7,6 +7,7 @@ import { StationContactCard, type StationDraftContact } from "./StationContactCa
 interface StationContactsSectionProps {
   contacts: StationDraftContact[];
   isSubmitting: boolean;
+  isReadOnly?: boolean;
   onAddExistingContact: () => void;
   onCreateContact: () => void;
   onEditContact: (index: number) => void;
@@ -17,12 +18,14 @@ interface StationContactsSectionProps {
 export function StationContactsSection({
   contacts,
   isSubmitting,
+  isReadOnly = false,
   onAddExistingContact,
   onCreateContact,
   onEditContact,
   onRemoveContact,
   onCopyContact,
 }: StationContactsSectionProps) {
+  const isActionDisabled = isSubmitting || isReadOnly;
   return (
     <section className="flex min-h-[420px] min-w-0 flex-col space-y-3">
       <div className="flex min-h-10 items-center justify-between gap-3 border-b border-slate-200 pb-2">
@@ -32,13 +35,13 @@ export function StationContactsSection({
             icon={<CirclePlus />}
             tooltip="Create contact"
             onClick={onCreateContact}
-            disabled={isSubmitting}
+            disabled={isActionDisabled}
           />
           <ActionIconButton
             icon={<UserPlus />}
             tooltip="Add existing contact"
             onClick={onAddExistingContact}
-            disabled={isSubmitting}
+            disabled={isActionDisabled}
           />
         </div>
       </div>
@@ -50,10 +53,11 @@ export function StationContactsSection({
               key={`${contact.contactId ?? contact.clientKey ?? index}:${contact.email ?? index}:${index}`}
               contact={contact}
               isSubmitting={isSubmitting}
-              onEdit={() => onEditContact(index)}
-              onRemove={() => onRemoveContact(index)}
-              onCopy={() => onCopyContact(index)}
-            />
+                onEdit={() => onEditContact(index)}
+                onRemove={() => onRemoveContact(index)}
+                onCopy={() => onCopyContact(index)}
+                isReadOnly={isReadOnly}
+              />
           ))}
         </div>
       ) : (

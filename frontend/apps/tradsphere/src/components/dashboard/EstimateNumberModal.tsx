@@ -71,6 +71,7 @@ interface EstimateNumberModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   mode: EstimateNumberModalMode;
+  canEdit?: boolean;
   initialData?: EstimateNumberModalData | null;
   accountCode: string;
   accountName?: string;
@@ -512,6 +513,7 @@ export function EstimateNumberModal({
   open,
   onOpenChange,
   mode,
+  canEdit = true,
   initialData,
   accountCode,
   accountName,
@@ -734,6 +736,7 @@ export function EstimateNumberModal({
   }
 
   const isEditMode = mode === "edit";
+  const isReadOnly = !canEdit;
   const hasUnsavedChanges =
     hasFormChanges(form, originalForm) || (isEditMode && hasAutoSeededDefaultDates);
   const isDetailReady = !isEditMode || (hasAttemptedDetailLoad && !isLoadingDetail && !detailError && !!originalForm);
@@ -754,7 +757,7 @@ export function EstimateNumberModal({
   }
 
   async function handleSubmit() {
-    if (isSubmitting) {
+    if (isSubmitting || isReadOnly) {
       return;
     }
 
@@ -869,8 +872,12 @@ export function EstimateNumberModal({
   const modalTitle = isEditMode ? "Edit Estimate Number" : "Estimate Number";
   const submitLabel = isEditMode ? "Save Changes" : "Create";
   const description = isEditMode
-    ? "Update the selected estimate number."
-    : "Create a new estimate number for the selected TradSphere account.";
+    ? isReadOnly
+      ? "View the selected estimate number."
+      : "Update the selected estimate number."
+    : isReadOnly
+      ? "View estimate number details."
+      : "Create a new estimate number for the selected TradSphere account.";
   const formValidationError = isDetailReady ? validateForm(form) : null;
   const flightDateValidationError = isDetailReady ? getFlightRangeValidationError(form) : null;
   const flightErrorMessage = flightRangeError || flightDateValidationError;
@@ -886,8 +893,9 @@ export function EstimateNumberModal({
   const canSubmit =
     isDetailReady &&
     !formValidationError &&
-    (!isEditMode || hasUnsavedChanges);
-  const shouldShowSubmitButton = canSubmit || isSubmitting;
+    (!isEditMode || hasUnsavedChanges) &&
+    canEdit;
+  const shouldShowSubmitButton = canEdit && (canSubmit || isSubmitting);
 
   return (
     <Dialog open={open} onOpenChange={handleDialogOpenChange}>
@@ -951,7 +959,7 @@ export function EstimateNumberModal({
                   options={accountOptions}
                   onValueChange={(value) => updateForm("accountCode", value.trim().toUpperCase())}
                   placeholder="Select account"
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || isReadOnly}
                   className="w-full"
                   emptyText="No accounts found."
                 />
@@ -977,7 +985,7 @@ export function EstimateNumberModal({
                   value={form.estNum}
                   onChange={(event) => updateForm("estNum", event.target.value)}
                   placeholder="e.g. 26001"
-                  disabled={isSubmitting}
+                  disabled={isSubmitting || isReadOnly}
                 />
               )}
             </LabeledField>
@@ -995,7 +1003,7 @@ export function EstimateNumberModal({
                 options={MEDIA_TYPE_OPTIONS}
                 onValueChange={(value) => updateForm("mediaType", value)}
                 placeholder="Select media type"
-                disabled={isSubmitting}
+                disabled={isSubmitting || isReadOnly}
                 searchable={false}
                 className="w-full"
                 emptyText="No media type found."
@@ -1021,7 +1029,7 @@ export function EstimateNumberModal({
                 }}
                 placeholder="Buyer name"
                 maxLength={36}
-                disabled={isSubmitting}
+                disabled={isSubmitting || isReadOnly}
               />
             </LabeledField>
 
@@ -1043,7 +1051,7 @@ export function EstimateNumberModal({
                 onFlightRangeError={setFlightRangeError}
                 defaultMonth={chicagoToday.month}
                 defaultYear={chicagoToday.year}
-                disabled={isSubmitting}
+                disabled={isSubmitting || isReadOnly}
               />
             </LabeledField>
 
@@ -1056,7 +1064,7 @@ export function EstimateNumberModal({
                 onChange={(event) => updateForm("note", event.target.value)}
                 placeholder="Optional note"
                 maxLength={2048}
-                disabled={isSubmitting}
+                disabled={isSubmitting || isReadOnly}
               />
             </LabeledField>
           </div>

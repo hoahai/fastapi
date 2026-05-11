@@ -16,6 +16,7 @@ export type StationDraftDeliveryMethod = {
 interface StationDeliveryMethodSectionProps {
   deliveryMethod: StationDraftDeliveryMethod;
   isSubmitting: boolean;
+  isReadOnly?: boolean;
   onSelectDeliveryMethod: () => void;
   onAddDeliveryMethod: () => void;
   onEditDeliveryMethod: () => void;
@@ -33,11 +34,13 @@ function SummaryRow({ label, value }: { label: string; value: string }) {
 export function StationDeliveryMethodSection({
   deliveryMethod,
   isSubmitting,
+  isReadOnly = false,
   onSelectDeliveryMethod,
   onAddDeliveryMethod,
   onEditDeliveryMethod,
 }: StationDeliveryMethodSectionProps) {
   const hasSelectedMethod = Boolean(deliveryMethod.name.trim() || deliveryMethod.id !== null);
+  const isActionDisabled = isSubmitting || isReadOnly;
   const resolvedPassword = asString(deliveryMethod.password);
   const passwordDisplay = resolvedPassword || (asString(deliveryMethod.passwordStatus) === "Stored" ? "Stored (hidden)" : "-");
 
@@ -51,21 +54,21 @@ export function StationDeliveryMethodSection({
             tooltip="Add delivery method"
             aria-label="Add delivery method"
             onClick={onAddDeliveryMethod}
-            disabled={isSubmitting}
+            disabled={isActionDisabled}
           />
           <ActionIconButton
             icon={<Pencil />}
             tooltip="Edit delivery method"
             aria-label="Edit delivery method"
             onClick={onEditDeliveryMethod}
-            disabled={isSubmitting || !hasSelectedMethod}
+            disabled={isActionDisabled || !hasSelectedMethod}
           />
           <ActionIconButton
             icon={<ListCheck />}
             tooltip="Select delivery method"
             aria-label="Select delivery method"
             onClick={onSelectDeliveryMethod}
-            disabled={isSubmitting}
+            disabled={isActionDisabled}
           />
         </div>
       </div>

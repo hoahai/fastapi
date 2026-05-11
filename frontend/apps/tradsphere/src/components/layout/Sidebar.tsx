@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronLeft, ChevronRight, LayoutDashboard, Menu } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, LayoutDashboard, LogIn, LogOut, Menu, ShieldCheck } from "lucide-react";
 import { useEffect, useMemo, useState, type ComponentType, type FocusEvent } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -41,8 +41,12 @@ export function Sidebar({
   const auth = useAuth();
   const [expandedById, setExpandedById] = useState<Record<string, boolean>>(() => ({}));
   const isCompact = !visuallyExpanded;
+  const isSignedIn = auth.status === "authenticated" && Boolean(auth.user);
   const protectionEnabled = shouldProtectTradsphereFrontend();
-  const canAccessTradsphere = !protectionEnabled || Boolean(auth.accessProfile?.permissions?.includes("tradsphere.viewer"));
+  const canAccessTradsphere =
+    isSignedIn && (!protectionEnabled || Boolean(auth.accessProfile?.permissions?.includes("tradsphere.viewer")));
+  const hasAdminPermission =
+    isSignedIn && (!protectionEnabled || Boolean(auth.accessProfile?.permissions?.includes("tradsphere.admin")));
   const navItems = useMemo(
     () =>
       APP_NAV_ITEMS.map((item) =>
@@ -120,6 +124,12 @@ export function Sidebar({
     onHoverExpandedChange(false);
   }
 
+  function handleSignOut() {
+    void auth.signOut();
+    onCloseMobile();
+    onNavigate("/auth/login");
+  }
+
   return (
     <>
       <header className="sticky top-0 z-30 rounded-2xl border border-border/80 bg-white/90 p-3 shadow-soft backdrop-blur lg:hidden">
@@ -183,6 +193,18 @@ export function Sidebar({
             onNavigate={onNavigate}
             onCloseMobile={onCloseMobile}
           />
+          {hasAdminPermission ? (
+            <SidebarItem
+              icon={ShieldCheck}
+              label="Admin / Users"
+              route="/admin/users"
+              collapsed={isCompact}
+              active={currentPath === "/admin/users"}
+              available
+              onNavigate={onNavigate}
+              onCloseMobile={onCloseMobile}
+            />
+          ) : null}
           {navItems.map((topLevel) => {
             const hasChildren = !isCompact && Boolean(topLevel.children?.length);
             const expanded = Boolean(expandedById[topLevel.id]);
@@ -221,6 +243,43 @@ export function Sidebar({
             );
           })}
         </nav>
+
+        <div className="mt-4 border-t border-slate-200 pt-3">
+          {isSignedIn ? (
+            <>
+              {!isCompact ? (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                  <p className="truncate text-sm font-medium text-slate-800">{auth.user?.email || "Signed in"}</p>
+                  <p className="mt-0.5 text-xs text-slate-500">Tenant: {auth.tenantSlug || "-"}</p>
+                </div>
+              ) : null}
+              <Button
+                variant="ghost"
+                className={cn("mt-2 w-full justify-start", isCompact && "lg:justify-center")}
+                onClick={handleSignOut}
+                aria-label="Sign out"
+                title={isCompact ? "Sign out" : undefined}
+              >
+                <LogOut className="size-4" />
+                {!isCompact ? <span>Sign out</span> : null}
+              </Button>
+            </>
+          ) : (
+            <Button
+              variant="ghost"
+              className={cn("w-full justify-start", isCompact && "lg:justify-center")}
+              onClick={() => {
+                onNavigate("/auth/login");
+                onCloseMobile();
+              }}
+              aria-label="Sign in"
+              title={isCompact ? "Sign in" : undefined}
+            >
+              <LogIn className="size-4" />
+              {!isCompact ? <span>Sign in</span> : null}
+            </Button>
+          )}
+        </div>
       </aside>
     </>
   );

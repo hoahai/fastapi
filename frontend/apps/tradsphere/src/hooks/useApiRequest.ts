@@ -88,7 +88,8 @@ export function useApiRequest() {
       const method = options.method ?? "GET";
       const hasBody = options.body !== undefined;
       const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
-      const baseHeaders = buildAuthHeaders(auth.session, auth.tenantSlug, false);
+      const ensuredSession = await auth.ensureFreshSession();
+      const baseHeaders = buildAuthHeaders(ensuredSession, auth.tenantSlug, false);
       const requestHeaders = new Headers(baseHeaders);
       const callerHeaders = new Headers(options.headers ?? {});
       callerHeaders.forEach((value, key) => requestHeaders.set(key, value));
@@ -135,7 +136,7 @@ export function useApiRequest() {
 
       return payload;
     },
-    [auth.session, auth.tenantSlug, toast],
+    [auth, toast],
   );
 
   return { requestJson };

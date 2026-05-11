@@ -54,6 +54,7 @@ type ContactModalProps = {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   mode: ContactModalMode;
+  canEdit?: boolean;
   initialContact: ContactRecord | null;
   focusUsageToken: number;
   detailCacheStatusText?: string | null;
@@ -284,6 +285,7 @@ export function ContactModal({
   open,
   onOpenChange,
   mode,
+  canEdit = true,
   initialContact,
   focusUsageToken,
   detailCacheStatusText,
@@ -342,6 +344,7 @@ export function ContactModal({
 
   const hasUnsavedChanges = useMemo(() => !formsEqual(form, baseline), [baseline, form]);
   const showUsageSections = mode === "edit";
+  const isReadOnly = !canEdit;
 
   const email = asString(form.email).toLowerCase();
   const isEmailValid = EMAIL_RE.test(email);
@@ -369,8 +372,8 @@ export function ContactModal({
   const visibleOfficeError = fieldTouched.office ? officeError : null;
   const visibleCellError = fieldTouched.cell ? cellError : null;
 
-  const canSubmit = hasUnsavedChanges && isFormValid && !isSubmitting;
-  const shouldShowSubmitButton = isSubmitting || canSubmit;
+  const canSubmit = hasUnsavedChanges && isFormValid && !isSubmitting && canEdit;
+  const shouldShowSubmitButton = canEdit && (isSubmitting || canSubmit);
   const modalTitle = mode === "create" ? "Add Contact" : "Edit Contact";
   const submitLabel = "Save";
 
@@ -435,7 +438,7 @@ export function ContactModal({
   }
 
   async function handleSubmit() {
-    if (!canSubmit) {
+    if (!canSubmit || isReadOnly) {
       return;
     }
 
@@ -493,7 +496,7 @@ export function ContactModal({
                 <Section className="space-y-3">
                   <SectionHeader
                     title="Contact"
-                    description="Edit contact profile fields."
+                    description={isReadOnly ? "View contact profile fields." : "Edit contact profile fields."}
                   />
                   <LabeledField label="Full Name">
                     <Input
@@ -513,6 +516,7 @@ export function ContactModal({
                       }}
                       maxLength={255}
                       autoComplete="off"
+                      disabled={isSubmitting || isReadOnly}
                     />
                   </LabeledField>
 
@@ -523,6 +527,7 @@ export function ContactModal({
                       onBlur={(event) => updateNameField("firstName", toNameCase(event.target.value))}
                       maxLength={255}
                       autoComplete="off"
+                      disabled={isSubmitting || isReadOnly}
                     />
                   </LabeledField>
 
@@ -533,6 +538,7 @@ export function ContactModal({
                       onBlur={(event) => updateNameField("lastName", toNameCase(event.target.value))}
                       maxLength={255}
                       autoComplete="off"
+                      disabled={isSubmitting || isReadOnly}
                     />
                   </LabeledField>
 
@@ -551,6 +557,7 @@ export function ContactModal({
                       maxLength={255}
                       autoComplete="off"
                       spellCheck={false}
+                      disabled={isSubmitting || isReadOnly}
                     />
                   </LabeledField>
 
@@ -562,6 +569,7 @@ export function ContactModal({
                       onChange={(event) => updateForm("company", event.target.value)}
                       maxLength={255}
                       autoComplete="off"
+                      disabled={isSubmitting || isReadOnly}
                     />
                   </LabeledField>
 
@@ -571,6 +579,7 @@ export function ContactModal({
                       onChange={(event) => updateForm("jobTitle", event.target.value)}
                       maxLength={255}
                       autoComplete="off"
+                      disabled={isSubmitting || isReadOnly}
                     />
                   </LabeledField>
 
@@ -585,6 +594,7 @@ export function ContactModal({
                       inputMode="tel"
                       maxLength={35}
                       autoComplete="off"
+                      disabled={isSubmitting || isReadOnly}
                     />
                   </LabeledField>
                   {visibleOfficeError ? <p className="text-sm text-rose-600">{visibleOfficeError}</p> : null}
@@ -600,6 +610,7 @@ export function ContactModal({
                       inputMode="tel"
                       maxLength={20}
                       autoComplete="off"
+                      disabled={isSubmitting || isReadOnly}
                     />
                   </LabeledField>
                   {visibleCellError ? <p className="text-sm text-rose-600">{visibleCellError}</p> : null}
@@ -610,6 +621,7 @@ export function ContactModal({
                       onChange={(event) => updateForm("note", event.target.value)}
                       rows={3}
                       maxLength={2048}
+                      disabled={isSubmitting || isReadOnly}
                     />
                   </LabeledField>
 
@@ -620,6 +632,8 @@ export function ContactModal({
                       aria-checked={form.active}
                       aria-label="Active"
                       onClick={() => updateForm("active", !form.active)}
+                      disabled={isSubmitting || isReadOnly}
+                      aria-disabled={isSubmitting || isReadOnly}
                       className={`inline-flex h-10 w-fit items-center gap-3 px-1 py-2 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
                         form.active
                           ? "text-blue-700"

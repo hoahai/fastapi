@@ -178,6 +178,7 @@ interface StationModalProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
   mode: StationModalMode;
+  canEdit?: boolean;
   stationCode?: string | null;
   stationCatalog?: StationCatalogItem[];
   headers: HeadersInit;
@@ -1331,6 +1332,7 @@ export function StationModal({
   open,
   onOpenChange,
   mode,
+  canEdit = true,
   stationCode,
   stationCatalog = [],
   headers,
@@ -1406,6 +1408,7 @@ export function StationModal({
   const [isAddExistingContactDiscardDialogOpen, setIsAddExistingContactDiscardDialogOpen] = useState(false);
 
   const isEditMode = mode === "edit";
+  const isReadOnly = !canEdit;
   const isDetailReady = !isEditMode || (hasAttemptedDetailLoad && !isLoadingDetail && !detailError && !!originalDraft);
   const hasUnsavedChanges = hasDraftChanges(draft, originalDraft);
   const validationError = isDetailReady ? validateDraft(draft, mode) : null;
@@ -1413,7 +1416,8 @@ export function StationModal({
     isDetailReady &&
       !validationError &&
       !isSubmitting &&
-      (!isEditMode || hasUnsavedChanges),
+      (!isEditMode || hasUnsavedChanges) &&
+      canEdit,
   );
   const hasDeliveryMethodSelectorChanges =
     isDeliveryMethodSelectorOpen && selectedDeliveryMethodId !== initialSelectedDeliveryMethodId;
@@ -1836,6 +1840,9 @@ export function StationModal({
   }
 
   function handleDeliveryMethodSelectorOpenChange(nextOpen: boolean) {
+    if (isReadOnly && nextOpen) {
+      return;
+    }
     const allowClose = canModalClose({
       nextOpen,
       hasUnsavedChanges: hasDeliveryMethodSelectorChanges,
@@ -1956,6 +1963,9 @@ export function StationModal({
   }
 
   function openDeliveryMethodSelector() {
+    if (isReadOnly) {
+      return;
+    }
     const currentId =
       draft.deliveryMethod.id !== undefined && draft.deliveryMethod.id !== null
         ? String(draft.deliveryMethod.id)
@@ -1969,6 +1979,9 @@ export function StationModal({
   }
 
   function applySelectedDeliveryMethod() {
+    if (isReadOnly) {
+      return;
+    }
     if (!canApplySelectedDeliveryMethod) {
       return;
     }
@@ -2014,6 +2027,9 @@ export function StationModal({
   }
 
   function handleDeliveryMethodEditorOpenChange(nextOpen: boolean) {
+    if (isReadOnly && nextOpen) {
+      return;
+    }
     const allowClose = canModalClose({
       nextOpen,
       hasUnsavedChanges: hasDeliveryMethodEditorChanges,
@@ -2028,6 +2044,9 @@ export function StationModal({
   }
 
   function openCreateDeliveryMethodEditor() {
+    if (isReadOnly) {
+      return;
+    }
     const initialForm = buildDeliveryMethodEditorForm();
     setDeliveryMethodEditorForm(initialForm);
     setDeliveryMethodEditorBaseline(initialForm);
@@ -2038,6 +2057,9 @@ export function StationModal({
   }
 
   function openEditDeliveryMethodEditor() {
+    if (isReadOnly) {
+      return;
+    }
     if (!asString(draft.deliveryMethod.name) && draft.deliveryMethod.id === null) {
       setSubmitError("Select or add a delivery method first.");
       return;
@@ -2056,6 +2078,9 @@ export function StationModal({
   }
 
   function saveDeliveryMethodEditor() {
+    if (isReadOnly) {
+      return;
+    }
     if (!asString(deliveryMethodEditorForm.name)) {
       setDeliveryMethodEditorError("Name is required.");
       return;
@@ -2126,6 +2151,9 @@ export function StationModal({
   }
 
   function handleContactEditorOpenChange(nextOpen: boolean) {
+    if (isReadOnly && nextOpen) {
+      return;
+    }
     const allowClose = canModalClose({
       nextOpen,
       hasUnsavedChanges: hasContactEditorChanges,
@@ -2140,6 +2168,9 @@ export function StationModal({
   }
 
   function openCreateContactEditor() {
+    if (isReadOnly) {
+      return;
+    }
     const initialForm = buildContactEditorForm();
     setContactEditorIndex(null);
     setContactEditorForm(initialForm);
@@ -2150,6 +2181,9 @@ export function StationModal({
   }
 
   function openEditContactEditor(index: number) {
+    if (isReadOnly) {
+      return;
+    }
     const contact = draft.contacts[index];
     if (!contact) {
       return;
@@ -2189,6 +2223,9 @@ export function StationModal({
   }
 
   function saveContactEditor() {
+    if (isReadOnly) {
+      return;
+    }
     const normalizedEmail = asString(contactEditorForm.email).toLowerCase();
     if (!normalizedEmail) {
       setContactEditorError("Email is required.");
@@ -2266,6 +2303,9 @@ export function StationModal({
   }
 
   function handleAddExistingContactOpenChange(nextOpen: boolean) {
+    if (isReadOnly && nextOpen) {
+      return;
+    }
     const allowClose = canModalClose({
       nextOpen,
       hasUnsavedChanges: hasAddExistingContactChanges,
@@ -2280,11 +2320,17 @@ export function StationModal({
   }
 
   function removeContact(index: number) {
+    if (isReadOnly) {
+      return;
+    }
     const nextContacts = draft.contacts.filter((_, itemIndex) => itemIndex !== index);
     updateContacts(nextContacts);
   }
 
   function openAddExistingContactDialog() {
+    if (isReadOnly) {
+      return;
+    }
     const initialState = buildAddExistingContactFormState({
       selectedExistingContactId: "",
       selectedExistingContactType: DEFAULT_CONTACT_TYPE,
@@ -2311,6 +2357,9 @@ export function StationModal({
   }, [filteredExistingContacts, isAddExistingContactOpen, selectedExistingContactId]);
 
   function addExistingContactToDraft() {
+    if (isReadOnly) {
+      return;
+    }
     if (!canAddExistingContact) {
       return;
     }
@@ -2372,6 +2421,9 @@ export function StationModal({
   }
 
   async function handleSubmit() {
+    if (isReadOnly) {
+      return;
+    }
     if (!canSubmit) {
       return;
     }
@@ -2526,7 +2578,7 @@ export function StationModal({
     isLoading: isLoadingExistingContacts,
     status: existingContactsCacheStatus,
   });
-  const shouldShowSubmitButton = isSubmitting || canSubmit;
+  const shouldShowSubmitButton = canEdit && (isSubmitting || canSubmit);
 
   return (
     <>
@@ -2579,6 +2631,7 @@ export function StationModal({
                   station={draft.station}
                   isEditMode={isEditMode}
                   isSubmitting={isSubmitting}
+                  isReadOnly={isReadOnly}
                   onChange={(next) => {
                     updateStation(next);
                   }}
@@ -2587,6 +2640,7 @@ export function StationModal({
                 <StationDeliveryMethodSection
                   deliveryMethod={draft.deliveryMethod}
                   isSubmitting={isSubmitting}
+                  isReadOnly={isReadOnly}
                   onSelectDeliveryMethod={openDeliveryMethodSelector}
                   onAddDeliveryMethod={openCreateDeliveryMethodEditor}
                   onEditDeliveryMethod={openEditDeliveryMethodEditor}
@@ -2595,6 +2649,7 @@ export function StationModal({
                 <StationContactsSection
                   contacts={draft.contacts}
                   isSubmitting={isSubmitting}
+                  isReadOnly={isReadOnly}
                   onAddExistingContact={openAddExistingContactDialog}
                   onCreateContact={openCreateContactEditor}
                   onEditContact={openEditContactEditor}
@@ -2724,7 +2779,7 @@ export function StationModal({
                   onChange={(event) => setDeliveryMethodSearch(event.target.value)}
                   placeholder="Search delivery methods"
                   className="pl-9"
-                  disabled={isLoadingDeliveryMethods}
+                  disabled={isLoadingDeliveryMethods || isReadOnly}
                 />
               </div>
             </div>
@@ -2749,6 +2804,7 @@ export function StationModal({
                               isSelected ? "bg-blue-50 text-blue-700" : "text-slate-700 hover:bg-slate-100"
                             }`}
                             onClick={() => setSelectedDeliveryMethodId(String(option.id))}
+                            disabled={isReadOnly}
                           >
                             <span className="min-w-0 space-y-1">
                               <span className="block truncate font-medium">
@@ -2785,9 +2841,9 @@ export function StationModal({
               <p className="text-sm text-rose-600">{deliveryMethodSelectorError}</p>
             ) : null}
 
-            {canApplySelectedDeliveryMethod ? (
+            {canEdit && canApplySelectedDeliveryMethod ? (
               <div className="flex justify-end">
-                <Button size="sm" onClick={applySelectedDeliveryMethod}>
+                <Button size="sm" onClick={applySelectedDeliveryMethod} disabled={isReadOnly}>
                   Use
                 </Button>
               </div>
@@ -2859,6 +2915,7 @@ export function StationModal({
                 }}
                 placeholder="Delivery method name"
                 maxLength={255}
+                disabled={isReadOnly}
               />
             </LabeledField>
             <LabeledField
@@ -2876,6 +2933,7 @@ export function StationModal({
                 }}
                 placeholder="URL"
                 maxLength={2048}
+                disabled={isReadOnly}
               />
             </LabeledField>
             <LabeledField
@@ -2893,6 +2951,7 @@ export function StationModal({
                 }}
                 placeholder="Username"
                 maxLength={255}
+                disabled={isReadOnly}
               />
             </LabeledField>
             <LabeledField label="Password">
@@ -2903,6 +2962,7 @@ export function StationModal({
                   setDeliveryMethodEditorForm((current) => ({ ...current, password: event.target.value }));
                 }}
                 placeholder="Password (optional)"
+                disabled={isReadOnly}
               />
             </LabeledField>
             <LabeledField
@@ -2920,6 +2980,7 @@ export function StationModal({
                 }}
                 placeholder="Deadline"
                 maxLength={50}
+                disabled={isReadOnly}
               />
             </LabeledField>
             <LabeledField label="Note" alignStart>
@@ -2930,6 +2991,7 @@ export function StationModal({
                 }}
                 placeholder="Note"
                 maxLength={2048}
+                disabled={isReadOnly}
               />
             </LabeledField>
 
@@ -2971,9 +3033,9 @@ export function StationModal({
 
             {deliveryMethodEditorError ? <p className="text-sm text-rose-600">{deliveryMethodEditorError}</p> : null}
 
-            {canApplyDeliveryMethodEditor ? (
+            {canEdit && canApplyDeliveryMethodEditor ? (
               <div className="flex justify-end">
-                <Button size="sm" onClick={saveDeliveryMethodEditor}>
+                <Button size="sm" onClick={saveDeliveryMethodEditor} disabled={isReadOnly}>
                   Apply
                 </Button>
               </div>
@@ -3046,6 +3108,7 @@ export function StationModal({
                 placeholder="Full Name"
                 autoComplete="off"
                 maxLength={255}
+                disabled={isReadOnly}
               />
             </LabeledField>
             <LabeledField label="First Name">
@@ -3056,6 +3119,7 @@ export function StationModal({
                 placeholder="First Name"
                 autoComplete="off"
                 maxLength={255}
+                disabled={isReadOnly}
               />
             </LabeledField>
             <LabeledField label="Last Name">
@@ -3066,6 +3130,7 @@ export function StationModal({
                 placeholder="Last Name"
                 autoComplete="off"
                 maxLength={255}
+                disabled={isReadOnly}
               />
             </LabeledField>
             <LabeledField
@@ -3083,6 +3148,7 @@ export function StationModal({
                 }}
                 placeholder="Email"
                 maxLength={255}
+                disabled={isReadOnly}
               />
             </LabeledField>
             <LabeledField label="Office">
@@ -3093,6 +3159,7 @@ export function StationModal({
                 }}
                 placeholder="Office"
                 maxLength={35}
+                disabled={isReadOnly}
               />
             </LabeledField>
             <LabeledField label="Cell">
@@ -3103,6 +3170,7 @@ export function StationModal({
                 }}
                 placeholder="Cell"
                 maxLength={20}
+                disabled={isReadOnly}
               />
             </LabeledField>
             <LabeledField label="Company">
@@ -3113,6 +3181,7 @@ export function StationModal({
                 }}
                 placeholder="Company"
                 maxLength={255}
+                disabled={isReadOnly}
               />
             </LabeledField>
             <LabeledField label="Job Title">
@@ -3123,6 +3192,7 @@ export function StationModal({
                 }}
                 placeholder="Job title"
                 maxLength={255}
+                disabled={isReadOnly}
               />
             </LabeledField>
             <LabeledField label="Station Link Note">
@@ -3133,6 +3203,7 @@ export function StationModal({
                 }}
                 placeholder="Station contact note"
                 maxLength={2048}
+                disabled={isReadOnly}
               />
             </LabeledField>
             <LabeledField label="Contact Note" alignStart>
@@ -3143,6 +3214,7 @@ export function StationModal({
                 }}
                 placeholder="Contact note"
                 maxLength={2048}
+                disabled={isReadOnly}
               />
             </LabeledField>
             <LabeledField
@@ -3159,29 +3231,31 @@ export function StationModal({
                   setContactEditorError(null);
                 }}
                 options={contactTypeOptions}
+                disabled={isReadOnly}
               />
             </LabeledField>
           </div>
 
           <div className="mt-2 sm:pl-[126px]">
             <label className="inline-flex items-center gap-2 rounded-md border border-slate-200 px-3 py-2 text-sm text-slate-700">
-              <input
-                type="checkbox"
-                className="size-4 rounded border border-slate-300"
-                checked={contactEditorForm.primaryContact}
-                onChange={(event) => {
-                  setContactEditorForm((current) => ({ ...current, primaryContact: event.target.checked }));
-                }}
-              />
+                <input
+                  type="checkbox"
+                  className="size-4 rounded border border-slate-300"
+                  checked={contactEditorForm.primaryContact}
+                  onChange={(event) => {
+                    setContactEditorForm((current) => ({ ...current, primaryContact: event.target.checked }));
+                  }}
+                  disabled={isReadOnly}
+                />
               Mark as primary
             </label>
           </div>
 
           {contactEditorError ? <p className="text-sm text-rose-600">{contactEditorError}</p> : null}
 
-          {canApplyContactEditor ? (
+          {canEdit && canApplyContactEditor ? (
             <div className="flex justify-end">
-              <Button size="sm" onClick={saveContactEditor}>
+              <Button size="sm" onClick={saveContactEditor} disabled={isReadOnly}>
                 Apply
               </Button>
             </div>
@@ -3229,7 +3303,7 @@ export function StationModal({
                   placeholder="Search contacts"
                   className="pl-9"
                   maxLength={255}
-                  disabled={isLoadingExistingContacts}
+                  disabled={isLoadingExistingContacts || isReadOnly}
                 />
               </div>
             </div>
@@ -3256,6 +3330,7 @@ export function StationModal({
                               isSelected ? "bg-blue-50 text-blue-700" : "text-slate-700 hover:bg-slate-100"
                             }`}
                             onClick={() => setSelectedExistingContactId(String(contact.id))}
+                            disabled={isReadOnly}
                           >
                             <span className="min-w-0 space-y-1">
                               <span className="block truncate font-medium">
@@ -3297,7 +3372,7 @@ export function StationModal({
                   setExistingContactsError(null);
                 }}
                 options={contactTypeOptions}
-                disabled={isLoadingExistingContacts}
+                disabled={isLoadingExistingContacts || isReadOnly}
               />
             </LabeledField>
 
@@ -3308,6 +3383,7 @@ export function StationModal({
                   className="size-4 rounded border border-slate-300"
                   checked={selectedExistingPrimaryContact}
                   onChange={(event) => setSelectedExistingPrimaryContact(event.target.checked)}
+                  disabled={isReadOnly}
                 />
                 Mark as primary
               </label>
@@ -3315,9 +3391,9 @@ export function StationModal({
 
             {existingContactsError ? <p className="text-sm text-rose-600">{existingContactsError}</p> : null}
 
-            {canAddExistingContact ? (
+            {canEdit && canAddExistingContact ? (
               <div className="flex justify-end">
-                <Button size="sm" onClick={addExistingContactToDraft}>
+                <Button size="sm" onClick={addExistingContactToDraft} disabled={isReadOnly}>
                   Add
                 </Button>
               </div>

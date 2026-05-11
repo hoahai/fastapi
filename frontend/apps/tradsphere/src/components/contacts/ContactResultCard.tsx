@@ -23,17 +23,19 @@ export function ContactResultCard({
   const name = contact.fullName || "-";
   const email = contact.email || "-";
 
+  const canOpen = !disabled;
+
   return (
     <article
       role="button"
-      tabIndex={disabled ? -1 : 0}
+      tabIndex={canOpen ? 0 : -1}
       onClick={() => {
-        if (!disabled) {
+        if (canOpen) {
           onEdit(contact);
         }
       }}
       onKeyDown={(event) => {
-        if (disabled) {
+        if (!canOpen) {
           return;
         }
         if (event.key === "Enter" || event.key === " ") {
@@ -43,9 +45,11 @@ export function ContactResultCard({
       }}
       className={cn(
         "space-y-3 rounded-xl border p-4 shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
+        canOpen ? "cursor-pointer" : "cursor-default",
         contact.active
           ? "border-slate-200 bg-white hover:border-blue-300 hover:shadow"
           : "border-slate-300 bg-slate-100 hover:border-slate-300 hover:shadow-sm",
+        !canOpen && "hover:border-slate-200 hover:shadow-sm",
       )}
     >
       <div className="flex flex-wrap items-start justify-between gap-3">

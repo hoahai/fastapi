@@ -23,6 +23,7 @@ export type StationDraftContact = {
 interface StationContactCardProps {
   contact: StationDraftContact;
   isSubmitting: boolean;
+  isReadOnly?: boolean;
   onEdit: () => void;
   onRemove: () => void;
   onCopy: () => void;
@@ -75,6 +76,7 @@ function Field({
 export function StationContactCard({
   contact,
   isSubmitting,
+  isReadOnly = false,
   onEdit,
   onRemove,
   onCopy,
@@ -89,6 +91,8 @@ export function StationContactCard({
     cell ? { label: "Cell", value: cell } : null,
   ].filter((item): item is { label: "Office" | "Cell"; value: string } => item !== null);
   const hasDetails = Boolean(fullName || email || phoneFields.length);
+
+  const isMutationDisabled = isSubmitting || isReadOnly;
 
   return (
     <article className="space-y-2 rounded-md border border-slate-200/80 bg-white/70 p-2.5">
@@ -108,7 +112,7 @@ export function StationContactCard({
             icon={<Trash2 />}
             tooltip="Remove contact from station"
             onClick={onRemove}
-            disabled={isSubmitting}
+            disabled={isMutationDisabled}
             className="!h-6 !w-6 !p-0 text-rose-500 hover:text-rose-600 focus-visible:text-rose-600 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-3.5 [&_svg]:!w-3.5 [&_svg]:text-rose-500 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110 hover:[&_svg]:text-rose-600 focus-visible:[&_svg]:text-rose-600"
             aria-label="Remove contact from station"
           />
@@ -116,7 +120,7 @@ export function StationContactCard({
             icon={<Pencil />}
             tooltip="Edit contact"
             onClick={onEdit}
-            disabled={isSubmitting}
+            disabled={isMutationDisabled}
             className="!h-6 !w-6 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-3.5 [&_svg]:!w-3.5 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
           />
           <ActionIconButton

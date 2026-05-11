@@ -4,7 +4,8 @@ from dataclasses import dataclass
 
 from shared.auth.permission_map import expand_permissions_for_role
 from shared.auth.permissions_cache import permission_cache
-from shared.auth.supabase_client import SupabaseClientError, supabase_client
+from shared.auth.providers import get_auth_provider
+from shared.auth.supabase_client import SupabaseClientError
 from shared.auth.types import TenantAccessProfile
 
 
@@ -31,7 +32,8 @@ def _resolve_active_tenant(tenant_slug: str) -> _ResolvedTenant:
     if not normalized:
         raise TenantAccessError("Missing X-Tenant-Id header", code="missing_tenant")
 
-    row = supabase_client.select_single(
+    provider = get_auth_provider()
+    row = provider.select_single(
         table="tenants",
         filters={"slug": normalized, "active": "true"},
         select="id,slug,active",
@@ -52,7 +54,8 @@ def _resolve_active_app(app_code: str) -> _ResolvedApp:
     if not normalized:
         raise TenantAccessError("Missing app code", code="app_not_enabled")
 
-    row = supabase_client.select_single(
+    provider = get_auth_provider()
+    row = provider.select_single(
         table="apps",
         filters={"code": normalized, "active": "true"},
         select="id,code,active",
@@ -69,7 +72,8 @@ def _resolve_active_app(app_code: str) -> _ResolvedApp:
 
 
 def _resolve_active_tenant_user(*, tenant_id: str, user_id: str) -> None:
-    row = supabase_client.select_single(
+    provider = get_auth_provider()
+    row = provider.select_single(
         table="tenant_users",
         filters={
             "tenant_id": tenant_id,
@@ -83,7 +87,8 @@ def _resolve_active_tenant_user(*, tenant_id: str, user_id: str) -> None:
 
 
 def _resolve_tenant_role(*, tenant_id: str, user_id: str, app_id: str) -> str:
-    row = supabase_client.select_single(
+    provider = get_auth_provider()
+    row = provider.select_single(
         table="tenant_app_roles",
         filters={
             "tenant_id": tenant_id,
@@ -99,7 +104,8 @@ def _resolve_tenant_role(*, tenant_id: str, user_id: str, app_id: str) -> str:
 
 
 def _resolve_role_permissions(role: str) -> list[str]:
-    rows = supabase_client.select_many(
+    provider = get_auth_provider()
+    rows = provider.select_many(
         table="role_permissions",
         filters={"role": role},
         select="permission",

@@ -27,6 +27,8 @@ import {
 import { buildAuthHeaders as buildSharedAuthHeaders } from "@shared/api/authHeaders";
 import { shouldFetchNetwork, type CachePolicy } from "@shared/cache";
 import { useAuth } from "@shared/auth/useAuth";
+import { shouldProtectTradsphereFrontend } from "@shared/auth/guards";
+import { hasAppEditAccess } from "@shared/auth/permissions";
 import { hasAtLeastOneSearchCriterion, shouldFetchSubmittedSearchNetwork } from "@shared/search";
 
 const CONTACTS_SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -1025,6 +1027,12 @@ export default function ContactsPage() {
     () => buildSharedAuthHeaders(auth.session, auth.tenantSlug, false),
     [auth.session, auth.tenantSlug],
   );
+  const canEditTradsphere = useMemo(() => {
+    if (!shouldProtectTradsphereFrontend()) {
+      return true;
+    }
+    return hasAppEditAccess(auth.accessProfile, "tradsphere");
+  }, [auth.accessProfile]);
 
   const [draft, setDraft] = usePersistentState<ContactSearchFormValues>(
     CONTACTS_SEARCH_DRAFT_STORAGE_KEY,
@@ -1474,6 +1482,9 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
   }
 
   function handleAddContact() {
+    if (!canEditTradsphere) {
+      return;
+    }
     setModalMode("create");
     setModalContact(null);
     setFocusUsageToken(0);
@@ -1543,7 +1554,7 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
         title="Contacts"
         description="Find contacts, update contact details, and review station usage."
         gradientVariant="app"
-        action={<Button onClick={handleAddContact}>Add Contact</Button>}
+        action={<Button onClick={handleAddContact} disabled={!canEditTradsphere}>Add Contact</Button>}
       />
 
       <ContactSearchForm
@@ -1612,6 +1623,7 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
           }
         }}
         mode={modalMode}
+        canEdit={canEditTradsphere}
         initialContact={modalContact}
         focusUsageToken={focusUsageToken}
         detailCacheStatusText={modalDetailCacheStatusText}

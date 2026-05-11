@@ -1,30 +1,45 @@
 from __future__ import annotations
 
-import secrets
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body, HTTPException, Request
 
-from shared.auth.config import get_invite_base_url, get_invite_ttl_hours
+from shared.auth.config import get_invite_base_url
 from shared.auth.dependencies import authenticate_bearer, authorize_bearer_for_tenant_app
+from shared.auth.invite_url import build_invite_url
+from shared.auth.invitations_repo import (
+    VALID_TRADSPHERE_ROLES,
+    activate_tenant_user,
+    create_invitation,
+    get_active_app,
+    get_invitation_by_id,
+    get_invitation_by_token,
+    mark_invitation_accepted,
+    patch_invitation_status,
+    upsert_tenant_app_role,
+)
 from shared.auth.permissions_cache import permission_cache
-from shared.auth.supabase_client import SupabaseClientError, supabase_client
+from shared.auth.supabase_client import SupabaseClientError
 
 router = APIRouter(prefix="/invitations")
 
 
-def _require_admin(request: Request) -> tuple[str, str]:
+def _require_admin(request: Request) -> tuple[str, str, str]:
     result = authorize_bearer_for_tenant_app(request=request, app_code="tradsphere")
     if "tradsphere.admin" not in result.access.permissions:
         raise HTTPException(status_code=403, detail="Forbidden")
-    return result.principal.user_id, result.access.tenant_id
+    return result.principal.user_id, result.access.tenant_id, result.access.tenant_slug
 
 
 def _invite_url(token: str) -> str:
-    base = get_invite_base_url().rstrip("/")
-    if not base:
-        return f"/auth/invite/{token}"
-    return f"{base}/auth/invite/{token}"
+    return build_invite_url(token=token, base_url=get_invite_base_url())
+
+
+def _parse_invitation_expiry(value: str) -> datetime:
+    try:
+        return datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail="Invitation expiration is invalid") from exc
 
 
 @router.post("")
@@ -33,17 +48,28 @@ def create_invitation_route(
     payload: dict = Body(...),
 ):
     """
-    Create invitation for tenant app role.
+    Create a pending TradSphere invitation and return a reusable invite URL.
 
     Example request:
         POST /api/auth/v1/invitations
 
+    Example response:
+        {
+          "id": "0ec0a2f8-0a59-42e4-b296-8f8b4a8e6d6d",
+          "email": "new.user@company.com",
+          "role": "tradsphere.viewer",
+          "status": "pending",
+          "expiresAt": "2026-05-13T08:00:00+00:00",
+          "inviteUrl": "https://workspace.example.com/auth/invite/abc123"
+        }
+
     Requirements:
-        - Requires bearer JWT
+        - Requires Authorization: Bearer <Supabase JWT>
         - Requires X-Tenant-Id
-        - Requires tradsphere.admin role
+        - Requires tradsphere.admin permission
+        - appCode currently supports tradsphere only
     """
-    invited_by_user_id, tenant_id = _require_admin(request)
+    invited_by_user_id, tenant_id, _ = _require_admin(request)
 
     email = str(payload.get("email") or "").strip().lower()
     app_code = str(payload.get("appCode") or "tradsphere").strip().lower()
@@ -53,42 +79,31 @@ def create_invitation_route(
         raise HTTPException(status_code=400, detail="email is required")
     if app_code != "tradsphere":
         raise HTTPException(status_code=400, detail="Only tradsphere app is supported in Phase 1")
-    if role not in {"tradsphere.viewer", "tradsphere.editor", "tradsphere.admin"}:
+    if role not in VALID_TRADSPHERE_ROLES:
         raise HTTPException(status_code=400, detail="Invalid role")
 
-    app_row = supabase_client.select_single(
-        table="apps",
-        filters={"code": app_code, "active": "true"},
-        select="id,code",
-    )
+    app_row = get_active_app(app_code=app_code)
     if not app_row:
         raise HTTPException(status_code=400, detail="Requested app is not enabled")
 
-    token = secrets.token_urlsafe(32)
-    expires_at = datetime.now(timezone.utc) + timedelta(hours=get_invite_ttl_hours())
-
-    row = {
-        "token": token,
-        "email": email,
-        "tenant_id": tenant_id,
-        "app_id": str(app_row.get("id") or "").strip(),
-        "role": role,
-        "status": "pending",
-        "invited_by_user_id": invited_by_user_id,
-        "expires_at": expires_at.isoformat(),
-    }
-
     try:
-        created = supabase_client.insert_row(table="invitations", row=row)
+        created = create_invitation(
+            email=email,
+            tenant_id=tenant_id,
+            app_id=str(app_row.get("id") or ""),
+            role=role,
+            invited_by_user_id=invited_by_user_id,
+        )
     except SupabaseClientError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
+    token = str(created.get("token") or "")
     return {
         "id": created.get("id"),
         "email": email,
         "role": role,
         "status": created.get("status") or "pending",
-        "expiresAt": created.get("expires_at") or expires_at.isoformat(),
+        "expiresAt": created.get("expires_at"),
         "inviteUrl": _invite_url(token),
     }
 
@@ -96,21 +111,30 @@ def create_invitation_route(
 @router.get("/{token}")
 def get_invitation_route(token: str):
     """
-    Resolve invitation token metadata.
+    Resolve invitation metadata for invite landing and acceptance UI.
 
     Example request:
-        GET /api/auth/v1/invitations/<token>
+        GET /api/auth/v1/invitations/abc123
+
+    Example response:
+        {
+          "id": "0ec0a2f8-0a59-42e4-b296-8f8b4a8e6d6d",
+          "email": "new.user@company.com",
+          "tenantId": "a4f4fd7d-2c0d-4bb2-bf73-26e5f7f918bf",
+          "appId": "f57fc74c-b429-4ce2-8bd0-c6f154a2cb18",
+          "role": "tradsphere.viewer",
+          "status": "pending",
+          "expiresAt": "2026-05-13T08:00:00+00:00",
+          "acceptedAt": null,
+          "createdAt": "2026-05-10T08:00:00+00:00"
+        }
 
     Requirements:
         - Public endpoint
         - Token must exist
-        - No sensitive values returned
+        - Returns no secrets/tokens beyond invitation token route lookup
     """
-    row = supabase_client.select_single(
-        table="invitations",
-        filters={"token": token},
-        select="id,email,tenant_id,app_id,role,status,expires_at,accepted_at,created_at",
-    )
+    row = get_invitation_by_token(token)
     if not row:
         raise HTTPException(status_code=404, detail="Invitation not found")
 
@@ -130,23 +154,28 @@ def get_invitation_route(token: str):
 @router.post("/{token}/accept")
 def accept_invitation_route(request: Request, token: str):
     """
-    Accept invitation for authenticated user.
+    Accept a pending invitation for the currently authenticated user.
 
     Example request:
-        POST /api/auth/v1/invitations/<token>/accept
+        POST /api/auth/v1/invitations/abc123/accept
+
+    Example response:
+        {
+          "status": "accepted",
+          "tenantId": "a4f4fd7d-2c0d-4bb2-bf73-26e5f7f918bf",
+          "appId": "f57fc74c-b429-4ce2-8bd0-c6f154a2cb18",
+          "role": "tradsphere.viewer"
+        }
 
     Requirements:
-        - Requires bearer JWT
+        - Requires Authorization: Bearer <Supabase JWT>
         - Invitation must be pending and not expired
+        - Signed-in user email must match invite email when invite email is present
     """
     principal = authenticate_bearer(request)
     user_id = principal.user_id
 
-    row = supabase_client.select_single(
-        table="invitations",
-        filters={"token": token},
-        select="id,email,tenant_id,app_id,role,status,expires_at",
-    )
+    row = get_invitation_by_token(token)
     if not row:
         raise HTTPException(status_code=404, detail="Invitation not found")
 
@@ -155,16 +184,9 @@ def accept_invitation_route(request: Request, token: str):
         raise HTTPException(status_code=400, detail="Invitation is not pending")
 
     expires_at_raw = str(row.get("expires_at") or "").strip()
-    try:
-        expires_at = datetime.fromisoformat(expires_at_raw.replace("Z", "+00:00"))
-    except ValueError:
-        raise HTTPException(status_code=400, detail="Invitation expiration is invalid")
+    expires_at = _parse_invitation_expiry(expires_at_raw)
     if datetime.now(timezone.utc) > expires_at:
-        supabase_client.patch_rows(
-            table="invitations",
-            filters={"id": str(row.get("id") or "")},
-            patch={"status": "expired"},
-        )
+        patch_invitation_status(invitation_id=str(row.get("id") or ""), status="expired")
         raise HTTPException(status_code=400, detail="Invitation has expired")
 
     tenant_id = str(row.get("tenant_id") or "").strip()
@@ -175,58 +197,12 @@ def accept_invitation_route(request: Request, token: str):
     if invite_email and principal_email and invite_email != principal_email:
         raise HTTPException(status_code=403, detail="Invite email does not match authenticated user")
 
-    tenant_user_row = supabase_client.select_single(
-        table="tenant_users",
-        filters={"tenant_id": tenant_id, "user_id": user_id},
-        select="id,status",
-    )
-    if tenant_user_row:
-        supabase_client.patch_rows(
-            table="tenant_users",
-            filters={"id": str(tenant_user_row.get("id") or "")},
-            patch={"status": "active", "updated_at": supabase_client.now_iso()},
-        )
-    else:
-        supabase_client.insert_row(
-            table="tenant_users",
-            row={
-                "tenant_id": tenant_id,
-                "user_id": user_id,
-                "status": "active",
-            },
-        )
-
-    role_row = supabase_client.select_single(
-        table="tenant_app_roles",
-        filters={"tenant_id": tenant_id, "user_id": user_id, "app_id": app_id},
-        select="id,role",
-    )
-    if role_row:
-        supabase_client.patch_rows(
-            table="tenant_app_roles",
-            filters={"id": str(role_row.get("id") or "")},
-            patch={"role": role, "updated_at": supabase_client.now_iso()},
-        )
-    else:
-        supabase_client.insert_row(
-            table="tenant_app_roles",
-            row={
-                "tenant_id": tenant_id,
-                "user_id": user_id,
-                "app_id": app_id,
-                "role": role,
-            },
-        )
-
-    supabase_client.patch_rows(
-        table="invitations",
-        filters={"id": str(row.get("id") or "")},
-        patch={
-            "status": "accepted",
-            "accepted_at": supabase_client.now_iso(),
-            "accepted_by_user_id": user_id,
-        },
-    )
+    try:
+        activate_tenant_user(tenant_id=tenant_id, user_id=user_id)
+        upsert_tenant_app_role(tenant_id=tenant_id, user_id=user_id, app_id=app_id, role=role)
+        mark_invitation_accepted(invitation_id=str(row.get("id") or ""), accepted_by_user_id=user_id)
+    except SupabaseClientError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
     permission_cache.invalidate(user_id=user_id)
 
@@ -241,30 +217,34 @@ def accept_invitation_route(request: Request, token: str):
 @router.post("/{invitation_id}/revoke")
 def revoke_invitation_route(request: Request, invitation_id: str):
     """
-    Revoke a pending invitation.
+    Revoke an invitation belonging to the active tenant.
 
     Example request:
-        POST /api/auth/v1/invitations/<id>/revoke
+        POST /api/auth/v1/invitations/0ec0a2f8-0a59-42e4-b296-8f8b4a8e6d6d/revoke
+
+    Example response:
+        {
+          "status": "revoked",
+          "id": "0ec0a2f8-0a59-42e4-b296-8f8b4a8e6d6d"
+        }
 
     Requirements:
-        - Requires bearer JWT
+        - Requires Authorization: Bearer <Supabase JWT>
         - Requires X-Tenant-Id
-        - Requires tradsphere.admin role
+        - Requires tradsphere.admin permission
     """
-    _, tenant_id = _require_admin(request)
+    _, tenant_id, _ = _require_admin(request)
 
-    row = supabase_client.select_single(
-        table="invitations",
-        filters={"id": invitation_id, "tenant_id": tenant_id},
-        select="id,status",
-    )
+    row = get_invitation_by_id(invitation_id=invitation_id, tenant_id=tenant_id)
     if not row:
         raise HTTPException(status_code=404, detail="Invitation not found")
 
-    supabase_client.patch_rows(
-        table="invitations",
-        filters={"id": invitation_id},
-        patch={"status": "revoked"},
-    )
+    accepted_by_user_id = str(row.get("accepted_by_user_id") or "").strip()
+    try:
+        patch_invitation_status(invitation_id=invitation_id, status="revoked")
+    except SupabaseClientError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+    if accepted_by_user_id:
+        permission_cache.invalidate(user_id=accepted_by_user_id)
 
     return {"status": "revoked", "id": invitation_id}

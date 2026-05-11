@@ -31,6 +31,7 @@
 - Rounded corners, clear visual states (default/hover/focus/disabled).
 - Primary button reserved for highest-priority action in a region.
 - Secondary/ghost variants for lower-priority actions.
+- Permission-gated mutations: if user lacks edit permission for the active app, allow opening detail/edit forms in read-only mode, and disable mutation actions (`Add`, `Create`, `Save`, `Delete`, `Upload`, etc.) while keeping read-only navigation/browse actions available.
 
 ## Forms
 - Inputs use clear labels and visible focus states.
@@ -99,7 +100,26 @@
 - `/fe` is compatibility-only and should redirect/alias to root-based routes.
 - Portal home should include a clear title, short guidance text, an Announcements section, and an Apps section with direct navigation cards.
 - The Apps section should use responsive cards: mobile 1 column, tablet 2 columns, desktop 3+ columns when space allows.
+- Portal app visibility must be auth-aware:
+  - Signed-out users should see sign-in CTA and should not see app actions as available access.
+  - Signed-in users should see app availability derived from `/api/auth/v1/session/me`.
+  - Signed-in users with no app permissions should see a clear empty state.
 - Reuse a shared banner component so portal and app pages keep the same visual language.
+
+## Auth UX Pages
+- Auth pages under `/auth/*` should match TheSphereWorks visual language and remain responsive.
+- Auth page source should live in shared auth (`frontend/shared/auth/pages/`), not app-local folders.
+- Login page copy:
+  - Title: `Welcome to TheSphereWorks`
+  - Subtitle: `Sign in to access your workspace apps.`
+  - Method: `Sign in with password`
+- Login must support only `email/password`; do not show Google login or magic-link UI in Phase 1.
+- Callback page should show friendly loading and error states without exposing tokens or raw secrets.
+- Invite accept page should show invite summary state (email/workspace/app/role/status/expiration) and clear state messaging (pending/accepted/revoked/expired/mismatch).
+- Unauthorized and pending-invite pages should show clear context + actions (`Back to Workspace Home`, `Sign out`, `Back to login` as applicable).
+- Auth feedback should use styled inline cards/toasts, not browser-native `alert`/`confirm`.
+- Never display or log tokens/service-role secrets in frontend UI.
+- Backend remains source of truth for authorization; frontend guards are UX-level routing only.
 
 ## Page State Persistence
 - Preserve useful UI state across frontend route navigation so returning users keep context.

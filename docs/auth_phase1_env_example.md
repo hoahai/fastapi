@@ -20,7 +20,7 @@ AUTH_ENABLE_LEGACY_API_KEY_FALLBACK=true
 AUTH_PERMISSION_CACHE_TTL_SECONDS=120
 AUTH_ENABLE_DEBUG_ENDPOINTS=true
 AUTH_INVITE_TTL_HOURS=72
-AUTH_INVITE_BASE_URL=http://localhost:8000/auth/invite
+AUTH_INVITE_BASE_URL=http://localhost:8000
 
 SUPABASE_URL=<PASTE_SUPABASE_URL>
 SUPABASE_ANON_KEY=<PASTE_SUPABASE_ANON_KEY>
@@ -60,3 +60,6 @@ VITE_LEGACY_USER_NAME=local-dev
 - `sb_secret_*` is not a JWT and must never be used as an Authorization bearer token.
 - `VITE_*` values are bundled into browser code. Only use public/anon Supabase values there.
 - Never commit real keys or tokens.
+- `AUTH_INVITE_BASE_URL` can be either:
+  - host root (example: `http://localhost:8000`)
+  - full invite root (example: `http://localhost:8000/auth/invite`)

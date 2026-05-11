@@ -27,6 +27,8 @@ import {
 } from "@/lib/browserCache";
 import { buildAuthHeaders as buildSharedAuthHeaders } from "@shared/api/authHeaders";
 import { useAuth } from "@shared/auth/useAuth";
+import { shouldProtectTradsphereFrontend } from "@shared/auth/guards";
+import { hasAppEditAccess } from "@shared/auth/permissions";
 import { shouldFetchSubmittedSearchNetwork } from "@shared/search";
 import { hasAtLeastOneSearchCriterion } from "@shared/search";
 import { type CachePolicy } from "@shared/cache";
@@ -648,6 +650,12 @@ export default function StationsPage() {
     () => buildSharedAuthHeaders(auth.session, auth.tenantSlug, false),
     [auth.session, auth.tenantSlug],
   );
+  const canEditTradsphere = useMemo(() => {
+    if (!shouldProtectTradsphereFrontend()) {
+      return true;
+    }
+    return hasAppEditAccess(auth.accessProfile, "tradsphere");
+  }, [auth.accessProfile]);
 
   const [draft, setDraft] = usePersistentState<StationSearchFormValues>(
     STATIONS_SEARCH_DRAFT_STORAGE_KEY,
@@ -1156,6 +1164,9 @@ export default function StationsPage() {
   }
 
   function openCreateStationModal() {
+    if (!canEditTradsphere) {
+      return;
+    }
     setStationModalMode("create");
     setStationModalCode(null);
     setIsStationModalOpen(true);
@@ -1185,7 +1196,7 @@ export default function StationsPage() {
         title="Stations"
         description="Search stations, manage delivery methods, and review contacts."
         gradientVariant="app"
-        action={<Button onClick={openCreateStationModal}>Add Station</Button>}
+        action={<Button onClick={openCreateStationModal} disabled={!canEditTradsphere}>Add Station</Button>}
       />
 
       <StationSearchForm
@@ -1259,6 +1270,7 @@ export default function StationsPage() {
           }
         }}
         mode={stationModalMode}
+        canEdit={canEditTradsphere}
         stationCode={stationModalCode}
         stationCatalog={stationCatalog}
         headers={requestHeaders}

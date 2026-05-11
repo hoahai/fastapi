@@ -38,12 +38,28 @@
 - Keep TradSphere frontend home mounted at `/tradsphere/home` via client-side routing.
 - Keep Estimate Numbers mounted at `/tradsphere/estnums` as a TradSphere child page route.
 - Keep `/` mapped to the workspace portal page.
+- Keep auth utility routes available in shared shell flow:
+  - `/auth/login`
+  - `/auth/callback`
+  - `/auth/invite/:token`
+  - `/auth/unauthorized`
+  - `/auth/invite/pending`
+- Keep admin route available for tenant admins:
+  - `/admin/users` (requires `tradsphere.admin`)
+- Global permission UX rule for TradSphere:
+  - `tradsphere.viewer`: read-only browsing.
+  - `tradsphere.editor` and `tradsphere.admin`: can perform mutation actions.
+  - When user lacks edit access, open existing-record forms in read-only mode and disable mutation action controls (`Add`, `Create`, `Save`, `Delete`, `Upload`, etc.).
 - Treat `/fe` and `/fe/...` as compatibility-only aliases/redirects to root paths.
 - All frontend pages/routes must render inside the shared app shell with the collapsible sidebar.
 - Sidebar navigation should support app child pages; TradSphere parent remains active for any `/tradsphere/*` child route.
 - Sidebar navigation state (collapsed/expanded) should persist across route navigation.
 - When sidebar is manually collapsed, desktop hover/focus may temporarily expand it for navigation, then revert on leave/blur.
 - Temporary hover/focus expansion must not overwrite the persisted collapsed/expanded preference.
+- Sidebar user area should stay subtle and support auth state UX:
+  - show signed-in email/tenant when authenticated
+  - provide sign-out action
+  - show sign-in action when unauthenticated
 - Preserve useful page UI state across frontend navigation for workspace routes.
 - Use `localStorage` for durable preferences (for example: sidebar collapsed/expanded).
 - Use `sessionStorage` for page-specific navigation state (for example: selected account/id, search/filter/sort, section/tab, scroll position).

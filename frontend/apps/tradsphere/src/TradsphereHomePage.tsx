@@ -66,6 +66,8 @@ import {
 import { buildAuthHeaders as buildSharedAuthHeaders } from "@shared/api/authHeaders";
 import { TRADSPHERE_CACHE_TTL_MS, shouldFetchNetwork, type CachePolicy } from "@shared/cache";
 import { useAuth } from "@shared/auth/useAuth";
+import { shouldProtectTradsphereFrontend } from "@shared/auth/guards";
+import { hasAppEditAccess } from "@shared/auth/permissions";
 
 const scheduleColumns: ColumnDef<EsnumItem>[] = [{ accessorKey: "estnum" }, { accessorKey: "name" }];
 
@@ -204,6 +206,12 @@ function App() {
     () => buildSharedAuthHeaders(auth.session, auth.tenantSlug, false),
     [auth.session, auth.tenantSlug],
   );
+  const canEditTradsphere = useMemo(() => {
+    if (!shouldProtectTradsphereFrontend()) {
+      return true;
+    }
+    return hasAppEditAccess(auth.accessProfile, "tradsphere");
+  }, [auth.accessProfile]);
 
   useEffect(() => {
     void fetchSelections("stale-while-revalidate");
@@ -496,7 +504,7 @@ function App() {
   }
 
   async function handleSaveAccount() {
-    if (!accountForm || isSaving || isLoadingAccount) {
+    if (!canEditTradsphere || !accountForm || isSaving || isLoadingAccount) {
       return;
     }
 
@@ -619,6 +627,9 @@ function App() {
   }
 
   function openEstimateCreateModal() {
+    if (!canEditTradsphere) {
+      return;
+    }
     setEstimateModalMode("create");
     setEstimateModalInitialData(null);
     setIsEstimateNumberModalOpen(true);
@@ -635,6 +646,9 @@ function App() {
   }
 
   function openStationCreateModal() {
+    if (!canEditTradsphere) {
+      return;
+    }
     setStationModalMode("create");
     setStationModalCode(null);
     setIsStationModalOpen(true);
@@ -685,6 +699,9 @@ function App() {
   }
 
   function openCreateAccountModal() {
+    if (!canEditTradsphere) {
+      return;
+    }
     resetCreateAccountForm();
     setIsCreateAccountModalOpen(true);
   }
@@ -708,6 +725,9 @@ function App() {
   }
 
   async function handleCreateAccount() {
+    if (!canEditTradsphere) {
+      return;
+    }
     const validationError = getCreateAccountValidationError();
     if (validationError) {
       setCreateAccountError(validationError);
@@ -784,7 +804,7 @@ function App() {
       <AppHeader />
       <HeroBanner
         action={
-          <Button onClick={openCreateAccountModal} className="min-w-40">
+          <Button onClick={openCreateAccountModal} className="min-w-40" disabled={!canEditTradsphere}>
             Add Account
           </Button>
         }
@@ -816,6 +836,7 @@ function App() {
           <main className="grid gap-5 lg:grid-cols-[360px_minmax(0,1fr)] lg:items-start">
             <AccountInformationCard
               account={accountForm}
+              canEdit={canEditTradsphere}
               isSaving={isSaving}
               hasEditableChanges={hasEditableChanges}
               saveError={saveError}
@@ -860,14 +881,14 @@ function App() {
                         setScheduleUploadSuccessMessage(null);
                         setIsScheduleUploadOpen(true);
                       }}
-                      disabled={isLoadingAccount || isSaving}
+                      disabled={!canEditTradsphere || isLoadingAccount || isSaving}
                       icon={<CloudUpload />}
                     />
                     <ActionIconButton
                       aria-label="Add estimate"
                       tooltip="Add estimate"
                       onClick={openEstimateCreateModal}
-                      disabled={!selectedAccountCode || isLoadingAccount || isSaving}
+                      disabled={!canEditTradsphere || !selectedAccountCode || isLoadingAccount || isSaving}
                       icon={<Plus />}
                     />
                   </>
@@ -905,7 +926,7 @@ function App() {
                     tooltip="Add station"
                     icon={<Plus />}
                     onClick={openStationCreateModal}
-                    disabled={!selectedAccountCode || isLoadingAccount || isSaving}
+                    disabled={!canEditTradsphere || !selectedAccountCode || isLoadingAccount || isSaving}
                   />
                 }
               >
@@ -1084,6 +1105,7 @@ function App() {
           }
         }}
         mode={estimateModalMode}
+        canEdit={canEditTradsphere}
         initialData={estimateModalInitialData}
         accountCode={selectedAccountCode}
         accountName={
@@ -1105,6 +1127,7 @@ function App() {
           }
         }}
         mode={stationModalMode}
+        canEdit={canEditTradsphere}
         stationCode={stationModalCode}
         stationCatalog={stations}
         headers={requestHeaders}

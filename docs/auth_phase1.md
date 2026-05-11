@@ -35,6 +35,7 @@ Optional:
 - `AUTH_ENABLE_DEBUG_ENDPOINTS=false`
 - `AUTH_INVITE_TTL_HOURS=72`
 - `AUTH_INVITE_BASE_URL=https://<frontend-domain>`
+- `AUTH_PROVIDER=supabase` (current provider module)
 
 ## Supabase Env Vars
 
@@ -51,11 +52,13 @@ Notes:
 - New `sb_*` keys are not JWTs and must not be sent as `Authorization: Bearer ...`.
 - For backend Supabase REST table access with new keys, use `apikey` header with the service key.
 - `Authorization: Bearer ...` is reserved for real user access tokens.
+- Backend auth access is isolated through `shared/auth/providers/` so provider-specific calls stay out of route handlers.
 
 Frontend (`VITE_*`):
 
 - `VITE_SUPABASE_URL`
 - `VITE_SUPABASE_ANON_KEY`
+- `VITE_AUTH_PROVIDER` (default `supabase`)
 - `VITE_DEFAULT_TENANT_SLUG`
 - `VITE_AUTH_MODE` (default `compat`)
 - `VITE_AUTH_ENABLE_LEGACY_API_KEY_FALLBACK` (default `true`)
@@ -103,19 +106,61 @@ Public routes remain limited to:
 - frontend auth pages (`/auth/*`)
 - signed OpsSphere public report (`/public/opssphere/advWebsiteReport/reports/cta`)
 
+## Frontend Auth UX (Phase 1)
+
+Auth pages are enabled in frontend under `/auth/*` for Tradsphere-first rollout:
+
+- `/auth/login`
+- `/auth/callback`
+- `/auth/invite/{token}`
+- `/auth/unauthorized`
+- `/auth/invite/pending`
+
+Login UX rules:
+
+- Product name shown as `TheSphereWorks`.
+- Auth pages are shared infrastructure under `frontend/shared/auth/pages/` (not app-local Home pages).
+- Supported sign-in method:
+  - Email/password only
+- Google login and magic-link login are not included in this phase.
+- Login copy remains invite-only and user-friendly.
+
+Workspace Home visibility rules:
+
+- Signed-out users see sign-in CTA and should not be shown app access as available.
+- Signed-in users see app availability based on `/api/auth/v1/session/me`.
+- Signed-in users with no app permissions see a no-access empty state.
+
+Security/authorization rule:
+
+- Frontend guards and auth pages are UX controls only.
+- Backend authorization remains the source of truth for protected API access.
+
 ## Tradsphere-First Protection
 
 Phase 1 enforces JWT/permission checks for Tradsphere first (behind `AUTH_PROTECT_TRADSPHERE`).
 Other apps keep existing behavior until later phases.
 
-## Invite Flow (API Only in Phase 1)
+## Invite + Admin Flow (Phase 1 MVP)
 
-Phase 1 ships invite APIs (no admin UI yet):
+Phase 1 includes invite APIs and admin management endpoints:
 
 - `POST /api/auth/v1/invitations`
 - `GET /api/auth/v1/invitations/{token}`
 - `POST /api/auth/v1/invitations/{token}/accept`
 - `POST /api/auth/v1/invitations/{invitation_id}/revoke`
+- `GET /api/auth/v1/admin/roles`
+- `GET /api/auth/v1/admin/users`
+- `PATCH /api/auth/v1/admin/users/{user_id}`
+- `GET /api/auth/v1/admin/invitations`
+- `POST /api/auth/v1/admin/invitations`
+- `POST /api/auth/v1/admin/invitations/{invitation_id}/revoke`
+
+Rules:
+
+- Admin endpoints require bearer JWT + `X-Tenant-Id` + `tradsphere.admin`.
+- Membership termination disables tenant/app access records; it does not delete Supabase auth users.
+- Role/membership updates invalidate in-memory permission cache for affected users.
 
 ## Debug Endpoint (Dev-Only)
 

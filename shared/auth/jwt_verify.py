@@ -1,6 +1,7 @@
 from __future__ import annotations
 
-from shared.auth.supabase_client import SupabaseAuthError, supabase_client
+from shared.auth.providers import get_auth_provider
+from shared.auth.supabase_client import SupabaseAuthError
 from shared.auth.types import AuthPrincipal
 
 
@@ -13,8 +14,9 @@ def verify_supabase_jwt(access_token: str) -> AuthPrincipal:
     if not token:
         raise JwtVerificationError("Missing bearer token")
 
+    provider = get_auth_provider()
     try:
-        user = supabase_client.get_user_from_token(token)
+        user = provider.verify_access_token(token)
     except SupabaseAuthError as exc:
         raise JwtVerificationError("Invalid Supabase JWT") from exc
 

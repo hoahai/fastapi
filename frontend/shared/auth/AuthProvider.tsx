@@ -1,14 +1,11 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
 
-import {
-  extractSessionFromCallbackUrl,
-  getUser,
-  sendMagicLink,
-  signInWithPassword,
-} from "./supabaseClient";
+import { createAuthProvider } from "./provider";
+import type { SignUpWithPasswordResult } from "./provider/types";
 import type { AccessProfile, AuthStatus, AuthUser, SupabaseSession } from "./types";
 
 const SESSION_STORAGE_KEY = "workspace.auth.session.v1";
+const USER_STORAGE_KEY = "workspace.auth.user.v1";
 const TENANT_STORAGE_KEY = "workspace.auth.tenantSlug.v1";
 
 type AuthContextValue = {
@@ -18,11 +15,16 @@ type AuthContextValue = {
   tenantSlug: string;
   accessProfile: AccessProfile | null;
   accessError: string | null;
+  providerName: string;
   setTenantSlug: (tenantSlug: string) => void;
+  signInWithPassword: (email: string, password: string) => Promise<void>;
+  signUpWithPassword: (email: string, password: string) => Promise<{ status: "signed_in" | "confirm_email" }>;
+  signOut: () => Promise<void>;
+  ensureFreshSession: () => Promise<SupabaseSession | null>;
+  getAccessToken: () => string | null;
+  // Backward-compatible aliases for existing callers.
   signInPassword: (email: string, password: string) => Promise<void>;
-  signInMagicLink: (email: string) => Promise<void>;
-  completeCallbackFromUrl: (url: string) => Promise<void>;
-  logout: () => void;
+  logout: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -97,14 +99,14 @@ async function fetchAccessProfile(session: SupabaseSession, tenantSlug: string):
     throw new Error("Invalid session profile response");
   }
 
-  const profile = unwrapped as AccessProfile;
-  return profile;
+  return unwrapped as AccessProfile;
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
+  const provider = useMemo(() => createAuthProvider(), []);
   const [status, setStatus] = useState<AuthStatus>("loading");
   const [session, setSession] = useState<SupabaseSession | null>(() => readJson<SupabaseSession>(SESSION_STORAGE_KEY));
-  const [user, setUser] = useState<AuthUser | null>(null);
+  const [user, setUser] = useState<AuthUser | null>(() => readJson<AuthUser>(USER_STORAGE_KEY));
   const [tenantSlug, setTenantSlugState] = useState<string>(() => {
     const stored = readJson<string>(TENANT_STORAGE_KEY);
     if (typeof stored === "string" && stored.trim()) {
@@ -121,40 +123,76 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     writeJson(TENANT_STORAGE_KEY, normalized);
   }, []);
 
-  const logout = useCallback(() => {
+  const signOut = useCallback(async () => {
+    await provider.signOut();
     setSession(null);
     setUser(null);
     setAccessProfile(null);
     setAccessError(null);
     setStatus("unauthenticated");
     removeStorage(SESSION_STORAGE_KEY);
-  }, []);
+    removeStorage(USER_STORAGE_KEY);
+  }, [provider]);
 
-  const hydrateFromSession = useCallback(async (nextSession: SupabaseSession) => {
-    const nextUser = await getUser(nextSession.accessToken);
-    setUser(nextUser);
+  const hydrateFromSession = useCallback(async (nextSession: SupabaseSession, nextUser?: AuthUser) => {
+    const resolvedUser = nextUser ?? await provider.getUser(nextSession.accessToken);
+    setUser(resolvedUser);
     setSession(nextSession);
+    writeJson(USER_STORAGE_KEY, resolvedUser);
     writeJson(SESSION_STORAGE_KEY, nextSession);
     setStatus("authenticated");
-  }, []);
+  }, [provider]);
 
-  const signInPassword = useCallback(async (email: string, password: string) => {
-    const result = await signInWithPassword(email, password);
-    await hydrateFromSession(result.session);
-  }, [hydrateFromSession]);
+  const signInWithPassword = useCallback(async (email: string, password: string) => {
+    const result = await provider.signInWithPassword(email, password);
+    await hydrateFromSession(result.session, result.user);
+  }, [provider, hydrateFromSession]);
 
-  const signInMagicLink = useCallback(async (email: string) => {
-    const redirectTo = `${window.location.origin}/auth/callback`;
-    await sendMagicLink(email, redirectTo);
-  }, []);
-
-  const completeCallbackFromUrl = useCallback(async (url: string) => {
-    const callbackSession = extractSessionFromCallbackUrl(url);
-    if (!callbackSession) {
-      throw new Error("Auth callback token is missing.");
+  const signUpWithPassword = useCallback(async (email: string, password: string) => {
+    const result: SignUpWithPasswordResult = await provider.signUpWithPassword(email, password);
+    if (result.session) {
+      await hydrateFromSession(result.session, result.user ?? undefined);
+      return { status: "signed_in" as const };
     }
-    await hydrateFromSession(callbackSession);
-  }, [hydrateFromSession]);
+
+    setSession(null);
+    setStatus("unauthenticated");
+    removeStorage(SESSION_STORAGE_KEY);
+    return { status: "confirm_email" as const };
+  }, [provider, hydrateFromSession]);
+
+  const getAccessToken = useCallback((): string | null => {
+    return provider.getAccessToken(session);
+  }, [provider, session]);
+
+  const ensureFreshSession = useCallback(async (): Promise<SupabaseSession | null> => {
+    if (!session?.accessToken) {
+      return null;
+    }
+
+    const expiresAt = Number(session.expiresAt ?? NaN);
+    if (!Number.isFinite(expiresAt) || expiresAt <= 0) {
+      return session;
+    }
+
+    const now = Math.floor(Date.now() / 1000);
+    if (now < expiresAt - 30) {
+      return session;
+    }
+
+    try {
+      const refreshed = await provider.refreshSession(session);
+      if (!refreshed?.accessToken) {
+        return session;
+      }
+      setSession(refreshed);
+      writeJson(SESSION_STORAGE_KEY, refreshed);
+      return refreshed;
+    } catch {
+      await signOut();
+      return null;
+    }
+  }, [provider, session, signOut]);
 
   useEffect(() => {
     let cancelled = false;
@@ -164,19 +202,24 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setStatus("unauthenticated");
         return;
       }
+      if (user) {
+        setStatus("authenticated");
+        return;
+      }
 
       try {
-        const resolvedUser = await getUser(session.accessToken);
+        const resolvedUser = await provider.getUser(session.accessToken);
         if (cancelled) {
           return;
         }
         setUser(resolvedUser);
+        writeJson(USER_STORAGE_KEY, resolvedUser);
         setStatus("authenticated");
       } catch {
         if (cancelled) {
           return;
         }
-        logout();
+        await signOut();
       }
     }
 
@@ -184,7 +227,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [session?.accessToken, logout]);
+  }, [provider, session?.accessToken, signOut]);
 
   useEffect(() => {
     let cancelled = false;
@@ -205,6 +248,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const profile = await fetchAccessProfile(session, tenantSlug);
         if (cancelled) {
           return;
+        }
+        if (!user && profile.user) {
+          setUser(profile.user);
+          writeJson(USER_STORAGE_KEY, profile.user);
         }
         setAccessProfile(profile);
         setAccessError(null);
@@ -230,11 +277,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     tenantSlug,
     accessProfile,
     accessError,
+    providerName: provider.name,
     setTenantSlug,
-    signInPassword,
-    signInMagicLink,
-    completeCallbackFromUrl,
-    logout,
+    signInWithPassword,
+    signUpWithPassword,
+    signOut,
+    ensureFreshSession,
+    getAccessToken,
+    signInPassword: signInWithPassword,
+    logout: signOut,
   }), [
     status,
     user,
@@ -242,11 +293,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     tenantSlug,
     accessProfile,
     accessError,
+    provider.name,
     setTenantSlug,
-    signInPassword,
-    signInMagicLink,
-    completeCallbackFromUrl,
-    logout,
+    signInWithPassword,
+    signUpWithPassword,
+    signOut,
+    ensureFreshSession,
+    getAccessToken,
   ]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

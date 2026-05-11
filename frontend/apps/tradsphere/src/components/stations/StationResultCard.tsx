@@ -1,4 +1,5 @@
 import type { StationRecord } from "./types";
+import { cn } from "@/lib/utils";
 
 type StationResultCardProps = {
   station: StationRecord;
@@ -11,6 +12,7 @@ export function StationResultCard({
   disabled,
   onEdit,
 }: StationResultCardProps) {
+  const canOpen = !disabled;
   const deliverySummary = station.deliveryMethod?.name?.trim() || "-";
 
   const repSummary = station.repContacts
@@ -31,14 +33,14 @@ export function StationResultCard({
   return (
     <article
       role="button"
-      tabIndex={disabled ? -1 : 0}
+      tabIndex={canOpen ? 0 : -1}
       onClick={() => {
-        if (!disabled) {
+        if (canOpen) {
           onEdit(station);
         }
       }}
       onKeyDown={(event) => {
-        if (disabled) {
+        if (!canOpen) {
           return;
         }
         if (event.key === "Enter" || event.key === " ") {
@@ -46,7 +48,10 @@ export function StationResultCard({
           onEdit(station);
         }
       }}
-      className="space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-blue-300 hover:shadow focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+      className={cn(
+        "space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
+        canOpen ? "cursor-pointer hover:border-blue-300 hover:shadow" : "cursor-default",
+      )}
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">

@@ -16,6 +16,7 @@ import type { AccountInfo } from "./types";
 
 interface AccountInformationCardProps {
   account: AccountInfo | null;
+  canEdit: boolean;
   isSaving: boolean;
   hasEditableChanges: boolean;
   saveError: string | null;
@@ -27,6 +28,7 @@ interface AccountInformationCardProps {
 
 export function AccountInformationCard({
   account,
+  canEdit,
   isSaving,
   hasEditableChanges,
   saveError,
@@ -35,7 +37,7 @@ export function AccountInformationCard({
   onNoteChange,
   onSave,
 }: AccountInformationCardProps) {
-  const editableDisabled = !account || isSaving;
+  const editableDisabled = !account || isSaving || !canEdit;
 
   return (
     <Card className="h-fit border-blue-100 shadow-[0_14px_30px_-18px_rgba(37,99,235,0.45)]">

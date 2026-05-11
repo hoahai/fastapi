@@ -34,6 +34,8 @@ import {
 } from "@shared/cache";
 import { buildAuthHeaders as buildSharedAuthHeaders } from "@shared/api/authHeaders";
 import { useAuth } from "@shared/auth/useAuth";
+import { shouldProtectTradsphereFrontend } from "@shared/auth/guards";
+import { hasAppEditAccess } from "@shared/auth/permissions";
 import { hasAtLeastOneSearchCriterion, shouldFetchSubmittedSearchNetwork } from "@shared/search";
 
 const SEARCH_LIMIT = 50;
@@ -1361,6 +1363,12 @@ export default function EstimateNumbersPage() {
     () => buildSharedAuthHeaders(auth.session, auth.tenantSlug, false),
     [auth.session, auth.tenantSlug],
   );
+  const canEditTradsphere = useMemo(() => {
+    if (!shouldProtectTradsphereFrontend()) {
+      return true;
+    }
+    return hasAppEditAccess(auth.accessProfile, "tradsphere");
+  }, [auth.accessProfile]);
 
   const [accountDirectory, setAccountDirectory] = useState<AccountDirectoryItem[]>([]);
   const [isLoadingAccountSelections, setIsLoadingAccountSelections] = useState(true);
@@ -1903,6 +1911,9 @@ export default function EstimateNumbersPage() {
   }
 
   function handleOpenCreate() {
+    if (!canEditTradsphere) {
+      return;
+    }
     if (!estimateModalAccountOptions.length) {
       toast.error("Accounts unavailable", "Unable to load TradSphere accounts.");
       return;
@@ -1948,7 +1959,10 @@ export default function EstimateNumbersPage() {
         description="Search estimate numbers and open schedules."
         gradientVariant="app"
         action={
-          <Button onClick={handleOpenCreate} disabled={isLoadingAccountSelections || !estimateModalAccountOptions.length}>
+          <Button
+            onClick={handleOpenCreate}
+            disabled={!canEditTradsphere || isLoadingAccountSelections || !estimateModalAccountOptions.length}
+          >
             Add Estimate
           </Button>
         }
@@ -2013,6 +2027,7 @@ export default function EstimateNumbersPage() {
         open={isEstimateModalOpen}
         onOpenChange={setIsEstimateModalOpen}
         mode={estimateModalMode}
+        canEdit={canEditTradsphere}
         initialData={estimateModalInitialData}
         accountCode={estimateModalAccountCode}
         accountName={accountDirectoryByCode[estimateModalAccountCode]?.name || estimateModalAccountCode}

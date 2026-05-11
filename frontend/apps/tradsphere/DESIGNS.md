@@ -37,6 +37,10 @@ This app inherits global standards from `frontend/DESIGNS.md`.
 ## Interaction Guidance
 - Surface API/loading errors inline and close to related actions.
 - Preserve optimistic/local cache behaviors unless requirements change.
+- Enforce role-gated mutation UX:
+  - viewers stay read-only
+  - only editors/admins can mutate
+  - open existing-record forms in read-only mode and disable mutation actions (`Add`, `Create`, `Save`, `Delete`, `Upload`) when edit permission is missing
 - Search flows are submit-only: never run backend search while typing.
 - Do not show validation errors on untouched empty search forms.
 - Search submit button/action should stay hidden or disabled until the form is valid.

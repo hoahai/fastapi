@@ -1,22 +1,20 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 
 import TradsphereHomePage from "@/TradsphereHomePage";
 import EstimateNumbersPage from "@/pages/EstimateNumbersPage";
 import ContactsPage from "@/pages/ContactsPage";
 import StationsPage from "@/pages/StationsPage";
+import AdminUsersPage from "@/pages/AdminUsersPage";
 import { WorkspaceNotFoundPage } from "@home/WorkspaceNotFoundPage";
 import { WorkspacePortalPage } from "@home/WorkspacePortalPage";
-import { AuthCallbackPage } from "@home/auth/AuthCallbackPage";
-import { InviteAcceptPage } from "@home/auth/InviteAcceptPage";
-import { LoginPage } from "@home/auth/LoginPage";
-import { PendingInvitePage } from "@home/auth/PendingInvitePage";
-import { UnauthorizedPage } from "@home/auth/UnauthorizedPage";
 import { AppShell } from "@/components/layout/AppShell";
 import { HOME_ROUTE } from "@/components/layout/navigation";
 import { ToastProvider } from "@/components/ui/toast";
 import { useRouteScrollRestoration } from "@/hooks/useRouteScrollRestoration";
 import { AuthProvider } from "@shared/auth/AuthProvider";
-import { RequireAuth, RequirePermission, RequireTenantAccess } from "@shared/auth/guards";
+import { RequirePermission, RequireTenantAccess } from "@shared/auth/guards";
+import { AuthCallbackPage, InviteAcceptPage, LoginPage, PendingInvitePage, UnauthorizedPage } from "@shared/auth/pages";
+import { useAuth } from "@shared/auth/useAuth";
 
 function getFrontendPath(pathname: string): string {
   const normalizedPath = pathname || "/";
@@ -62,8 +60,36 @@ function toScrollStorageKey(route: string): string {
   if (route === "/tradsphere/stations") {
     return "tradsphere.stations.scrollY";
   }
+  if (route === "/admin/users") {
+    return "workspace.admin.users.scrollY";
+  }
   const normalized = route.replace(/[^a-zA-Z0-9]+/g, ".").replace(/^\.+|\.+$/g, "").toLowerCase();
   return `${normalized || "workspace"}.scrollY`;
+}
+
+function RedirectToLogin() {
+  useEffect(() => {
+    if (window.location.pathname === "/auth/login") {
+      return;
+    }
+    window.location.replace("/auth/login");
+  }, []);
+
+  return <div className="p-6 text-sm text-slate-600">Redirecting to login...</div>;
+}
+
+function RequireSignedIn({ children }: { children: ReactNode }) {
+  const auth = useAuth();
+
+  if (auth.status === "loading") {
+    return <div className="p-6 text-sm text-slate-600">Checking session...</div>;
+  }
+
+  if (auth.status !== "authenticated" || !auth.user) {
+    return <RedirectToLogin />;
+  }
+
+  return <>{children}</>;
 }
 
 function App() {
@@ -95,6 +121,7 @@ function App() {
       "/auth/callback",
       "/auth/unauthorized",
       "/auth/invite/pending",
+      "/admin/users",
       "/tradsphere/home",
       "/tradsphere/estnums",
       "/tradsphere/contacts",
@@ -122,7 +149,7 @@ function App() {
 
   function renderTradsphereRoute() {
     return (
-      <RequireAuth fallback={<LoginPage />}>
+      <RequireSignedIn>
         <RequireTenantAccess fallback={<UnauthorizedPage />}>
           <RequirePermission permission="tradsphere.viewer" fallback={<UnauthorizedPage />}>
             {frontendPath === "/tradsphere/home" ? <TradsphereHomePage /> : null}
@@ -131,7 +158,19 @@ function App() {
             {frontendPath === "/tradsphere/stations" ? <StationsPage /> : null}
           </RequirePermission>
         </RequireTenantAccess>
-      </RequireAuth>
+      </RequireSignedIn>
+    );
+  }
+
+  function renderAdminRoute() {
+    return (
+      <RequireSignedIn>
+        <RequireTenantAccess fallback={<UnauthorizedPage />}>
+          <RequirePermission permission="tradsphere.admin" fallback={<UnauthorizedPage />}>
+            <AdminUsersPage />
+          </RequirePermission>
+        </RequireTenantAccess>
+      </RequireSignedIn>
     );
   }
 
@@ -144,8 +183,13 @@ function App() {
           {frontendPath === "/auth/unauthorized" ? <UnauthorizedPage /> : null}
           {frontendPath === "/auth/invite/pending" ? <PendingInvitePage /> : null}
           {inviteToken ? <InviteAcceptPage token={inviteToken} /> : null}
+          {frontendPath === "/admin/users" ? renderAdminRoute() : null}
           {frontendPath.startsWith("/tradsphere/") ? renderTradsphereRoute() : null}
-          {frontendPath === HOME_ROUTE ? <WorkspacePortalPage onNavigate={navigate} /> : null}
+          {frontendPath === HOME_ROUTE ? (
+            <RequireSignedIn>
+              <WorkspacePortalPage onNavigate={navigate} />
+            </RequireSignedIn>
+          ) : null}
           {!knownRoutes.has(frontendPath) && !inviteToken ? <WorkspaceNotFoundPage onNavigate={navigate} /> : null}
         </AppShell>
       </ToastProvider>

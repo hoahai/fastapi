@@ -9,6 +9,18 @@
   - mobile: 1 column
   - tablet: 2 columns
   - desktop: 3+ columns when space allows
+- App cards must not imply access for signed-out users.
+- Signed-out state should emphasize sign-in CTA.
+- Signed-in state should reflect real app access from `/api/auth/v1/session/me`.
+- If signed in with no app access, show a helpful no-access empty state.
+- Cross-app permission pattern: downstream app forms open in read-only mode for users without edit permission, and create/add/save/delete/upload controls remain disabled.
+
+## Auth UX Identity
+- Auth pages should look consistent with TheSphereWorks/Workspace Home visual language.
+- Auth page source belongs to shared auth (`frontend/shared/auth/pages/`), not Home-only folders.
+- Login page must support only `Sign in with password` (email/password).
+- Do not include Google login or magic-link UI.
+- Keep invite-only context visible in login and no-access states.
 
 ## System Alignment
 - Follow the global design system in `frontend/DESIGNS.md`.

@@ -23,6 +23,15 @@
 - Follow `frontend/DESIGNS.md`.
 - Reuse shared components/styles before adding one-off styles.
 - Update design docs when introducing new reusable patterns.
+- Auth UX standards:
+  - Login supports only `email/password`.
+  - Magic link and Google login are not part of this phase.
+  - Do not show Google login UI in Phase 1.
+  - Keep auth copy invite-only and user-friendly; avoid raw technical error dumps.
+  - Do not use browser-native `alert`/`confirm` for auth flows.
+  - Frontend auth guards are UX helpers only; backend permission checks remain source of truth.
+  - Permission-gated mutation rule (global): if the signed-in user lacks edit permission for an app, keep mutation forms read-only and disable create/add/save/delete/upload actions.
+  - Shared auth pages live under `frontend/shared/auth/pages/` and are routed at `/auth/*`.
 - For shared shell sidebar behavior: persist manual collapse/expand preference, and keep hover/focus expansion temporary-only (no preference write).
 - Prefer reusable layout/action primitives over per-page/per-modal one-off component structures.
 - For app-agnostic UI building blocks, place code in `frontend/shared/components/`.

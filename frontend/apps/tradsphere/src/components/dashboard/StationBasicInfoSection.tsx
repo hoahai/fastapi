@@ -30,6 +30,7 @@ interface StationBasicInfoSectionProps {
   station: StationDraftStation;
   isEditMode: boolean;
   isSubmitting: boolean;
+  isReadOnly?: boolean;
   onChange: (next: Partial<StationDraftStation>) => void;
 }
 
@@ -41,8 +42,10 @@ export function StationBasicInfoSection({
   station,
   isEditMode,
   isSubmitting,
+  isReadOnly = false,
   onChange,
 }: StationBasicInfoSectionProps) {
+  const isFieldDisabled = isSubmitting || isReadOnly;
   return (
     <section className="min-w-0 space-y-3">
       <div className="flex min-h-10 items-center justify-between gap-3 border-b border-slate-200 pb-2">
@@ -65,7 +68,7 @@ export function StationBasicInfoSection({
               onChange={(event) => onChange({ code: event.target.value.toUpperCase() })}
               placeholder="e.g. KABC"
               maxLength={50}
-              disabled={isSubmitting}
+              disabled={isFieldDisabled}
             />
           )}
         </LabeledField>
@@ -82,7 +85,7 @@ export function StationBasicInfoSection({
             onChange={(event) => onChange({ name: event.target.value })}
             placeholder="Station name"
             maxLength={255}
-            disabled={isSubmitting}
+            disabled={isFieldDisabled}
           />
         </LabeledField>
 
@@ -92,7 +95,7 @@ export function StationBasicInfoSection({
             onChange={(event) => onChange({ affiliation: event.target.value })}
             placeholder="Optional"
             maxLength={255}
-            disabled={isSubmitting}
+            disabled={isFieldDisabled}
           />
         </LabeledField>
 
@@ -109,7 +112,7 @@ export function StationBasicInfoSection({
             options={MEDIA_TYPE_OPTIONS}
             onValueChange={(value) => onChange({ mediaType: value })}
             placeholder="Select media type"
-            disabled={isSubmitting}
+            disabled={isFieldDisabled}
             searchable={false}
             className="w-full"
             emptyText="No media type found."
@@ -131,7 +134,7 @@ export function StationBasicInfoSection({
               value={station.syscode}
               onChange={(event) => onChange({ syscode: event.target.value })}
               placeholder="e.g. 1001"
-              disabled={isSubmitting}
+              disabled={isFieldDisabled}
             />
           </LabeledField>
         ) : null}
@@ -149,7 +152,7 @@ export function StationBasicInfoSection({
             options={LANGUAGE_OPTIONS}
             onValueChange={(value) => onChange({ language: value })}
             placeholder="Select language"
-            disabled={isSubmitting}
+            disabled={isFieldDisabled}
             searchable={false}
             className="w-full"
             emptyText="No language found."
@@ -162,7 +165,7 @@ export function StationBasicInfoSection({
             onChange={(event) => onChange({ ownership: event.target.value })}
             placeholder="Optional"
             maxLength={255}
-            disabled={isSubmitting}
+            disabled={isFieldDisabled}
           />
         </LabeledField>
 
@@ -172,7 +175,7 @@ export function StationBasicInfoSection({
             onChange={(event) => onChange({ note: event.target.value })}
             placeholder="Optional note"
             maxLength={2048}
-            disabled={isSubmitting}
+            disabled={isFieldDisabled}
           />
         </LabeledField>
       </div>

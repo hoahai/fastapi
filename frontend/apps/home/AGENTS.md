@@ -16,6 +16,23 @@
   - Announcements section
   - Apps section with responsive app-card grid
 - Apps grid should show current apps and mark unavailable apps as `Soon`.
+- Workspace Home auth visibility:
+  - If not signed in, show sign-in CTA and do not imply app access.
+  - If signed in, app availability should follow `/api/auth/v1/session/me` permissions.
+  - If signed in with no app permissions, show an explicit no-access empty state.
+  - App-level mutation actions in downstream apps must stay permission-gated: users without edit access should get read-only forms for existing records, and create/add/save/delete/upload controls should remain disabled.
+
+## Shared Auth Pages
+- Auth routes used by the shared shell are:
+  - `/auth/login`
+  - `/auth/callback`
+  - `/auth/invite/:token`
+  - `/auth/unauthorized`
+  - `/auth/invite/pending`
+- Auth page source is shared in `frontend/shared/auth/pages/`.
+- Login UX is TheSphereWorks-branded and supports only email/password.
+- Do not add Google login or magic-link login in Phase 1.
+- Keep auth messaging invite-only and friendly, with inline loading/error states (no browser-native alerts/confirms).
 
 ## Architecture
 - Home app should render inside shared layout/shell components used by the frontend workspace.
