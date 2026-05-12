@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 from shared.auth.providers import get_auth_provider
-from shared.auth.supabase_client import SupabaseAuthError
+from shared.auth.supabase_client import SupabaseAuthError, SupabaseClientError
 from shared.auth.types import AuthPrincipal
 
 
 class JwtVerificationError(RuntimeError):
-    pass
+    def __init__(self, message: str, *, status_code: int = 401) -> None:
+        super().__init__(message)
+        self.status_code = status_code
 
 
 def verify_supabase_jwt(access_token: str) -> AuthPrincipal:
@@ -18,7 +20,12 @@ def verify_supabase_jwt(access_token: str) -> AuthPrincipal:
     try:
         user = provider.verify_access_token(token)
     except SupabaseAuthError as exc:
+        detail = str(exc).lower()
+        if "timed out" in detail:
+            raise JwtVerificationError("Authentication service timed out", status_code=503) from exc
         raise JwtVerificationError("Invalid Supabase JWT") from exc
+    except SupabaseClientError as exc:
+        raise JwtVerificationError("Authentication service unavailable", status_code=503) from exc
 
     user_id = str(user.get("id") or "").strip()
     if not user_id:

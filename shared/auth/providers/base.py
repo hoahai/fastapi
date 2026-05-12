@@ -15,6 +15,9 @@ class AuthDataProvider(Protocol):
     def verify_access_token(self, access_token: str) -> dict[str, Any]:
         ...
 
+    def get_auth_user_by_id(self, *, user_id: str) -> dict[str, Any] | None:
+        ...
+
     def select_single(
         self,
         *,
@@ -42,6 +45,14 @@ class AuthDataProvider(Protocol):
         table: str,
         filters: dict[str, str],
         patch: dict[str, Any],
+    ) -> list[dict[str, Any]]:
+        ...
+
+    def delete_rows(
+        self,
+        *,
+        table: str,
+        filters: dict[str, str],
     ) -> list[dict[str, Any]]:
         ...
 

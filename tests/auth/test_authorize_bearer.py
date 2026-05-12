@@ -5,6 +5,7 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from shared.auth.dependencies import authorize_bearer_for_tenant_app
+from shared.auth.jwt_verify import JwtVerificationError
 from shared.auth.permissions_repo import TenantAccessError
 from shared.auth.types import AuthPrincipal, TenantAccessProfile
 
@@ -53,7 +54,16 @@ class AuthorizeBearerTests(unittest.TestCase):
 
         self.assertEqual(exc.exception.status_code, 403)
 
+    def test_auth_service_timeout_returns_503(self):
+        request = self._request("Bearer token-123")
+        with patch(
+            "shared.auth.dependencies.verify_supabase_jwt",
+            side_effect=JwtVerificationError("Authentication service timed out", status_code=503),
+        ):
+            with self.assertRaises(HTTPException) as exc:
+                authorize_bearer_for_tenant_app(request=request, app_code="tradsphere")
+        self.assertEqual(exc.exception.status_code, 503)
+
 
 if __name__ == "__main__":
     unittest.main()
-

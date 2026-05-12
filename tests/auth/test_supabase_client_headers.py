@@ -1,6 +1,7 @@
 import unittest
+from unittest.mock import patch
 
-from shared.auth.supabase_client import SupabaseRestClient
+from shared.auth.supabase_client import SupabaseAuthError, SupabaseRestClient
 
 
 class SupabaseClientHeaderTests(unittest.TestCase):
@@ -34,7 +35,16 @@ class SupabaseClientHeaderTests(unittest.TestCase):
         self.assertEqual(headers.get("apikey"), "sb_publishable_example_key")
         self.assertEqual(headers.get("Authorization"), "Bearer user.jwt.token")
 
+    def test_auth_request_timeout_is_wrapped(self):
+        self.client.base_url = "https://example.supabase.co"
+        self.client.anon_key = "sb_publishable_example_key"
+        self.client.service_role_key = "sb_secret_example_key"
+        with patch.object(self.client, "_reload_from_env", return_value=None), patch(
+            "shared.auth.supabase_client.urlopen", side_effect=TimeoutError("read timeout")
+        ):
+            with self.assertRaises(SupabaseAuthError):
+                self.client.get_user_from_token("user.jwt.token")
+
 
 if __name__ == "__main__":
     unittest.main()
-

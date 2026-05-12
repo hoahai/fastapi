@@ -44,6 +44,8 @@
   - `/auth/invite/:token`
   - `/auth/unauthorized`
   - `/auth/invite/pending`
+- Keep authenticated user profile route available:
+  - `/profile` (requires signed-in tenant user with TradSphere access)
 - Keep admin route available for tenant admins:
   - `/admin/users` (requires `tradsphere.admin`)
 - Global permission UX rule for TradSphere:
@@ -58,6 +60,7 @@
 - Temporary hover/focus expansion must not overwrite the persisted collapsed/expanded preference.
 - Sidebar user area should stay subtle and support auth state UX:
   - show signed-in email/tenant when authenticated
+  - provide direct navigation to `/profile` for self profile updates
   - provide sign-out action
   - show sign-in action when unauthenticated
 - Preserve useful page UI state across frontend navigation for workspace routes.

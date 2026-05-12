@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 
 from shared.auth.config import get_invite_ttl_hours
+from shared.auth.profile_repo import upsert_profile_basic_info
 from shared.auth.providers import get_auth_provider
 
 VALID_TRADSPHERE_ROLES = (
@@ -45,6 +46,36 @@ def get_active_app(*, app_code: str) -> dict[str, str] | None:
     if not app_id or code != app_code:
         return None
     return {"id": app_id, "code": code}
+
+
+def list_active_apps() -> list[dict[str, object]]:
+    rows = _provider().select_many(
+        table="apps",
+        filters={"active": "true"},
+        select="id,code,name,active,created_at",
+    )
+    items: list[dict[str, object]] = []
+    for row in rows:
+        app_id = str(row.get("id") or "").strip()
+        app_code = str(row.get("code") or "").strip().lower()
+        if not app_id or not app_code:
+            continue
+        items.append(
+            {
+                "id": app_id,
+                "code": app_code,
+                "name": row.get("name"),
+                "active": bool(row.get("active", True)),
+                "createdAt": row.get("created_at"),
+            }
+        )
+    items.sort(
+        key=lambda item: (
+            0 if str(item.get("code") or "").strip().lower() == "tradsphere" else 1,
+            str(item.get("code") or "").strip().lower(),
+        )
+    )
+    return items
 
 
 def create_invitation(
@@ -114,6 +145,28 @@ def list_invitations(*, tenant_id: str, app_id: str, status: str | None = None) 
         filters=filters,
         select="id,token,email,tenant_id,app_id,role,status,expires_at,accepted_at,accepted_by_user_id,created_at",
     )
+
+
+def list_invitations_scoped(
+    *,
+    tenant_ids: set[str] | None = None,
+    app_ids: set[str] | None = None,
+    status: str | None = None,
+) -> list[dict[str, object]]:
+    rows = _provider().select_many(
+        table="invitations",
+        filters={},
+        select="id,token,email,tenant_id,app_id,role,status,expires_at,accepted_at,accepted_by_user_id,created_at",
+    )
+    results = rows
+    if tenant_ids:
+        results = [row for row in results if str(row.get("tenant_id") or "").strip() in tenant_ids]
+    if app_ids:
+        results = [row for row in results if str(row.get("app_id") or "").strip() in app_ids]
+    if status:
+        normalized_status = str(status or "").strip().lower()
+        results = [row for row in results if str(row.get("status") or "").strip().lower() == normalized_status]
+    return results
 
 
 def patch_invitation_status(*, invitation_id: str, status: str, extra_patch: dict[str, object] | None = None) -> None:
@@ -188,4 +241,18 @@ def mark_invitation_accepted(*, invitation_id: str, accepted_by_user_id: str) ->
             "accepted_at": provider.now_iso(),
             "accepted_by_user_id": accepted_by_user_id,
         },
+    )
+
+
+def upsert_profile_for_invited_user(
+    *,
+    user_id: str,
+    email: str | None,
+    full_name: str | None,
+) -> None:
+    upsert_profile_basic_info(
+        provider=_provider(),
+        user_id=user_id,
+        email=email,
+        full_name=full_name,
     )

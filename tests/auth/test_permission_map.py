@@ -4,6 +4,12 @@ from shared.auth.permission_map import expand_permissions_for_role
 
 
 class PermissionMapTests(unittest.TestCase):
+    def test_super_admin_permissions_include_admin_capabilities(self):
+        perms = expand_permissions_for_role("workspace.super_admin")
+        self.assertIn("workspace.super_admin", perms)
+        self.assertIn("tradsphere.admin", perms)
+        self.assertIn("tradsphere.invites.admin", perms)
+
     def test_viewer_permissions_include_base(self):
         perms = expand_permissions_for_role("tradsphere.viewer")
         self.assertIn("tradsphere.viewer", perms)

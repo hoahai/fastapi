@@ -7,6 +7,25 @@ import type { AccessProfile, AuthStatus, AuthUser, SupabaseSession } from "./typ
 const SESSION_STORAGE_KEY = "workspace.auth.session.v1";
 const USER_STORAGE_KEY = "workspace.auth.user.v1";
 const TENANT_STORAGE_KEY = "workspace.auth.tenantSlug.v1";
+const ACCESS_PROFILE_CACHE_KEY = "workspace.auth.accessProfileCache.v1";
+const ACCESS_PROFILE_CACHE_TTL_MS = 2 * 60 * 1000;
+
+class AccessProfileRequestError extends Error {
+  status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.name = "AccessProfileRequestError";
+    this.status = status;
+  }
+}
+
+type AccessProfileCacheEntry = {
+  cachedAt: number;
+  profile: AccessProfile;
+};
+
+type AccessProfileCacheStore = Record<string, AccessProfileCacheEntry>;
 
 type AuthContextValue = {
   status: AuthStatus;
@@ -14,6 +33,7 @@ type AuthContextValue = {
   session: SupabaseSession | null;
   tenantSlug: string;
   accessProfile: AccessProfile | null;
+  accessLoading: boolean;
   accessError: string | null;
   providerName: string;
   setTenantSlug: (tenantSlug: string) => void;
@@ -92,7 +112,7 @@ async function fetchAccessProfile(session: SupabaseSession, tenantSlug: string):
         : typeof (unwrapped as { message?: unknown })?.message === "string"
           ? (unwrapped as { message: string }).message
           : `Session lookup failed (${response.status})`;
-    throw new Error(message);
+    throw new AccessProfileRequestError(message, response.status);
   }
 
   if (!unwrapped || typeof unwrapped !== "object") {
@@ -100,6 +120,79 @@ async function fetchAccessProfile(session: SupabaseSession, tenantSlug: string):
   }
 
   return unwrapped as AccessProfile;
+}
+
+function accessProfileCacheEntryKey(userId: string, tenantSlug: string): string {
+  return `${String(userId || "").trim().toLowerCase()}::${String(tenantSlug || "").trim().toLowerCase()}`;
+}
+
+function readAccessProfileCacheStore(): AccessProfileCacheStore {
+  const store = readJson<AccessProfileCacheStore>(ACCESS_PROFILE_CACHE_KEY);
+  if (!store || typeof store !== "object") {
+    return {};
+  }
+  return store;
+}
+
+function writeAccessProfileCacheStore(store: AccessProfileCacheStore): void {
+  writeJson(ACCESS_PROFILE_CACHE_KEY, store);
+}
+
+function pruneAccessProfileCacheStore(store: AccessProfileCacheStore, now: number): AccessProfileCacheStore {
+  const next: AccessProfileCacheStore = {};
+  for (const [key, entry] of Object.entries(store)) {
+    const cachedAt = Number(entry?.cachedAt ?? NaN);
+    if (!Number.isFinite(cachedAt) || cachedAt <= 0 || now - cachedAt > ACCESS_PROFILE_CACHE_TTL_MS) {
+      continue;
+    }
+    if (!entry?.profile || typeof entry.profile !== "object") {
+      continue;
+    }
+    next[key] = entry;
+  }
+  return next;
+}
+
+function readCachedAccessProfile(userId: string, tenantSlug: string): AccessProfile | null {
+  const key = accessProfileCacheEntryKey(userId, tenantSlug);
+  if (!key) {
+    return null;
+  }
+  const now = Date.now();
+  const store = pruneAccessProfileCacheStore(readAccessProfileCacheStore(), now);
+  writeAccessProfileCacheStore(store);
+  const entry = store[key];
+  if (!entry || !entry.profile) {
+    return null;
+  }
+  return entry.profile;
+}
+
+function writeCachedAccessProfile(userId: string, tenantSlug: string, profile: AccessProfile): void {
+  const key = accessProfileCacheEntryKey(userId, tenantSlug);
+  if (!key) {
+    return;
+  }
+  const now = Date.now();
+  const store = pruneAccessProfileCacheStore(readAccessProfileCacheStore(), now);
+  store[key] = {
+    cachedAt: now,
+    profile,
+  };
+  writeAccessProfileCacheStore(store);
+}
+
+function removeCachedAccessProfile(userId: string, tenantSlug: string): void {
+  const key = accessProfileCacheEntryKey(userId, tenantSlug);
+  if (!key) {
+    return;
+  }
+  const store = readAccessProfileCacheStore();
+  if (!(key in store)) {
+    return;
+  }
+  delete store[key];
+  writeAccessProfileCacheStore(store);
 }
 
 export function AuthProvider({ children }: { children: ReactNode }) {
@@ -115,6 +208,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return getDefaultTenantSlug();
   });
   const [accessProfile, setAccessProfile] = useState<AccessProfile | null>(null);
+  const [accessLoading, setAccessLoading] = useState(false);
   const [accessError, setAccessError] = useState<string | null>(null);
 
   const setTenantSlug = useCallback((value: string) => {
@@ -128,10 +222,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSession(null);
     setUser(null);
     setAccessProfile(null);
+    setAccessLoading(false);
     setAccessError(null);
     setStatus("unauthenticated");
     removeStorage(SESSION_STORAGE_KEY);
     removeStorage(USER_STORAGE_KEY);
+    removeStorage(ACCESS_PROFILE_CACHE_KEY);
   }, [provider]);
 
   const hydrateFromSession = useCallback(async (nextSession: SupabaseSession, nextUser?: AuthUser) => {
@@ -235,13 +331,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     async function run() {
       if (status !== "authenticated" || !session?.accessToken) {
         setAccessProfile(null);
+        setAccessLoading(false);
         setAccessError(null);
         return;
       }
       if (!tenantSlug) {
         setAccessProfile(null);
+        setAccessLoading(false);
         setAccessError("Missing tenant selection");
         return;
+      }
+
+      const currentUserId = String(user?.id || "").trim();
+      const cached = currentUserId ? readCachedAccessProfile(currentUserId, tenantSlug) : null;
+      if (cached) {
+        setAccessProfile(cached);
+        setAccessLoading(false);
+      } else {
+        setAccessProfile(null);
+        setAccessLoading(true);
       }
 
       try {
@@ -254,13 +362,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           writeJson(USER_STORAGE_KEY, profile.user);
         }
         setAccessProfile(profile);
+        setAccessLoading(false);
         setAccessError(null);
+        writeCachedAccessProfile(profile.user.id, tenantSlug, profile);
       } catch (error) {
         if (cancelled) {
           return;
         }
-        setAccessProfile(null);
-        setAccessError(error instanceof Error ? error.message : "Failed to load access profile");
+        const message = error instanceof Error ? error.message : "Failed to load access profile";
+        const statusCode = error instanceof AccessProfileRequestError ? error.status : 0;
+        const shouldInvalidateCache = statusCode === 401 || statusCode === 403;
+
+        if (shouldInvalidateCache && currentUserId) {
+          removeCachedAccessProfile(currentUserId, tenantSlug);
+          setAccessProfile(null);
+        } else if (!cached) {
+          setAccessProfile(null);
+        }
+        setAccessLoading(false);
+        setAccessError(message);
       }
     }
 
@@ -268,7 +388,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [status, session, tenantSlug]);
+  }, [status, session, tenantSlug, user?.id]);
 
   const value = useMemo<AuthContextValue>(() => ({
     status,
@@ -276,6 +396,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     session,
     tenantSlug,
     accessProfile,
+    accessLoading,
     accessError,
     providerName: provider.name,
     setTenantSlug,
@@ -292,6 +413,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     session,
     tenantSlug,
     accessProfile,
+    accessLoading,
     accessError,
     provider.name,
     setTenantSlug,

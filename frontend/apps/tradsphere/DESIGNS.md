@@ -37,6 +37,10 @@ This app inherits global standards from `frontend/DESIGNS.md`.
 ## Interaction Guidance
 - Surface API/loading errors inline and close to related actions.
 - Preserve optimistic/local cache behaviors unless requirements change.
+- Keep profile editing simple and explicit:
+  - `/profile` should expose first-name + last-name inputs
+  - save writes combined `fullName` to auth profile APIs
+  - keep email/tenant read-only
 - Enforce role-gated mutation UX:
   - viewers stay read-only
   - only editors/admins can mutate

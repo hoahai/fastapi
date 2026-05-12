@@ -1,4 +1,4 @@
-import { ChevronDown, ChevronLeft, ChevronRight, LayoutDashboard, LogIn, LogOut, Menu, ShieldCheck } from "lucide-react";
+import { ChevronDown, ChevronLeft, ChevronRight, LayoutDashboard, LogIn, LogOut, Menu, ShieldCheck, UserRound } from "lucide-react";
 import { useEffect, useMemo, useState, type ComponentType, type FocusEvent } from "react";
 
 import { Button } from "@/components/ui/button";
@@ -253,6 +253,19 @@ export function Sidebar({
                   <p className="mt-0.5 text-xs text-slate-500">Tenant: {auth.tenantSlug || "-"}</p>
                 </div>
               ) : null}
+              <Button
+                variant="ghost"
+                className={cn("mt-2 w-full justify-start", isCompact && "lg:justify-center")}
+                onClick={() => {
+                  onNavigate("/profile");
+                  onCloseMobile();
+                }}
+                aria-label="My profile"
+                title={isCompact ? "My profile" : undefined}
+              >
+                <UserRound className="size-4" />
+                {!isCompact ? <span>My profile</span> : null}
+              </Button>
               <Button
                 variant="ghost"
                 className={cn("mt-2 w-full justify-start", isCompact && "lg:justify-center")}

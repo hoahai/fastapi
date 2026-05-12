@@ -17,8 +17,10 @@ from shared.auth.invitations_repo import (
     mark_invitation_accepted,
     patch_invitation_status,
     upsert_tenant_app_role,
+    upsert_profile_for_invited_user,
 )
 from shared.auth.permissions_cache import permission_cache
+from shared.auth.profile_repo import compose_full_name
 from shared.auth.supabase_client import SupabaseClientError
 
 router = APIRouter(prefix="/invitations")
@@ -152,12 +154,25 @@ def get_invitation_route(token: str):
 
 
 @router.post("/{token}/accept")
-def accept_invitation_route(request: Request, token: str):
+def accept_invitation_route(
+    request: Request,
+    token: str,
+    payload: dict | None = Body(default=None),
+):
     """
     Accept a pending invitation for the currently authenticated user.
 
     Example request:
         POST /api/auth/v1/invitations/abc123/accept
+
+    Example request body:
+        {
+          "profile": {
+            "firstName": "Alex",
+            "lastName": "Johnson",
+            "fullName": "Alex Johnson"
+          }
+        }
 
     Example response:
         {
@@ -197,7 +212,23 @@ def accept_invitation_route(request: Request, token: str):
     if invite_email and principal_email and invite_email != principal_email:
         raise HTTPException(status_code=403, detail="Invite email does not match authenticated user")
 
+    body = payload if isinstance(payload, dict) else {}
+    profile_payload = body.get("profile")
+    profile = profile_payload if isinstance(profile_payload, dict) else {}
+    full_name = compose_full_name(
+        full_name=str(profile.get("fullName") or body.get("fullName") or "").strip() or None,
+        first_name=str(profile.get("firstName") or body.get("firstName") or "").strip() or None,
+        last_name=str(profile.get("lastName") or body.get("lastName") or "").strip() or None,
+    )
+    if full_name is not None and len(full_name) > 255:
+        raise HTTPException(status_code=400, detail="Full name exceeds maximum length")
+
     try:
+        upsert_profile_for_invited_user(
+            user_id=user_id,
+            email=principal.email or invite_email or None,
+            full_name=full_name,
+        )
         activate_tenant_user(tenant_id=tenant_id, user_id=user_id)
         upsert_tenant_app_role(tenant_id=tenant_id, user_id=user_id, app_id=app_id, role=role)
         mark_invitation_accepted(invitation_id=str(row.get("id") or ""), accepted_by_user_id=user_id)

@@ -1,7 +1,10 @@
 from __future__ import annotations
 
+from collections.abc import Iterable
+
 from shared.auth.providers import get_auth_provider
-from shared.auth.supabase_client import SupabaseClientError
+from shared.auth.profile_repo import select_profile_for_user
+from shared.auth.roles import ROLE_ORDER
 
 
 def _provider():
@@ -13,36 +16,31 @@ def _as_non_empty_text(value: object) -> str | None:
     return text or None
 
 
-def _select_profile_for_user(*, provider, user_id: str) -> dict[str, object] | None:
-    profile = provider.select_single(
-        table="profiles",
-        filters={"user_id": user_id},
-        select="user_id,email,full_name,created_at,updated_at",
-    )
-    if profile:
-        return profile
-
-    # Optional compatibility fallback for deployments where profile PK is `id`.
-    # Some schemas do not expose `profiles.id`; ignore that case gracefully.
+def _role_rank(role_key: str | None) -> int:
+    normalized = str(role_key or "").strip()
     try:
-        profile = provider.select_single(
-            table="profiles",
-            filters={"id": user_id},
-            select="id,user_id,email,full_name,created_at,updated_at",
-        )
-    except SupabaseClientError as exc:
-        if "column profiles.id does not exist" in str(exc):
-            return None
-        raise
-    if profile:
-        return profile
-    return None
+        return ROLE_ORDER.index(normalized)
+    except ValueError:
+        return len(ROLE_ORDER) + 1
 
 
-def _select_invitation_email_for_user(*, provider, tenant_id: str, user_id: str) -> str | None:
+def _collect_table_rows(
+    *,
+    table: str,
+    filters: dict[str, str],
+    select: str,
+) -> list[dict[str, object]]:
+    return _provider().select_many(
+        table=table,
+        filters=filters,
+        select=select,
+    )
+
+
+def _select_invitation_email_for_user(*, provider, user_id: str) -> str | None:
     rows = provider.select_many(
         table="invitations",
-        filters={"tenant_id": tenant_id, "accepted_by_user_id": user_id},
+        filters={"accepted_by_user_id": user_id},
         select="email,accepted_at,created_at",
     )
     candidates: list[tuple[str, str]] = []
@@ -58,57 +56,294 @@ def _select_invitation_email_for_user(*, provider, tenant_id: str, user_id: str)
     return candidates[0][1]
 
 
-def list_tenant_users_with_app_role(*, tenant_id: str, app_id: str) -> list[dict[str, object]]:
-    provider = _provider()
-    membership_rows = provider.select_many(
-        table="tenant_users",
-        filters={"tenant_id": tenant_id},
-        select="id,user_id,status,created_at,updated_at",
+def list_active_tenants() -> list[dict[str, object]]:
+    rows = _collect_table_rows(
+        table="tenants",
+        filters={"active": "true"},
+        select="id,slug,name,active,created_at",
     )
-    role_rows = provider.select_many(
-        table="tenant_app_roles",
-        filters={"tenant_id": tenant_id, "app_id": app_id},
-        select="id,user_id,role,created_at,updated_at",
-    )
+    items = [
+        {
+            "id": row.get("id"),
+            "slug": row.get("slug"),
+            "name": row.get("name"),
+            "active": bool(row.get("active", True)),
+            "createdAt": row.get("created_at"),
+        }
+        for row in rows
+    ]
+    items.sort(key=lambda item: (str(item.get("slug") or "~").lower(), str(item.get("id") or "")))
+    return items
 
-    membership_by_user: dict[str, dict[str, object]] = {}
-    role_by_user: dict[str, dict[str, object]] = {}
+
+def list_active_apps() -> list[dict[str, object]]:
+    rows = _collect_table_rows(
+        table="apps",
+        filters={"active": "true"},
+        select="id,code,name,active,created_at",
+    )
+    items = [
+        {
+            "id": row.get("id"),
+            "code": str(row.get("code") or "").strip().lower(),
+            "name": row.get("name"),
+            "active": bool(row.get("active", True)),
+            "createdAt": row.get("created_at"),
+        }
+        for row in rows
+    ]
+    items.sort(
+        key=lambda item: (
+            0 if str(item.get("code") or "").strip().lower() == "tradsphere" else 1,
+            str(item.get("code") or "~").lower(),
+        )
+    )
+    return items
+
+
+def list_role_keys_from_store() -> list[str]:
+    roles: set[str] = set()
+    for row in _collect_table_rows(
+        table="role_permissions",
+        filters={},
+        select="role",
+    ):
+        role = str(row.get("role") or "").strip()
+        if role:
+            roles.add(role)
+    for row in _collect_table_rows(
+        table="tenant_app_roles",
+        filters={},
+        select="role",
+    ):
+        role = str(row.get("role") or "").strip()
+        if role:
+            roles.add(role)
+    return sorted(roles)
+
+
+def _tenant_rows_by_scope(*, scope_tenant_ids: set[str] | None) -> list[dict[str, object]]:
+    if scope_tenant_ids and len(scope_tenant_ids) == 1:
+        tenant_id = next(iter(scope_tenant_ids))
+        return _collect_table_rows(
+            table="tenant_users",
+            filters={"tenant_id": tenant_id},
+            select="id,tenant_id,user_id,status,created_at,updated_at",
+        )
+    rows = _collect_table_rows(
+        table="tenant_users",
+        filters={},
+        select="id,tenant_id,user_id,status,created_at,updated_at",
+    )
+    if not scope_tenant_ids:
+        return rows
+    return [row for row in rows if str(row.get("tenant_id") or "").strip() in scope_tenant_ids]
+
+
+def _role_rows_by_scope(
+    *,
+    scope_tenant_ids: set[str] | None,
+    scope_app_ids: set[str] | None,
+) -> list[dict[str, object]]:
+    if scope_tenant_ids and len(scope_tenant_ids) == 1 and scope_app_ids and len(scope_app_ids) == 1:
+        return _collect_table_rows(
+            table="tenant_app_roles",
+            filters={
+                "tenant_id": next(iter(scope_tenant_ids)),
+                "app_id": next(iter(scope_app_ids)),
+            },
+            select="id,tenant_id,user_id,app_id,role,created_at,updated_at",
+        )
+    rows = _collect_table_rows(
+        table="tenant_app_roles",
+        filters={},
+        select="id,tenant_id,user_id,app_id,role,created_at,updated_at",
+    )
+    filtered = rows
+    if scope_tenant_ids:
+        filtered = [row for row in filtered if str(row.get("tenant_id") or "").strip() in scope_tenant_ids]
+    if scope_app_ids:
+        filtered = [row for row in filtered if str(row.get("app_id") or "").strip() in scope_app_ids]
+    return filtered
+
+
+def list_users_with_access(
+    *,
+    scope_tenant_ids: set[str] | None = None,
+    scope_app_ids: set[str] | None = None,
+    primary_tenant_id: str | None = None,
+    primary_app_id: str | None = None,
+) -> list[dict[str, object]]:
+    provider = _provider()
+    membership_rows = _tenant_rows_by_scope(scope_tenant_ids=scope_tenant_ids)
+    role_rows = _role_rows_by_scope(scope_tenant_ids=scope_tenant_ids, scope_app_ids=scope_app_ids)
+
+    tenant_map: dict[str, dict[str, object]] = {}
+    for row in _collect_table_rows(table="tenants", filters={}, select="id,slug,name,active"):
+        tenant_id = str(row.get("id") or "").strip()
+        if tenant_id:
+            tenant_map[tenant_id] = row
+
+    app_map: dict[str, dict[str, object]] = {}
+    for row in _collect_table_rows(table="apps", filters={}, select="id,code,name,active"):
+        app_id = str(row.get("id") or "").strip()
+        if app_id:
+            app_map[app_id] = row
+
+    memberships_by_user: dict[str, list[dict[str, object]]] = {}
+    roles_by_user: dict[str, list[dict[str, object]]] = {}
+    primary_membership_by_user: dict[str, dict[str, object]] = {}
+    primary_role_by_user: dict[str, dict[str, object]] = {}
 
     for row in membership_rows:
         user_id = str(row.get("user_id") or "").strip()
-        if user_id:
-            membership_by_user[user_id] = row
+        tenant_id = str(row.get("tenant_id") or "").strip()
+        if not user_id or not tenant_id:
+            continue
+        tenant_row = tenant_map.get(tenant_id) or {}
+        item = {
+            "tenantId": tenant_id,
+            "tenantSlug": tenant_row.get("slug"),
+            "tenantName": tenant_row.get("name"),
+            "status": row.get("status") or "pending",
+            "createdAt": row.get("created_at"),
+            "updatedAt": row.get("updated_at"),
+        }
+        memberships_by_user.setdefault(user_id, []).append(item)
+        if primary_tenant_id and tenant_id == primary_tenant_id:
+            primary_membership_by_user[user_id] = item
 
     for row in role_rows:
         user_id = str(row.get("user_id") or "").strip()
-        if user_id:
-            role_by_user[user_id] = row
+        tenant_id = str(row.get("tenant_id") or "").strip()
+        app_id = str(row.get("app_id") or "").strip()
+        if not user_id or not tenant_id or not app_id:
+            continue
+        tenant_row = tenant_map.get(tenant_id) or {}
+        app_row = app_map.get(app_id) or {}
+        item = {
+            "tenantId": tenant_id,
+            "tenantSlug": tenant_row.get("slug"),
+            "tenantName": tenant_row.get("name"),
+            "appId": app_id,
+            "appCode": str(app_row.get("code") or "").strip().lower() or None,
+            "appName": app_row.get("name"),
+            "role": row.get("role"),
+            "createdAt": row.get("created_at"),
+            "updatedAt": row.get("updated_at"),
+        }
+        roles_by_user.setdefault(user_id, []).append(item)
+        if primary_tenant_id and primary_app_id and tenant_id == primary_tenant_id and app_id == primary_app_id:
+            primary_role_by_user[user_id] = item
 
-    user_ids = sorted(set(membership_by_user.keys()) | set(role_by_user.keys()))
+    user_ids = sorted(set(memberships_by_user.keys()) | set(roles_by_user.keys()))
 
     results: list[dict[str, object]] = []
     for user_id in user_ids:
-        profile = _select_profile_for_user(provider=provider, user_id=user_id)
-        invitation_email = _select_invitation_email_for_user(provider=provider, tenant_id=tenant_id, user_id=user_id)
+        profile = select_profile_for_user(provider=provider, user_id=user_id)
+        invitation_email = _select_invitation_email_for_user(provider=provider, user_id=user_id)
         resolved_email = _as_non_empty_text(profile.get("email") if profile else None) or invitation_email
-        membership = membership_by_user.get(user_id) or {}
-        app_role = role_by_user.get(user_id) or {}
+        memberships = sorted(
+            memberships_by_user.get(user_id, []),
+            key=lambda item: (str(item.get("tenantSlug") or "~").lower(), str(item.get("tenantId") or "")),
+        )
+        assignments = sorted(
+            roles_by_user.get(user_id, []),
+            key=lambda item: (
+                str(item.get("tenantSlug") or "~").lower(),
+                str(item.get("appCode") or "~").lower(),
+                str(item.get("role") or "~").lower(),
+            ),
+        )
+
+        primary_membership = primary_membership_by_user.get(user_id)
+        primary_assignment = primary_role_by_user.get(user_id)
+        if primary_membership is None and memberships:
+            primary_membership = memberships[0]
+        if primary_assignment is None and assignments:
+            primary_assignment = assignments[0]
+
+        top_role = None
+        if assignments:
+            top_role = sorted(
+                [str(item.get("role") or "").strip() for item in assignments if str(item.get("role") or "").strip()],
+                key=_role_rank,
+            )[0]
+
+        created_at = None
+        updated_at = None
+        for row in [primary_membership, primary_assignment]:
+            if row and not created_at:
+                created_at = row.get("createdAt")
+            if row:
+                updated_at = row.get("updatedAt") or updated_at
+        if not created_at and profile:
+            created_at = profile.get("created_at")
+        if not updated_at and profile:
+            updated_at = profile.get("updated_at")
 
         results.append(
             {
                 "userId": user_id,
                 "email": resolved_email,
                 "fullName": profile.get("full_name") if profile else None,
-                "status": membership.get("status") or "pending",
-                "role": app_role.get("role") or None,
-                "createdAt": membership.get("created_at") or profile.get("created_at") if profile else None,
-                "updatedAt": membership.get("updated_at") or profile.get("updated_at") if profile else None,
-                "roleUpdatedAt": app_role.get("updated_at") or app_role.get("created_at"),
+                "status": (primary_membership or {}).get("status") or "pending",
+                "role": (primary_assignment or {}).get("role") or top_role,
+                "createdAt": created_at,
+                "updatedAt": updated_at,
+                "roleUpdatedAt": (primary_assignment or {}).get("updatedAt") or (primary_assignment or {}).get("createdAt"),
+                "tenantMemberships": memberships,
+                "appAssignments": assignments,
             }
         )
 
     results.sort(key=lambda row: (str(row.get("email") or "~").lower(), str(row.get("userId") or "")))
     return results
+
+
+def list_tenant_users_with_app_role(*, tenant_id: str, app_id: str) -> list[dict[str, object]]:
+    return list_users_with_access(
+        scope_tenant_ids={tenant_id},
+        scope_app_ids={app_id},
+        primary_tenant_id=tenant_id,
+        primary_app_id=app_id,
+    )
+
+
+def get_user_memberships(
+    *,
+    user_id: str,
+    scope_tenant_ids: set[str] | None = None,
+) -> list[dict[str, object]]:
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        return []
+    rows = _collect_table_rows(
+        table="tenant_users",
+        filters={"user_id": normalized_user_id},
+        select="id,tenant_id,user_id,status,created_at,updated_at",
+    )
+    if scope_tenant_ids:
+        rows = [row for row in rows if str(row.get("tenant_id") or "").strip() in scope_tenant_ids]
+    return rows
+
+
+def get_user_app_roles(
+    *,
+    user_id: str,
+    scope_tenant_ids: set[str] | None = None,
+) -> list[dict[str, object]]:
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        return []
+    rows = _collect_table_rows(
+        table="tenant_app_roles",
+        filters={"user_id": normalized_user_id},
+        select="id,tenant_id,user_id,app_id,role,created_at,updated_at",
+    )
+    if scope_tenant_ids:
+        rows = [row for row in rows if str(row.get("tenant_id") or "").strip() in scope_tenant_ids]
+    return rows
 
 
 def set_tenant_user_status(*, tenant_id: str, user_id: str, status: str) -> None:
@@ -162,3 +397,29 @@ def set_tenant_app_role(*, tenant_id: str, user_id: str, app_id: str, role: str)
             "role": role,
         },
     )
+
+
+def remove_tenant_app_role(*, tenant_id: str, user_id: str, app_id: str) -> None:
+    _provider().delete_rows(
+        table="tenant_app_roles",
+        filters={"tenant_id": tenant_id, "user_id": user_id, "app_id": app_id},
+    )
+
+
+def remove_tenant_app_roles_for_tenant(*, tenant_id: str, user_id: str) -> None:
+    _provider().delete_rows(
+        table="tenant_app_roles",
+        filters={"tenant_id": tenant_id, "user_id": user_id},
+    )
+
+
+def unique_text_values(values: Iterable[object]) -> list[str]:
+    seen: set[str] = set()
+    results: list[str] = []
+    for value in values:
+        normalized = str(value or "").strip()
+        if not normalized or normalized in seen:
+            continue
+        seen.add(normalized)
+        results.append(normalized)
+    return results

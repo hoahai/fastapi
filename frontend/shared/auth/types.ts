@@ -7,6 +7,9 @@ export type SupabaseSession = {
 export type AuthUser = {
   id: string;
   email: string | null;
+  fullName?: string | null;
+  firstName?: string | null;
+  lastName?: string | null;
 };
 
 export type AccessProfile = {

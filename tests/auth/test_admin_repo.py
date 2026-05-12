@@ -39,7 +39,15 @@ class AdminRepoTests(unittest.TestCase):
             {"id": "m1", "user_id": "user-1", "status": "active", "created_at": "2026-05-10T00:00:00Z", "updated_at": "2026-05-10T00:00:00Z"}
         ]
         provider.role_rows = [
-            {"id": "r1", "user_id": "user-1", "role": "tradsphere.viewer", "created_at": "2026-05-10T00:00:00Z", "updated_at": "2026-05-10T00:00:00Z"}
+            {
+                "id": "r1",
+                "tenant_id": "tenant-1",
+                "user_id": "user-1",
+                "app_id": "app-1",
+                "role": "tradsphere.viewer",
+                "created_at": "2026-05-10T00:00:00Z",
+                "updated_at": "2026-05-10T00:00:00Z",
+            }
         ]
         provider.profiles_by_id["user-1"] = {
             "id": "user-1",
@@ -62,7 +70,15 @@ class AdminRepoTests(unittest.TestCase):
             {"id": "m2", "user_id": "user-2", "status": "active", "created_at": "2026-05-11T00:00:00Z", "updated_at": "2026-05-11T00:00:00Z"}
         ]
         provider.role_rows = [
-            {"id": "r2", "user_id": "user-2", "role": "tradsphere.viewer", "created_at": "2026-05-11T00:00:00Z", "updated_at": "2026-05-11T00:00:00Z"}
+            {
+                "id": "r2",
+                "tenant_id": "tenant-1",
+                "user_id": "user-2",
+                "app_id": "app-1",
+                "role": "tradsphere.viewer",
+                "created_at": "2026-05-11T00:00:00Z",
+                "updated_at": "2026-05-11T00:00:00Z",
+            }
         ]
         provider.invitations_by_user_id["user-2"] = [
             {"email": "older@example.com", "accepted_at": "2026-05-10T00:00:00Z", "created_at": "2026-05-10T00:00:00Z"},

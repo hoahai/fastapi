@@ -5,6 +5,7 @@ import EstimateNumbersPage from "@/pages/EstimateNumbersPage";
 import ContactsPage from "@/pages/ContactsPage";
 import StationsPage from "@/pages/StationsPage";
 import AdminUsersPage from "@/pages/AdminUsersPage";
+import ProfilePage from "@/pages/ProfilePage";
 import { WorkspaceNotFoundPage } from "@home/WorkspaceNotFoundPage";
 import { WorkspacePortalPage } from "@home/WorkspacePortalPage";
 import { AppShell } from "@/components/layout/AppShell";
@@ -62,6 +63,9 @@ function toScrollStorageKey(route: string): string {
   }
   if (route === "/admin/users") {
     return "workspace.admin.users.scrollY";
+  }
+  if (route === "/profile") {
+    return "workspace.profile.scrollY";
   }
   const normalized = route.replace(/[^a-zA-Z0-9]+/g, ".").replace(/^\.+|\.+$/g, "").toLowerCase();
   return `${normalized || "workspace"}.scrollY`;
@@ -121,6 +125,7 @@ function App() {
       "/auth/callback",
       "/auth/unauthorized",
       "/auth/invite/pending",
+      "/profile",
       "/admin/users",
       "/tradsphere/home",
       "/tradsphere/estnums",
@@ -162,6 +167,18 @@ function App() {
     );
   }
 
+  function renderProfileRoute() {
+    return (
+      <RequireSignedIn>
+        <RequireTenantAccess fallback={<UnauthorizedPage />}>
+          <RequirePermission permission="tradsphere.viewer" fallback={<UnauthorizedPage />}>
+            <ProfilePage />
+          </RequirePermission>
+        </RequireTenantAccess>
+      </RequireSignedIn>
+    );
+  }
+
   function renderAdminRoute() {
     return (
       <RequireSignedIn>
@@ -183,6 +200,7 @@ function App() {
           {frontendPath === "/auth/unauthorized" ? <UnauthorizedPage /> : null}
           {frontendPath === "/auth/invite/pending" ? <PendingInvitePage /> : null}
           {inviteToken ? <InviteAcceptPage token={inviteToken} /> : null}
+          {frontendPath === "/profile" ? renderProfileRoute() : null}
           {frontendPath === "/admin/users" ? renderAdminRoute() : null}
           {frontendPath.startsWith("/tradsphere/") ? renderTradsphereRoute() : null}
           {frontendPath === HOME_ROUTE ? (

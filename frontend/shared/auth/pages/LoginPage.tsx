@@ -1,5 +1,5 @@
 import { ShieldCheck } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 
 import { PageBanner } from "@/components/layout/PageBanner";
 import { Button } from "@/components/ui/button";
@@ -48,6 +48,7 @@ export function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSigningIn, setIsSigningIn] = useState(false);
+  const passwordInputRef = useRef<HTMLInputElement | null>(null);
 
   const normalizedEmail = useMemo(() => email.trim().toLowerCase(), [email]);
   const postLoginPath = useMemo(() => resolvePostLoginPath(), []);
@@ -60,6 +61,9 @@ export function LoginPage() {
   }, [auth.status, auth.user, postLoginPath]);
 
   async function handlePasswordLogin() {
+    if (!normalizedEmail || !password || isSigningIn) {
+      return;
+    }
     setError(null);
     setIsSigningIn(true);
     try {
@@ -72,6 +76,11 @@ export function LoginPage() {
     }
   }
 
+  async function handleSubmit(event: FormEvent<HTMLFormElement>) {
+    event.preventDefault();
+    await handlePasswordLogin();
+  }
+
   return (
     <div className="mx-auto flex w-full max-w-[920px] flex-col gap-6">
       <PageBanner
@@ -82,7 +91,7 @@ export function LoginPage() {
       />
 
       <section className="rounded-2xl border border-blue-100 bg-white/95 p-5 shadow-soft sm:p-6">
-        <div className="mx-auto max-w-[420px] space-y-4 rounded-2xl border border-blue-100 bg-white p-4">
+        <form className="mx-auto max-w-[420px] space-y-4 rounded-2xl border border-blue-100 bg-white p-4" onSubmit={handleSubmit}>
           <div>
             <h2 className="text-base font-semibold text-slate-900">Sign in with password</h2>
             <p className="mt-1 text-sm text-slate-600">Use your existing workspace credentials.</p>
@@ -93,6 +102,13 @@ export function LoginPage() {
             onChange={(event) => setEmail(event.target.value)}
             type="email"
             autoComplete="email"
+            onKeyDown={(event) => {
+              if (event.key !== "Enter") {
+                return;
+              }
+              event.preventDefault();
+              passwordInputRef.current?.focus();
+            }}
           />
           <Input
             placeholder="Password"
@@ -100,16 +116,17 @@ export function LoginPage() {
             onChange={(event) => setPassword(event.target.value)}
             type="password"
             autoComplete="current-password"
+            ref={passwordInputRef}
           />
           <Button
-            onClick={handlePasswordLogin}
+            type="submit"
             disabled={isSigningIn || !normalizedEmail || !password}
             className="w-full"
           >
             {isSigningIn ? <Spinner className="size-4" /> : <ShieldCheck className="size-4" />}
             {isSigningIn ? "Signing in..." : "Sign in"}
           </Button>
-        </div>
+        </form>
 
         {error ? (
           <p className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>

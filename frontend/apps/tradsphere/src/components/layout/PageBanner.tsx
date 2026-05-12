@@ -8,13 +8,15 @@ type PageBannerProps = {
   description: string;
   action?: ReactNode;
   className?: string;
-  gradientVariant?: "app" | "workspace";
+  gradientVariant?: "app" | "workspace" | "admin";
 };
 
 const bannerGradientByVariant: Record<NonNullable<PageBannerProps["gradientVariant"]>, string> = {
   app: "bg-[radial-gradient(circle_at_82%_30%,rgba(251,146,60,0.45),transparent_34%),radial-gradient(circle_at_58%_30%,rgba(239,68,68,0.38),transparent_42%),radial-gradient(circle_at_10%_34%,rgba(76,29,149,0.48),transparent_38%),linear-gradient(135deg,#f8fafc_6%,#eef2ff_42%,#ffffff_70%)]",
   workspace:
     "bg-[radial-gradient(circle_at_18%_24%,rgba(56,189,248,0.28),transparent_42%),radial-gradient(circle_at_82%_20%,rgba(99,102,241,0.3),transparent_42%),radial-gradient(circle_at_56%_78%,rgba(167,139,250,0.24),transparent_50%),linear-gradient(135deg,#f8fbff_4%,#eef2ff_48%,#f5f3ff_100%)]",
+  admin:
+    "bg-[radial-gradient(circle_at_14%_24%,rgba(37,99,235,0.26),transparent_42%),radial-gradient(circle_at_86%_22%,rgba(147,51,234,0.24),transparent_42%),radial-gradient(circle_at_52%_80%,rgba(13,148,136,0.24),transparent_50%),linear-gradient(135deg,#f8fafc_5%,#eff6ff_46%,#f5f3ff_72%,#f0fdfa_100%)]",
 };
 
 export function PageBanner({

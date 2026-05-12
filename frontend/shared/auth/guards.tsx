@@ -2,6 +2,10 @@ import type { ReactNode } from "react";
 
 import { useAuth } from "./useAuth";
 
+function AccessLoadingFallback() {
+  return <div className="p-6 text-sm text-slate-600">Loading access...</div>;
+}
+
 export function shouldProtectTradsphereFrontend(): boolean {
   const value = String(import.meta.env.VITE_AUTH_PROTECT_TRADSPHERE || "false").trim().toLowerCase();
   return value === "1" || value === "true" || value === "yes" || value === "on";
@@ -26,10 +30,16 @@ export function RequireTenantAccess({ children, fallback }: { children: ReactNod
   if (!shouldProtectTradsphereFrontend()) {
     return <>{children}</>;
   }
+  if (auth.status === "loading") {
+    return <AccessLoadingFallback />;
+  }
   if (auth.status !== "authenticated") {
     return <>{fallback}</>;
   }
-  if (!auth.tenantSlug || !auth.accessProfile || auth.accessError) {
+  if (auth.accessLoading && !auth.accessProfile) {
+    return <AccessLoadingFallback />;
+  }
+  if (!auth.tenantSlug || !auth.accessProfile) {
     return <>{fallback}</>;
   }
   return <>{children}</>;
@@ -47,6 +57,18 @@ export function RequirePermission({
   const auth = useAuth();
   if (!shouldProtectTradsphereFrontend()) {
     return <>{children}</>;
+  }
+  if (auth.status === "loading") {
+    return <AccessLoadingFallback />;
+  }
+  if (auth.status !== "authenticated") {
+    return <>{fallback}</>;
+  }
+  if (auth.accessLoading && !auth.accessProfile) {
+    return <AccessLoadingFallback />;
+  }
+  if (!auth.accessProfile) {
+    return <>{fallback}</>;
   }
   const permissions = new Set(auth.accessProfile?.permissions ?? []);
   if (!permissions.has(permission)) {

@@ -57,6 +57,7 @@ class SupabaseRestClient:
         *,
         bearer_token: str | None,
         use_service_role: bool,
+        force_key_as_bearer: bool = False,
     ) -> dict[str, str]:
         selected_key = self.service_role_key if use_service_role else self.anon_key
         headers: dict[str, str] = {"apikey": selected_key}
@@ -64,6 +65,10 @@ class SupabaseRestClient:
         if bearer_token:
             # Authorization bearer is only for real JWTs (for example user access tokens).
             headers["Authorization"] = f"Bearer {bearer_token}"
+            return headers
+
+        if force_key_as_bearer:
+            headers["Authorization"] = f"Bearer {selected_key}"
             return headers
 
         # Backward compatibility for legacy JWT-format anon/service keys.
@@ -82,6 +87,7 @@ class SupabaseRestClient:
         body: dict[str, Any] | None = None,
         bearer_token: str | None = None,
         use_service_role: bool = False,
+        force_key_as_bearer: bool = False,
     ) -> Any:
         self._reload_from_env()
         self._require_configured()
@@ -92,6 +98,7 @@ class SupabaseRestClient:
         headers = self._build_headers(
             bearer_token=bearer_token,
             use_service_role=use_service_role,
+            force_key_as_bearer=force_key_as_bearer,
         )
 
         data: bytes | None = None
@@ -115,6 +122,11 @@ class SupabaseRestClient:
         except HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
             message = f"Supabase request failed ({exc.code}): {detail}"
+            if path.startswith("/auth/v1/"):
+                raise SupabaseAuthError(message) from exc
+            raise SupabaseClientError(message) from exc
+        except TimeoutError as exc:
+            message = f"Supabase request timed out for {path}"
             if path.startswith("/auth/v1/"):
                 raise SupabaseAuthError(message) from exc
             raise SupabaseClientError(message) from exc
@@ -191,8 +203,36 @@ class SupabaseRestClient:
             return []
         return [row for row in result if isinstance(row, dict)]
 
+    def delete_rows(self, *, table: str, filters: dict[str, str]) -> list[dict[str, Any]]:
+        query: dict[str, str] = {}
+        for key, value in filters.items():
+            query[key] = f"eq.{value}"
+        result = self._request(
+            path=f"/rest/v1/{table}",
+            method="DELETE",
+            query=query,
+            use_service_role=True,
+        )
+        if not isinstance(result, list):
+            return []
+        return [row for row in result if isinstance(row, dict)]
+
     def now_iso(self) -> str:
         return datetime.now(timezone.utc).isoformat()
+
+    def get_auth_user_by_id(self, *, user_id: str) -> dict[str, Any] | None:
+        normalized_user_id = str(user_id or "").strip()
+        if not normalized_user_id:
+            return None
+        result = self._request(
+            path=f"/auth/v1/admin/users/{normalized_user_id}",
+            method="GET",
+            use_service_role=True,
+            force_key_as_bearer=True,
+        )
+        if not isinstance(result, dict):
+            return None
+        return result
 
 
 supabase_client = SupabaseRestClient()

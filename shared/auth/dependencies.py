@@ -36,7 +36,8 @@ def authorize_bearer_for_tenant_app(
     try:
         principal = verify_supabase_jwt(token)
     except JwtVerificationError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        status_code = int(getattr(exc, "status_code", 401) or 401)
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
     try:
         access = get_tenant_access_cached(
@@ -64,7 +65,8 @@ def authenticate_bearer(request: Request) -> AuthPrincipal:
     try:
         principal = verify_supabase_jwt(token)
     except JwtVerificationError as exc:
-        raise HTTPException(status_code=401, detail=str(exc)) from exc
+        status_code = int(getattr(exc, "status_code", 401) or 401)
+        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
 
     request.state.auth_principal = principal
     request.state.auth_mode = "supabase_jwt"

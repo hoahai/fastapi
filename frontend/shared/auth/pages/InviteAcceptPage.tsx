@@ -32,6 +32,25 @@ type InviteViewState =
   | "accepted"
   | "closed";
 
+function composeFullName(firstName: string, lastName: string): string {
+  return [firstName.trim(), lastName.trim()].filter(Boolean).join(" ").trim();
+}
+
+function splitFullName(value: string | null | undefined): { firstName: string; lastName: string } {
+  const normalized = String(value || "").trim();
+  if (!normalized) {
+    return { firstName: "", lastName: "" };
+  }
+  const parts = normalized.split(/\s+/);
+  if (parts.length === 1) {
+    return { firstName: parts[0], lastName: "" };
+  }
+  return {
+    firstName: parts[0],
+    lastName: parts.slice(1).join(" "),
+  };
+}
+
 function unwrapResponse(payload: unknown): Record<string, unknown> | null {
   if (!payload || typeof payload !== "object") {
     return null;
@@ -114,6 +133,9 @@ export function InviteAcceptPage({ token }: InviteAcceptPageProps) {
   const [registerConfirmPassword, setRegisterConfirmPassword] = useState("");
   const [registering, setRegistering] = useState(false);
   const [registerMessage, setRegisterMessage] = useState<string | null>(null);
+  const [profileFirstName, setProfileFirstName] = useState("");
+  const [profileLastName, setProfileLastName] = useState("");
+  const [profileError, setProfileError] = useState<string | null>(null);
   const autoAcceptAttemptedRef = useRef(false);
 
   const inviteStatus = normalizeStatus(payload?.status);
@@ -144,6 +166,18 @@ export function InviteAcceptPage({ token }: InviteAcceptPageProps) {
     }
     return "This invitation is no longer available.";
   }, [inviteStatus]);
+
+  useEffect(() => {
+    if (profileFirstName.trim() || profileLastName.trim()) {
+      return;
+    }
+    const seeded = splitFullName(auth.accessProfile?.user?.fullName || auth.user?.fullName || "");
+    if (!seeded.firstName && !seeded.lastName) {
+      return;
+    }
+    setProfileFirstName(seeded.firstName);
+    setProfileLastName(seeded.lastName);
+  }, [auth.accessProfile?.user?.fullName, auth.user?.fullName, profileFirstName, profileLastName]);
 
   useEffect(() => {
     let cancelled = false;
@@ -224,6 +258,7 @@ export function InviteAcceptPage({ token }: InviteAcceptPageProps) {
     }
 
     setRegisterMessage(null);
+    setProfileError(null);
     setRegistering(true);
     try {
       const signUpResult = await auth.signUpWithPassword(normalizedInviteEmail, registerPassword);
@@ -233,8 +268,7 @@ export function InviteAcceptPage({ token }: InviteAcceptPageProps) {
       }
       setRegisterPassword("");
       setRegisterConfirmPassword("");
-      setRegisterMessage("Account created and signed in. Finalizing invitation...");
-      await handleAccept();
+      setRegisterMessage("Account created and signed in. Continue below to complete your profile and accept invitation.");
     } catch (err) {
       const raw = err instanceof Error ? err.message : "";
       const text = raw.trim().toLowerCase();
@@ -258,8 +292,16 @@ export function InviteAcceptPage({ token }: InviteAcceptPageProps) {
       setState("needs_sign_in");
       return;
     }
+    const normalizedFirstName = profileFirstName.trim();
+    const normalizedLastName = profileLastName.trim();
+    const normalizedFullName = composeFullName(normalizedFirstName, normalizedLastName);
+    if (!normalizedFirstName || !normalizedLastName || !normalizedFullName) {
+      setProfileError("First name and last name are required.");
+      return;
+    }
 
     setError(null);
+    setProfileError(null);
     setState("accepting");
 
     try {
@@ -267,7 +309,15 @@ export function InviteAcceptPage({ token }: InviteAcceptPageProps) {
         method: "POST",
         headers: {
           Authorization: `Bearer ${auth.session.accessToken}`,
+          "Content-Type": "application/json",
         },
+        body: JSON.stringify({
+          profile: {
+            firstName: normalizedFirstName,
+            lastName: normalizedLastName,
+            fullName: normalizedFullName,
+          },
+        }),
       });
 
       const json = await response.json().catch(() => null);
@@ -296,9 +346,12 @@ export function InviteAcceptPage({ token }: InviteAcceptPageProps) {
     if (state !== "ready" || !autoAcceptRequested || autoAcceptAttemptedRef.current) {
       return;
     }
+    if (!profileFirstName.trim() || !profileLastName.trim()) {
+      return;
+    }
     autoAcceptAttemptedRef.current = true;
     void handleAccept();
-  }, [state, autoAcceptRequested]);
+  }, [state, autoAcceptRequested, profileFirstName, profileLastName]);
 
   return (
     <div className="mx-auto flex w-full max-w-[860px] flex-col gap-6">
@@ -374,8 +427,8 @@ export function InviteAcceptPage({ token }: InviteAcceptPageProps) {
         ) : null}
 
         {state === "ready" || state === "accepting" || state === "accepted" ? (
-          <div className="space-y-4">
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="space-y-4">
+              <div className="grid gap-3 sm:grid-cols-2">
               <div className="rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
                 <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Invited email</p>
                 <p className="mt-1 text-sm font-medium text-slate-900">{payload?.email || "-"}</p>
@@ -400,10 +453,45 @@ export function InviteAcceptPage({ token }: InviteAcceptPageProps) {
                 <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Expiration</p>
                 <p className="mt-1 text-sm font-medium text-slate-900">{toDisplayDate(payload?.expiresAt)}</p>
               </div>
-            </div>
+              </div>
 
-            {error ? (
-              <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>
+              <div className="rounded-xl border border-slate-200 bg-white px-3 py-3">
+                <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Profile setup</p>
+                <div className="mt-2 space-y-2">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <Input
+                      value={profileFirstName}
+                      onChange={(event) => {
+                        setProfileFirstName(event.target.value);
+                        if (profileError) {
+                          setProfileError(null);
+                        }
+                      }}
+                      placeholder="First name"
+                      autoComplete="given-name"
+                      maxLength={120}
+                      disabled={state === "accepting"}
+                    />
+                    <Input
+                      value={profileLastName}
+                      onChange={(event) => {
+                        setProfileLastName(event.target.value);
+                        if (profileError) {
+                          setProfileError(null);
+                        }
+                      }}
+                      placeholder="Last name"
+                      autoComplete="family-name"
+                      maxLength={120}
+                      disabled={state === "accepting"}
+                    />
+                  </div>
+                  {profileError ? <p className="text-xs text-rose-700">{profileError}</p> : null}
+                </div>
+              </div>
+
+              {error ? (
+                <p className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>
             ) : null}
 
             {state === "accepted" ? (
@@ -411,7 +499,7 @@ export function InviteAcceptPage({ token }: InviteAcceptPageProps) {
                 Invitation accepted. Redirecting to Tradsphere...
               </p>
             ) : (
-              <Button onClick={handleAccept} disabled={state === "accepting"}>
+              <Button onClick={handleAccept} disabled={state === "accepting" || !profileFirstName.trim() || !profileLastName.trim()}>
                 {state === "accepting" ? <Spinner className="size-4" /> : null}
                 {state === "accepting" ? "Accepting invitation..." : "Accept invitation"}
               </Button>
