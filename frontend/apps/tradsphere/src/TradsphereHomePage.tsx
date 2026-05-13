@@ -47,7 +47,6 @@ import { Input } from "@/components/ui/input";
 import { canModalClose, shouldBlockOutsideClose } from "@/components/ui/modal-close-guard";
 import type {
   AccountInfo,
-  AccountSelection,
   ApiMainLoadResponse,
   EsnumItem,
   MainLoadResponse,
@@ -58,23 +57,24 @@ import { UnsavedChangesDialog } from "@/components/ui/unsaved-changes-dialog";
 import { useToast } from "@/components/ui/toast";
 import { useApiRequest, type ApiRequestOptions } from "@/hooks/useApiRequest";
 import { usePersistentState } from "@/hooks/usePersistentState";
+import { useTradsphereAccountSelections } from "@/hooks/useTradsphereAccountSelections";
 import {
   readBrowserCacheSnapshot,
   removeBrowserCacheByPrefix,
   writeBrowserCache,
 } from "@/lib/browserCache";
+import { TRADSPHERE_SELECTIONS_CACHE_KEY } from "@/lib/tradsphereAccountSelections";
 import { buildAuthHeaders as buildSharedAuthHeaders } from "@shared/api/authHeaders";
 import { TRADSPHERE_CACHE_TTL_MS, shouldFetchNetwork, type CachePolicy } from "@shared/cache";
 import { useAuth } from "@shared/auth/useAuth";
 import { shouldProtectTradsphereFrontend } from "@shared/auth/guards";
 import { hasAppEditAccess } from "@shared/auth/permissions";
+import { PageLoadingOverlay } from "@shared/components/status/LoadingOverlay";
 
 const scheduleColumns: ColumnDef<EsnumItem>[] = [{ accessorKey: "estnum" }, { accessorKey: "name" }];
 
 const stationColumns: ColumnDef<StationItem>[] = [{ accessorKey: "code" }, { accessorKey: "name" }];
 
-const SELECTIONS_CACHE_KEY = "tradsphere:main:selections:v2";
-const SELECTIONS_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.SELECTIONS;
 const LOAD_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.MAIN_LOAD;
 const SCHEDULE_IMPORT_URL = "/api/tradsphere/v1/schedules/import/file?skipBlankLines=false";
 const HOME_SELECTED_ACCOUNT_STORAGE_KEY = "tradsphere.home.selectedAccount";
@@ -148,16 +148,11 @@ function App() {
   const { requestJson } = useApiRequest();
   const auth = useAuth();
   const [sidebarVisuallyExpanded, setSidebarVisuallyExpanded] = useState<boolean>(() => !readSidebarCollapsedState());
-  const [accountSelections, setAccountSelections] = useState<AccountSelection[]>([]);
   const [selectedAccountCode, setSelectedAccountCode] = usePersistentState<string>(
     HOME_SELECTED_ACCOUNT_STORAGE_KEY,
     "",
     { storage: "session", validate: (value: unknown): value is string => typeof value === "string" },
   );
-  const [isLoadingSelections, setIsLoadingSelections] = useState(true);
-  const [isRefreshingSelections, setIsRefreshingSelections] = useState(false);
-  const [selectionsError, setSelectionsError] = useState<string | null>(null);
-  const [selectionsCacheStatus, setSelectionsCacheStatus] = useState<CacheStatus | null>(null);
 
   const [isLoadingAccount, setIsLoadingAccount] = useState(false);
   const [isRefreshingAccount, setIsRefreshingAccount] = useState(false);
@@ -212,10 +207,18 @@ function App() {
     }
     return hasAppEditAccess(auth.accessProfile, "tradsphere");
   }, [auth.accessProfile]);
-
-  useEffect(() => {
-    void fetchSelections("stale-while-revalidate");
-  }, []);
+  const {
+    accountSelections,
+    isLoadingSelections,
+    isRefreshingSelections,
+    selectionsError,
+    selectionsCacheStatus,
+    loadSelections,
+  } = useTradsphereAccountSelections({
+    requestJson,
+    requestHeaders,
+    loadErrorMessage: "Unable to load account selections.",
+  });
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -312,61 +315,10 @@ function App() {
     resetLoadedDashboardData();
   }
 
-  async function fetchSelections(policy: CachePolicy) {
-    const cacheSnapshot = readBrowserCacheSnapshot<AccountSelection[]>(SELECTIONS_CACHE_KEY);
-    const cachedSelections = normalizeSelectionsResponse(cacheSnapshot?.data);
-    const hasCachedSelections = cachedSelections.length > 0;
-    const shouldUseCache = policy !== "network-only" && hasCachedSelections;
-    const shouldFetchFromNetwork = shouldFetchNetwork(policy, cacheSnapshot);
-
-    if (shouldUseCache) {
-      applySelections(cachedSelections);
-      setSelectionsCacheStatus({
-        source: "cache",
-        fetchedAt: cacheSnapshot?.fetchedAt ?? Date.now(),
-      });
-    }
-
-    if (!shouldFetchFromNetwork) {
-      setIsLoadingSelections(false);
-      setIsRefreshingSelections(false);
-      return;
-    }
-
-    setIsLoadingSelections(!shouldUseCache);
-    setIsRefreshingSelections(shouldUseCache);
-    setSelectionsError(null);
-
-    try {
-      const payload = await requestJson("/api/tradsphere/v1/ui/main/selections", {
-        headers: requestHeaders,
-      });
-      const selections = normalizeSelectionsResponse(payload);
-      writeBrowserCache(SELECTIONS_CACHE_KEY, selections, SELECTIONS_CACHE_TTL_MS, { source: "network" });
-      applySelections(selections);
-      setSelectionsCacheStatus({
-        source: "network",
-        fetchedAt: Date.now(),
-      });
-    } catch (error) {
-      if (!shouldUseCache) {
-        setSelectionsError(getErrorMessage(error, "Unable to load account selections."));
-        setAccountSelections([]);
-        setSelectedAccountCode("");
-        setHasLoadedDashboard(false);
-        resetLoadedDashboardData();
-      } else {
-        setSelectionsError(null);
-      }
-    } finally {
-      setIsLoadingSelections(false);
-      setIsRefreshingSelections(false);
-    }
-  }
-
-  function applySelections(selections: AccountSelection[]) {
-    setAccountSelections(selections);
+  function applySelections(selections: typeof accountSelections) {
     if (!selections.length) {
+      setHasLoadedDashboard(false);
+      resetLoadedDashboardData();
       setSelectedAccountCode("");
       return;
     }
@@ -386,6 +338,13 @@ function App() {
     setHasLoadedDashboard(false);
     resetLoadedDashboardData();
   }
+
+  useEffect(() => {
+    if (isLoadingSelections) {
+      return;
+    }
+    applySelections(accountSelections);
+  }, [accountSelections, isLoadingSelections, selectedAccountCode]);
 
   useEffect(() => {
     if (isLoadingSelections || hasAttemptedDashboardRestoreRef.current) {
@@ -757,8 +716,8 @@ function App() {
         },
       });
 
-      removeBrowserCacheByPrefix(SELECTIONS_CACHE_KEY);
-      await fetchSelections("network-only");
+      removeBrowserCacheByPrefix(TRADSPHERE_SELECTIONS_CACHE_KEY);
+      await loadSelections("network-only");
       handleAccountChange(accountCode);
       setIsCreateAccountModalOpen(false);
       setIsCreateAccountUnsavedDialogOpen(false);
@@ -1151,12 +1110,7 @@ function App() {
       />
 
       {isPageBusy ? (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-slate-950/25 backdrop-blur-[1.5px]">
-          <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-medium text-slate-700 shadow-soft">
-            <Loader2 className="size-4 animate-spin text-blue-600" />
-            <span>{pageBusyMessage}</span>
-          </div>
-        </div>
+        <PageLoadingOverlay message={pageBusyMessage} />
       ) : null}
     </div>
   );
@@ -1164,13 +1118,6 @@ function App() {
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
-}
-
-function unwrapData(payload: unknown): unknown {
-  if (isRecord(payload) && "data" in payload) {
-    return payload.data;
-  }
-  return payload;
 }
 
 function asString(value: unknown): string {
@@ -1192,42 +1139,6 @@ function asNumber(value: unknown): number | null {
     return Number.isFinite(parsed) ? parsed : null;
   }
   return null;
-}
-
-function buildLabel(code: string, name: string): string {
-  if (code && name) {
-    return `${code} - ${name}`;
-  }
-  return code || name;
-}
-
-function normalizeSelectionsResponse(payload: unknown): AccountSelection[] {
-  const data = unwrapData(payload);
-  if (!Array.isArray(data)) {
-    return [];
-  }
-
-  const output: AccountSelection[] = [];
-  const seen = new Set<string>();
-
-  for (const item of data) {
-    if (!isRecord(item)) {
-      continue;
-    }
-
-    const accountCode = asString(item.code ?? item.accountCode ?? item.value).toUpperCase();
-    const name = asString(item.name);
-    const label = asString(item.label) || buildLabel(accountCode, name);
-
-    if (!accountCode || !label || seen.has(accountCode)) {
-      continue;
-    }
-
-    seen.add(accountCode);
-    output.push({ accountCode, label, name: name || undefined });
-  }
-
-  return output;
 }
 
 function normalizeMainLoadResponse(payload: unknown): MainLoadResponse | null {

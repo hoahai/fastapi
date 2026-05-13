@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, Loader2 } from "lucide-react";
+import { AlertCircle } from "lucide-react";
 
 import { EstimateNumberResults } from "@/components/estnums/EstimateNumberResults";
 import {
@@ -21,21 +21,19 @@ import { CacheStatusChip } from "@/components/ui/cache-status-chip";
 import { useToast } from "@/components/ui/toast";
 import { useApiRequest } from "@/hooks/useApiRequest";
 import { usePersistentState } from "@/hooks/usePersistentState";
+import { useTradsphereAccountSelections } from "@/hooks/useTradsphereAccountSelections";
 import {
   listBrowserCacheSnapshotsByPrefix,
   readBrowserCacheSnapshot,
   removeBrowserCacheByPrefix,
   writeBrowserCache,
 } from "@/lib/browserCache";
-import {
-  TRADSPHERE_CACHE_TTL_MS,
-  shouldFetchNetwork,
-  type CachePolicy,
-} from "@shared/cache";
+import { type CachePolicy } from "@shared/cache";
 import { buildAuthHeaders as buildSharedAuthHeaders } from "@shared/api/authHeaders";
 import { useAuth } from "@shared/auth/useAuth";
 import { shouldProtectTradsphereFrontend } from "@shared/auth/guards";
 import { hasAppEditAccess } from "@shared/auth/permissions";
+import { PageLoadingOverlay } from "@shared/components/status/LoadingOverlay";
 import { hasAtLeastOneSearchCriterion, shouldFetchSubmittedSearchNetwork } from "@shared/search";
 
 const SEARCH_LIMIT = 50;
@@ -44,8 +42,6 @@ const SEARCH_TIMEZONE = "America/Chicago";
 const ESTNUMS_PAGE_CACHE_VERSION = "v4";
 const ESTNUMS_SEARCH_CACHE_COLLECTION_PREFIX = "estnums:form-search:";
 const ESTNUMS_SEARCH_CACHE_COLLECTION_LIMIT = 40;
-const SELECTIONS_CACHE_KEY = "tradsphere:main:selections:v2";
-const SELECTIONS_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.SELECTIONS;
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspace.sidebar.collapsed";
 const LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY = "tradsphere:ui:sidebarCollapsed:v1";
 const SIDEBAR_COLLAPSED_EVENT = "workspace-sidebar-collapsed-change";
@@ -363,42 +359,6 @@ function parseAccountDirectory(payload: unknown): AccountDirectoryItem[] {
   }
 
   return output.sort((a, b) => a.accountCode.localeCompare(b.accountCode));
-}
-
-function buildSelectionLabel(code: string, name: string): string {
-  if (code && name) {
-    return `${code} - ${name}`;
-  }
-  return code || name;
-}
-
-function normalizeSelectionsResponse(payload: unknown): AccountSelection[] {
-  const data = unwrapData(payload);
-  if (!Array.isArray(data)) {
-    return [];
-  }
-
-  const output: AccountSelection[] = [];
-  const seen = new Set<string>();
-
-  for (const item of data) {
-    if (!isRecord(item)) {
-      continue;
-    }
-
-    const accountCode = asString(item.code ?? item.accountCode ?? item.value).toUpperCase();
-    const name = asString(item.name);
-    const label = asString(item.label) || buildSelectionLabel(accountCode, name);
-
-    if (!accountCode || !label || seen.has(accountCode)) {
-      continue;
-    }
-
-    seen.add(accountCode);
-    output.push({ accountCode, label, name: name || undefined });
-  }
-
-  return output;
 }
 
 function accountDirectoryFromSelections(selections: AccountSelection[]): AccountDirectoryItem[] {
@@ -1363,6 +1323,10 @@ export default function EstimateNumbersPage() {
     () => buildSharedAuthHeaders(auth.session, auth.tenantSlug, false),
     [auth.session, auth.tenantSlug],
   );
+  const accountSelectionsRequestOptions = useMemo(
+    () => ({ errorToast: false as const }),
+    [],
+  );
   const canEditTradsphere = useMemo(() => {
     if (!shouldProtectTradsphereFrontend()) {
       return true;
@@ -1370,8 +1334,8 @@ export default function EstimateNumbersPage() {
     return hasAppEditAccess(auth.accessProfile, "tradsphere");
   }, [auth.accessProfile]);
 
-  const [accountDirectory, setAccountDirectory] = useState<AccountDirectoryItem[]>([]);
-  const [isLoadingAccountSelections, setIsLoadingAccountSelections] = useState(true);
+  const [billingDirectory, setBillingDirectory] = useState<AccountDirectoryItem[]>([]);
+  const [isLoadingBillingDirectory, setIsLoadingBillingDirectory] = useState(true);
   const [sidebarVisuallyExpanded, setSidebarVisuallyExpanded] = useState<boolean>(() => !readSidebarCollapsedState());
 
   const [draft, setDraft] = usePersistentState<EstimateNumberSearchFormValues>(
@@ -1409,6 +1373,26 @@ export default function EstimateNumbersPage() {
   const pageRef = useRef<EstimateSearchPage | null>(null);
   const requestTokenRef = useRef(0);
   const inFlightRef = useRef<Record<string, Promise<EstimateSearchPage>>>({});
+  const hasSelectionDirectoryRef = useRef(false);
+  const {
+    accountSelections,
+    isLoadingSelections,
+    selectionsError,
+  } = useTradsphereAccountSelections({
+    requestJson,
+    requestHeaders,
+    loadErrorMessage: "Unable to load TradSphere accounts.",
+    requestOptions: accountSelectionsRequestOptions,
+  });
+  const selectionBackedDirectory = useMemo(
+    () => accountDirectoryFromSelections(accountSelections),
+    [accountSelections],
+  );
+  const accountDirectory = useMemo(
+    () => mergeDirectoryWithBillingTypes(selectionBackedDirectory, billingDirectory),
+    [billingDirectory, selectionBackedDirectory],
+  );
+  const isLoadingAccountSelections = isLoadingSelections || isLoadingBillingDirectory;
 
   const accountDirectoryByCode = useMemo(() => {
     return accountDirectory.reduce<Record<string, AccountDirectoryItem>>((map, item) => {
@@ -1499,44 +1483,24 @@ export default function EstimateNumbersPage() {
   }, []);
 
   useEffect(() => {
+    hasSelectionDirectoryRef.current = selectionBackedDirectory.length > 0;
+  }, [selectionBackedDirectory]);
+
+  useEffect(() => {
+    if (!selectionsError || hasSelectionDirectoryRef.current) {
+      return;
+    }
+    toast.error("Account load failed", selectionsError);
+  }, [selectionsError, toast]);
+
+  useEffect(() => {
     let cancelled = false;
 
-    async function loadAccounts() {
-      let selectionBackedDirectory: AccountDirectoryItem[] = [];
+    async function loadAccountDirectoryMetadata() {
       if (!cancelled) {
-        setIsLoadingAccountSelections(true);
+        setIsLoadingBillingDirectory(true);
       }
       try {
-        const selectionCacheSnapshot = readBrowserCacheSnapshot<AccountSelection[]>(SELECTIONS_CACHE_KEY);
-        const cachedSelections = normalizeSelectionsResponse(selectionCacheSnapshot?.data);
-        const hasCachedSelections = cachedSelections.length > 0;
-        if (hasCachedSelections) {
-          selectionBackedDirectory = accountDirectoryFromSelections(cachedSelections);
-          if (!cancelled) {
-            setAccountDirectory(selectionBackedDirectory);
-          }
-        }
-
-        const shouldFetchSelectionsFromNetwork = shouldFetchNetwork(
-          "stale-while-revalidate",
-          selectionCacheSnapshot,
-        );
-        if (shouldFetchSelectionsFromNetwork || !hasCachedSelections) {
-          const selectionPayload = await requestJson("/api/tradsphere/v1/ui/main/selections", {
-            headers: requestHeaders,
-            errorToast: false,
-          });
-          const selections = normalizeSelectionsResponse(selectionPayload);
-          writeBrowserCache(SELECTIONS_CACHE_KEY, selections, SELECTIONS_CACHE_TTL_MS, {
-            source: "network",
-            fetchedAt: Date.now(),
-          });
-          selectionBackedDirectory = accountDirectoryFromSelections(selections);
-          if (!cancelled) {
-            setAccountDirectory(selectionBackedDirectory);
-          }
-        }
-
         const accountPayload = await requestJson("/api/tradsphere/v1/accounts?active=false", {
           headers: requestHeaders,
           errorToast: false,
@@ -1544,25 +1508,22 @@ export default function EstimateNumbersPage() {
         if (cancelled) {
           return;
         }
-
-        const billingDirectory = parseAccountDirectory(accountPayload);
-        const merged = mergeDirectoryWithBillingTypes(selectionBackedDirectory, billingDirectory);
-        setAccountDirectory(merged);
+        setBillingDirectory(parseAccountDirectory(accountPayload));
       } catch (loadError) {
         if (cancelled) {
           return;
         }
-        if (!selectionBackedDirectory.length) {
+        if (!hasSelectionDirectoryRef.current) {
           toast.error("Account load failed", getErrorMessage(loadError, "Unable to load TradSphere accounts."));
         }
       } finally {
         if (!cancelled) {
-          setIsLoadingAccountSelections(false);
+          setIsLoadingBillingDirectory(false);
         }
       }
     }
 
-    void loadAccounts();
+    void loadAccountDirectoryMetadata();
 
     return () => {
       cancelled = true;
@@ -2046,12 +2007,7 @@ export default function EstimateNumbersPage() {
       />
 
       {isPageBusy ? (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-slate-950/25 backdrop-blur-[1.5px]">
-          <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-medium text-slate-700 shadow-soft">
-            <Loader2 className="size-4 animate-spin text-blue-600" />
-            <span>{pageBusyMessage}</span>
-          </div>
-        </div>
+        <PageLoadingOverlay message={pageBusyMessage} />
       ) : null}
     </div>
   );
