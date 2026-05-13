@@ -1227,7 +1227,7 @@ def get_master_budget_control_net_spend_data(
         f"AND b.{budget_year_expr} = %s"
         ") nb "
         f"ON nb.serviceId = s.{service_id_expr} "
-        f"WHERE d.{department_code_expr} IN ('DIGM', 'SOCM', 'SEO')"
+        f"WHERE d.{department_code_expr} IN ('DIGM', 'SOCM', 'PKG')"
         f"{service_active_where} "
         "ORDER BY accountCode ASC, departmentName ASC, serviceName ASC"
     )
