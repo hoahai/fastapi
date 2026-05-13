@@ -25,7 +25,7 @@ class InvitationEndpointTests(unittest.TestCase):
             "expires_at": expires_at,
             "tenant_id": "tenant-1",
             "app_id": "app-1",
-            "role": "tradsphere.viewer",
+            "role": "viewer",
             "email": "new.user@example.com",
         }
 
@@ -40,6 +40,9 @@ class InvitationEndpointTests(unittest.TestCase):
         ) as mock_activate, patch(
             "apps.auth.api.v1.endpoints.invitations.upsert_tenant_app_role"
         ) as mock_role, patch(
+            "apps.auth.api.v1.endpoints.invitations.list_invitation_assignments",
+            return_value=[],
+        ) as mock_assignments, patch(
             "apps.auth.api.v1.endpoints.invitations.mark_invitation_accepted"
         ) as mock_mark, patch(
             "apps.auth.api.v1.endpoints.invitations.permission_cache.invalidate"
@@ -57,10 +60,11 @@ class InvitationEndpointTests(unittest.TestCase):
         )
         mock_activate.assert_called_once()
         mock_role.assert_called_once()
+        mock_assignments.assert_called_once()
         mock_mark.assert_called_once()
         mock_invalidate.assert_called_once_with(user_id="user-1")
         self.assertEqual(response["status"], "accepted")
-        self.assertEqual(response["role"], "tradsphere.viewer")
+        self.assertEqual(response["role"], "viewer")
 
 
 if __name__ == "__main__":

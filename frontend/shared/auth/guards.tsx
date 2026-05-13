@@ -1,9 +1,17 @@
 import type { ReactNode } from "react";
+import { Loader2 } from "lucide-react";
 
 import { useAuth } from "./useAuth";
 
-function AccessLoadingFallback() {
-  return <div className="p-6 text-sm text-slate-600">Loading access...</div>;
+export function AuthLoadingFallback({ message = "Loading access..." }: { message?: string }) {
+  return (
+    <div className="fixed inset-0 z-30 flex items-center justify-center bg-slate-950/25 backdrop-blur-[1.5px]">
+      <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-medium text-slate-700 shadow-soft">
+        <Loader2 className="size-4 animate-spin text-blue-600" />
+        <span>{message}</span>
+      </div>
+    </div>
+  );
 }
 
 export function shouldProtectTradsphereFrontend(): boolean {
@@ -17,7 +25,7 @@ export function RequireAuth({ children, fallback }: { children: ReactNode; fallb
     return <>{children}</>;
   }
   if (auth.status === "loading") {
-    return <div className="p-6 text-sm text-slate-600">Loading session...</div>;
+    return <AuthLoadingFallback message="Loading session..." />;
   }
   if (auth.status !== "authenticated" || !auth.user) {
     return <>{fallback}</>;
@@ -31,13 +39,13 @@ export function RequireTenantAccess({ children, fallback }: { children: ReactNod
     return <>{children}</>;
   }
   if (auth.status === "loading") {
-    return <AccessLoadingFallback />;
+    return <AuthLoadingFallback />;
   }
   if (auth.status !== "authenticated") {
     return <>{fallback}</>;
   }
   if (auth.accessLoading && !auth.accessProfile) {
-    return <AccessLoadingFallback />;
+    return <AuthLoadingFallback />;
   }
   if (!auth.tenantSlug || !auth.accessProfile) {
     return <>{fallback}</>;
@@ -59,13 +67,13 @@ export function RequirePermission({
     return <>{children}</>;
   }
   if (auth.status === "loading") {
-    return <AccessLoadingFallback />;
+    return <AuthLoadingFallback />;
   }
   if (auth.status !== "authenticated") {
     return <>{fallback}</>;
   }
   if (auth.accessLoading && !auth.accessProfile) {
-    return <AccessLoadingFallback />;
+    return <AuthLoadingFallback />;
   }
   if (!auth.accessProfile) {
     return <>{fallback}</>;

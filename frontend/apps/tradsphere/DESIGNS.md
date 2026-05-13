@@ -61,6 +61,12 @@ This app inherits global standards from `frontend/DESIGNS.md`.
   - cached results + refresh failure => keep cached results and show non-blocking cached-data message
   - no cache + refresh failure => show normal error state
 - When cache-backed page content is visible, refresh should stay non-blocking; page-level blocking overlays are for no-cache loads only.
+- Admin page refresh behavior:
+  - initial load may show loading state
+  - refreshing existing admin data should show subtle in-section overlay without blanking page layout
+  - keep floating cache chip refresh affordance
+- Admin role grouping display order:
+  - Super Admin, Admin, Editor, Viewer, Other/Unknown
 
 ## Estimate Numbers Page
 - Add and maintain a dedicated `/tradsphere/estnums` page focused on fast search.

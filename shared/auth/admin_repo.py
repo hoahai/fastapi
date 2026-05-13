@@ -4,7 +4,8 @@ from collections.abc import Iterable
 
 from shared.auth.providers import get_auth_provider
 from shared.auth.profile_repo import select_profile_for_user
-from shared.auth.roles import ROLE_ORDER
+from shared.auth.roles import ROLE_ADMIN, ROLE_ORDER, ROLE_SUPER_ADMIN, normalize_role_key
+from shared.auth.supabase_client import SupabaseClientError
 
 
 def _provider():
@@ -17,11 +18,16 @@ def _as_non_empty_text(value: object) -> str | None:
 
 
 def _role_rank(role_key: str | None) -> int:
-    normalized = str(role_key or "").strip()
+    normalized = normalize_role_key(role_key)
     try:
         return ROLE_ORDER.index(normalized)
     except ValueError:
         return len(ROLE_ORDER) + 1
+
+
+def _is_missing_table_error(exc: Exception, table_name: str) -> bool:
+    detail = str(exc).lower()
+    return table_name.lower() in detail and ("does not exist" in detail or "not found" in detail)
 
 
 def _collect_table_rows(
@@ -108,7 +114,7 @@ def list_role_keys_from_store() -> list[str]:
         filters={},
         select="role",
     ):
-        role = str(row.get("role") or "").strip()
+        role = normalize_role_key(str(row.get("role") or "").strip())
         if role:
             roles.add(role)
     for row in _collect_table_rows(
@@ -116,10 +122,50 @@ def list_role_keys_from_store() -> list[str]:
         filters={},
         select="role",
     ):
-        role = str(row.get("role") or "").strip()
+        role = normalize_role_key(str(row.get("role") or "").strip())
         if role:
             roles.add(role)
+    try:
+        for row in _collect_table_rows(
+            table="user_global_roles",
+            filters={"active": "true"},
+            select="role",
+        ):
+            role = normalize_role_key(str(row.get("role") or "").strip())
+            if role:
+                roles.add(role)
+    except SupabaseClientError as exc:
+        if not _is_missing_table_error(exc, "user_global_roles"):
+            raise
     return sorted(roles)
+
+
+def list_active_global_roles_by_user(*, user_ids: set[str] | None = None) -> dict[str, list[str]]:
+    try:
+        rows = _collect_table_rows(
+            table="user_global_roles",
+            filters={"active": "true"},
+            select="id,user_id,role,active,created_at,updated_at",
+        )
+    except SupabaseClientError as exc:
+        if _is_missing_table_error(exc, "user_global_roles"):
+            return {}
+        raise
+
+    results: dict[str, list[str]] = {}
+    for row in rows:
+        user_id = str(row.get("user_id") or "").strip()
+        role = normalize_role_key(str(row.get("role") or "").strip())
+        if not user_id or not role:
+            continue
+        if user_ids and user_id not in user_ids:
+            continue
+        results.setdefault(user_id, [])
+        if role not in results[user_id]:
+            results[user_id].append(role)
+    for roles in results.values():
+        roles.sort(key=_role_rank)
+    return results
 
 
 def _tenant_rows_by_scope(*, scope_tenant_ids: set[str] | None) -> list[dict[str, object]]:
@@ -237,6 +283,8 @@ def list_users_with_access(
             primary_role_by_user[user_id] = item
 
     user_ids = sorted(set(memberships_by_user.keys()) | set(roles_by_user.keys()))
+    global_roles_by_user = list_active_global_roles_by_user(user_ids=set(user_ids))
+    user_ids = sorted(set(user_ids) | set(global_roles_by_user.keys()))
 
     results: list[dict[str, object]] = []
     for user_id in user_ids:
@@ -255,6 +303,10 @@ def list_users_with_access(
                 str(item.get("role") or "~").lower(),
             ),
         )
+        normalized_assignments = [
+            {**item, "role": normalize_role_key(str(item.get("role") or "").strip()) or item.get("role")}
+            for item in assignments
+        ]
 
         primary_membership = primary_membership_by_user.get(user_id)
         primary_assignment = primary_role_by_user.get(user_id)
@@ -264,11 +316,18 @@ def list_users_with_access(
             primary_assignment = assignments[0]
 
         top_role = None
-        if assignments:
+        if normalized_assignments:
             top_role = sorted(
-                [str(item.get("role") or "").strip() for item in assignments if str(item.get("role") or "").strip()],
+                [
+                    normalize_role_key(str(item.get("role") or "").strip())
+                    for item in normalized_assignments
+                    if normalize_role_key(str(item.get("role") or "").strip())
+                ],
                 key=_role_rank,
             )[0]
+        global_roles = global_roles_by_user.get(user_id, [])
+        if ROLE_SUPER_ADMIN in global_roles:
+            top_role = ROLE_SUPER_ADMIN
 
         created_at = None
         updated_at = None
@@ -288,12 +347,14 @@ def list_users_with_access(
                 "email": resolved_email,
                 "fullName": profile.get("full_name") if profile else None,
                 "status": (primary_membership or {}).get("status") or "pending",
-                "role": (primary_assignment or {}).get("role") or top_role,
+                "role": top_role or normalize_role_key(str((primary_assignment or {}).get("role") or "").strip()) or None,
                 "createdAt": created_at,
                 "updatedAt": updated_at,
                 "roleUpdatedAt": (primary_assignment or {}).get("updatedAt") or (primary_assignment or {}).get("createdAt"),
                 "tenantMemberships": memberships,
-                "appAssignments": assignments,
+                "appAssignments": normalized_assignments,
+                "globalRoles": global_roles,
+                "isSuperAdmin": ROLE_SUPER_ADMIN in global_roles,
             }
         )
 
@@ -374,6 +435,7 @@ def set_tenant_user_status(*, tenant_id: str, user_id: str, status: str) -> None
 
 def set_tenant_app_role(*, tenant_id: str, user_id: str, app_id: str, role: str) -> None:
     provider = _provider()
+    normalized_role = normalize_role_key(role)
     existing = provider.select_single(
         table="tenant_app_roles",
         filters={"tenant_id": tenant_id, "user_id": user_id, "app_id": app_id},
@@ -384,7 +446,7 @@ def set_tenant_app_role(*, tenant_id: str, user_id: str, app_id: str, role: str)
         provider.patch_rows(
             table="tenant_app_roles",
             filters={"id": str(existing.get("id") or "")},
-            patch={"role": role, "updated_at": provider.now_iso()},
+            patch={"role": normalized_role, "updated_at": provider.now_iso()},
         )
         return
 
@@ -394,7 +456,7 @@ def set_tenant_app_role(*, tenant_id: str, user_id: str, app_id: str, role: str)
             "tenant_id": tenant_id,
             "user_id": user_id,
             "app_id": app_id,
-            "role": role,
+            "role": normalized_role,
         },
     )
 
@@ -423,3 +485,31 @@ def unique_text_values(values: Iterable[object]) -> list[str]:
         seen.add(normalized)
         results.append(normalized)
     return results
+
+
+def is_user_super_admin(*, user_id: str) -> bool:
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        return False
+    roles_by_user = list_active_global_roles_by_user(user_ids={normalized_user_id})
+    return ROLE_SUPER_ADMIN in roles_by_user.get(normalized_user_id, [])
+
+
+def list_admin_assignment_scopes_for_user(*, user_id: str) -> set[tuple[str, str]]:
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        return set()
+    rows = _collect_table_rows(
+        table="tenant_app_roles",
+        filters={"user_id": normalized_user_id},
+        select="tenant_id,app_id,role",
+    )
+    scopes: set[tuple[str, str]] = set()
+    for row in rows:
+        tenant_id = str(row.get("tenant_id") or "").strip()
+        app_id = str(row.get("app_id") or "").strip()
+        role = normalize_role_key(str(row.get("role") or "").strip())
+        if not tenant_id or not app_id or role != ROLE_ADMIN:
+            continue
+        scopes.add((tenant_id, app_id))
+    return scopes

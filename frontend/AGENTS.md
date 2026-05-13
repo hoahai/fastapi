@@ -30,6 +30,10 @@
   - Keep auth copy invite-only and user-friendly; avoid raw technical error dumps.
   - Do not use browser-native `alert`/`confirm` for auth flows.
   - Frontend auth guards are UX helpers only; backend permission checks remain source of truth.
+  - Canonical role labels for auth/admin UX must be:
+    - `Super Admin` (global/workspace role, non-assignable from normal admin page)
+    - `Admin`, `Editor`, `Viewer` (tenant/app scoped)
+  - Do not label view-only role as `User`; use `Viewer`.
   - Permission-gated mutation rule (global): if the signed-in user lacks edit permission for an app, keep mutation forms read-only and disable create/add/save/delete/upload actions.
   - Shared auth pages live under `frontend/shared/auth/pages/` and are routed at `/auth/*`.
 - For shared shell sidebar behavior: persist manual collapse/expand preference, and keep hover/focus expansion temporary-only (no preference write).
@@ -66,6 +70,11 @@
     - timeline/date-window route by entity + date range
     - detail route by entity id
     - search route by submitted params
+- Admin Users page rule:
+  - initial load and refresh should use a single bundled route call: `GET /api/auth/v1/admin/users/load`
+  - do not issue separate initial requests for `/admin/tenants`, `/admin/apps`, `/admin/roles`, `/admin/invitations`, and `/admin/users`
+  - keep mutation routes separate (`create/revoke invite`, `update/disable user`) and reload bundled data once after mutation when local patching is insufficient
+  - avoid duplicate load effects/request loops on page mount
 - Default data-loading policy is `stale-while-revalidate`.
 - Search-submit revalidation rule:
   - on valid search submit, render matching cached results immediately when available

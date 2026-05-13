@@ -27,31 +27,32 @@ set name = excluded.name,
 
 -- 2) Role permission map (MVP app-level + feature-level)
 insert into role_permissions (role, permission) values
-  ('tradsphere.viewer', 'tradsphere.viewer'),
-  ('tradsphere.viewer', 'tradsphere.contacts.viewer'),
-  ('tradsphere.viewer', 'tradsphere.stations.viewer'),
-  ('tradsphere.viewer', 'tradsphere.estnums.viewer'),
-  ('tradsphere.viewer', 'tradsphere.schedules.viewer'),
-  ('tradsphere.editor', 'tradsphere.viewer'),
-  ('tradsphere.editor', 'tradsphere.editor'),
-  ('tradsphere.editor', 'tradsphere.contacts.viewer'),
-  ('tradsphere.editor', 'tradsphere.contacts.editor'),
-  ('tradsphere.editor', 'tradsphere.stations.viewer'),
-  ('tradsphere.editor', 'tradsphere.stations.editor'),
-  ('tradsphere.editor', 'tradsphere.estnums.viewer'),
-  ('tradsphere.editor', 'tradsphere.estnums.editor'),
-  ('tradsphere.editor', 'tradsphere.schedules.viewer'),
-  ('tradsphere.admin', 'tradsphere.viewer'),
-  ('tradsphere.admin', 'tradsphere.editor'),
-  ('tradsphere.admin', 'tradsphere.admin'),
-  ('tradsphere.admin', 'tradsphere.contacts.viewer'),
-  ('tradsphere.admin', 'tradsphere.contacts.editor'),
-  ('tradsphere.admin', 'tradsphere.stations.viewer'),
-  ('tradsphere.admin', 'tradsphere.stations.editor'),
-  ('tradsphere.admin', 'tradsphere.estnums.viewer'),
-  ('tradsphere.admin', 'tradsphere.estnums.editor'),
-  ('tradsphere.admin', 'tradsphere.schedules.viewer'),
-  ('tradsphere.admin', 'tradsphere.invites.admin')
+  ('viewer', 'tradsphere.viewer'),
+  ('viewer', 'tradsphere.contacts.viewer'),
+  ('viewer', 'tradsphere.stations.viewer'),
+  ('viewer', 'tradsphere.estnums.viewer'),
+  ('viewer', 'tradsphere.schedules.viewer'),
+  ('editor', 'tradsphere.viewer'),
+  ('editor', 'tradsphere.editor'),
+  ('editor', 'tradsphere.contacts.viewer'),
+  ('editor', 'tradsphere.contacts.editor'),
+  ('editor', 'tradsphere.stations.viewer'),
+  ('editor', 'tradsphere.stations.editor'),
+  ('editor', 'tradsphere.estnums.viewer'),
+  ('editor', 'tradsphere.estnums.editor'),
+  ('editor', 'tradsphere.schedules.viewer'),
+  ('admin', 'tradsphere.viewer'),
+  ('admin', 'tradsphere.editor'),
+  ('admin', 'tradsphere.admin'),
+  ('admin', 'tradsphere.contacts.viewer'),
+  ('admin', 'tradsphere.contacts.editor'),
+  ('admin', 'tradsphere.stations.viewer'),
+  ('admin', 'tradsphere.stations.editor'),
+  ('admin', 'tradsphere.estnums.viewer'),
+  ('admin', 'tradsphere.estnums.editor'),
+  ('admin', 'tradsphere.schedules.viewer'),
+  ('admin', 'tradsphere.invites.admin'),
+  ('super_admin', 'workspace.super_admin')
 on conflict (role, permission) do nothing;
 
 -- 3) Profile mirror for user (app convenience table)
@@ -73,9 +74,9 @@ set status = excluded.status,
 
 -- 5) App role assignment (set initial role here)
 -- Choose one role:
---   tradsphere.viewer | tradsphere.editor | tradsphere.admin
+--   viewer | editor | admin
 insert into tenant_app_roles (tenant_id, user_id, app_id, role)
-select t.id, '762fec4b-1da3-4ba7-80e2-dd21622b6e0d'::uuid, a.id, 'tradsphere.admin'
+select t.id, '762fec4b-1da3-4ba7-80e2-dd21622b6e0d'::uuid, a.id, 'admin'
 from tenants t
 join apps a on a.code = 'tradsphere'
 where t.slug = 'taaa'
@@ -83,5 +84,11 @@ on conflict (tenant_id, user_id, app_id) do update
 set role = excluded.role,
     updated_at = now();
 
-commit;
+-- 6) Optional global super admin assignment
+insert into user_global_roles (user_id, role, active)
+values ('762fec4b-1da3-4ba7-80e2-dd21622b6e0d'::uuid, 'super_admin', true)
+on conflict (user_id, role) do update
+set active = excluded.active,
+    updated_at = now();
 
+commit;

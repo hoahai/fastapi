@@ -27,7 +27,7 @@ class AuthorizeBearerTests(unittest.TestCase):
             tenant_slug="taaa",
             app_id="app-1",
             app_code="tradsphere",
-            role="tradsphere.viewer",
+            role="viewer",
             permissions=frozenset({"tradsphere.viewer"}),
         )
         request = self._request("Bearer token-123")

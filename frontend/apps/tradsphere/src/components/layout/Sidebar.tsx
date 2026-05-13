@@ -43,10 +43,12 @@ export function Sidebar({
   const isCompact = !visuallyExpanded;
   const isSignedIn = auth.status === "authenticated" && Boolean(auth.user);
   const protectionEnabled = shouldProtectTradsphereFrontend();
+  const permissions = new Set(auth.accessProfile?.permissions ?? []);
+  const hasSuperAdmin = permissions.has("workspace.super_admin");
   const canAccessTradsphere =
-    isSignedIn && (!protectionEnabled || Boolean(auth.accessProfile?.permissions?.includes("tradsphere.viewer")));
+    isSignedIn && (!protectionEnabled || hasSuperAdmin || permissions.has("tradsphere.viewer"));
   const hasAdminPermission =
-    isSignedIn && (!protectionEnabled || Boolean(auth.accessProfile?.permissions?.includes("tradsphere.admin")));
+    isSignedIn && (!protectionEnabled || hasSuperAdmin || permissions.has("tradsphere.admin"));
   const navItems = useMemo(
     () =>
       APP_NAV_ITEMS.map((item) =>

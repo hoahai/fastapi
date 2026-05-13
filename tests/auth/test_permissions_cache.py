@@ -12,13 +12,13 @@ class PermissionCacheTests(unittest.TestCase):
             tenant_slug="taaa",
             app_id="aid",
             app_code="tradsphere",
-            role="tradsphere.viewer",
+            role="viewer",
             permissions=frozenset({"tradsphere.viewer"}),
         )
         cache.set(user_id="u1", tenant_slug="taaa", app_code="tradsphere", value=profile)
         cached = cache.get(user_id="u1", tenant_slug="taaa", app_code="tradsphere")
         self.assertIsNotNone(cached)
-        self.assertEqual(cached.role, "tradsphere.viewer")
+        self.assertEqual(cached.role, "viewer")
 
     def test_invalidate(self):
         cache = PermissionCache()
@@ -27,7 +27,7 @@ class PermissionCacheTests(unittest.TestCase):
             tenant_slug="taaa",
             app_id="aid",
             app_code="tradsphere",
-            role="tradsphere.viewer",
+            role="viewer",
             permissions=frozenset({"tradsphere.viewer"}),
         )
         cache.set(user_id="u1", tenant_slug="taaa", app_code="tradsphere", value=profile)

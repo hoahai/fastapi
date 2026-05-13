@@ -1,4 +1,4 @@
-import { Copy, Loader2, Plus, ShieldCheck, Trash2, UserMinus, X } from "lucide-react";
+import { ChevronDown, Copy, Filter, Loader2, Plus, ShieldCheck, Trash2, UserMinus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ActionIconButton } from "@/components/dashboard/ActionIconButton";
@@ -75,6 +75,8 @@ type AdminUser = {
   roleUpdatedAt: string | null;
   tenantMemberships: TenantMembership[];
   appAssignments: AppAssignment[];
+  globalRoles?: string[];
+  isSuperAdmin?: boolean;
 };
 
 type AdminInvitation = {
@@ -92,6 +94,16 @@ type AdminInvitation = {
   createdAt: string | null;
   acceptedAt: string | null;
   inviteUrl: string | null;
+  assignmentCount?: number;
+  assignments?: Array<{
+    tenantId: string;
+    tenantSlug: string | null;
+    tenantName: string | null;
+    appId: string;
+    appCode: string | null;
+    appName: string | null;
+    role: string | null;
+  }>;
 };
 
 type DisableTarget = {
@@ -106,9 +118,15 @@ type EditAssignmentRow = {
   role: string;
 };
 
+type InviteAssignmentRow = {
+  id: string;
+  tenantId: string;
+  appId: string;
+  role: string;
+};
+
 type EditDraft = {
   fullName: string;
-  tenantIds: string[];
   assignments: EditAssignmentRow[];
 };
 
@@ -126,20 +144,37 @@ type CacheStatus = {
   fetchedAt: number;
 };
 
+type AdminUsersLoadResponse = {
+  users?: AdminUser[];
+  invitations?: AdminInvitation[];
+  roles?: RoleItem[];
+  tenants?: TenantItem[];
+  apps?: AppItem[];
+  scope?: { isSuperAdmin?: boolean } | null;
+};
+
 const ROLE_GROUP_ORDER = [
-  "workspace.super_admin",
-  "tradsphere.admin",
-  "tradsphere.editor",
-  "tradsphere.viewer",
+  "super_admin",
+  "admin",
+  "editor",
+  "viewer",
   "other",
 ] as const;
 
 const ROLE_GROUP_LABEL: Record<(typeof ROLE_GROUP_ORDER)[number], string> = {
-  "workspace.super_admin": "Super Admin",
-  "tradsphere.admin": "Admin",
-  "tradsphere.editor": "Editor",
-  "tradsphere.viewer": "Viewer",
+  super_admin: "Super Admin",
+  admin: "Admin",
+  editor: "Editor",
+  viewer: "Viewer",
   other: "Other / Unknown",
+};
+
+const ROLE_GROUP_DESCRIPTIONS: Record<(typeof ROLE_GROUP_ORDER)[number], string> = {
+  super_admin: "Global workspace-level control",
+  admin: "Can manage members and app-level settings",
+  editor: "Can edit operational records",
+  viewer: "Read-only access",
+  other: "Legacy or unmapped role values",
 };
 
 const ADMIN_PAGE_CACHE_KEY = "admin-users:page:v1";
@@ -148,6 +183,8 @@ const EDIT_MODAL_CLEAR_DELAY_MS = 360;
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspace.sidebar.collapsed";
 const LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY = "tradsphere:ui:sidebarCollapsed:v1";
 const SIDEBAR_COLLAPSED_EVENT = "workspace-sidebar-collapsed-change";
+
+let adminUsersLoadInFlight: Promise<AdminUsersLoadResponse> | null = null;
 
 function unwrap<T>(payload: unknown, fallback: T): T {
   if (payload && typeof payload === "object" && "data" in (payload as Record<string, unknown>)) {
@@ -217,13 +254,6 @@ function readSidebarCollapsedState(): boolean {
   }
 }
 
-const TENANT_CHIP_STYLES = [
-  "border-indigo-200 bg-indigo-50 text-indigo-700",
-  "border-emerald-200 bg-emerald-50 text-emerald-700",
-  "border-amber-200 bg-amber-50 text-amber-700",
-  "border-cyan-200 bg-cyan-50 text-cyan-700",
-] as const;
-
 const APP_CHIP_STYLES = [
   "border-blue-200 bg-blue-50 text-blue-700",
   "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700",
@@ -235,12 +265,30 @@ function assignmentIdentity(item: { tenantId: string; appId: string; role: strin
   return `${item.tenantId}::${item.appId}::${item.role}`;
 }
 
+function normalizeRoleKey(roleKey: string | null | undefined): string {
+  const normalized = String(roleKey || "").trim();
+  if (!normalized) {
+    return "";
+  }
+  if (normalized === "workspace.super_admin") {
+    return "super_admin";
+  }
+  if (normalized === "tradsphere.admin") {
+    return "admin";
+  }
+  if (normalized === "tradsphere.editor") {
+    return "editor";
+  }
+  if (normalized === "tradsphere.viewer" || normalized === "user") {
+    return "viewer";
+  }
+  return normalized;
+}
+
 function normalizeDraftComparable(draft: EditDraft): {
   fullName: string;
-  tenantIds: string[];
   assignments: string[];
 } {
-  const tenantIds = unique(draft.tenantIds).sort((a, b) => a.localeCompare(b));
   const assignments = draft.assignments
     .map((item) => ({
       tenantId: String(item.tenantId || "").trim(),
@@ -252,7 +300,6 @@ function normalizeDraftComparable(draft: EditDraft): {
     .sort((a, b) => a.localeCompare(b));
   return {
     fullName: draft.fullName.trim(),
-    tenantIds,
     assignments,
   };
 }
@@ -263,6 +310,36 @@ function statusChipClass(status: AdminUser["status"]): string {
   }
   if (status === "pending") {
     return "border-amber-200 bg-amber-50 text-amber-700";
+  }
+  return "border-slate-300 bg-slate-100 text-slate-700";
+}
+
+function roleChipClass(roleKey: string | null): string {
+  const normalized = normalizeRoleKey(roleKey);
+  if (normalized === "super_admin") {
+    return "border-fuchsia-200 bg-fuchsia-50 text-fuchsia-700";
+  }
+  if (normalized === "admin") {
+    return "border-blue-200 bg-blue-50 text-blue-700";
+  }
+  if (normalized === "editor") {
+    return "border-amber-200 bg-amber-50 text-amber-700";
+  }
+  if (normalized === "viewer") {
+    return "border-slate-300 bg-slate-100 text-slate-700";
+  }
+  return "border-violet-200 bg-violet-50 text-violet-700";
+}
+
+function invitationStatusChipClass(status: AdminInvitation["status"]): string {
+  if (status === "pending") {
+    return "border-amber-200 bg-amber-50 text-amber-700";
+  }
+  if (status === "accepted") {
+    return "border-emerald-200 bg-emerald-50 text-emerald-700";
+  }
+  if (status === "revoked") {
+    return "border-rose-200 bg-rose-50 text-rose-700";
   }
   return "border-slate-300 bg-slate-100 text-slate-700";
 }
@@ -312,76 +389,83 @@ function DisableMemberIconButton({
 }
 
 function roleRank(roleKey: string | null): number {
-  const normalized = String(roleKey || "").trim();
-  if (normalized === "workspace.super_admin") {
+  const normalized = normalizeRoleKey(roleKey);
+  if (normalized === "super_admin") {
     return 0;
   }
-  if (normalized === "tradsphere.admin") {
+  if (normalized === "admin") {
     return 1;
   }
-  if (normalized === "tradsphere.editor") {
+  if (normalized === "editor") {
     return 2;
   }
-  if (normalized === "tradsphere.viewer") {
+  if (normalized === "viewer") {
     return 3;
   }
   return 4;
 }
 
 function roleGroupKey(roleKey: string | null): (typeof ROLE_GROUP_ORDER)[number] {
-  const normalized = String(roleKey || "").trim();
-  if (normalized === "workspace.super_admin") {
-    return "workspace.super_admin";
+  const normalized = normalizeRoleKey(roleKey);
+  if (normalized === "super_admin") {
+    return "super_admin";
   }
-  if (normalized === "tradsphere.admin") {
-    return "tradsphere.admin";
+  if (normalized === "admin") {
+    return "admin";
   }
-  if (normalized === "tradsphere.editor") {
-    return "tradsphere.editor";
+  if (normalized === "editor") {
+    return "editor";
   }
-  if (normalized === "tradsphere.viewer") {
-    return "tradsphere.viewer";
+  if (normalized === "viewer") {
+    return "viewer";
   }
   return "other";
 }
 
 function displayRole(roleKey: string | null, roleLabels: Record<string, string>): string {
-  const normalized = String(roleKey || "").trim();
+  const normalized = normalizeRoleKey(roleKey);
   if (!normalized) {
     return "Unknown";
   }
-  return roleLabels[normalized] || normalized;
+  return roleLabels[normalized]
+    || roleLabels[String(roleKey || "").trim()]
+    || (normalized === "super_admin"
+      ? "Super Admin"
+      : normalized === "admin"
+        ? "Admin"
+        : normalized === "editor"
+          ? "Editor"
+          : normalized === "viewer"
+            ? "Viewer"
+            : normalized);
 }
 
 function summarizeUserRole(user: AdminUser): string | null {
+  if (user.isSuperAdmin || (Array.isArray(user.globalRoles) && user.globalRoles.some((role) => normalizeRoleKey(role) === "super_admin"))) {
+    return "super_admin";
+  }
   const roles = unique(
     user.appAssignments
-      .map((item) => String(item.role || "").trim())
+      .map((item) => normalizeRoleKey(String(item.role || "").trim()))
       .filter((item) => Boolean(item)),
   );
   if (roles.length === 0) {
-    return user.role;
+    return normalizeRoleKey(user.role);
   }
-  return roles.sort((a, b) => roleRank(a) - roleRank(b))[0] || user.role;
+  return roles.sort((a, b) => roleRank(a) - roleRank(b))[0] || normalizeRoleKey(user.role);
 }
 
 function buildInitialDraft(user: AdminUser): EditDraft {
-  const tenantIds = unique(
-    user.tenantMemberships
-      .filter((item) => item.status !== "disabled")
-      .map((item) => item.tenantId),
-  );
   const assignments = user.appAssignments
     .filter((item) => item.role && item.tenantId && item.appId)
     .map((item, index) => ({
       id: `${user.userId}-${index}-${item.tenantId}-${item.appId}`,
       tenantId: item.tenantId,
       appId: item.appId,
-      role: String(item.role || "").trim(),
+      role: normalizeRoleKey(String(item.role || "").trim()),
     }));
   return {
     fullName: user.fullName || "",
-    tenantIds,
     assignments,
   };
 }
@@ -439,9 +523,9 @@ function normalizeRoles(items: RoleItem[]): RoleItem[] {
     return items;
   }
   return [
-    { key: "tradsphere.viewer", label: "Viewer", assignable: true },
-    { key: "tradsphere.editor", label: "Editor", assignable: true },
-    { key: "tradsphere.admin", label: "Admin", assignable: true },
+    { key: "viewer", label: "Viewer", assignable: true },
+    { key: "editor", label: "Editor", assignable: true },
+    { key: "admin", label: "Admin", assignable: true },
   ];
 }
 
@@ -467,9 +551,12 @@ function buildAppDropdownOptions(apps: AppItem[]): Array<{ value: string; label:
 
 export default function AdminUsersPage() {
   const { requestJson } = useApiRequest();
+  const loadDataRef = useRef<(showRefreshing: boolean) => Promise<void>>(async () => undefined);
+  const loadInvocationRef = useRef(0);
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [backgroundRefreshing, setBackgroundRefreshing] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null);
 
@@ -481,11 +568,15 @@ export default function AdminUsersPage() {
   const [scope, setScope] = useState<{ isSuperAdmin?: boolean } | null>(null);
 
   const [inviteEmail, setInviteEmail] = useState("");
-  const [inviteRole, setInviteRole] = useState("tradsphere.viewer");
-  const [inviteTenantIds, setInviteTenantIds] = useState<string[]>([]);
-  const [inviteAppIds, setInviteAppIds] = useState<string[]>([]);
+  const [inviteAssignments, setInviteAssignments] = useState<InviteAssignmentRow[]>([]);
   const [inviteExpirationHours, setInviteExpirationHours] = useState("72");
   const [creatingInvite, setCreatingInvite] = useState(false);
+  const [inviteAssignmentsTouched, setInviteAssignmentsTouched] = useState(false);
+  const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
+  const [memberSearch, setMemberSearch] = useState("");
+  const [memberRoleFilter, setMemberRoleFilter] = useState<string>("all");
+  const [memberStatusFilter, setMemberStatusFilter] = useState<string>("all");
+  const [memberTenantFilter, setMemberTenantFilter] = useState<string>("all");
 
   const [editingUser, setEditingUser] = useState<AdminUser | null>(null);
   const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
@@ -521,26 +612,47 @@ export default function AdminUsersPage() {
     setRoles(nextRoles);
     setScope(payload.scope ?? null);
 
-    if (nextTenants.length && inviteTenantIds.length === 0) {
-      setInviteTenantIds([nextTenants[0].id]);
+    if (nextTenants.length > 0 && nextApps.length > 0 && nextRoles.length > 0) {
+      setInviteAssignments((current) => {
+        if (current.length > 0) {
+          return current;
+        }
+        return [
+          {
+            id: "invite-row-initial",
+            tenantId: "",
+            appId: "",
+            role: "",
+          },
+        ];
+      });
     }
-    if (nextApps.length && inviteAppIds.length === 0) {
-      const tradsphereApp = nextApps.find((item) => String(item.code || "").trim().toLowerCase() === "tradsphere");
-      setInviteAppIds([tradsphereApp?.id || nextApps[0].id]);
+  }, []);
+
+  const requestBundledAdminLoad = useCallback(async (): Promise<AdminUsersLoadResponse> => {
+    if (!adminUsersLoadInFlight) {
+      adminUsersLoadInFlight = requestJson("/api/auth/v1/admin/users/load", { successToast: false, errorToast: false })
+        .then((payload) => unwrap<AdminUsersLoadResponse>(payload, {}))
+        .finally(() => {
+          adminUsersLoadInFlight = null;
+        });
     }
-    if (!nextRoles.some((role) => role.key === inviteRole)) {
-      const fallback = nextRoles.find((role) => role.assignable);
-      if (fallback) {
-        setInviteRole(fallback.key);
-      }
-    }
-  }, [inviteAppIds.length, inviteRole, inviteTenantIds.length]);
+    return adminUsersLoadInFlight;
+  }, [requestJson]);
 
   const roleLabels = useMemo(() => {
     const map: Record<string, string> = {};
     for (const role of roles) {
+      const normalizedKey = normalizeRoleKey(role.key);
       map[role.key] = role.label;
+      if (normalizedKey && !(normalizedKey in map)) {
+        map[normalizedKey] = role.label;
+      }
     }
+    map.super_admin = map.super_admin || "Super Admin";
+    map.admin = map.admin || "Admin";
+    map.editor = map.editor || "Editor";
+    map.viewer = map.viewer || "Viewer";
     return map;
   }, [roles]);
 
@@ -578,15 +690,85 @@ export default function AdminUsersPage() {
     [assignableRoles],
   );
 
-  const groupedMembers = useMemo(() => {
+  const roleFilterOptions = useMemo(
+    () => [
+      { value: "all", label: "All roles" },
+      ...ROLE_GROUP_ORDER.map((groupKey) => ({
+        value: groupKey,
+        label: ROLE_GROUP_LABEL[groupKey],
+      })),
+    ],
+    [],
+  );
+
+  const statusFilterOptions = useMemo(
+    () => [
+      { value: "all", label: "All statuses" },
+      { value: "active", label: "Active" },
+      { value: "pending", label: "Pending" },
+      { value: "disabled", label: "Disabled" },
+    ],
+    [],
+  );
+
+  const memberTenantFilterOptions = useMemo(
+    () => [
+      { value: "all", label: "All tenants" },
+      ...tenantDropdownOptions,
+    ],
+    [tenantDropdownOptions],
+  );
+
+  const filteredGroupedMembers = useMemo(() => {
+    const searchValue = memberSearch.trim().toLowerCase();
+    const filteredUsers = users.filter((user) => {
+      const resolvedRole = summarizeUserRole(user);
+      const groupKey = roleGroupKey(resolvedRole);
+      if (memberRoleFilter !== "all" && memberRoleFilter !== groupKey) {
+        return false;
+      }
+      if (memberStatusFilter !== "all" && memberStatusFilter !== user.status) {
+        return false;
+      }
+      if (memberTenantFilter !== "all") {
+        const hasTenant = user.tenantMemberships.some((membership) => membership.tenantId === memberTenantFilter);
+        if (!hasTenant) {
+          return false;
+        }
+      }
+      if (!searchValue) {
+        return true;
+      }
+
+      const tenantLabels = user.tenantMemberships
+        .map((item) => item.tenantName || item.tenantSlug || tenantNameById[item.tenantId] || item.tenantId)
+        .join(" ");
+      const assignmentLabels = user.appAssignments
+        .map((item) => {
+          const appLabel = item.appName || item.appCode || appNameById[item.appId] || item.appId;
+          const tenantLabel = item.tenantName || item.tenantSlug || tenantNameById[item.tenantId] || item.tenantId;
+          const roleLabel = displayRole(item.role, roleLabels);
+          return `${tenantLabel} ${appLabel} ${roleLabel}`;
+        })
+        .join(" ");
+      const haystack = [
+        user.fullName || "",
+        user.email || "",
+        user.userId,
+        tenantLabels,
+        assignmentLabels,
+      ].join(" ").toLowerCase();
+      return haystack.includes(searchValue);
+    });
+
     const groups: Record<(typeof ROLE_GROUP_ORDER)[number], AdminUser[]> = {
-      "workspace.super_admin": [],
-      "tradsphere.admin": [],
-      "tradsphere.editor": [],
-      "tradsphere.viewer": [],
+      super_admin: [],
+      admin: [],
+      editor: [],
+      viewer: [],
       other: [],
     };
-    for (const user of users) {
+    for (const user of filteredUsers) {
       const role = summarizeUserRole(user);
       const key = roleGroupKey(role);
       groups[key].push(user);
@@ -595,9 +777,26 @@ export default function AdminUsersPage() {
       groups[key].sort((a, b) => String(a.email || a.userId).localeCompare(String(b.email || b.userId)));
     }
     return groups;
-  }, [users]);
+  }, [
+    appNameById,
+    memberRoleFilter,
+    memberSearch,
+    memberStatusFilter,
+    memberTenantFilter,
+    roleLabels,
+    tenantNameById,
+    users,
+  ]);
+
+  const filteredUserCount = useMemo(
+    () => ROLE_GROUP_ORDER.reduce((count, key) => count + filteredGroupedMembers[key].length, 0),
+    [filteredGroupedMembers],
+  );
 
   const loadData = useCallback(async (showRefreshing: boolean) => {
+    const loadInvocationId = loadInvocationRef.current + 1;
+    loadInvocationRef.current = loadInvocationId;
+
     const cachedSnapshot = !showRefreshing
       ? readBrowserCacheSnapshot<AdminPageCacheSnapshot>(ADMIN_PAGE_CACHE_KEY)
       : null;
@@ -613,8 +812,10 @@ export default function AdminUsersPage() {
 
     if (showRefreshing) {
       setRefreshing(true);
+      setBackgroundRefreshing(false);
     } else {
       setLoading(true);
+      setBackgroundRefreshing(false);
       if (canUseCachedData && cachedData) {
         applyLoadedData(cachedData);
         setCacheStatus({
@@ -622,36 +823,26 @@ export default function AdminUsersPage() {
           fetchedAt: cachedSnapshot?.fetchedAt ?? Date.now(),
         });
         setLoading(false);
+        setBackgroundRefreshing(true);
       }
     }
     setError(null);
 
     try {
-      const [usersPayload, invitesPayload, rolesPayload, tenantsPayload, appsPayload] = await Promise.all([
-        requestJson("/api/auth/v1/admin/users", { successToast: false, errorToast: false }),
-        requestJson("/api/auth/v1/admin/invitations?status=pending", { successToast: false, errorToast: false }),
-        requestJson("/api/auth/v1/admin/roles", { successToast: false, errorToast: false }),
-        requestJson("/api/auth/v1/admin/tenants", { successToast: false, errorToast: false }),
-        requestJson("/api/auth/v1/admin/apps", { successToast: false, errorToast: false }),
-      ]);
-
-      const usersData = unwrap<{ items?: AdminUser[]; scope?: { isSuperAdmin?: boolean } }>(usersPayload, {});
-      const invitesData = unwrap<{ items?: AdminInvitation[] }>(invitesPayload, {});
-      const rolesData = unwrap<{ items?: RoleItem[]; roles?: string[] }>(rolesPayload, {});
-      const tenantsData = unwrap<{ items?: TenantItem[] }>(tenantsPayload, {});
-      const appsData = unwrap<{ items?: AppItem[] }>(appsPayload, {});
-      const nextRoles = Array.isArray(rolesData.items)
-        ? rolesData.items
-        : (Array.isArray(rolesData.roles) ? rolesData.roles.map((key) => ({ key, label: key, assignable: true })) : []);
+      const bundledData = await requestBundledAdminLoad();
+      const nextRoles = Array.isArray(bundledData.roles) ? bundledData.roles : [];
 
       const nextData: AdminPageCacheSnapshot = {
-        users: Array.isArray(usersData.items) ? usersData.items : [],
-        invitations: Array.isArray(invitesData.items) ? invitesData.items : [],
+        users: Array.isArray(bundledData.users) ? bundledData.users : [],
+        invitations: Array.isArray(bundledData.invitations) ? bundledData.invitations : [],
         roles: nextRoles,
-        tenants: Array.isArray(tenantsData.items) ? tenantsData.items : [],
-        apps: Array.isArray(appsData.items) ? appsData.items : [],
-        scope: usersData.scope || null,
+        tenants: Array.isArray(bundledData.tenants) ? bundledData.tenants : [],
+        apps: Array.isArray(bundledData.apps) ? bundledData.apps : [],
+        scope: bundledData.scope || null,
       };
+      if (loadInvocationRef.current !== loadInvocationId) {
+        return;
+      }
       applyLoadedData(nextData);
       setCacheStatus({ source: "network", fetchedAt: Date.now() });
       writeBrowserCache(ADMIN_PAGE_CACHE_KEY, nextData, ADMIN_PAGE_CACHE_TTL_MS, {
@@ -661,18 +852,29 @@ export default function AdminUsersPage() {
     } catch (loadError) {
       const message = loadError instanceof Error ? loadError.message : "Unable to load admin data.";
       if (!canUseCachedData) {
+        if (loadInvocationRef.current !== loadInvocationId) {
+          return;
+        }
         setError(message);
         setCacheStatus(null);
       }
     } finally {
+      if (loadInvocationRef.current !== loadInvocationId) {
+        return;
+      }
       setLoading(false);
       setRefreshing(false);
+      setBackgroundRefreshing(false);
     }
-  }, [applyLoadedData, requestJson]);
+  }, [applyLoadedData, requestBundledAdminLoad]);
 
   useEffect(() => {
-    void loadData(false);
+    loadDataRef.current = loadData;
   }, [loadData]);
+
+  useEffect(() => {
+    void loadDataRef.current(false);
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -706,6 +908,9 @@ export default function AdminUsersPage() {
   }, []);
 
   function openEditUser(user: AdminUser) {
+    if (summarizeUserRole(user) === "super_admin" || user.isSuperAdmin) {
+      return;
+    }
     if (editModalClearTimerRef.current !== null && typeof window !== "undefined") {
       window.clearTimeout(editModalClearTimerRef.current);
       editModalClearTimerRef.current = null;
@@ -773,11 +978,11 @@ export default function AdminUsersPage() {
       if (!current) {
         return current;
       }
-      const tenantId = current.tenantIds[0] || tenants[0]?.id || "";
-      const appId = inviteAppIds[0] || apps[0]?.id || "";
-      const role = assignableRoles.find((item) => item.key === "tradsphere.viewer")?.key
+      const tenantId = current.assignments[0]?.tenantId || tenants[0]?.id || "";
+      const appId = apps[0]?.id || "";
+      const role = assignableRoles.find((item) => item.key === "viewer")?.key
         || assignableRoles[0]?.key
-        || "tradsphere.viewer";
+        || "viewer";
       return {
         ...current,
         assignments: [
@@ -805,11 +1010,35 @@ export default function AdminUsersPage() {
     });
   }
 
+  function updateInviteAssignmentRow(rowId: string, patch: Partial<InviteAssignmentRow>) {
+    setInviteAssignmentsTouched(true);
+    setInviteAssignments((current) =>
+      current.map((item) => (item.id === rowId ? { ...item, ...patch } : item)),
+    );
+  }
+
+  function addInviteAssignmentRow() {
+    setInviteAssignmentsTouched(true);
+    setInviteAssignments((current) => [
+      ...current,
+      {
+        id: `invite-row-${Date.now()}-${Math.random().toString(36).slice(2)}`,
+        tenantId: "",
+        appId: "",
+        role: "",
+      },
+    ]);
+  }
+
+  function removeInviteAssignmentRow(rowId: string) {
+    setInviteAssignmentsTouched(true);
+    setInviteAssignments((current) => current.filter((item) => item.id !== rowId));
+  }
+
   async function handleSaveUserEdit() {
     if (!editingUser || !editDraft) {
       return;
     }
-    const normalizedTenantIds = unique(editDraft.tenantIds.map((tenantId) => String(tenantId || "").trim()).filter((tenantId) => Boolean(tenantId)));
     const validAssignments = editDraft.assignments
       .map((item) => {
         const tenantId = String(item.tenantId || "").trim();
@@ -829,10 +1058,6 @@ export default function AdminUsersPage() {
         body: {
           fullName: editDraft.fullName.trim() || undefined,
           email: editingUser.email || undefined,
-          tenantMemberships: normalizedTenantIds.map((tenantId) => ({
-            tenantId,
-            status: "active",
-          })),
           appAssignments: validAssignments,
         },
         successToast: {
@@ -848,10 +1073,33 @@ export default function AdminUsersPage() {
   }
 
   async function handleCreateInvite() {
+    setInviteAssignmentsTouched(true);
+    if (inviteValidationError) {
+      return;
+    }
     const normalizedEmail = inviteEmail.trim().toLowerCase();
-    const normalizedTenantIds = unique(inviteTenantIds.map((tenantId) => String(tenantId || "").trim()).filter((tenantId) => Boolean(tenantId)));
-    const normalizedAppIds = unique(inviteAppIds.map((appId) => String(appId || "").trim()).filter((appId) => Boolean(appId)));
-    if (!normalizedEmail || normalizedTenantIds.length === 0 || normalizedAppIds.length === 0) {
+    const normalizedAssignments = inviteAssignments
+      .map((item) => ({
+        tenantId: String(item.tenantId || "").trim(),
+        appId: String(item.appId || "").trim(),
+        role: normalizeRoleKey(String(item.role || "").trim()),
+      }))
+      .filter((item) => item.tenantId && item.appId && item.role);
+    if (!normalizedEmail || normalizedAssignments.length === 0) {
+      return;
+    }
+    const seenAssignments = new Set<string>();
+    for (const item of normalizedAssignments) {
+      const key = `${item.tenantId}::${item.appId}`;
+      if (seenAssignments.has(key)) {
+        return;
+      }
+      seenAssignments.add(key);
+      if (item.role === "super_admin") {
+        return;
+      }
+    }
+    if (!normalizedAssignments.every((item) => item.role === "admin" || item.role === "editor" || item.role === "viewer")) {
       return;
     }
 
@@ -866,9 +1114,7 @@ export default function AdminUsersPage() {
         method: "POST",
         body: {
           email: normalizedEmail,
-          tenantIds: normalizedTenantIds,
-          appIds: normalizedAppIds,
-          role: inviteRole,
+          assignments: normalizedAssignments,
           expirationHours: Math.floor(expiresHours),
         },
         successToast: {
@@ -876,12 +1122,14 @@ export default function AdminUsersPage() {
           message: `Invite package for ${normalizedEmail} is ready.`,
         },
       });
-      const data = unwrap<{ items?: Array<{ inviteUrl?: string }> }>(payload, {});
-      const firstInviteUrl = String(data.items?.[0]?.inviteUrl || "").trim();
+      const data = unwrap<{ inviteUrl?: string; items?: Array<{ inviteUrl?: string }> }>(payload, {});
+      const firstInviteUrl = String(data.inviteUrl || data.items?.[0]?.inviteUrl || "").trim();
       if (firstInviteUrl) {
         await navigator.clipboard.writeText(firstInviteUrl).catch(() => undefined);
       }
       setInviteEmail("");
+      setInviteAssignmentsTouched(false);
+      setIsInviteModalOpen(false);
       await loadData(true);
     } finally {
       setCreatingInvite(false);
@@ -924,19 +1172,37 @@ export default function AdminUsersPage() {
     }
   }
 
-  const cacheStatusText = refreshing
+  const cacheStatusText = (refreshing || backgroundRefreshing)
     ? "Refreshing..."
     : cacheStatus
       ? `Data source: ${cacheStatus.source}. Last updated ${formatRelativeTime(cacheStatus.fetchedAt)}.`
       : "No cached data yet";
+  const hasLoadedAnyData = users.length > 0 || pendingInvitations.length > 0 || tenants.length > 0 || apps.length > 0;
+  const shouldShowRefreshingOverlay = refreshing && hasLoadedAnyData;
   const showCacheChip = !loading && !error && !isEditModalOpen && !disableTarget;
+  const inviteValidationError = useMemo(() => {
+    const seen = new Set<string>();
+    for (const row of inviteAssignments) {
+      const tenantId = String(row.tenantId || "").trim();
+      const appId = String(row.appId || "").trim();
+      const role = normalizeRoleKey(String(row.role || "").trim());
+      if (!tenantId || !appId || !role) {
+        return "Complete all invite assignment rows before creating invitation.";
+      }
+      if (role === "super_admin") {
+        return "Super Admin cannot be assigned from this page.";
+      }
+      const key = `${tenantId}::${appId}`;
+      if (seen.has(key)) {
+        return "Duplicate tenant/app assignment rows are not allowed.";
+      }
+      seen.add(key);
+    }
+    return null;
+  }, [inviteAssignments]);
   const editValidationError = useMemo(() => {
     if (!editDraft) {
       return null;
-    }
-    const normalizedTenantIds = unique(editDraft.tenantIds.map((tenantId) => String(tenantId || "").trim()));
-    if (normalizedTenantIds.some((tenantId) => !tenantId)) {
-      return "One or more selected tenants are unavailable in current scope.";
     }
     const seen = new Set<string>();
     for (const row of editDraft.assignments) {
@@ -966,14 +1232,25 @@ export default function AdminUsersPage() {
 
   const canSubmitEdit = Boolean(editingUser && editDraft && hasEditChanges && !editValidationError);
   const shouldShowSaveButton = canSubmitEdit || savingEdit;
+  const canSubmitInvite = Boolean(!creatingInvite && inviteEmail.trim() && inviteAssignments.length > 0 && !inviteValidationError);
+  const shouldShowCreateInviteButton = creatingInvite || (inviteAssignmentsTouched && canSubmitInvite);
 
   return (
     <div className="mx-auto flex min-h-[100dvh] w-full max-w-[1680px] flex-col gap-6">
       <PageBanner
         eyebrow="TheSphereWorks"
         title="Admin Users"
-        description="Manage tenant memberships, app assignments, roles, and invitations."
+        description="Manage app assignments, roles, and invitations."
         gradientVariant="admin"
+        className="[&>div.relative]:min-h-[136px] [&>div.relative]:py-6 md:[&>div.relative]:min-h-[168px] md:[&>div.relative]:py-8"
+        action={(
+          <Button
+            className="min-w-36"
+            onClick={() => setIsInviteModalOpen(true)}
+          >
+            Invite User
+          </Button>
+        )}
       />
 
       {error ? (
@@ -983,286 +1260,268 @@ export default function AdminUsersPage() {
       ) : null}
 
       <section className="rounded-2xl border border-blue-100 bg-white/95 p-5 shadow-soft">
-        <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-center justify-between gap-3">
           <div>
             <h2 className="text-base font-semibold text-slate-900">Invitations</h2>
-            <p className="text-sm text-slate-600">Create invites and manage pending invitation links in one place.</p>
+            <p className="text-sm text-slate-600">Manage pending invitation links and invite status.</p>
           </div>
-        </div>
-
-        <div className="mt-4 grid gap-3 lg:grid-cols-[minmax(220px,1.4fr)_minmax(170px,0.8fr)_minmax(220px,1fr)_minmax(220px,1fr)_130px_auto]">
-          <div>
-            <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Invite email</p>
-            <Input
-              value={inviteEmail}
-              onChange={(event) => setInviteEmail(event.target.value)}
-              placeholder="new.user@company.com"
-              type="email"
-              autoComplete="email"
-            />
-          </div>
-          <div>
-            <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Role</p>
-            <AppDropdown
-              value={inviteRole}
-              onValueChange={setInviteRole}
-              options={roleDropdownOptions}
-              searchable={false}
-            />
-          </div>
-          <div>
-            <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Tenants</p>
-            <AppDropdown
-              value=""
-              onValueChange={() => undefined}
-              multiple
-              values={inviteTenantIds}
-              onValuesChange={setInviteTenantIds}
-              options={tenantDropdownOptions}
-              placeholder="Select tenants"
-              searchable={false}
-            />
-          </div>
-          <div>
-            <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Apps</p>
-            <AppDropdown
-              value=""
-              onValueChange={() => undefined}
-              multiple
-              values={inviteAppIds}
-              onValuesChange={setInviteAppIds}
-              options={appDropdownOptions}
-              placeholder="Select apps"
-              searchable={false}
-            />
-          </div>
-          <div>
-            <p className="text-xs uppercase tracking-[0.16em] text-slate-500">Expiry hrs</p>
-            <Input
-              value={inviteExpirationHours}
-              onChange={(event) => setInviteExpirationHours(event.target.value)}
-              placeholder="72"
-              inputMode="numeric"
-            />
-          </div>
-          <div className="flex items-end">
-            <Button
-              onClick={() => void handleCreateInvite()}
-              disabled={creatingInvite || !inviteEmail.trim() || inviteTenantIds.length === 0 || inviteAppIds.length === 0}
-            >
-              {creatingInvite ? <Spinner className="size-4" /> : <ShieldCheck className="size-4" />}
-              {creatingInvite ? "Creating..." : "Create invite"}
-            </Button>
-          </div>
-        </div>
-        <p className="mt-3 text-sm text-slate-600">First invite URL is auto-copied when available. Current schema creates one token per tenant/app assignment.</p>
-        <div className="mt-8 flex items-center justify-between gap-2">
-          <h3 className="text-base font-semibold text-slate-900">Pending invitations</h3>
           <p className="text-sm text-slate-500">{pendingInvitations.length} pending</p>
         </div>
-
-        {pendingInvitations.length === 0 ? (
-          <p className="mt-2 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-            No pending invitations.
-          </p>
-        ) : (
-          <div className="mt-2 overflow-x-auto">
-            <table className="w-full min-w-[1040px] border-separate border-spacing-y-2 text-sm">
-              <thead>
-                <tr className="text-left text-xs uppercase tracking-[0.14em] text-slate-500">
-                  <th className="px-3 py-2">Email</th>
-                  <th className="px-3 py-2">Tenant</th>
-                  <th className="px-3 py-2">App</th>
-                  <th className="px-3 py-2">Role</th>
-                  <th className="px-3 py-2">Status</th>
-                  <th className="px-3 py-2">Expires</th>
-                  <th className="px-3 py-2">Actions</th>
-                </tr>
-              </thead>
-              <tbody>
-                {pendingInvitations.map((invite) => (
-                  <tr key={invite.id} className="bg-slate-50 text-slate-700">
-                    <td className="rounded-l-xl border border-r-0 border-slate-200 px-3 py-3">{invite.email}</td>
-                    <td className="border border-l-0 border-r-0 border-slate-200 px-3 py-3">
-                      {invite.tenantName || invite.tenantSlug || invite.tenantId}
-                    </td>
-                    <td className="border border-l-0 border-r-0 border-slate-200 px-3 py-3">
-                      {invite.appName || invite.appCode || invite.appId}
-                    </td>
-                    <td className="border border-l-0 border-r-0 border-slate-200 px-3 py-3">
-                      {displayRole(invite.role, roleLabels)}
-                    </td>
-                    <td className="border border-l-0 border-r-0 border-slate-200 px-3 py-3 capitalize">{invite.status}</td>
-                    <td className="border border-l-0 border-r-0 border-slate-200 px-3 py-3">{formatDate(invite.expiresAt)}</td>
-                    <td className="rounded-r-xl border border-l-0 border-slate-200 px-3 py-3">
-                      <div className="flex gap-2">
-                        <Button
-                          variant="outline"
-                          onClick={() => void navigator.clipboard.writeText(String(invite.inviteUrl || "")).catch(() => undefined)}
-                          disabled={!invite.inviteUrl}
-                        >
-                          <Copy className="size-4" />
-                          Copy
-                        </Button>
-                        <Button
-                          variant="secondary"
-                          onClick={() => void handleRevokeInvite(invite.id, invite.email)}
-                        >
-                          Revoke
-                        </Button>
-                      </div>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
+        <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
+          <div className="flex items-center justify-between gap-2">
+            <h3 className="text-sm font-semibold text-slate-800">Pending invitations</h3>
+            <p className="text-xs uppercase tracking-[0.14em] text-slate-500">{pendingInvitations.length}</p>
           </div>
-        )}
+
+          <div className="mt-3 space-y-2">
+            {loading && pendingInvitations.length === 0 ? (
+              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
+                <div className="flex items-center gap-2">
+                  <Spinner className="size-4" />
+                  <span>Loading invitations...</span>
+                </div>
+              </div>
+            ) : null}
+            {!loading && pendingInvitations.length === 0 ? (
+              <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
+                No pending invitations.
+              </p>
+            ) : null}
+            {pendingInvitations.map((invite) => (
+              <article key={invite.id} className="space-y-2 rounded-lg border border-slate-200 bg-slate-50/70 p-3">
+                <div className="flex flex-wrap items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="truncate text-sm font-semibold text-slate-900">{invite.email}</p>
+                    <p className="mt-0.5 text-xs text-slate-500">
+                      Created: {formatDate(invite.createdAt)} · Expires: {formatDate(invite.expiresAt)}
+                    </p>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold capitalize ${invitationStatusChipClass(invite.status)}`}>
+                      {invite.status}
+                    </span>
+                    <Button
+                      variant="outline"
+                      className="h-8 px-2.5 text-xs"
+                      onClick={() => void navigator.clipboard.writeText(String(invite.inviteUrl || "")).catch(() => undefined)}
+                      disabled={!invite.inviteUrl}
+                    >
+                      <Copy className="size-3.5" />
+                      Copy link
+                    </Button>
+                    <Button
+                      variant="secondary"
+                      className="h-8 px-2.5 text-xs"
+                      onClick={() => void handleRevokeInvite(invite.id, invite.email)}
+                    >
+                      Revoke
+                    </Button>
+                  </div>
+                </div>
+                <div className="flex flex-wrap gap-1">
+                  {Array.isArray(invite.assignments) && invite.assignments.length > 0 ? (
+                    invite.assignments.map((assignment) => {
+                      const tenantLabel = assignment.tenantName || assignment.tenantSlug || assignment.tenantId || "-";
+                      const appLabel = assignment.appName || assignment.appCode || assignment.appId || "-";
+                      const roleLabel = displayRole(assignment.role || null, roleLabels);
+                      return (
+                        <span key={`${invite.id}-${tenantLabel}-${appLabel}-${roleLabel}`} className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
+                          {tenantLabel}: {appLabel} ({roleLabel})
+                        </span>
+                      );
+                    })
+                  ) : (
+                    <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-xs text-slate-600">
+                      {(invite.tenantName || invite.tenantSlug || invite.tenantId)}: {(invite.appName || invite.appCode || invite.appId)} ({displayRole(invite.role, roleLabels)})
+                    </span>
+                  )}
+                </div>
+              </article>
+            ))}
+          </div>
+        </div>
       </section>
 
       <section className="rounded-2xl border border-blue-100 bg-white/95 p-5 shadow-soft">
-        <div className="flex flex-wrap items-center justify-between gap-2">
+        <div className="flex flex-wrap items-start justify-between gap-3">
           <div>
             <h2 className="text-base font-semibold text-slate-900">Members</h2>
             <p className="text-sm text-slate-600">
-              Members are grouped by role type. Edit assignments by tenant/app and disable access without deleting auth users.
+              Grouped by access role with tenant/app assignment visibility and in-place admin actions.
             </p>
           </div>
           <p className="text-sm text-slate-500">
-            {users.length} users
+            {filteredUserCount}/{users.length} users
             {scope?.isSuperAdmin ? " · super-admin scope" : ""}
           </p>
         </div>
 
-        <div className="relative mt-4">
-          {users.length === 0 ? (
+        <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+            <Filter className="size-3.5" />
+            <span>Filters</span>
+          </div>
+          <div className="mt-2 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+            <Input
+              value={memberSearch}
+              onChange={(event) => setMemberSearch(event.target.value)}
+              placeholder="Search name, email, tenant, app"
+            />
+            <AppDropdown
+              value={memberRoleFilter}
+              onValueChange={(value) => setMemberRoleFilter(value)}
+              options={roleFilterOptions}
+              searchable={false}
+            />
+            <AppDropdown
+              value={memberStatusFilter}
+              onValueChange={(value) => setMemberStatusFilter(value)}
+              options={statusFilterOptions}
+              searchable={false}
+            />
+            <AppDropdown
+              value={memberTenantFilter}
+              onValueChange={(value) => setMemberTenantFilter(value)}
+              options={memberTenantFilterOptions}
+              searchable={false}
+            />
+          </div>
+        </div>
+
+        <div className="mt-4">
+          {loading && users.length === 0 ? (
+            <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+              <div className="flex items-center gap-2">
+                <Spinner className="size-4" />
+                <span>Loading members...</span>
+              </div>
+            </div>
+          ) : filteredUserCount === 0 ? (
             <p className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-              No users found in this admin scope.
+              No members match the current filters.
             </p>
           ) : (
-            <div className="space-y-5">
+            <div className="space-y-3">
               {ROLE_GROUP_ORDER.map((groupKey) => {
-                const groupUsers = groupedMembers[groupKey] || [];
+                const groupUsers = filteredGroupedMembers[groupKey] || [];
                 if (groupUsers.length === 0) {
                   return null;
                 }
                 return (
-                  <div key={groupKey}>
-                    <div className="mb-2 flex items-center justify-between">
-                      <h3 className="text-sm font-semibold text-slate-800">{ROLE_GROUP_LABEL[groupKey]}</h3>
-                      <p className="text-xs uppercase tracking-[0.14em] text-slate-500">{groupUsers.length}</p>
-                    </div>
-                    <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
-                      {groupUsers.map((user) => {
-                        const resolvedRole = summarizeUserRole(user);
-                        const tenantLabels = unique(
-                          user.tenantMemberships
-                            .filter((item) => item.status !== "disabled")
-                            .map((item) => item.tenantName || item.tenantSlug || tenantNameById[item.tenantId] || item.tenantId),
-                        );
-                        const assignmentLabels = unique(
-                          user.appAssignments.map((item) => {
-                            const appLabel = item.appName || item.appCode || appNameById[item.appId] || item.appId;
-                            const roleLabel = displayRole(item.role, roleLabels);
-                            const tenantLabel = item.tenantName || item.tenantSlug || tenantNameById[item.tenantId] || item.tenantId;
-                            return `${tenantLabel}: ${appLabel} (${roleLabel})`;
-                          }),
-                        );
-                        return (
-                          <div
-                            key={user.userId}
-                            role="button"
-                            tabIndex={0}
-                            onClick={() => openEditUser(user)}
-                            onKeyDown={(event) => {
-                              if (event.key === "Enter" || event.key === " ") {
-                                event.preventDefault();
+                  <details key={groupKey} open className="group rounded-2xl border border-blue-100 bg-white shadow-soft">
+                    <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-5 py-4">
+                      <div>
+                        <h3 className="text-lg font-bold text-blue-900 md:text-xl">{ROLE_GROUP_LABEL[groupKey]}</h3>
+                        <p className="mt-1 text-xs text-slate-500">
+                          {groupUsers.length} members · {ROLE_GROUP_DESCRIPTIONS[groupKey]}
+                        </p>
+                      </div>
+                      <ChevronDown className="size-4 text-slate-500 transition-transform group-open:rotate-180" />
+                    </summary>
+
+                    <section className="mx-3 mb-4 overflow-hidden rounded-xl border border-slate-100 bg-slate-50/70">
+                      <header className="border-b border-blue-100 bg-blue-50/70 px-4 py-2.5">
+                        <p className="text-sm font-bold uppercase tracking-[0.14em] text-blue-800">
+                          {ROLE_GROUP_LABEL[groupKey]} Members
+                        </p>
+                      </header>
+                      <div className="grid gap-3 p-3 sm:grid-cols-2 xl:grid-cols-3">
+                        {groupUsers.map((user) => {
+                          const resolvedRole = summarizeUserRole(user);
+                          const isSuperAdminMember = resolvedRole === "super_admin" || Boolean(user.isSuperAdmin);
+                          const assignmentLabels = unique(
+                            user.appAssignments.map((item) => {
+                              const appLabel = item.appName || item.appCode || appNameById[item.appId] || item.appId;
+                              const roleLabel = displayRole(item.role, roleLabels);
+                              const tenantLabel = item.tenantName || item.tenantSlug || tenantNameById[item.tenantId] || item.tenantId;
+                              return `${tenantLabel}: ${appLabel} (${roleLabel})`;
+                            }),
+                          );
+
+                          return (
+                            <article
+                              key={user.userId}
+                              role="button"
+                              tabIndex={isSuperAdminMember ? -1 : 0}
+                              onClick={() => {
+                                if (isSuperAdminMember) {
+                                  return;
+                                }
                                 openEditUser(user);
-                              }
-                            }}
-                            className="cursor-pointer rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition hover:border-blue-200 hover:bg-blue-50/40 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
-                          >
-                              <div className="flex flex-wrap items-start justify-between gap-2">
-                                <div>
-                                  <p className="text-base font-semibold text-slate-900">{user.fullName || "-"}</p>
-                                  <p className="text-sm text-slate-500">{user.email || user.userId}</p>
+                              }}
+                              onKeyDown={(event) => {
+                                if (isSuperAdminMember) {
+                                  return;
+                                }
+                                if (event.key === "Enter" || event.key === " ") {
+                                  event.preventDefault();
+                                  openEditUser(user);
+                                }
+                              }}
+                              className={`rounded-xl p-4 shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 ${
+                                isSuperAdminMember
+                                  ? "cursor-default border border-slate-200 bg-white"
+                                  : "cursor-pointer border border-slate-200 bg-white hover:border-blue-200 hover:bg-blue-50/40"
+                              }`}
+                            >
+                              <div className="flex items-start justify-between gap-2">
+                                <div className="min-w-0">
+                                  <p className="truncate text-sm font-semibold text-slate-900">{user.fullName || "-"}</p>
+                                  <p className="mt-0.5 break-all text-xs text-slate-600">{user.email || user.userId}</p>
                                 </div>
-                              <div className="flex items-center gap-2">
-                                {resolvedRole !== "workspace.super_admin" ? (
-                                  <DisableMemberIconButton
-                                    disabled={user.status === "disabled"}
-                                    onDisable={() => setDisableTarget({ userId: user.userId, email: user.email })}
-                                  />
-                                ) : null}
-                                <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-1 text-xs font-medium text-blue-800">
-                                  {displayRole(resolvedRole, roleLabels)}
-                                </span>
-                              </div>
+                                <div className="flex items-center gap-2">
+                                  {!isSuperAdminMember ? (
+                                    <DisableMemberIconButton
+                                      disabled={user.status === "disabled"}
+                                      onDisable={() => setDisableTarget({ userId: user.userId, email: user.email })}
+                                    />
+                                  ) : null}
+                                  <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${roleChipClass(resolvedRole)}`}>
+                                    {displayRole(resolvedRole, roleLabels)}
+                                  </span>
+                                </div>
                               </div>
 
-                              <div className="mt-2 grid gap-x-3 gap-y-2 text-sm text-slate-700 sm:grid-cols-2">
+                              <div className="mt-2 flex flex-wrap items-center gap-1">
+                                <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold capitalize ${statusChipClass(user.status)}`}>
+                                  {user.status}
+                                </span>
+                              </div>
+
+                              <div className="mt-3 space-y-2">
                                 <div>
-                                  <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Tenants</p>
-                                  {tenantLabels.length ? (
+                                  <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">App assignments</p>
+                                  {assignmentLabels.length ? (
                                     <div className="flex flex-wrap gap-1">
-                                      {tenantLabels.map((label, index) => (
+                                      {assignmentLabels.map((label, index) => (
                                         <span
                                           key={label}
-                                          className={`rounded-full border px-2 py-0.5 text-xs font-medium ${TENANT_CHIP_STYLES[index % TENANT_CHIP_STYLES.length]}`}
+                                          className={`rounded-full border px-2 py-0.5 text-[11px] font-medium ${APP_CHIP_STYLES[index % APP_CHIP_STYLES.length]}`}
                                         >
                                           {label}
                                         </span>
                                       ))}
                                     </div>
                                   ) : (
-                                    <p>-</p>
+                                    <p className="text-xs text-slate-500">No app assignments.</p>
                                   )}
-                                </div>
-                                <div>
-                                  <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Status</p>
-                                  <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold capitalize ${statusChipClass(user.status)}`}>
-                                    {user.status}
-                                  </span>
-                                  <p className="mt-1 text-xs text-slate-500">Created: {formatDate(user.createdAt)}</p>
-                                  <p className="text-xs text-slate-500">Updated: {formatDate(user.updatedAt || user.roleUpdatedAt)}</p>
                                 </div>
                               </div>
 
-                              <div className="mt-3">
-                                <p className="mb-1 text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Apps</p>
-                                {assignmentLabels.length ? (
-                                  <div className="flex flex-wrap gap-1">
-                                    {assignmentLabels.map((label, index) => (
-                                      <span
-                                        key={label}
-                                        className={`rounded-full border px-2 py-0.5 text-xs font-medium ${APP_CHIP_STYLES[index % APP_CHIP_STYLES.length]}`}
-                                      >
-                                        {label}
-                                      </span>
-                                    ))}
-                                  </div>
-                                ) : (
-                                  <p className="text-xs text-slate-500">No app assignments.</p>
-                                )}
+                              <div className="mt-3 flex flex-wrap gap-x-3 gap-y-1 text-[11px] text-slate-500">
+                                <span>Created: {formatDate(user.createdAt)}</span>
+                                <span>Updated: {formatDate(user.updatedAt || user.roleUpdatedAt)}</span>
                               </div>
-                            </div>
-                        );
-                      })}
-                    </div>
-                  </div>
+                            </article>
+                          );
+                        })}
+                      </div>
+                    </section>
+                  </details>
                 );
               })}
             </div>
           )}
-
-          {loading ? (
-            <div className="absolute inset-0 z-20 flex items-center justify-center rounded-xl bg-white/70 backdrop-blur-[1px]">
-              <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-medium text-slate-700 shadow-soft">
-                <Loader2 className="size-4 animate-spin text-blue-600" />
-                <span>Loading access...</span>
-              </div>
-            </div>
-          ) : null}
         </div>
       </section>
 
@@ -1287,7 +1546,7 @@ export default function AdminUsersPage() {
           <DialogHeader>
             <DialogTitle>Edit member access</DialogTitle>
             <DialogDescription>
-              Assign tenants, apps, and roles for this user. Saving applies tenant/app access updates in backend scope.
+              Access is assigned by tenant, app, and role. Removing an assignment revokes access for that app scope.
             </DialogDescription>
           </DialogHeader>
 
@@ -1307,20 +1566,6 @@ export default function AdminUsersPage() {
                   placeholder="Full name"
                   maxLength={255}
                 />
-              </LabeledField>
-
-              <LabeledField label="Tenants" alignStart>
-                <AppDropdown
-                  value=""
-                  onValueChange={() => undefined}
-                  multiple
-                  values={editDraft.tenantIds}
-                  onValuesChange={(values) => setEditDraft((current) => (current ? { ...current, tenantIds: unique(values) } : current))}
-                  options={tenantDropdownOptions}
-                  placeholder="Select tenant memberships"
-                  searchable={false}
-                />
-                <p className="mt-1 text-xs text-slate-500">Removing a tenant here disables membership for that tenant in managed scope.</p>
               </LabeledField>
 
               <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
@@ -1379,6 +1624,9 @@ export default function AdminUsersPage() {
                     ))}
                   </div>
                 )}
+                <p className="text-xs text-slate-500">
+                  Access is assigned by tenant, app, and role. Removing an assignment revokes access for that app scope.
+                </p>
               </div>
             </div>
           ) : null}
@@ -1419,6 +1667,115 @@ export default function AdminUsersPage() {
         </DialogContent>
       </Dialog>
 
+      <Dialog open={isInviteModalOpen} onOpenChange={(open) => !creatingInvite && setIsInviteModalOpen(open)}>
+        <DialogContent className="max-w-[920px] rounded-xl bg-white p-6">
+          <DialogHeader>
+            <DialogTitle>Create invitation</DialogTitle>
+            <DialogDescription>
+              Create invite access by tenant, app, and role. First invite URL is auto-copied when available.
+            </DialogDescription>
+          </DialogHeader>
+
+          <div className="mt-4 space-y-4">
+            <div className="grid gap-3 sm:grid-cols-[minmax(0,1.6fr)_120px]">
+              <div>
+                <p className="mb-1 text-xs uppercase tracking-[0.16em] text-slate-500">Invite email</p>
+                <Input
+                  value={inviteEmail}
+                  onChange={(event) => setInviteEmail(event.target.value)}
+                  placeholder="new.user@company.com"
+                  type="email"
+                  autoComplete="email"
+                />
+              </div>
+              <div>
+                <p className="mb-1 text-xs uppercase tracking-[0.16em] text-slate-500">Expiry hrs</p>
+                <Input
+                  value={inviteExpirationHours}
+                  onChange={(event) => setInviteExpirationHours(event.target.value)}
+                  placeholder="72"
+                  inputMode="numeric"
+                />
+              </div>
+            </div>
+
+            <div className="space-y-2 rounded-lg border border-slate-200 bg-slate-50 p-3">
+              <div className="flex items-center justify-between">
+                <p className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">Invite assignments</p>
+                <ActionIconButton
+                  icon={<Plus />}
+                  tooltip="Add assignment"
+                  onClick={addInviteAssignmentRow}
+                  disabled={creatingInvite}
+                />
+              </div>
+              {inviteAssignments.length === 0 ? (
+                <p className="rounded-md border border-slate-200 bg-white px-3 py-2 text-sm text-slate-600">
+                  Add at least one tenant/app/role assignment.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {inviteAssignments.map((row) => (
+                    <div key={row.id} className="grid grid-cols-1 items-center gap-2 rounded-md border border-slate-200 bg-white p-2 sm:grid-cols-2 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.9fr)_auto]">
+                      <AppDropdown
+                        value={row.tenantId}
+                        onValueChange={(value) => updateInviteAssignmentRow(row.id, { tenantId: value })}
+                        options={tenantDropdownOptions}
+                        searchable={false}
+                        size="sm"
+                      />
+                      <AppDropdown
+                        value={row.appId}
+                        onValueChange={(value) => updateInviteAssignmentRow(row.id, { appId: value })}
+                        options={appDropdownOptions}
+                        searchable={false}
+                        size="sm"
+                      />
+                      <AppDropdown
+                        value={row.role}
+                        onValueChange={(value) => updateInviteAssignmentRow(row.id, { role: normalizeRoleKey(value) })}
+                        options={roleDropdownOptions}
+                        searchable={false}
+                        size="sm"
+                      />
+                      <ActionIconButton
+                        icon={<Trash2 />}
+                        tooltip="Remove assignment"
+                        onClick={() => removeInviteAssignmentRow(row.id)}
+                        disabled={creatingInvite}
+                        className="h-8 w-8 [&_svg]:h-4 [&_svg]:w-4"
+                      />
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+            {inviteAssignmentsTouched && inviteValidationError ? <p className="text-sm text-rose-600">{inviteValidationError}</p> : null}
+          </div>
+
+          {shouldShowCreateInviteButton ? (
+            <DialogFooter>
+              <Button
+                onClick={() => void handleCreateInvite()}
+                disabled={creatingInvite || !inviteEmail.trim() || inviteAssignments.length === 0 || Boolean(inviteValidationError)}
+              >
+                {creatingInvite ? <Spinner className="size-4" /> : <ShieldCheck className="size-4" />}
+                {creatingInvite ? "Creating..." : "Create invite"}
+              </Button>
+            </DialogFooter>
+          ) : null}
+        </DialogContent>
+      </Dialog>
+
+      {shouldShowRefreshingOverlay ? (
+        <div className="fixed inset-0 z-30 flex items-center justify-center bg-slate-950/25 backdrop-blur-[1.5px]">
+          <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-medium text-slate-700 shadow-soft">
+            <Loader2 className="size-4 animate-spin text-blue-600" />
+            <span>Refreshing admin data...</span>
+          </div>
+        </div>
+      ) : null}
+
       {showCacheChip ? (
         <div className="pointer-events-none fixed inset-x-0 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40">
           <div className={`mx-4 sm:mx-6 lg:mr-6 ${sidebarVisuallyExpanded ? "lg:ml-[18.75rem]" : "lg:ml-[6.5rem]"}`}>
@@ -1426,8 +1783,8 @@ export default function AdminUsersPage() {
               <CacheStatusChip
                 text={cacheStatusText}
                 onRefresh={() => void loadData(true)}
-                disabled={refreshing || loading}
-                refreshing={refreshing}
+                disabled={refreshing || backgroundRefreshing || loading}
+                refreshing={refreshing || backgroundRefreshing}
                 refreshLabel="Refresh admin data"
                 tooltipText="Click to refresh admin users, invitations, tenants, apps, and roles"
                 containerClassName="pointer-events-auto"

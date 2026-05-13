@@ -5,6 +5,7 @@ from dataclasses import dataclass
 from shared.auth.permission_map import expand_permissions_for_role
 from shared.auth.permissions_cache import permission_cache
 from shared.auth.providers import get_auth_provider
+from shared.auth.roles import ROLE_SUPER_ADMIN, normalize_role_key
 from shared.auth.supabase_client import SupabaseClientError
 from shared.auth.types import TenantAccessProfile
 
@@ -86,7 +87,7 @@ def _resolve_active_tenant_user(*, tenant_id: str, user_id: str) -> None:
         raise TenantAccessError("User is not an active member of tenant", code="tenant_membership_required")
 
 
-def _resolve_tenant_role(*, tenant_id: str, user_id: str, app_id: str) -> str:
+def _resolve_tenant_role(*, tenant_id: str, user_id: str, app_id: str) -> tuple[str, str]:
     provider = get_auth_provider()
     row = provider.select_single(
         table="tenant_app_roles",
@@ -97,34 +98,66 @@ def _resolve_tenant_role(*, tenant_id: str, user_id: str, app_id: str) -> str:
         },
         select="id,role",
     )
-    role = str((row or {}).get("role") or "").strip()
+    raw_role = str((row or {}).get("role") or "").strip()
+    role = normalize_role_key(raw_role)
     if not role:
         raise TenantAccessError("User does not have access to this app", code="app_role_required")
-    return role
+    return role, raw_role
 
 
-def _resolve_role_permissions(role: str) -> list[str]:
+def _resolve_role_permissions(*, role: str, raw_role: str | None = None) -> list[str]:
     provider = get_auth_provider()
-    rows = provider.select_many(
-        table="role_permissions",
-        filters={"role": role},
-        select="permission",
-    )
+    role_candidates = [str(role or "").strip()]
+    raw = str(raw_role or "").strip()
+    if raw and raw not in role_candidates:
+        role_candidates.append(raw)
+
     permissions: list[str] = []
-    for row in rows:
-        permission = str(row.get("permission") or "").strip()
-        if permission:
-            permissions.append(permission)
+    for role_key in role_candidates:
+        rows = provider.select_many(
+            table="role_permissions",
+            filters={"role": role_key},
+            select="permission",
+        )
+        for row in rows:
+            permission = str(row.get("permission") or "").strip()
+            if permission:
+                permissions.append(permission)
     return permissions
+
+
+def _has_global_super_admin(*, user_id: str) -> bool:
+    provider = get_auth_provider()
+    try:
+        row = provider.select_single(
+            table="user_global_roles",
+            filters={
+                "user_id": user_id,
+                "role": ROLE_SUPER_ADMIN,
+                "active": "true",
+            },
+            select="id,role,active",
+        )
+    except SupabaseClientError as exc:
+        detail = str(exc).lower()
+        if "user_global_roles" in detail and ("does not exist" in detail or "not found" in detail):
+            return False
+        raise
+    return bool(row)
 
 
 def resolve_tenant_access(*, user_id: str, tenant_slug: str, app_code: str) -> TenantAccessProfile:
     try:
         tenant = _resolve_active_tenant(tenant_slug)
         app = _resolve_active_app(app_code)
-        _resolve_active_tenant_user(tenant_id=tenant.tenant_id, user_id=user_id)
-        role = _resolve_tenant_role(tenant_id=tenant.tenant_id, user_id=user_id, app_id=app.app_id)
-        role_permissions = _resolve_role_permissions(role)
+        is_super_admin = _has_global_super_admin(user_id=user_id)
+        if is_super_admin:
+            role = ROLE_SUPER_ADMIN
+            raw_role: str | None = ROLE_SUPER_ADMIN
+        else:
+            _resolve_active_tenant_user(tenant_id=tenant.tenant_id, user_id=user_id)
+            role, raw_role = _resolve_tenant_role(tenant_id=tenant.tenant_id, user_id=user_id, app_id=app.app_id)
+        role_permissions = _resolve_role_permissions(role=role, raw_role=raw_role)
     except SupabaseClientError as exc:
         raise TenantAccessError("Unable to verify tenant permissions", code="supabase_unavailable") from exc
 

@@ -8,7 +8,7 @@ const SESSION_STORAGE_KEY = "workspace.auth.session.v1";
 const USER_STORAGE_KEY = "workspace.auth.user.v1";
 const TENANT_STORAGE_KEY = "workspace.auth.tenantSlug.v1";
 const ACCESS_PROFILE_CACHE_KEY = "workspace.auth.accessProfileCache.v1";
-const ACCESS_PROFILE_CACHE_TTL_MS = 2 * 60 * 1000;
+const ACCESS_PROFILE_CACHE_TTL_MS = 30 * 60 * 1000;
 
 class AccessProfileRequestError extends Error {
   status: number;

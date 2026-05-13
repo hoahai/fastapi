@@ -67,7 +67,7 @@ def get_session_me(request: Request):
             "id": "f57fc74c-b429-4ce2-8bd0-c6f154a2cb18",
             "code": "tradsphere"
           },
-          "role": "tradsphere.viewer",
+          "role": "viewer",
           "permissions": [
             "tradsphere.viewer"
           ]

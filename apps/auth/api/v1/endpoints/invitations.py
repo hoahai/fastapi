@@ -14,6 +14,7 @@ from shared.auth.invitations_repo import (
     get_active_app,
     get_invitation_by_id,
     get_invitation_by_token,
+    list_invitation_assignments,
     mark_invitation_accepted,
     patch_invitation_status,
     upsert_tenant_app_role,
@@ -21,6 +22,7 @@ from shared.auth.invitations_repo import (
 )
 from shared.auth.permissions_cache import permission_cache
 from shared.auth.profile_repo import compose_full_name
+from shared.auth.roles import normalize_role_key
 from shared.auth.supabase_client import SupabaseClientError
 
 router = APIRouter(prefix="/invitations")
@@ -59,7 +61,7 @@ def create_invitation_route(
         {
           "id": "0ec0a2f8-0a59-42e4-b296-8f8b4a8e6d6d",
           "email": "new.user@company.com",
-          "role": "tradsphere.viewer",
+          "role": "viewer",
           "status": "pending",
           "expiresAt": "2026-05-13T08:00:00+00:00",
           "inviteUrl": "https://workspace.example.com/auth/invite/abc123"
@@ -75,7 +77,7 @@ def create_invitation_route(
 
     email = str(payload.get("email") or "").strip().lower()
     app_code = str(payload.get("appCode") or "tradsphere").strip().lower()
-    role = str(payload.get("role") or "").strip()
+    role = normalize_role_key(str(payload.get("role") or "").strip())
 
     if not email:
         raise HTTPException(status_code=400, detail="email is required")
@@ -124,7 +126,7 @@ def get_invitation_route(token: str):
           "email": "new.user@company.com",
           "tenantId": "a4f4fd7d-2c0d-4bb2-bf73-26e5f7f918bf",
           "appId": "f57fc74c-b429-4ce2-8bd0-c6f154a2cb18",
-          "role": "tradsphere.viewer",
+          "role": "viewer",
           "status": "pending",
           "expiresAt": "2026-05-13T08:00:00+00:00",
           "acceptedAt": null,
@@ -140,16 +142,39 @@ def get_invitation_route(token: str):
     if not row:
         raise HTTPException(status_code=404, detail="Invitation not found")
 
+    invitation_id = str(row.get("id") or "").strip()
+    assignments = list_invitation_assignments(invitation_id=invitation_id)
+    resolved_assignments = [
+        {
+            "tenantId": str(item.get("tenant_id") or "").strip(),
+            "appId": str(item.get("app_id") or "").strip(),
+            "role": normalize_role_key(str(item.get("role") or "").strip()),
+        }
+        for item in assignments
+        if str(item.get("tenant_id") or "").strip()
+        and str(item.get("app_id") or "").strip()
+        and normalize_role_key(str(item.get("role") or "").strip())
+    ]
+    if not resolved_assignments:
+        resolved_assignments = [
+            {
+                "tenantId": str(row.get("tenant_id") or "").strip(),
+                "appId": str(row.get("app_id") or "").strip(),
+                "role": normalize_role_key(str(row.get("role") or "").strip()),
+            }
+        ]
+
     return {
         "id": row.get("id"),
         "email": row.get("email"),
         "tenantId": row.get("tenant_id"),
         "appId": row.get("app_id"),
-        "role": row.get("role"),
+        "role": normalize_role_key(str(row.get("role") or "").strip()),
         "status": row.get("status"),
         "expiresAt": row.get("expires_at"),
         "acceptedAt": row.get("accepted_at"),
         "createdAt": row.get("created_at"),
+        "assignments": resolved_assignments,
     }
 
 
@@ -179,7 +204,7 @@ def accept_invitation_route(
           "status": "accepted",
           "tenantId": "a4f4fd7d-2c0d-4bb2-bf73-26e5f7f918bf",
           "appId": "f57fc74c-b429-4ce2-8bd0-c6f154a2cb18",
-          "role": "tradsphere.viewer"
+          "role": "viewer"
         }
 
     Requirements:
@@ -204,9 +229,24 @@ def accept_invitation_route(
         patch_invitation_status(invitation_id=str(row.get("id") or ""), status="expired")
         raise HTTPException(status_code=400, detail="Invitation has expired")
 
+    invitation_id = str(row.get("id") or "").strip()
     tenant_id = str(row.get("tenant_id") or "").strip()
     app_id = str(row.get("app_id") or "").strip()
-    role = str(row.get("role") or "").strip()
+    role = normalize_role_key(str(row.get("role") or "").strip())
+    assignments = list_invitation_assignments(invitation_id=invitation_id)
+    resolved_assignments = [
+        (
+            str(item.get("tenant_id") or "").strip(),
+            str(item.get("app_id") or "").strip(),
+            normalize_role_key(str(item.get("role") or "").strip()),
+        )
+        for item in assignments
+        if str(item.get("tenant_id") or "").strip()
+        and str(item.get("app_id") or "").strip()
+        and normalize_role_key(str(item.get("role") or "").strip())
+    ]
+    if not resolved_assignments:
+        resolved_assignments = [(tenant_id, app_id, role)]
     invite_email = str(row.get("email") or "").strip().lower()
     principal_email = str(principal.email or "").strip().lower()
     if invite_email and principal_email and invite_email != principal_email:
@@ -229,9 +269,15 @@ def accept_invitation_route(
             email=principal.email or invite_email or None,
             full_name=full_name,
         )
-        activate_tenant_user(tenant_id=tenant_id, user_id=user_id)
-        upsert_tenant_app_role(tenant_id=tenant_id, user_id=user_id, app_id=app_id, role=role)
-        mark_invitation_accepted(invitation_id=str(row.get("id") or ""), accepted_by_user_id=user_id)
+        for assignment_tenant_id, assignment_app_id, assignment_role in resolved_assignments:
+            activate_tenant_user(tenant_id=assignment_tenant_id, user_id=user_id)
+            upsert_tenant_app_role(
+                tenant_id=assignment_tenant_id,
+                user_id=user_id,
+                app_id=assignment_app_id,
+                role=assignment_role,
+            )
+        mark_invitation_accepted(invitation_id=invitation_id, accepted_by_user_id=user_id)
     except SupabaseClientError as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
 
@@ -242,6 +288,14 @@ def accept_invitation_route(
         "tenantId": tenant_id,
         "appId": app_id,
         "role": role,
+        "assignments": [
+            {
+                "tenantId": assignment_tenant_id,
+                "appId": assignment_app_id,
+                "role": assignment_role,
+            }
+            for assignment_tenant_id, assignment_app_id, assignment_role in resolved_assignments
+        ],
     }
 
 

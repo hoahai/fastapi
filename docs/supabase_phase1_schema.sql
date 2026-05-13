@@ -39,10 +39,20 @@ create table if not exists tenant_app_roles (
   tenant_id uuid not null references tenants(id) on delete cascade,
   user_id uuid not null references auth.users(id) on delete cascade,
   app_id uuid not null references apps(id) on delete cascade,
-  role text not null check (role in ('tradsphere.viewer','tradsphere.editor','tradsphere.admin')),
+  role text not null check (role in ('viewer','editor','admin')),
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
   unique (tenant_id, user_id, app_id)
+);
+
+create table if not exists user_global_roles (
+  id uuid primary key default gen_random_uuid(),
+  user_id uuid not null references auth.users(id) on delete cascade,
+  role text not null check (role in ('super_admin')),
+  active boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (user_id, role)
 );
 
 create table if not exists role_permissions (
@@ -66,4 +76,14 @@ create table if not exists invitations (
   accepted_at timestamptz,
   accepted_by_user_id uuid references auth.users(id),
   created_at timestamptz not null default now()
+);
+
+create table if not exists invitation_assignments (
+  id uuid primary key default gen_random_uuid(),
+  invitation_id uuid not null references invitations(id) on delete cascade,
+  tenant_id uuid not null references tenants(id) on delete cascade,
+  app_id uuid not null references apps(id) on delete cascade,
+  role text not null check (role in ('viewer','editor','admin')),
+  created_at timestamptz not null default now(),
+  unique (invitation_id, tenant_id, app_id)
 );

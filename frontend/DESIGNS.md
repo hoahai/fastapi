@@ -77,6 +77,11 @@
 - Avoid one giant aggregate endpoint that loads everything for a page.
 - Avoid fragmented request patterns for data that is always required together.
 - Avoid N+1 data-loading/request patterns.
+- Admin Users page pattern:
+  - use one bundled core-load request (`GET /api/auth/v1/admin/users/load`) for `tenants/apps/roles/users/invitations`
+  - initial mount should issue one bundled request; refresh should issue one bundled request
+  - keep invite/user mutations on separate endpoints and then update local state or run one bundled reload
+  - avoid effect dependency loops that trigger duplicate fetches on the same page load
 - Cache by natural scope:
   - dashboard load: entity/page key
   - timeline/date-window data: entity + date range
@@ -120,6 +125,10 @@
 - Auth feedback should use styled inline cards/toasts, not browser-native `alert`/`confirm`.
 - Never display or log tokens/service-role secrets in frontend UI.
 - Backend remains source of truth for authorization; frontend guards are UX-level routing only.
+- Admin/member role display must use:
+  - `Super Admin` (global role)
+  - `Admin`, `Editor`, `Viewer` (tenant/app roles)
+  - Never relabel `Viewer` as `User`.
 
 ## Page State Persistence
 - Preserve useful UI state across frontend route navigation so returning users keep context.

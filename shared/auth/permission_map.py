@@ -1,9 +1,16 @@
 from __future__ import annotations
 
+from shared.auth.roles import (
+    ROLE_ADMIN,
+    ROLE_EDITOR,
+    ROLE_SUPER_ADMIN,
+    ROLE_VIEWER,
+    normalize_role_key,
+)
+
 ROLE_TO_PERMISSIONS: dict[str, set[str]] = {
-    "workspace.super_admin": {
+    ROLE_SUPER_ADMIN: {
         "workspace.super_admin",
-        "workspace.admin",
         "tradsphere.viewer",
         "tradsphere.editor",
         "tradsphere.admin",
@@ -16,8 +23,7 @@ ROLE_TO_PERMISSIONS: dict[str, set[str]] = {
         "tradsphere.estnums.editor",
         "tradsphere.schedules.viewer",
     },
-    "workspace.admin": {
-        "workspace.admin",
+    ROLE_ADMIN: {
         "tradsphere.viewer",
         "tradsphere.editor",
         "tradsphere.admin",
@@ -30,28 +36,14 @@ ROLE_TO_PERMISSIONS: dict[str, set[str]] = {
         "tradsphere.estnums.editor",
         "tradsphere.schedules.viewer",
     },
-    "app.admin": {
-        "app.admin",
-        "tradsphere.viewer",
-        "tradsphere.editor",
-        "tradsphere.admin",
-        "tradsphere.invites.admin",
-        "tradsphere.contacts.viewer",
-        "tradsphere.contacts.editor",
-        "tradsphere.stations.viewer",
-        "tradsphere.stations.editor",
-        "tradsphere.estnums.viewer",
-        "tradsphere.estnums.editor",
-        "tradsphere.schedules.viewer",
-    },
-    "tradsphere.viewer": {
+    ROLE_VIEWER: {
         "tradsphere.viewer",
         "tradsphere.contacts.viewer",
         "tradsphere.stations.viewer",
         "tradsphere.estnums.viewer",
         "tradsphere.schedules.viewer",
     },
-    "tradsphere.editor": {
+    ROLE_EDITOR: {
         "tradsphere.viewer",
         "tradsphere.editor",
         "tradsphere.contacts.viewer",
@@ -61,25 +53,13 @@ ROLE_TO_PERMISSIONS: dict[str, set[str]] = {
         "tradsphere.estnums.viewer",
         "tradsphere.estnums.editor",
         "tradsphere.schedules.viewer",
-    },
-    "tradsphere.admin": {
-        "tradsphere.viewer",
-        "tradsphere.editor",
-        "tradsphere.admin",
-        "tradsphere.contacts.viewer",
-        "tradsphere.contacts.editor",
-        "tradsphere.stations.viewer",
-        "tradsphere.stations.editor",
-        "tradsphere.estnums.viewer",
-        "tradsphere.estnums.editor",
-        "tradsphere.schedules.viewer",
-        "tradsphere.invites.admin",
     },
 }
 
 
 def expand_permissions_for_role(role: str, role_permissions: list[str] | None = None) -> set[str]:
-    base = set(ROLE_TO_PERMISSIONS.get(str(role or "").strip(), set()))
+    normalized = normalize_role_key(role)
+    base = set(ROLE_TO_PERMISSIONS.get(normalized, set()))
     for permission in role_permissions or []:
         normalized = str(permission or "").strip()
         if normalized:

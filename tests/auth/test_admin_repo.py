@@ -44,7 +44,7 @@ class AdminRepoTests(unittest.TestCase):
                 "tenant_id": "tenant-1",
                 "user_id": "user-1",
                 "app_id": "app-1",
-                "role": "tradsphere.viewer",
+                "role": "viewer",
                 "created_at": "2026-05-10T00:00:00Z",
                 "updated_at": "2026-05-10T00:00:00Z",
             }
@@ -75,7 +75,7 @@ class AdminRepoTests(unittest.TestCase):
                 "tenant_id": "tenant-1",
                 "user_id": "user-2",
                 "app_id": "app-1",
-                "role": "tradsphere.viewer",
+                "role": "viewer",
                 "created_at": "2026-05-11T00:00:00Z",
                 "updated_at": "2026-05-11T00:00:00Z",
             }

@@ -149,6 +149,7 @@ Phase 1 includes invite APIs and admin management endpoints:
 - `GET /api/auth/v1/invitations/{token}`
 - `POST /api/auth/v1/invitations/{token}/accept`
 - `POST /api/auth/v1/invitations/{invitation_id}/revoke`
+- `GET /api/auth/v1/admin/users/load`
 - `GET /api/auth/v1/admin/roles`
 - `GET /api/auth/v1/admin/users`
 - `PATCH /api/auth/v1/admin/users/{user_id}`
@@ -159,8 +160,37 @@ Phase 1 includes invite APIs and admin management endpoints:
 Rules:
 
 - Admin endpoints require bearer JWT + `X-Tenant-Id` + `tradsphere.admin`.
+- Admin Users page should load core data through `GET /api/auth/v1/admin/users/load`:
+  - Response includes `tenants`, `apps`, `roles`, `users`, `invitations` (pending by default), and `scope`.
+  - Super Admin scope can use `includeAllTenants=true`; app-admin remains tenant/app scoped.
+  - Existing granular admin endpoints remain available for targeted refresh/debug/action flows.
 - Membership termination disables tenant/app access records; it does not delete Supabase auth users.
 - Role/membership updates invalidate in-memory permission cache for affected users.
+- Admin invitations support multiple tenant/app/role assignments in one invite package.
+- Invite acceptance applies all assignment rows and invalidates the accepted user cache.
+
+## Role Scope Model (Current)
+
+- Global workspace role:
+  - `super_admin`
+- Tenant/app scoped roles:
+  - `admin`
+  - `editor`
+  - `viewer`
+
+Semantics:
+
+- `viewer`: view-only app access
+- `editor`: can mutate app data
+- `admin`: can manage user access only in tenant/app scopes where they are admin
+- `super_admin`: global highest access across tenants/apps
+
+Notes:
+
+- `super_admin` is global and is not stored as tenant/app role.
+- Admin UI flow does not assign `super_admin`.
+- Admin UI flow does not edit/disable `super_admin` members.
+- Backend is source of truth for permission enforcement.
 
 ## Debug Endpoint (Dev-Only)
 
@@ -176,12 +206,15 @@ Rules:
 - `apps`
 - `tenant_users`
 - `tenant_app_roles`
+- `user_global_roles`
 - `role_permissions`
 - `invitations`
+- `invitation_assignments`
 
 Schema file:
 
 - [supabase_phase1_schema.sql](/Users/haitruongh/Developer/fastapi/docs/supabase_phase1_schema.sql)
+- [supabase_role_scope_migration.sql](/Users/haitruongh/Developer/fastapi/docs/supabase_role_scope_migration.sql)
 
 Schema readiness notes (suggestions only, not applied yet):
 

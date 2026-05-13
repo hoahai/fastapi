@@ -42,7 +42,7 @@ class TradspherePermissionDependencyTests(unittest.TestCase):
             tenant_slug="taaa",
             app_id="aid",
             app_code="tradsphere",
-            role="tradsphere.viewer",
+            role="viewer",
             permissions=frozenset({"tradsphere.viewer"}),
         )
         request = SimpleNamespace(
@@ -59,7 +59,7 @@ class TradspherePermissionDependencyTests(unittest.TestCase):
             tenant_slug="taaa",
             app_id="aid",
             app_code="tradsphere",
-            role="tradsphere.viewer",
+            role="viewer",
             permissions=frozenset({"tradsphere.contacts.viewer"}),
         )
         request = SimpleNamespace(

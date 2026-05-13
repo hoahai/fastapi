@@ -14,7 +14,7 @@ def _auth_result() -> AuthorizationResult:
             tenant_slug="taaa",
             app_id="app-1",
             app_code="tradsphere",
-            role="tradsphere.viewer",
+            role="viewer",
             permissions=frozenset({"tradsphere.viewer"}),
         ),
     )

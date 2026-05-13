@@ -13,7 +13,7 @@ import { HOME_ROUTE } from "@/components/layout/navigation";
 import { ToastProvider } from "@/components/ui/toast";
 import { useRouteScrollRestoration } from "@/hooks/useRouteScrollRestoration";
 import { AuthProvider } from "@shared/auth/AuthProvider";
-import { RequirePermission, RequireTenantAccess } from "@shared/auth/guards";
+import { AuthLoadingFallback, RequirePermission, RequireTenantAccess } from "@shared/auth/guards";
 import { AuthCallbackPage, InviteAcceptPage, LoginPage, PendingInvitePage, UnauthorizedPage } from "@shared/auth/pages";
 import { useAuth } from "@shared/auth/useAuth";
 
@@ -86,13 +86,31 @@ function RequireSignedIn({ children }: { children: ReactNode }) {
   const auth = useAuth();
 
   if (auth.status === "loading") {
-    return <div className="p-6 text-sm text-slate-600">Checking session...</div>;
+    return <AuthLoadingFallback message="Checking session..." />;
   }
 
   if (auth.status !== "authenticated" || !auth.user) {
     return <RedirectToLogin />;
   }
 
+  return <>{children}</>;
+}
+
+function RequireAnyPermission({
+  permissions,
+  children,
+  fallback,
+}: {
+  permissions: string[];
+  children: ReactNode;
+  fallback: ReactNode;
+}) {
+  const auth = useAuth();
+  const granted = new Set(auth.accessProfile?.permissions ?? []);
+  const allowed = permissions.some((permission) => granted.has(permission));
+  if (!allowed) {
+    return <>{fallback}</>;
+  }
   return <>{children}</>;
 }
 
@@ -171,9 +189,9 @@ function App() {
     return (
       <RequireSignedIn>
         <RequireTenantAccess fallback={<UnauthorizedPage />}>
-          <RequirePermission permission="tradsphere.viewer" fallback={<UnauthorizedPage />}>
+          <RequireAnyPermission permissions={["workspace.super_admin", "tradsphere.viewer"]} fallback={<UnauthorizedPage />}>
             <ProfilePage />
-          </RequirePermission>
+          </RequireAnyPermission>
         </RequireTenantAccess>
       </RequireSignedIn>
     );
@@ -183,9 +201,9 @@ function App() {
     return (
       <RequireSignedIn>
         <RequireTenantAccess fallback={<UnauthorizedPage />}>
-          <RequirePermission permission="tradsphere.admin" fallback={<UnauthorizedPage />}>
+          <RequireAnyPermission permissions={["workspace.super_admin", "tradsphere.admin"]} fallback={<UnauthorizedPage />}>
             <AdminUsersPage />
-          </RequirePermission>
+          </RequireAnyPermission>
         </RequireTenantAccess>
       </RequireSignedIn>
     );

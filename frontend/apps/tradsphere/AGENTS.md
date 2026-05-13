@@ -48,6 +48,17 @@
   - `/profile` (requires signed-in tenant user with TradSphere access)
 - Keep admin route available for tenant admins:
   - `/admin/users` (requires `tradsphere.admin`)
+- Admin Users data-loading rule:
+  - Use bundled load endpoint `GET /api/auth/v1/admin/users/load` for initial page render and manual refresh.
+  - Populate invite options, pending invitations, members, and edit modal options from bundled payload (`tenants`, `apps`, `roles`, `users`, `invitations`).
+  - Do not fan out initial requests to `/admin/tenants`, `/admin/apps`, `/admin/roles`, `/admin/invitations`, and `/admin/users`.
+  - Keep mutation endpoints separate, then run one bundled reload or targeted local patch.
+- Role scope model in TradSphere admin UX:
+  - `Super Admin` is global/workspace-level (not tenant/app assignment).
+  - `Admin`/`Editor`/`Viewer` are tenant/app scoped.
+  - Admin page must not allow assigning `Super Admin`.
+  - Admin page must use label `Viewer` (never `User`).
+  - Non-super admins must be limited to tenant/app scopes where they hold admin role.
 - Global permission UX rule for TradSphere:
   - `tradsphere.viewer`: read-only browsing.
   - `tradsphere.editor` and `tradsphere.admin`: can perform mutation actions.

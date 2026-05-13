@@ -7,11 +7,13 @@ from datetime import datetime, timedelta, timezone
 from shared.auth.config import get_invite_ttl_hours
 from shared.auth.profile_repo import upsert_profile_basic_info
 from shared.auth.providers import get_auth_provider
+from shared.auth.roles import ROLE_ADMIN, ROLE_EDITOR, ROLE_VIEWER, normalize_role_key
+from shared.auth.supabase_client import SupabaseClientError
 
 VALID_TRADSPHERE_ROLES = (
-    "tradsphere.viewer",
-    "tradsphere.editor",
-    "tradsphere.admin",
+    ROLE_VIEWER,
+    ROLE_EDITOR,
+    ROLE_ADMIN,
 )
 
 
@@ -31,6 +33,11 @@ class InvitationRecord:
 
 def _provider():
     return get_auth_provider()
+
+
+def _is_missing_table_error(exc: Exception, table_name: str) -> bool:
+    detail = str(exc).lower()
+    return table_name.lower() in detail and ("does not exist" in detail or "not found" in detail)
 
 
 def get_active_app(*, app_code: str) -> dict[str, str] | None:
@@ -90,12 +97,13 @@ def create_invitation(
     token = secrets.token_urlsafe(32)
     resolved_expires_at = expires_at or (datetime.now(timezone.utc) + timedelta(hours=get_invite_ttl_hours()))
 
+    normalized_role = normalize_role_key(role)
     row = {
         "token": token,
         "email": email,
         "tenant_id": tenant_id,
         "app_id": app_id,
-        "role": role,
+        "role": normalized_role,
         "status": "pending",
         "invited_by_user_id": invited_by_user_id,
         "expires_at": resolved_expires_at.isoformat(),
@@ -105,7 +113,7 @@ def create_invitation(
         "id": created.get("id"),
         "token": token,
         "email": email,
-        "role": role,
+        "role": normalized_role,
         "status": created.get("status") or "pending",
         "expires_at": created.get("expires_at") or resolved_expires_at.isoformat(),
     }
@@ -169,6 +177,64 @@ def list_invitations_scoped(
     return results
 
 
+def list_invitation_assignments(*, invitation_id: str) -> list[dict[str, object]]:
+    try:
+        rows = _provider().select_many(
+            table="invitation_assignments",
+            filters={"invitation_id": invitation_id},
+            select="id,invitation_id,tenant_id,app_id,role,created_at",
+        )
+    except SupabaseClientError as exc:
+        if _is_missing_table_error(exc, "invitation_assignments"):
+            return []
+        raise
+
+    items: list[dict[str, object]] = []
+    for row in rows:
+        tenant_id = str(row.get("tenant_id") or "").strip()
+        app_id = str(row.get("app_id") or "").strip()
+        role = normalize_role_key(str(row.get("role") or "").strip())
+        if not tenant_id or not app_id or not role:
+            continue
+        items.append(
+            {
+                "id": row.get("id"),
+                "invitation_id": row.get("invitation_id"),
+                "tenant_id": tenant_id,
+                "app_id": app_id,
+                "role": role,
+                "created_at": row.get("created_at"),
+            }
+        )
+    return items
+
+
+def insert_invitation_assignments(
+    *,
+    invitation_id: str,
+    assignments: list[tuple[str, str, str]],
+) -> None:
+    provider = _provider()
+    for tenant_id, app_id, role in assignments:
+        normalized_role = normalize_role_key(role)
+        if not tenant_id or not app_id or not normalized_role:
+            continue
+        try:
+            provider.insert_row(
+                table="invitation_assignments",
+                row={
+                    "invitation_id": invitation_id,
+                    "tenant_id": tenant_id,
+                    "app_id": app_id,
+                    "role": normalized_role,
+                },
+            )
+        except SupabaseClientError as exc:
+            if _is_missing_table_error(exc, "invitation_assignments"):
+                return
+            raise
+
+
 def patch_invitation_status(*, invitation_id: str, status: str, extra_patch: dict[str, object] | None = None) -> None:
     patch: dict[str, object] = {"status": status}
     if extra_patch:
@@ -207,6 +273,7 @@ def activate_tenant_user(*, tenant_id: str, user_id: str) -> None:
 
 def upsert_tenant_app_role(*, tenant_id: str, user_id: str, app_id: str, role: str) -> None:
     provider = _provider()
+    normalized_role = normalize_role_key(role)
     existing = provider.select_single(
         table="tenant_app_roles",
         filters={"tenant_id": tenant_id, "user_id": user_id, "app_id": app_id},
@@ -216,7 +283,7 @@ def upsert_tenant_app_role(*, tenant_id: str, user_id: str, app_id: str, role: s
         provider.patch_rows(
             table="tenant_app_roles",
             filters={"id": str(existing.get("id") or "")},
-            patch={"role": role, "updated_at": provider.now_iso()},
+            patch={"role": normalized_role, "updated_at": provider.now_iso()},
         )
         return
 
@@ -226,7 +293,7 @@ def upsert_tenant_app_role(*, tenant_id: str, user_id: str, app_id: str, role: s
             "tenant_id": tenant_id,
             "user_id": user_id,
             "app_id": app_id,
-            "role": role,
+            "role": normalized_role,
         },
     )
 
