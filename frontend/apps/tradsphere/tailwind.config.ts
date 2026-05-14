@@ -6,6 +6,7 @@ const config: Config = {
     "./index.html",
     "./src/**/*.{ts,tsx}",
     "../home/src/**/*.{ts,tsx}",
+    "../shiftzy/src/**/*.{ts,tsx}",
     "../../shared/**/*.{ts,tsx}",
   ],
   theme: {

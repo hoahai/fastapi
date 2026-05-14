@@ -41,6 +41,7 @@ output/
 *.xlsx
 *.json
 *.csv
+!package.json
 !frontend/**/*.json
 
 # ------------------

@@ -1,4 +1,4 @@
-import { ChevronDown, Copy, Filter, Loader2, Plus, ShieldCheck, Trash2, UserMinus, X } from "lucide-react";
+import { ChevronDown, Copy, Filter, Plus, ShieldCheck, Trash2, UserMinus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ActionIconButton } from "@/components/dashboard/ActionIconButton";
@@ -21,6 +21,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { useApiRequest } from "@/hooks/useApiRequest";
 import { readBrowserCacheSnapshot, writeBrowserCache } from "@/lib/browserCache";
 import { Tooltip } from "@shared/components/actions/Tooltip";
+import { PageLoadingOverlay } from "@shared/components/status/LoadingOverlay";
 
 type RoleItem = {
   key: string;
@@ -107,6 +108,11 @@ type AdminInvitation = {
 };
 
 type DisableTarget = {
+  userId: string;
+  email: string | null;
+};
+
+type PasswordResetTarget = {
   userId: string;
   email: string | null;
 };
@@ -583,6 +589,8 @@ export default function AdminUsersPage() {
   const [originalEditDraft, setOriginalEditDraft] = useState<EditDraft | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
+  const [passwordResetTarget, setPasswordResetTarget] = useState<PasswordResetTarget | null>(null);
+  const [sendingPasswordReset, setSendingPasswordReset] = useState(false);
   const editModalClearTimerRef = useRef<number | null>(null);
 
   const [disableTarget, setDisableTarget] = useState<DisableTarget | null>(null);
@@ -908,7 +916,8 @@ export default function AdminUsersPage() {
   }, []);
 
   function openEditUser(user: AdminUser) {
-    if (summarizeUserRole(user) === "super_admin" || user.isSuperAdmin) {
+    const isSuperAdminMember = summarizeUserRole(user) === "super_admin" || Boolean(user.isSuperAdmin);
+    if (isSuperAdminMember && !scope?.isSuperAdmin) {
       return;
     }
     if (editModalClearTimerRef.current !== null && typeof window !== "undefined") {
@@ -923,9 +932,10 @@ export default function AdminUsersPage() {
   }
 
   function closeEditUser() {
-    if (savingEdit) {
+    if (savingEdit || sendingPasswordReset) {
       return;
     }
+    setPasswordResetTarget(null);
     setIsEditModalOpen(false);
   }
 
@@ -978,20 +988,15 @@ export default function AdminUsersPage() {
       if (!current) {
         return current;
       }
-      const tenantId = current.assignments[0]?.tenantId || tenants[0]?.id || "";
-      const appId = apps[0]?.id || "";
-      const role = assignableRoles.find((item) => item.key === "viewer")?.key
-        || assignableRoles[0]?.key
-        || "viewer";
       return {
         ...current,
         assignments: [
           ...current.assignments,
           {
             id: `row-${Date.now()}-${Math.random().toString(36).slice(2)}`,
-            tenantId,
-            appId,
-            role,
+            tenantId: "",
+            appId: "",
+            role: "",
           },
         ],
       };
@@ -1169,6 +1174,25 @@ export default function AdminUsersPage() {
       await loadData(true);
     } finally {
       setProcessingDisable(false);
+    }
+  }
+
+  async function handleSendPasswordResetConfirmed() {
+    if (!passwordResetTarget) {
+      return;
+    }
+    setSendingPasswordReset(true);
+    try {
+      await requestJson(`/api/auth/v1/admin/users/${encodeURIComponent(passwordResetTarget.userId)}/password-reset`, {
+        method: "POST",
+        successToast: {
+          title: "Password reset sent",
+          message: `A secure password-reset email was sent to ${passwordResetTarget.email || passwordResetTarget.userId}.`,
+        },
+      });
+      setPasswordResetTarget(null);
+    } finally {
+      setSendingPasswordReset(false);
     }
   }
 
@@ -1429,6 +1453,7 @@ export default function AdminUsersPage() {
                         {groupUsers.map((user) => {
                           const resolvedRole = summarizeUserRole(user);
                           const isSuperAdminMember = resolvedRole === "super_admin" || Boolean(user.isSuperAdmin);
+                          const canEditMember = !isSuperAdminMember || Boolean(scope?.isSuperAdmin);
                           const assignmentLabels = unique(
                             user.appAssignments.map((item) => {
                               const appLabel = item.appName || item.appCode || appNameById[item.appId] || item.appId;
@@ -1442,15 +1467,15 @@ export default function AdminUsersPage() {
                             <article
                               key={user.userId}
                               role="button"
-                              tabIndex={isSuperAdminMember ? -1 : 0}
+                              tabIndex={canEditMember ? 0 : -1}
                               onClick={() => {
-                                if (isSuperAdminMember) {
+                                if (!canEditMember) {
                                   return;
                                 }
                                 openEditUser(user);
                               }}
                               onKeyDown={(event) => {
-                                if (isSuperAdminMember) {
+                                if (!canEditMember) {
                                   return;
                                 }
                                 if (event.key === "Enter" || event.key === " ") {
@@ -1459,9 +1484,9 @@ export default function AdminUsersPage() {
                                 }
                               }}
                               className={`rounded-xl p-4 shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 ${
-                                isSuperAdminMember
-                                  ? "cursor-default border border-slate-200 bg-white"
-                                  : "cursor-pointer border border-slate-200 bg-white hover:border-blue-200 hover:bg-blue-50/40"
+                                canEditMember
+                                  ? "cursor-pointer border border-slate-200 bg-white hover:border-blue-200 hover:bg-blue-50/40"
+                                  : "cursor-default border border-slate-200 bg-white"
                               }`}
                             >
                               <div className="flex items-start justify-between gap-2">
@@ -1591,6 +1616,7 @@ export default function AdminUsersPage() {
                             value={row.tenantId}
                             onValueChange={(value) => updateEditAssignmentRow(row.id, { tenantId: value })}
                             options={tenantDropdownOptions}
+                            placeholder="tenant"
                             searchable={false}
                             size="sm"
                           />
@@ -1600,6 +1626,7 @@ export default function AdminUsersPage() {
                             value={row.appId}
                             onValueChange={(value) => updateEditAssignmentRow(row.id, { appId: value })}
                             options={appDropdownOptions}
+                            placeholder="app"
                             searchable={false}
                             size="sm"
                           />
@@ -1609,6 +1636,7 @@ export default function AdminUsersPage() {
                             value={row.role}
                             onValueChange={(value) => updateEditAssignmentRow(row.id, { role: value })}
                             options={roleDropdownOptions}
+                            placeholder="role"
                             searchable={false}
                             size="sm"
                           />
@@ -1633,14 +1661,24 @@ export default function AdminUsersPage() {
 
           {editValidationError ? <p className="mt-3 text-sm text-rose-600">{editValidationError}</p> : null}
 
-          {shouldShowSaveButton ? (
-            <DialogFooter>
+          <DialogFooter>
+            {editingUser ? (
+              <Button
+                variant="outline"
+                onClick={() => setPasswordResetTarget({ userId: editingUser.userId, email: editingUser.email })}
+                disabled={savingEdit || sendingPasswordReset}
+              >
+                {sendingPasswordReset ? <Spinner className="size-4" /> : <ShieldCheck className="size-4" />}
+                {sendingPasswordReset ? "Sending..." : "Send password reset"}
+              </Button>
+            ) : null}
+            {shouldShowSaveButton ? (
               <Button onClick={() => void handleSaveUserEdit()} disabled={savingEdit || !canSubmitEdit}>
                 {savingEdit ? <Spinner className="size-4" /> : null}
                 {savingEdit ? "Saving..." : "Save Changes"}
               </Button>
-            </DialogFooter>
-          ) : null}
+            ) : null}
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -1662,6 +1700,32 @@ export default function AdminUsersPage() {
             >
               {processingDisable ? <Spinner className="size-4" /> : null}
               {processingDisable ? "Disabling..." : "Disable access"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(passwordResetTarget)} onOpenChange={(open) => !open && !sendingPasswordReset && setPasswordResetTarget(null)}>
+        <DialogContent className="max-w-[560px]">
+          <DialogHeader>
+            <DialogTitle>Send password reset</DialogTitle>
+          </DialogHeader>
+
+          <p className="text-sm text-slate-700">
+            Send a secure password-reset email to <span className="font-semibold">{passwordResetTarget?.email || passwordResetTarget?.userId}</span>?
+          </p>
+          <p className="text-xs text-slate-500">
+            This sends a Supabase recovery email. No password or reset token is exposed in the admin UI.
+          </p>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => void handleSendPasswordResetConfirmed()}
+              disabled={sendingPasswordReset}
+            >
+              {sendingPasswordReset ? <Spinner className="size-4" /> : <ShieldCheck className="size-4" />}
+              {sendingPasswordReset ? "Sending..." : "Send password reset"}
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -1768,12 +1832,7 @@ export default function AdminUsersPage() {
       </Dialog>
 
       {shouldShowRefreshingOverlay ? (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-slate-950/25 backdrop-blur-[1.5px]">
-          <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-medium text-slate-700 shadow-soft">
-            <Loader2 className="size-4 animate-spin text-blue-600" />
-            <span>Refreshing admin data...</span>
-          </div>
-        </div>
+        <PageLoadingOverlay message="Refreshing admin data..." />
       ) : null}
 
       {showCacheChip ? (

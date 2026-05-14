@@ -4,17 +4,19 @@ import TradsphereHomePage from "@/TradsphereHomePage";
 import EstimateNumbersPage from "@/pages/EstimateNumbersPage";
 import ContactsPage from "@/pages/ContactsPage";
 import StationsPage from "@/pages/StationsPage";
+import ShiftzySchedulePage from "@shiftzy/ShiftzySchedulePage";
 import AdminUsersPage from "@/pages/AdminUsersPage";
 import ProfilePage from "@/pages/ProfilePage";
 import { WorkspaceNotFoundPage } from "@home/WorkspaceNotFoundPage";
 import { WorkspacePortalPage } from "@home/WorkspacePortalPage";
 import { AppShell } from "@/components/layout/AppShell";
-import { HOME_ROUTE } from "@/components/layout/navigation";
+import { APP_NAV_ITEMS, HOME_ROUTE } from "@/components/layout/navigation";
 import { ToastProvider } from "@/components/ui/toast";
 import { useRouteScrollRestoration } from "@/hooks/useRouteScrollRestoration";
 import { AuthProvider } from "@shared/auth/AuthProvider";
-import { AuthLoadingFallback, RequirePermission, RequireTenantAccess } from "@shared/auth/guards";
-import { AuthCallbackPage, InviteAcceptPage, LoginPage, PendingInvitePage, UnauthorizedPage } from "@shared/auth/pages";
+import { AuthLoadingFallback, RequirePermission, RequireTenantAccess, shouldProtectTradsphereFrontend } from "@shared/auth/guards";
+import { hasAnyAdminScope, hasAppViewAccess } from "@shared/auth/permissions";
+import { AuthCallbackPage, InviteAcceptPage, LoginPage, PendingInvitePage, UnauthorizedPage, UpdatePasswordPage } from "@shared/auth/pages";
 import { useAuth } from "@shared/auth/useAuth";
 
 function getFrontendPath(pathname: string): string {
@@ -45,6 +47,26 @@ function toFrontendHref(route: string): string {
   return route;
 }
 
+function shouldRouteToUpdatePasswordFromHash(hash: string): boolean {
+  const normalizedHash = String(hash || "").replace(/^#/, "");
+  if (!normalizedHash) {
+    return false;
+  }
+  const params = new URLSearchParams(normalizedHash);
+  const flowType = String(params.get("type") || "").trim().toLowerCase();
+  const hasAccessToken = String(params.get("access_token") || "").trim().length > 0;
+  if (flowType === "recovery" && hasAccessToken) {
+    return true;
+  }
+
+  const errorCode = String(params.get("error_code") || "").trim().toLowerCase();
+  const hasSupabaseMarker = params.has("sb");
+  if (!errorCode || !hasSupabaseMarker) {
+    return false;
+  }
+  return errorCode === "otp_expired" || errorCode === "access_denied";
+}
+
 function toScrollStorageKey(route: string): string {
   if (route === HOME_ROUTE) {
     return "workspace.portal.scrollY";
@@ -60,6 +82,9 @@ function toScrollStorageKey(route: string): string {
   }
   if (route === "/tradsphere/stations") {
     return "tradsphere.stations.scrollY";
+  }
+  if (route === "/shiftzy/home") {
+    return "shiftzy.home.scrollY";
   }
   if (route === "/admin/users") {
     return "workspace.admin.users.scrollY";
@@ -114,9 +139,74 @@ function RequireAnyPermission({
   return <>{children}</>;
 }
 
+function RequireAppView({
+  appCode,
+  children,
+  fallback,
+}: {
+  appCode: string;
+  children: ReactNode;
+  fallback: ReactNode;
+}) {
+  const auth = useAuth();
+  if (!shouldProtectTradsphereFrontend()) {
+    return <>{children}</>;
+  }
+  if (auth.status === "loading") {
+    return <AuthLoadingFallback />;
+  }
+  if (auth.status !== "authenticated") {
+    return <>{fallback}</>;
+  }
+  if (auth.accessLoading && !auth.accessProfile) {
+    return <AuthLoadingFallback />;
+  }
+  if (!hasAppViewAccess(auth.accessProfile, appCode)) {
+    return <>{fallback}</>;
+  }
+  return <>{children}</>;
+}
+
+function RequireAdminScope({ children, fallback }: { children: ReactNode; fallback: ReactNode }) {
+  const auth = useAuth();
+  if (!shouldProtectTradsphereFrontend()) {
+    return <>{children}</>;
+  }
+  if (auth.status === "loading") {
+    return <AuthLoadingFallback />;
+  }
+  if (auth.status !== "authenticated") {
+    return <>{fallback}</>;
+  }
+  if (auth.accessLoading && !auth.accessProfile) {
+    return <AuthLoadingFallback />;
+  }
+  if (!auth.accessProfile) {
+    return <>{fallback}</>;
+  }
+  const appCodes = APP_NAV_ITEMS.map((item) => item.id);
+  if (!hasAnyAdminScope(auth.accessProfile, appCodes)) {
+    return <>{fallback}</>;
+  }
+  return <>{children}</>;
+}
+
 function App() {
   const [frontendPath, setFrontendPath] = useState(() => getFrontendPath(window.location.pathname));
   useRouteScrollRestoration(toScrollStorageKey(frontendPath));
+
+  useEffect(() => {
+    if (frontendPath === "/auth/update-password") {
+      return;
+    }
+    if (!shouldRouteToUpdatePasswordFromHash(window.location.hash || "")) {
+      return;
+    }
+    const targetPath = "/auth/update-password";
+    const nextUrl = `${targetPath}${window.location.search || ""}${window.location.hash || ""}`;
+    window.history.replaceState({}, "", nextUrl);
+    setFrontendPath(targetPath);
+  }, [frontendPath]);
 
   useEffect(() => {
     const handlePopState = () => {
@@ -141,6 +231,7 @@ function App() {
       HOME_ROUTE,
       "/auth/login",
       "/auth/callback",
+      "/auth/update-password",
       "/auth/unauthorized",
       "/auth/invite/pending",
       "/profile",
@@ -149,6 +240,7 @@ function App() {
       "/tradsphere/estnums",
       "/tradsphere/contacts",
       "/tradsphere/stations",
+      "/shiftzy/home",
     ]);
   }, []);
 
@@ -185,6 +277,18 @@ function App() {
     );
   }
 
+  function renderShiftzyRoute() {
+    return (
+      <RequireSignedIn>
+        <RequireTenantAccess fallback={<UnauthorizedPage />}>
+          <RequireAppView appCode="shiftzy" fallback={<UnauthorizedPage />}>
+            {frontendPath === "/shiftzy/home" ? <ShiftzySchedulePage /> : null}
+          </RequireAppView>
+        </RequireTenantAccess>
+      </RequireSignedIn>
+    );
+  }
+
   function renderProfileRoute() {
     return (
       <RequireSignedIn>
@@ -201,9 +305,9 @@ function App() {
     return (
       <RequireSignedIn>
         <RequireTenantAccess fallback={<UnauthorizedPage />}>
-          <RequireAnyPermission permissions={["workspace.super_admin", "tradsphere.admin"]} fallback={<UnauthorizedPage />}>
+          <RequireAdminScope fallback={<UnauthorizedPage />}>
             <AdminUsersPage />
-          </RequireAnyPermission>
+          </RequireAdminScope>
         </RequireTenantAccess>
       </RequireSignedIn>
     );
@@ -215,12 +319,14 @@ function App() {
         <AppShell currentPath={frontendPath} onNavigate={navigate}>
           {frontendPath === "/auth/login" ? <LoginPage /> : null}
           {frontendPath === "/auth/callback" ? <AuthCallbackPage /> : null}
+          {frontendPath === "/auth/update-password" ? <UpdatePasswordPage /> : null}
           {frontendPath === "/auth/unauthorized" ? <UnauthorizedPage /> : null}
           {frontendPath === "/auth/invite/pending" ? <PendingInvitePage /> : null}
           {inviteToken ? <InviteAcceptPage token={inviteToken} /> : null}
           {frontendPath === "/profile" ? renderProfileRoute() : null}
           {frontendPath === "/admin/users" ? renderAdminRoute() : null}
           {frontendPath.startsWith("/tradsphere/") ? renderTradsphereRoute() : null}
+          {frontendPath.startsWith("/shiftzy/") ? renderShiftzyRoute() : null}
           {frontendPath === HOME_ROUTE ? (
             <RequireSignedIn>
               <WorkspacePortalPage onNavigate={navigate} />

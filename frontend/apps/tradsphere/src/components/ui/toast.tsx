@@ -29,6 +29,7 @@ type ToastContextValue = {
 const ToastContext = createContext<ToastContextValue | null>(null);
 
 const DEFAULT_DURATION_MS = 3800;
+const ERROR_DURATION_MS = 7000;
 
 function createToastId(): string {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
@@ -54,7 +55,7 @@ export function ToastProvider({ children }: { children: ReactNode }) {
         },
       ]);
 
-      const durationMs = input.durationMs ?? DEFAULT_DURATION_MS;
+      const durationMs = input.durationMs ?? (input.kind === "error" ? ERROR_DURATION_MS : DEFAULT_DURATION_MS);
       window.setTimeout(() => {
         dismiss(id);
       }, durationMs);

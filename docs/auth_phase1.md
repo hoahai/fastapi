@@ -112,6 +112,7 @@ Auth pages are enabled in frontend under `/auth/*` for Tradsphere-first rollout:
 
 - `/auth/login`
 - `/auth/callback`
+- `/auth/update-password`
 - `/auth/invite/{token}`
 - `/auth/unauthorized`
 - `/auth/invite/pending`
@@ -125,16 +126,28 @@ Login UX rules:
 - Google login and magic-link login are not included in this phase.
 - Login copy remains invite-only and user-friendly.
 
+My Profile + password rules:
+
+- `/profile` supports basic profile updates (`firstName`, `lastName`, `fullName`) via `PATCH /api/auth/v1/session/me/profile`.
+- `/profile` supports self password change through the frontend auth-provider abstraction and Supabase Auth user update.
+- `/profile` account summary does not treat tenant as root-level identity; tenant is shown only in app/access scope context when needed.
+- Password values are never persisted to browser storage and are never logged.
+- Password policy for create/reset/change flows: `Password must be at least 8 characters and include at least one letter and one number.`
+- Password reset recovery flow uses `/auth/update-password` and keeps email/password auth only (no magic link sign-in UX).
+
 Workspace Home visibility rules:
 
 - Signed-out users see sign-in CTA and should not be shown app access as available.
-- Signed-in users see app availability based on `/api/auth/v1/session/me`.
-- Signed-in users with no app permissions see a no-access empty state.
+- Signed-in users see app availability based on `/api/auth/v1/session/me` (session permissions/access profile is the frontend source of truth).
+- Workspace Home hides apps the user cannot access; unavailable app cards should not be shown as clickable actions.
+- Sidebar navigation hides app/page links the user cannot access (including Admin/Users for non-admin scopes).
+- Signed-in users with no app permissions see: `You do not have access to any apps yet. Contact your workspace administrator.`
 
 Security/authorization rule:
 
-- Frontend guards and auth pages are UX controls only.
+- Frontend visibility and guards are UX controls only.
 - Backend authorization remains the source of truth for protected API access.
+- Direct URL access to unauthorized routes must still resolve to unauthorized behavior (route guard/backend enforcement).
 
 ## Tradsphere-First Protection
 
@@ -153,6 +166,7 @@ Phase 1 includes invite APIs and admin management endpoints:
 - `GET /api/auth/v1/admin/roles`
 - `GET /api/auth/v1/admin/users`
 - `PATCH /api/auth/v1/admin/users/{user_id}`
+- `POST /api/auth/v1/admin/users/{user_id}/password-reset`
 - `GET /api/auth/v1/admin/invitations`
 - `POST /api/auth/v1/admin/invitations`
 - `POST /api/auth/v1/admin/invitations/{invitation_id}/revoke`
@@ -160,6 +174,8 @@ Phase 1 includes invite APIs and admin management endpoints:
 Rules:
 
 - Admin endpoints require bearer JWT + `X-Tenant-Id` + `tradsphere.admin`.
+- Admin password reset endpoint sends Supabase recovery email for the target scoped user and never returns password/token values.
+- Super Admin can reset any user; app-admin can reset only users in their managed tenant/app scope.
 - Admin Users page should load core data through `GET /api/auth/v1/admin/users/load`:
   - Response includes `tenants`, `apps`, `roles`, `users`, `invitations` (pending by default), and `scope`.
   - Super Admin scope can use `includeAllTenants=true`; app-admin remains tenant/app scoped.

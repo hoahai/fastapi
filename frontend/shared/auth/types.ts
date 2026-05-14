@@ -18,12 +18,39 @@ export type AccessProfile = {
     id: string;
     slug: string;
   };
-  app: {
+  app?: {
     id: string;
     code: string;
-  };
-  role: string;
+  } | null;
+  role?: string | null;
+  assignments?: Array<{
+    tenant: {
+      id: string;
+      slug: string;
+      name?: string | null;
+      status?: string | null;
+    };
+    app: {
+      id: string;
+      code: string;
+      name?: string | null;
+    };
+    role: string;
+  }>;
   permissions: string[];
+  appAccess?: Array<{
+    app: {
+      id: string;
+      code: string;
+      name?: string | null;
+    };
+    role: string;
+    permissions?: string[];
+  }>;
+  scope?: {
+    isSuperAdmin?: boolean;
+    hasAnyAdminScope?: boolean;
+  };
 };
 
 export type AuthStatus = "idle" | "loading" | "authenticated" | "unauthenticated";

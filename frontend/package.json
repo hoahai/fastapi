@@ -3,8 +3,11 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
+    "install:tradsphere": "npm --prefix apps/tradsphere install",
+    "install:all": "bash -lc 'for app in apps/*; do [ -f \"$app/package.json\" ] || continue; echo \"==> install ${app}\"; npm --prefix \"$app\" install || exit 1; done'",
     "dev:tradsphere": "npm --prefix apps/tradsphere run dev",
     "build:tradsphere": "npm --prefix apps/tradsphere run build",
-    "build": "npm run build:tradsphere"
+    "build:all": "bash -lc 'for app in apps/*; do [ -f \"$app/package.json\" ] || continue; echo \"==> build ${app}\"; npm --prefix \"$app\" run build --if-present || exit 1; done'",
+    "build": "npm run build:all"
   }
 }

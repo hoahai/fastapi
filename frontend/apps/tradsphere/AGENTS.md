@@ -41,18 +41,27 @@
 - Keep auth utility routes available in shared shell flow:
   - `/auth/login`
   - `/auth/callback`
+  - `/auth/update-password`
   - `/auth/invite/:token`
   - `/auth/unauthorized`
   - `/auth/invite/pending`
 - Keep authenticated user profile route available:
   - `/profile` (requires signed-in tenant user with TradSphere access)
+  - `/profile` includes:
+    - profile-name update (`PATCH /api/auth/v1/session/me/profile`)
+    - self password change via shared auth provider abstraction
+    - account summary cards that treat tenant as access scope context, not root-level profile identity
+    - role labels must remain `Super Admin`, `Admin`, `Editor`, `Viewer`
+    - password policy text: `Password must be at least 8 characters and include at least one letter and one number.`
 - Keep admin route available for tenant admins:
-  - `/admin/users` (requires `tradsphere.admin`)
+  - `/admin/users` (requires admin scope; `viewer`/`editor` must not see this nav link)
 - Admin Users data-loading rule:
   - Use bundled load endpoint `GET /api/auth/v1/admin/users/load` for initial page render and manual refresh.
   - Populate invite options, pending invitations, members, and edit modal options from bundled payload (`tenants`, `apps`, `roles`, `users`, `invitations`).
   - Do not fan out initial requests to `/admin/tenants`, `/admin/apps`, `/admin/roles`, `/admin/invitations`, and `/admin/users`.
   - Keep mutation endpoints separate, then run one bundled reload or targeted local patch.
+  - Edit member modal may trigger `POST /api/auth/v1/admin/users/{user_id}/password-reset` as a scoped admin action.
+  - Password reset action must stay secondary (not primary save action) and must never expose passwords/tokens in UI.
 - Role scope model in TradSphere admin UX:
   - `Super Admin` is global/workspace-level (not tenant/app assignment).
   - `Admin`/`Editor`/`Viewer` are tenant/app scoped.
@@ -66,6 +75,8 @@
 - Treat `/fe` and `/fe/...` as compatibility-only aliases/redirects to root paths.
 - All frontend pages/routes must render inside the shared app shell with the collapsible sidebar.
 - Sidebar navigation should support app child pages; TradSphere parent remains active for any `/tradsphere/*` child route.
+- Sidebar and Workspace Home must hide unauthorized apps/pages based on `/api/auth/v1/session/me` access profile data loaded in auth context.
+- Frontend-hidden links are UX only; direct URL access still relies on route guards and backend permission checks.
 - Sidebar navigation state (collapsed/expanded) should persist across route navigation.
 - When sidebar is manually collapsed, desktop hover/focus may temporarily expand it for navigation, then revert on leave/blur.
 - Temporary hover/focus expansion must not overwrite the persisted collapsed/expanded preference.

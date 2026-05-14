@@ -407,6 +407,75 @@ def get_user_app_roles(
     return rows
 
 
+def list_user_access_assignments(*, user_id: str) -> list[dict[str, object]]:
+    """
+    Return tenant/app role assignments for a single user with tenant/app metadata.
+
+    Active membership is required per tenant for assignment inclusion.
+    """
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        return []
+
+    tenant_map: dict[str, dict[str, object]] = {}
+    for row in _collect_table_rows(table="tenants", filters={}, select="id,slug,name,active"):
+        tenant_id = str(row.get("id") or "").strip()
+        if tenant_id:
+            tenant_map[tenant_id] = row
+
+    app_map: dict[str, dict[str, object]] = {}
+    for row in _collect_table_rows(table="apps", filters={}, select="id,code,name,active"):
+        app_id = str(row.get("id") or "").strip()
+        if app_id:
+            app_map[app_id] = row
+
+    active_memberships_by_tenant: dict[str, dict[str, object]] = {}
+    for row in get_user_memberships(user_id=normalized_user_id):
+        tenant_id = str(row.get("tenant_id") or "").strip()
+        status = str(row.get("status") or "").strip().lower()
+        if not tenant_id or status != "active":
+            continue
+        active_memberships_by_tenant[tenant_id] = row
+
+    assignments: list[dict[str, object]] = []
+    for row in get_user_app_roles(user_id=normalized_user_id):
+        tenant_id = str(row.get("tenant_id") or "").strip()
+        app_id = str(row.get("app_id") or "").strip()
+        if not tenant_id or not app_id:
+            continue
+        if tenant_id not in active_memberships_by_tenant:
+            continue
+
+        tenant_row = tenant_map.get(tenant_id) or {}
+        app_row = app_map.get(app_id) or {}
+
+        assignments.append(
+            {
+                "tenant": {
+                    "id": tenant_id,
+                    "slug": str(tenant_row.get("slug") or "").strip() or None,
+                    "name": _as_non_empty_text(tenant_row.get("name")),
+                    "status": "active",
+                },
+                "app": {
+                    "id": app_id,
+                    "code": str(app_row.get("code") or "").strip().lower() or None,
+                    "name": _as_non_empty_text(app_row.get("name")),
+                },
+                "role": normalize_role_key(str(row.get("role") or "").strip()) or _as_non_empty_text(row.get("role")),
+            }
+        )
+
+    assignments.sort(
+        key=lambda item: (
+            str(((item.get("app") or {}).get("code") if isinstance(item.get("app"), dict) else "") or "~").lower(),
+            str(((item.get("tenant") or {}).get("slug") if isinstance(item.get("tenant"), dict) else "") or "~").lower(),
+            _role_rank(str(item.get("role") or "")),
+        )
+    )
+    return assignments
+
+
 def set_tenant_user_status(*, tenant_id: str, user_id: str, status: str) -> None:
     provider = _provider()
     existing = provider.select_single(
@@ -513,3 +582,16 @@ def list_admin_assignment_scopes_for_user(*, user_id: str) -> set[tuple[str, str
             continue
         scopes.add((tenant_id, app_id))
     return scopes
+
+
+def send_password_reset_for_user(*, user_id: str, redirect_to: str | None = None) -> str:
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        raise SupabaseClientError("user_id is required")
+    provider = _provider()
+    auth_user = provider.get_auth_user_by_id(user_id=normalized_user_id) or {}
+    email = _as_non_empty_text(auth_user.get("email"))
+    if not email:
+        raise SupabaseClientError("Target user email is unavailable for password reset")
+    provider.send_password_recovery_email(email=email, redirect_to=redirect_to)
+    return email.lower()

@@ -94,10 +94,19 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
   {
     id: "shiftzy",
     label: "Shiftzy",
-    description: "Coming soon",
+    description: "Workforce schedule maker",
     route: "/shiftzy/home",
     icon: CalendarClock,
-    available: false,
+    available: true,
+    activeMatchPrefix: "/shiftzy/",
+    children: [
+      {
+        id: "shiftzy-schedules",
+        label: "Schedules",
+        route: "/shiftzy/home",
+        available: true,
+      },
+    ],
   },
 ];
 
@@ -112,3 +121,4 @@ export const TRADSPHERE_HOME_CHILD_ICON = House;
 export const TRADSPHERE_ESTNUMS_CHILD_ICON = Search;
 export const TRADSPHERE_CONTACTS_CHILD_ICON = ContactRound;
 export const TRADSPHERE_STATIONS_CHILD_ICON = MapPinned;
+export const SHIFTZY_SCHEDULES_CHILD_ICON = CalendarClock;

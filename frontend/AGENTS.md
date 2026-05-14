@@ -27,9 +27,19 @@
   - Login supports only `email/password`.
   - Magic link and Google login are not part of this phase.
   - Do not show Google login UI in Phase 1.
+  - Password recovery/update route is `/auth/update-password` (email/password only; no magic-link login UX).
   - Keep auth copy invite-only and user-friendly; avoid raw technical error dumps.
   - Do not use browser-native `alert`/`confirm` for auth flows.
   - Frontend auth guards are UX helpers only; backend permission checks remain source of truth.
+  - Workspace Home and sidebar app visibility must be driven by `/api/auth/v1/session/me` access data already loaded in auth context.
+  - Hide apps/pages the user cannot access instead of rendering disabled navigation by default.
+  - Hide `Admin / Users` for non-admin scopes (`viewer`/`editor`); show it only for users with admin scope or `super_admin`.
+  - Direct URL access must still be protected by route guards/backend checks even when links are hidden.
+  - Keep Supabase-specific auth calls inside `frontend/shared/auth/provider/*` and call generic auth-context methods from pages/components.
+  - `/profile` must keep profile and password forms split; save/update actions follow dirty + valid + loading guard rules.
+  - `/profile` account summary must not show tenant as a root-level identity field; tenant belongs to app/access scope context.
+  - Password policy for create/reset/change flows:
+    - `Password must be at least 8 characters and include at least one letter and one number.`
   - Canonical role labels for auth/admin UX must be:
     - `Super Admin` (global/workspace role, non-assignable from normal admin page)
     - `Admin`, `Editor`, `Viewer` (tenant/app scoped)

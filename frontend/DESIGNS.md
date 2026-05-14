@@ -101,14 +101,17 @@
 - Collapsed desktop sidebar should be icon-only (no text labels and no leftover letter badges).
 - Sidebar remains fixed while page content scrolls independently.
 - Sidebar entries include `Home / Portal` and app links/status (for example `Tradsphere`, future app placeholders).
+- Sidebar entries must be visibility-scoped by signed-in access from `/api/auth/v1/session/me`; hide unauthorized app/page items.
 - App pages follow `/<app-name>/home` (for example `/tradsphere/home`).
 - `/fe` is compatibility-only and should redirect/alias to root-based routes.
 - Portal home should include a clear title, short guidance text, an Announcements section, and an Apps section with direct navigation cards.
 - The Apps section should use responsive cards: mobile 1 column, tablet 2 columns, desktop 3+ columns when space allows.
 - Portal app visibility must be auth-aware:
   - Signed-out users should see sign-in CTA and should not see app actions as available access.
-  - Signed-in users should see app availability derived from `/api/auth/v1/session/me`.
-  - Signed-in users with no app permissions should see a clear empty state.
+  - Signed-in users should see only apps they can access, derived from `/api/auth/v1/session/me`.
+  - Unauthorized/unavailable apps should be hidden from Workspace Home by default.
+  - Signed-in users with no app permissions should see a clear empty state:
+    - `You do not have access to any apps yet. Contact your workspace administrator.`
 - Reuse a shared banner component so portal and app pages keep the same visual language.
 
 ## Auth UX Pages
@@ -119,12 +122,21 @@
   - Subtitle: `Sign in to access your workspace apps.`
   - Method: `Sign in with password`
 - Login must support only `email/password`; do not show Google login or magic-link UI in Phase 1.
+- Password recovery/update route is `/auth/update-password`; keep the UX email/password-only and do not reintroduce magic-link sign-in UI.
 - Callback page should show friendly loading and error states without exposing tokens or raw secrets.
 - Invite accept page should show invite summary state (email/workspace/app/role/status/expiration) and clear state messaging (pending/accepted/revoked/expired/mismatch).
 - Unauthorized and pending-invite pages should show clear context + actions (`Back to Workspace Home`, `Sign out`, `Back to login` as applicable).
 - Auth feedback should use styled inline cards/toasts, not browser-native `alert`/`confirm`.
 - Never display or log tokens/service-role secrets in frontend UI.
+- Profile security UX should keep profile fields and password fields in separate visual sections/cards.
+- Profile account summary should use read-only summary cards and avoid root-level `Active Tenant` identity fields.
+- Tenant context in profile UI should appear under app/access scope rows (for example App Access), not as a root identity value.
+- Password forms should include inline strength/help text, friendly validation, and clear success/failure states.
+- Password create/reset/change copy should use:
+  - `Password must be at least 8 characters and include at least one letter and one number.`
+- Admin password reset UI should be a secondary action in member edit flows and must never reveal generated tokens/password values.
 - Backend remains source of truth for authorization; frontend guards are UX-level routing only.
+- Hidden links are UX only; direct URL access must still be blocked by route guards/backend permission checks.
 - Admin/member role display must use:
   - `Super Admin` (global role)
   - `Admin`, `Editor`, `Viewer` (tenant/app roles)

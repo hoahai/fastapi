@@ -35,6 +35,9 @@ class SessionEndpointTests(unittest.TestCase):
         with patch("apps.auth.api.v1.endpoints.session.authorize_bearer_for_tenant_app", return_value=_auth_result()), patch(
             "apps.auth.api.v1.endpoints.session.select_profile_for_user",
             return_value={"user_id": "user-1", "email": "user@example.com", "full_name": "Alex Johnson"},
+        ), patch(
+            "apps.auth.api.v1.endpoints.session._filter_assignments_by_backend_app_config",
+            side_effect=lambda assignments: assignments,
         ):
             response = get_session_me(request)
 
@@ -60,6 +63,74 @@ class SessionEndpointTests(unittest.TestCase):
         self.assertEqual(response["user"]["fullName"], "Updated Name")
         self.assertEqual(response["user"]["firstName"], "Updated")
         self.assertEqual(response["user"]["lastName"], "Name")
+
+    def test_get_session_me_super_admin_includes_active_tenant_assignments_when_scoped_assignments_missing(self):
+        request = self._request()
+        super_admin_result = AuthorizationResult(
+            principal=AuthPrincipal(user_id="user-1", email="user@example.com", raw_user={}),
+            access=TenantAccessProfile(
+                tenant_id="tenant-1",
+                tenant_slug="taaa",
+                app_id="app-1",
+                app_code="tradsphere",
+                role="super_admin",
+                permissions=frozenset({"workspace.super_admin", "tradsphere.admin", "tradsphere.viewer"}),
+            ),
+        )
+        with patch("apps.auth.api.v1.endpoints.session.authorize_bearer_for_tenant_app", return_value=super_admin_result), patch(
+            "apps.auth.api.v1.endpoints.session.select_profile_for_user",
+            return_value={"user_id": "user-1", "email": "user@example.com", "full_name": "Alex Johnson"},
+        ), patch(
+            "apps.auth.api.v1.endpoints.session.list_user_access_assignments",
+            return_value=[],
+        ), patch(
+            "apps.auth.api.v1.endpoints.session._filter_assignments_by_backend_app_config",
+            side_effect=lambda assignments: assignments,
+        ), patch(
+            "apps.auth.api.v1.endpoints.session.is_user_super_admin",
+            return_value=True,
+        ), patch(
+            "apps.auth.api.v1.endpoints.session.list_active_tenants",
+            return_value=[
+                {"id": "tenant-1", "slug": "taaa", "name": "TAAA"},
+                {"id": "tenant-2", "slug": "nucar", "name": "NuCar"},
+            ],
+        ), patch(
+            "apps.auth.api.v1.endpoints.session.list_active_apps",
+            return_value=[{"id": "app-1", "code": "tradsphere", "name": "Tradsphere"}],
+        ):
+            response = get_session_me(request)
+
+        self.assertTrue(response["scope"]["isSuperAdmin"])
+        self.assertEqual(len(response["assignments"]), 2)
+        self.assertEqual(response["assignments"][0]["tenant"]["slug"], "nucar")
+        self.assertEqual(response["assignments"][1]["tenant"]["slug"], "taaa")
+        self.assertEqual(response["assignments"][0]["role"], "super_admin")
+        self.assertEqual(response["assignments"][0]["app"]["code"], "tradsphere")
+
+    def test_get_session_me_filters_out_backend_disabled_tenant_assignment(self):
+        request = self._request()
+        assignment = {
+            "tenant": {"id": "tenant-1", "slug": "taaa", "name": "TAAA"},
+            "app": {"id": "app-1", "code": "tradsphere", "name": "Tradsphere"},
+            "role": "viewer",
+        }
+        with patch("apps.auth.api.v1.endpoints.session.authorize_bearer_for_tenant_app", return_value=_auth_result()), patch(
+            "apps.auth.api.v1.endpoints.session.select_profile_for_user",
+            return_value={"user_id": "user-1", "email": "user@example.com", "full_name": "Alex Johnson"},
+        ), patch(
+            "apps.auth.api.v1.endpoints.session.list_user_access_assignments",
+            return_value=[assignment],
+        ), patch(
+            "apps.auth.api.v1.endpoints.session.is_user_super_admin",
+            return_value=False,
+        ), patch(
+            "apps.auth.api.v1.endpoints.session._is_assignment_backend_enabled",
+            return_value=False,
+        ):
+            response = get_session_me(request)
+
+        self.assertEqual(response["assignments"], [])
 
 
 if __name__ == "__main__":

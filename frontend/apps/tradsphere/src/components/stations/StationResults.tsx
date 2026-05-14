@@ -65,9 +65,8 @@ export function StationResults({
                 <h3 className="text-base font-bold text-blue-900">{group.label}</h3>
                 <p className="mt-0.5 text-xs text-slate-500">{group.items.length} stations</p>
               </div>
-              <span className="inline-flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">
-                {isOpen ? "Collapse" : "Expand"}
-                <ChevronDown className={`size-3.5 transition-transform ${isOpen ? "rotate-180" : "rotate-0"}`} />
+              <span className="inline-flex items-center text-slate-500" aria-hidden="true">
+                <ChevronDown className={`size-4 transition-transform ${isOpen ? "rotate-180" : "rotate-0"}`} />
               </span>
             </button>
 

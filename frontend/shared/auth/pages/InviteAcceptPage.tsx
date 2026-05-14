@@ -4,6 +4,7 @@ import { PageBanner } from "@/components/layout/PageBanner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { PASSWORD_RULE_MESSAGE, validatePasswordAgainstPolicy } from "@shared/auth/passwordRules";
 import { useAuth } from "@shared/auth/useAuth";
 
 type InviteAcceptPageProps = {
@@ -143,6 +144,20 @@ export function InviteAcceptPage({ token }: InviteAcceptPageProps) {
   const inviteEmail = String(payload?.email || "").trim().toLowerCase();
   const workspaceLabel = auth.tenantSlug || String(import.meta.env.VITE_DEFAULT_TENANT_SLUG || "").trim().toLowerCase();
   const canCreatePassword = Boolean(inviteEmail);
+  const registerPasswordValidationError = useMemo(() => {
+    const policyError = validatePasswordAgainstPolicy(registerPassword);
+    if (policyError) {
+      return policyError;
+    }
+    if (!registerConfirmPassword) {
+      return "Confirm your password.";
+    }
+    if (registerPassword !== registerConfirmPassword) {
+      return "Passwords do not match.";
+    }
+    return null;
+  }, [registerConfirmPassword, registerPassword]);
+  const canSubmitCreatePassword = Boolean(registerPassword && registerConfirmPassword && !registerPasswordValidationError && !registering);
   const loginHref = useMemo(
     () => `/auth/login?return_to=${encodeURIComponent(`/auth/invite/${token}?auto_accept=1`)}`,
     [token],
@@ -247,8 +262,9 @@ export function InviteAcceptPage({ token }: InviteAcceptPageProps) {
       return;
     }
 
-    if (registerPassword.length < 8) {
-      setRegisterMessage("Password must be at least 8 characters.");
+    const passwordPolicyError = validatePasswordAgainstPolicy(registerPassword);
+    if (passwordPolicyError) {
+      setRegisterMessage(passwordPolicyError);
       return;
     }
 
@@ -277,7 +293,7 @@ export function InviteAcceptPage({ token }: InviteAcceptPageProps) {
         return;
       }
       if (text.includes("password")) {
-        setRegisterMessage(raw || "Password does not meet requirements.");
+        setRegisterMessage(PASSWORD_RULE_MESSAGE);
         return;
       }
       setRegisterMessage(normalizeAuthError(err));
@@ -393,21 +409,35 @@ export function InviteAcceptPage({ token }: InviteAcceptPageProps) {
                 <Input
                   type="password"
                   value={registerPassword}
-                  onChange={(event) => setRegisterPassword(event.target.value)}
-                  placeholder="Create password (min 8 chars)"
+                  onChange={(event) => {
+                    setRegisterPassword(event.target.value);
+                    if (registerMessage) {
+                      setRegisterMessage(null);
+                    }
+                  }}
+                  placeholder="Create password"
                   autoComplete="new-password"
                 />
                 <Input
                   type="password"
                   value={registerConfirmPassword}
-                  onChange={(event) => setRegisterConfirmPassword(event.target.value)}
+                  onChange={(event) => {
+                    setRegisterConfirmPassword(event.target.value);
+                    if (registerMessage) {
+                      setRegisterMessage(null);
+                    }
+                  }}
                   placeholder="Confirm password"
                   autoComplete="new-password"
                 />
+                <p className="text-xs text-slate-500">{PASSWORD_RULE_MESSAGE}</p>
+                {(registerPassword || registerConfirmPassword) && registerPasswordValidationError ? (
+                  <p className="text-xs text-rose-700">{registerPasswordValidationError}</p>
+                ) : null}
                 {registerMessage ? (
                   <p className="text-xs text-slate-600">{registerMessage}</p>
                 ) : null}
-                <Button onClick={handleCreatePasswordAndSignIn} disabled={registering || !registerPassword || !registerConfirmPassword}>
+                <Button onClick={handleCreatePasswordAndSignIn} disabled={!canSubmitCreatePassword}>
                   {registering ? <Spinner className="size-4" /> : null}
                   {registering ? "Creating account..." : "Create password and sign in"}
                 </Button>

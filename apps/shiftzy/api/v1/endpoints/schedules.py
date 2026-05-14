@@ -145,7 +145,7 @@ def download_schedule_pdf(
     include_all: bool = Query(False, alias="all"),
 ):
     """
-    Generate and download a schedule PDF for a given week number.
+    Generate a schedule PDF for a given week number and return it for browser preview.
 
     Example request:
         GET /api/shiftzy/v1/schedules/pdf?week_no=120
@@ -156,7 +156,7 @@ def download_schedule_pdf(
     Example response:
         HTTP 200
         Content-Type: application/pdf
-        Content-Disposition: attachment; filename="schedule-week-120.pdf"
+        Content-Disposition: inline; filename="shiftzy-week-120.pdf"
 
     Requirements:
         - Requires X-Tenant-Id header
@@ -175,11 +175,11 @@ def download_schedule_pdf(
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
-    filename = f"schedule-week-{week_no}.pdf"
+    filename = f"shiftzy-week-{week_no}.pdf"
     return Response(
         content=pdf_bytes,
         media_type="application/pdf",
-        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+        headers={"Content-Disposition": f'inline; filename="{filename}"'},
     )
 
 

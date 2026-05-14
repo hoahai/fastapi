@@ -1,4 +1,4 @@
-import { AlertCircle, Search } from "lucide-react";
+import { AlertCircle, ChevronDown, Search } from "lucide-react";
 
 import { ContactResultCard } from "./ContactResultCard";
 import type { ContactGroup, ContactRecord } from "./types";
@@ -64,8 +64,9 @@ export function ContactResults({
               <h3 className="text-base font-bold text-blue-900">{group.label}</h3>
               <p className="mt-0.5 text-xs text-slate-500">{group.items.length} contacts</p>
             </div>
-            <span className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500 group-open:hidden">Expand</span>
-            <span className="hidden text-xs font-semibold uppercase tracking-[0.08em] text-slate-500 group-open:inline">Collapse</span>
+            <span className="inline-flex items-center text-slate-500" aria-hidden="true">
+              <ChevronDown className="size-4 transition-transform group-open:rotate-180" />
+            </span>
           </summary>
 
           <div className="grid gap-3 px-3 pb-4 sm:grid-cols-2 xl:grid-cols-3">

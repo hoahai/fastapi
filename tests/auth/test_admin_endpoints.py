@@ -5,10 +5,12 @@ from unittest.mock import patch
 from fastapi import HTTPException
 
 from apps.auth.api.v1.endpoints.admin import (
+    _password_reset_redirect_url,
     create_invitation_admin_route,
     load_admin_users_page_route,
     list_roles_route,
     revoke_invitation_admin_route,
+    send_user_password_reset_route,
     update_user_access_v2_route,
 )
 from shared.auth.types import AuthorizationResult, AuthPrincipal, TenantAccessProfile
@@ -275,6 +277,86 @@ class AdminEndpointTests(unittest.TestCase):
 
         self.assertEqual(exc.exception.status_code, 403)
 
+    def test_update_user_access_super_admin_target_allowed_for_super_admin_actor(self):
+        request = self._request()
+        refreshed = [
+            {
+                "userId": "target-super-admin",
+                "email": "target.super@example.com",
+                "fullName": "Target Super",
+                "status": "active",
+                "role": "super_admin",
+                "tenantMemberships": [],
+                "appAssignments": [],
+                "isSuperAdmin": True,
+            }
+        ]
+        with patch("apps.auth.api.v1.endpoints.admin.authorize_bearer_for_tenant_app", return_value=_super_admin_result()), patch(
+            "apps.auth.api.v1.endpoints.admin.list_active_apps",
+            return_value=[{"id": "app-1", "code": "tradsphere", "name": "TradSphere", "active": True}],
+        ), patch(
+            "apps.auth.api.v1.endpoints.admin.list_role_keys_from_store",
+            return_value=["super_admin", "viewer", "editor", "admin"],
+        ), patch(
+            "apps.auth.api.v1.endpoints.admin.get_user_memberships",
+            return_value=[{"tenant_id": "tenant-1", "status": "active"}],
+        ), patch(
+            "apps.auth.api.v1.endpoints.admin.get_user_app_roles",
+            return_value=[{"tenant_id": "tenant-1", "app_id": "app-1", "role": "viewer"}],
+        ), patch(
+            "apps.auth.api.v1.endpoints.admin.is_user_super_admin",
+            return_value=True,
+        ), patch(
+            "apps.auth.api.v1.endpoints.admin.set_tenant_user_status"
+        ) as mock_set_status, patch(
+            "apps.auth.api.v1.endpoints.admin.set_tenant_app_role"
+        ) as mock_set_role, patch(
+            "apps.auth.api.v1.endpoints.admin.remove_tenant_app_role"
+        ) as mock_remove_role, patch(
+            "apps.auth.api.v1.endpoints.admin.list_users_with_access",
+            return_value=refreshed,
+        ), patch(
+            "apps.auth.api.v1.endpoints.admin.permission_cache.invalidate"
+        ) as mock_invalidate:
+            response = update_user_access_v2_route(
+                request=request,
+                user_id="target-super-admin",
+                payload={
+                    "tenantMemberships": [
+                        {"tenantId": "tenant-1", "status": "active"},
+                    ],
+                    "appAssignments": [
+                        {"tenantId": "tenant-1", "appId": "app-1", "role": "admin"},
+                    ],
+                },
+            )
+
+        mock_set_status.assert_not_called()
+        mock_set_role.assert_called_once()
+        mock_remove_role.assert_not_called()
+        mock_invalidate.assert_called_once_with(user_id="target-super-admin")
+        self.assertTrue(response["permissionCacheInvalidated"])
+
+    def test_update_user_access_super_admin_target_forbidden_for_non_super_actor(self):
+        request = self._request()
+        with patch("apps.auth.api.v1.endpoints.admin.authorize_bearer_for_tenant_app", return_value=_admin_result()), patch(
+            "apps.auth.api.v1.endpoints.admin.list_admin_assignment_scopes_for_user",
+            return_value={("tenant-1", "app-1")},
+        ), patch(
+            "apps.auth.api.v1.endpoints.admin.is_user_super_admin",
+            return_value=True,
+        ):
+            with self.assertRaises(HTTPException) as exc:
+                update_user_access_v2_route(
+                    request=request,
+                    user_id="target-super-admin",
+                    payload={
+                        "appAssignments": [{"tenantId": "tenant-1", "appId": "app-1", "role": "viewer"}],
+                    },
+                )
+
+        self.assertEqual(exc.exception.status_code, 403)
+
     def test_admin_invite_create_and_revoke(self):
         request = self._request()
 
@@ -331,6 +413,87 @@ class AdminEndpointTests(unittest.TestCase):
 
         mock_patch.assert_called_once_with(invitation_id="invite-1", status="revoked")
         self.assertEqual(revoke_response, {"status": "revoked", "id": "invite-1"})
+
+    def test_send_password_reset_scoped_admin_allowed(self):
+        request = self._request()
+        with patch("apps.auth.api.v1.endpoints.admin.authorize_bearer_for_tenant_app", return_value=_admin_result()), patch(
+            "apps.auth.api.v1.endpoints.admin.list_admin_assignment_scopes_for_user",
+            return_value={("tenant-1", "app-1")},
+        ), patch(
+            "apps.auth.api.v1.endpoints.admin.list_users_with_access",
+            return_value=[
+                {
+                    "userId": "target-user",
+                    "email": "target@example.com",
+                    "tenantMemberships": [{"tenantId": "tenant-1", "status": "active"}],
+                    "appAssignments": [{"tenantId": "tenant-1", "appId": "app-1", "role": "viewer"}],
+                }
+            ],
+        ), patch(
+            "apps.auth.api.v1.endpoints.admin.send_password_reset_for_user",
+            return_value="target@example.com",
+        ) as mock_send_reset:
+            response = send_user_password_reset_route(request=request, user_id="target-user")
+
+        mock_send_reset.assert_called_once()
+        self.assertEqual(response["userId"], "target-user")
+        self.assertEqual(response["status"], "sent")
+        self.assertEqual(response["delivery"], "supabase_recovery_email")
+        self.assertNotIn("password", response)
+        self.assertNotIn("token", response)
+
+    def test_send_password_reset_forbids_non_admin(self):
+        request = self._request()
+        with patch("apps.auth.api.v1.endpoints.admin.authorize_bearer_for_tenant_app", return_value=_non_admin_result()):
+            with self.assertRaises(HTTPException) as exc:
+                send_user_password_reset_route(request=request, user_id="target-user")
+        self.assertEqual(exc.exception.status_code, 403)
+
+    def test_send_password_reset_forbids_out_of_scope_user(self):
+        request = self._request()
+        scoped_rows = [
+            {
+                "userId": "in-scope-user",
+                "tenantMemberships": [{"tenantId": "tenant-1", "status": "active"}],
+                "appAssignments": [{"tenantId": "tenant-1", "appId": "app-1", "role": "viewer"}],
+            }
+        ]
+        global_rows = [
+            {
+                "userId": "out-scope-user",
+                "tenantMemberships": [{"tenantId": "tenant-2", "status": "active"}],
+                "appAssignments": [{"tenantId": "tenant-2", "appId": "app-2", "role": "viewer"}],
+            }
+        ]
+        with patch("apps.auth.api.v1.endpoints.admin.authorize_bearer_for_tenant_app", return_value=_admin_result()), patch(
+            "apps.auth.api.v1.endpoints.admin.list_admin_assignment_scopes_for_user",
+            return_value={("tenant-1", "app-1")},
+        ), patch(
+            "apps.auth.api.v1.endpoints.admin.list_users_with_access",
+            side_effect=[scoped_rows, global_rows],
+        ):
+            with self.assertRaises(HTTPException) as exc:
+                send_user_password_reset_route(request=request, user_id="out-scope-user")
+
+        self.assertEqual(exc.exception.status_code, 403)
+
+    def test_password_reset_redirect_url_uses_host_from_auth_invite_base(self):
+        request = SimpleNamespace(
+            headers={"origin": "http://localhost:3000"},
+            url=SimpleNamespace(scheme="http", netloc="localhost:8000"),
+        )
+        with patch("apps.auth.api.v1.endpoints.admin.get_invite_base_url", return_value="http://localhost:8000/auth/invite"):
+            redirect_to = _password_reset_redirect_url(request)
+        self.assertEqual(redirect_to, "http://127.0.0.1:8000/auth/update-password")
+
+    def test_password_reset_redirect_url_falls_back_to_origin_header(self):
+        request = SimpleNamespace(
+            headers={"origin": "http://localhost:5173"},
+            url=SimpleNamespace(scheme="http", netloc="localhost:8000"),
+        )
+        with patch("apps.auth.api.v1.endpoints.admin.get_invite_base_url", return_value=""):
+            redirect_to = _password_reset_redirect_url(request)
+        self.assertEqual(redirect_to, "http://127.0.0.1:5173/auth/update-password")
 
 
 if __name__ == "__main__":

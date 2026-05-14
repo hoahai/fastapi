@@ -1,4 +1,4 @@
-import { createContext, useCallback, useContext, useEffect, useMemo, useState, type ReactNode } from "react";
+import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import { createAuthProvider } from "./provider";
 import type { SignUpWithPasswordResult } from "./provider/types";
@@ -26,6 +26,7 @@ type AccessProfileCacheEntry = {
 };
 
 type AccessProfileCacheStore = Record<string, AccessProfileCacheEntry>;
+type AccessProfileCacheStatus = { source: "cache" | "network"; fetchedAt: number };
 
 type AuthContextValue = {
   status: AuthStatus;
@@ -35,13 +36,18 @@ type AuthContextValue = {
   accessProfile: AccessProfile | null;
   accessLoading: boolean;
   accessError: string | null;
+  accessCacheStatus: AccessProfileCacheStatus | null;
   providerName: string;
   setTenantSlug: (tenantSlug: string) => void;
   signInWithPassword: (email: string, password: string) => Promise<void>;
   signUpWithPassword: (email: string, password: string) => Promise<{ status: "signed_in" | "confirm_email" }>;
+  updatePassword: (newPassword: string) => Promise<void>;
+  sendPasswordResetEmail: (email: string, options?: { redirectTo?: string }) => Promise<void>;
+  setSessionFromTokens: (tokens: { accessToken: string; refreshToken?: string | null; expiresInSeconds?: number | null }) => void;
   signOut: () => Promise<void>;
   ensureFreshSession: () => Promise<SupabaseSession | null>;
   getAccessToken: () => string | null;
+  refreshAccessProfile: () => void;
   // Backward-compatible aliases for existing callers.
   signInPassword: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -153,7 +159,7 @@ function pruneAccessProfileCacheStore(store: AccessProfileCacheStore, now: numbe
   return next;
 }
 
-function readCachedAccessProfile(userId: string, tenantSlug: string): AccessProfile | null {
+function readCachedAccessProfileEntry(userId: string, tenantSlug: string): AccessProfileCacheEntry | null {
   const key = accessProfileCacheEntryKey(userId, tenantSlug);
   if (!key) {
     return null;
@@ -162,10 +168,10 @@ function readCachedAccessProfile(userId: string, tenantSlug: string): AccessProf
   const store = pruneAccessProfileCacheStore(readAccessProfileCacheStore(), now);
   writeAccessProfileCacheStore(store);
   const entry = store[key];
-  if (!entry || !entry.profile) {
+  if (!entry || !entry.profile || !Number.isFinite(Number(entry.cachedAt))) {
     return null;
   }
-  return entry.profile;
+  return entry;
 }
 
 function writeCachedAccessProfile(userId: string, tenantSlug: string, profile: AccessProfile): void {
@@ -210,11 +216,32 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [accessProfile, setAccessProfile] = useState<AccessProfile | null>(null);
   const [accessLoading, setAccessLoading] = useState(false);
   const [accessError, setAccessError] = useState<string | null>(null);
+  const [accessCacheStatus, setAccessCacheStatus] = useState<AccessProfileCacheStatus | null>(null);
+  const [accessRefreshVersion, setAccessRefreshVersion] = useState(0);
+  const handledRefreshVersionRef = useRef(0);
 
   const setTenantSlug = useCallback((value: string) => {
     const normalized = String(value || "").trim().toLowerCase();
     setTenantSlugState(normalized);
     writeJson(TENANT_STORAGE_KEY, normalized);
+  }, []);
+
+  const setSessionFromTokens = useCallback((tokens: { accessToken: string; refreshToken?: string | null; expiresInSeconds?: number | null }) => {
+    const accessToken = String(tokens.accessToken || "").trim();
+    if (!accessToken) {
+      return;
+    }
+    const expiresInSeconds = Number(tokens.expiresInSeconds ?? NaN);
+    const expiresAt = Number.isFinite(expiresInSeconds) ? Math.floor(Date.now() / 1000 + expiresInSeconds) : null;
+    const nextSession: SupabaseSession = {
+      accessToken,
+      refreshToken: String(tokens.refreshToken || "").trim() || null,
+      expiresAt,
+    };
+    setSession(nextSession);
+    writeJson(SESSION_STORAGE_KEY, nextSession);
+    setStatus("authenticated");
+    setAccessError(null);
   }, []);
 
   const signOut = useCallback(async () => {
@@ -224,6 +251,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAccessProfile(null);
     setAccessLoading(false);
     setAccessError(null);
+    setAccessCacheStatus(null);
     setStatus("unauthenticated");
     removeStorage(SESSION_STORAGE_KEY);
     removeStorage(USER_STORAGE_KEY);
@@ -290,6 +318,27 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [provider, session, signOut]);
 
+  const refreshAccessProfile = useCallback(() => {
+    setAccessRefreshVersion((value) => value + 1);
+  }, []);
+
+  const updatePassword = useCallback(async (newPassword: string) => {
+    const normalizedPassword = String(newPassword || "");
+    if (!normalizedPassword) {
+      throw new Error("Password is required.");
+    }
+    const ensuredSession = await ensureFreshSession();
+    const accessToken = provider.getAccessToken(ensuredSession);
+    if (!accessToken) {
+      throw new Error("Your session has expired. Please sign in again.");
+    }
+    await provider.updatePassword(accessToken, normalizedPassword);
+  }, [ensureFreshSession, provider]);
+
+  const sendPasswordResetEmail = useCallback(async (email: string, options?: { redirectTo?: string }) => {
+    await provider.sendPasswordResetEmail(email, options);
+  }, [provider]);
+
   useEffect(() => {
     let cancelled = false;
 
@@ -304,7 +353,15 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       try {
-        const resolvedUser = await provider.getUser(session.accessToken);
+        const activeSession = await ensureFreshSession();
+        if (cancelled) {
+          return;
+        }
+        if (!activeSession?.accessToken) {
+          setStatus("unauthenticated");
+          return;
+        }
+        const resolvedUser = await provider.getUser(activeSession.accessToken);
         if (cancelled) {
           return;
         }
@@ -323,7 +380,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [provider, session?.accessToken, signOut]);
+  }, [provider, session?.accessToken, signOut, ensureFreshSession, user]);
 
   useEffect(() => {
     let cancelled = false;
@@ -333,27 +390,48 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setAccessProfile(null);
         setAccessLoading(false);
         setAccessError(null);
+        setAccessCacheStatus(null);
         return;
       }
       if (!tenantSlug) {
         setAccessProfile(null);
         setAccessLoading(false);
         setAccessError("Missing tenant selection");
+        setAccessCacheStatus(null);
         return;
       }
 
+      const isManualRefresh = accessRefreshVersion > handledRefreshVersionRef.current;
+      if (isManualRefresh) {
+        handledRefreshVersionRef.current = accessRefreshVersion;
+      }
       const currentUserId = String(user?.id || "").trim();
-      const cached = currentUserId ? readCachedAccessProfile(currentUserId, tenantSlug) : null;
-      if (cached) {
-        setAccessProfile(cached);
+      const cachedEntry = currentUserId ? readCachedAccessProfileEntry(currentUserId, tenantSlug) : null;
+      if (cachedEntry && !isManualRefresh) {
+        setAccessProfile(cachedEntry.profile);
+        setAccessCacheStatus({
+          source: "cache",
+          fetchedAt: cachedEntry.cachedAt,
+        });
         setAccessLoading(false);
       } else {
-        setAccessProfile(null);
         setAccessLoading(true);
       }
 
+      const activeSession = await ensureFreshSession();
+      if (cancelled) {
+        return;
+      }
+      if (!activeSession?.accessToken) {
+        setAccessProfile(null);
+        setAccessLoading(false);
+        setAccessError("Your session has expired. Please sign in again.");
+        setAccessCacheStatus(null);
+        return;
+      }
+
       try {
-        const profile = await fetchAccessProfile(session, tenantSlug);
+        const profile = await fetchAccessProfile(activeSession, tenantSlug);
         if (cancelled) {
           return;
         }
@@ -364,20 +442,67 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setAccessProfile(profile);
         setAccessLoading(false);
         setAccessError(null);
+        setAccessCacheStatus({
+          source: "network",
+          fetchedAt: Date.now(),
+        });
         writeCachedAccessProfile(profile.user.id, tenantSlug, profile);
       } catch (error) {
+        const statusCode = error instanceof AccessProfileRequestError ? error.status : 0;
+        if (statusCode === 401 && activeSession.refreshToken) {
+          try {
+            const refreshed = await provider.refreshSession(activeSession);
+            if (cancelled) {
+              return;
+            }
+            if (refreshed?.accessToken) {
+              setSession(refreshed);
+              writeJson(SESSION_STORAGE_KEY, refreshed);
+              const retriedProfile = await fetchAccessProfile(refreshed, tenantSlug);
+              if (cancelled) {
+                return;
+              }
+              if (!user && retriedProfile.user) {
+                setUser(retriedProfile.user);
+                writeJson(USER_STORAGE_KEY, retriedProfile.user);
+              }
+              setAccessProfile(retriedProfile);
+              setAccessLoading(false);
+              setAccessError(null);
+              setAccessCacheStatus({
+                source: "network",
+                fetchedAt: Date.now(),
+              });
+              writeCachedAccessProfile(retriedProfile.user.id, tenantSlug, retriedProfile);
+              return;
+            }
+          } catch {
+            // Fall through to normal unauthorized handling.
+          }
+        }
+
         if (cancelled) {
           return;
         }
+        if (statusCode === 401) {
+          await signOut();
+          return;
+        }
         const message = error instanceof Error ? error.message : "Failed to load access profile";
-        const statusCode = error instanceof AccessProfileRequestError ? error.status : 0;
         const shouldInvalidateCache = statusCode === 401 || statusCode === 403;
 
         if (shouldInvalidateCache && currentUserId) {
           removeCachedAccessProfile(currentUserId, tenantSlug);
           setAccessProfile(null);
-        } else if (!cached) {
+          setAccessCacheStatus(null);
+        } else if (!cachedEntry) {
           setAccessProfile(null);
+          setAccessCacheStatus(null);
+        } else {
+          setAccessCacheStatus({
+            source: "cache",
+            fetchedAt: cachedEntry.cachedAt,
+          });
         }
         setAccessLoading(false);
         setAccessError(message);
@@ -388,7 +513,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return () => {
       cancelled = true;
     };
-  }, [status, session, tenantSlug, user?.id]);
+  }, [status, session, tenantSlug, user, ensureFreshSession, provider, accessRefreshVersion]);
 
   const value = useMemo<AuthContextValue>(() => ({
     status,
@@ -398,13 +523,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     accessProfile,
     accessLoading,
     accessError,
+    accessCacheStatus,
     providerName: provider.name,
     setTenantSlug,
     signInWithPassword,
     signUpWithPassword,
+    updatePassword,
+    sendPasswordResetEmail,
+    setSessionFromTokens,
     signOut,
     ensureFreshSession,
     getAccessToken,
+    refreshAccessProfile,
     signInPassword: signInWithPassword,
     logout: signOut,
   }), [
@@ -415,13 +545,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     accessProfile,
     accessLoading,
     accessError,
+    accessCacheStatus,
     provider.name,
     setTenantSlug,
     signInWithPassword,
     signUpWithPassword,
+    updatePassword,
+    sendPasswordResetEmail,
+    setSessionFromTokens,
     signOut,
     ensureFreshSession,
     getAccessToken,
+    refreshAccessProfile,
   ]);
 
   return <AuthContext.Provider value={value}>{children}</AuthContext.Provider>;

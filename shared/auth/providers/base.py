@@ -18,6 +18,9 @@ class AuthDataProvider(Protocol):
     def get_auth_user_by_id(self, *, user_id: str) -> dict[str, Any] | None:
         ...
 
+    def send_password_recovery_email(self, *, email: str, redirect_to: str | None = None) -> None:
+        ...
+
     def select_single(
         self,
         *,

@@ -9,3 +9,4 @@ export * from "./layout/SectionHeader";
 export * from "./modal/ModalFooter";
 export * from "./modal/ModalShell";
 export * from "./status/CacheStatusChip";
+export * from "./status/LoadingOverlay";

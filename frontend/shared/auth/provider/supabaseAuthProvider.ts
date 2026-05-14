@@ -2,8 +2,10 @@ import type { AuthProviderAdapter, AuthStateChangeEvent } from "./types";
 import {
   getUser as getSupabaseUser,
   refreshSession as refreshSupabaseSession,
+  sendPasswordResetEmail as sendSupabasePasswordResetEmail,
   signInWithPassword as supabaseSignInWithPassword,
   signUpWithPassword as supabaseSignUpWithPassword,
+  updatePassword as updateSupabasePassword,
 } from "../supabaseClient";
 import type { SupabaseSession } from "../types";
 
@@ -16,6 +18,14 @@ export class SupabaseAuthProvider implements AuthProviderAdapter {
 
   async signUpWithPassword(email: string, password: string) {
     return supabaseSignUpWithPassword(email, password);
+  }
+
+  async updatePassword(accessToken: string, newPassword: string): Promise<void> {
+    await updateSupabasePassword(accessToken, newPassword);
+  }
+
+  async sendPasswordResetEmail(email: string, options?: { redirectTo?: string }): Promise<void> {
+    await sendSupabasePasswordResetEmail(email, options?.redirectTo);
   }
 
   async refreshSession(session: SupabaseSession): Promise<SupabaseSession | null> {

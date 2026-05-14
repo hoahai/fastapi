@@ -127,3 +127,42 @@ export async function getUser(accessToken: string): Promise<AuthUser> {
   });
   return parseUser(payload);
 }
+
+export async function updatePassword(accessToken: string, newPassword: string): Promise<void> {
+  const normalizedToken = String(accessToken || "").trim();
+  if (!normalizedToken) {
+    throw new Error("Supabase access token is missing.");
+  }
+  const normalizedPassword = String(newPassword || "");
+  if (!normalizedPassword) {
+    throw new Error("Password is required.");
+  }
+
+  await requestJson("/auth/v1/user", {
+    method: "PUT",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${normalizedToken}`,
+    },
+    body: JSON.stringify({ password: normalizedPassword }),
+  });
+}
+
+export async function sendPasswordResetEmail(email: string, redirectTo?: string): Promise<void> {
+  const normalizedEmail = String(email || "").trim().toLowerCase();
+  if (!normalizedEmail) {
+    throw new Error("Email is required.");
+  }
+  const normalizedRedirectTo = String(redirectTo || "").trim();
+
+  await requestJson("/auth/v1/recover", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      email: normalizedEmail,
+      redirect_to: normalizedRedirectTo || undefined,
+    }),
+  });
+}

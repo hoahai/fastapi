@@ -234,5 +234,21 @@ class SupabaseRestClient:
             return None
         return result
 
+    def send_password_recovery_email(self, *, email: str, redirect_to: str | None = None) -> None:
+        normalized_email = str(email or "").strip().lower()
+        if not normalized_email:
+            raise SupabaseClientError("Email is required for password recovery")
+        normalized_redirect_to = str(redirect_to or "").strip()
+        body: dict[str, Any] = {"email": normalized_email}
+        if normalized_redirect_to:
+            body["redirect_to"] = normalized_redirect_to
+        self._request(
+            path="/auth/v1/recover",
+            method="POST",
+            body=body,
+            use_service_role=True,
+            force_key_as_bearer=True,
+        )
+
 
 supabase_client = SupabaseRestClient()

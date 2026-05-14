@@ -24,7 +24,7 @@ export function WorkspaceNotFoundPage({ onNavigate }: WorkspaceNotFoundPageProps
       />
       <section className="rounded-2xl border border-blue-100 bg-white/90 p-5 shadow-soft">
         <p className="text-sm text-slate-600">
-          Placeholder apps are listed in the sidebar and portal cards, but unavailable routes remain disabled until those apps are added.
+          Only apps and pages that your account can access are shown in navigation. If you expected a page here, contact your workspace administrator.
         </p>
       </section>
     </div>

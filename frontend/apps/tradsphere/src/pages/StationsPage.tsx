@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
 
 import {
   StationModal,
@@ -29,6 +28,7 @@ import { buildAuthHeaders as buildSharedAuthHeaders } from "@shared/api/authHead
 import { useAuth } from "@shared/auth/useAuth";
 import { shouldProtectTradsphereFrontend } from "@shared/auth/guards";
 import { hasAppEditAccess } from "@shared/auth/permissions";
+import { SectionLoadingOverlay } from "@shared/components/status/LoadingOverlay";
 import { shouldFetchSubmittedSearchNetwork } from "@shared/search";
 import { hasAtLeastOneSearchCriterion } from "@shared/search";
 import { type CachePolicy } from "@shared/cache";
@@ -1232,12 +1232,7 @@ export default function StationsPage() {
         />
 
         {shouldShowBlockingResultsOverlay ? (
-          <div className="absolute inset-0 z-20 flex items-center justify-center rounded-2xl bg-white/70 backdrop-blur-[1px]">
-            <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-medium text-slate-700 shadow-soft">
-              <Loader2 className="size-4 animate-spin text-blue-600" />
-              <span>Searching stations...</span>
-            </div>
-          </div>
+          <SectionLoadingOverlay message="Searching stations..." />
         ) : null}
       </div>
 

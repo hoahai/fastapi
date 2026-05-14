@@ -24,6 +24,7 @@ interface FloatingActionMenuProps {
   open: boolean;
   anchorRef: RefObject<HTMLElement | null>;
   belowOffsetY?: number;
+  align?: "center" | "left";
   items: FloatingActionMenuItem[];
   onClose: () => void;
   onPointerEnter?: () => void;
@@ -50,6 +51,7 @@ export function FloatingActionMenu({
   open,
   anchorRef,
   belowOffsetY = 0,
+  align = "center",
   items,
   onClose,
   onPointerEnter,
@@ -86,7 +88,9 @@ export function FloatingActionMenu({
       placement = "below";
     }
 
-    const left = rect.left + rect.width / 2 - MENU_WIDTH / 2;
+    const left = align === "left"
+      ? rect.left
+      : rect.left + rect.width / 2 - MENU_WIDTH / 2;
     const top =
       placement === "above"
         ? rect.top - estimatedMenuHeight - MENU_GAP
@@ -102,7 +106,7 @@ export function FloatingActionMenu({
       left: clamp(left, minLeft, maxLeft),
       top: clamp(top, minTop, maxTop),
     });
-  }, [anchorRef, belowOffsetY, estimatedMenuHeight, open]);
+  }, [align, anchorRef, belowOffsetY, estimatedMenuHeight, open]);
 
   useEffect(() => {
     if (!open) {
@@ -119,7 +123,9 @@ export function FloatingActionMenu({
         if (!current) {
           return current;
         }
-        const left = rect.left + rect.width / 2 - MENU_WIDTH / 2;
+        const left = align === "left"
+          ? rect.left
+          : rect.left + rect.width / 2 - MENU_WIDTH / 2;
         const top =
           current.placement === "above"
             ? rect.top - estimatedMenuHeight - MENU_GAP
@@ -168,7 +174,7 @@ export function FloatingActionMenu({
       document.removeEventListener("mousedown", handlePointerDown);
       document.removeEventListener("keydown", handleEscape);
     };
-  }, [anchorRef, belowOffsetY, estimatedMenuHeight, onClose, open]);
+  }, [align, anchorRef, belowOffsetY, estimatedMenuHeight, onClose, open]);
 
   if (!open || !position || !items.length) {
     return null;
@@ -206,7 +212,7 @@ export function FloatingActionMenu({
               key={item.key}
               type="button"
               className={cn(
-                "flex w-full items-center justify-center rounded-lg px-2.5 py-2 text-center text-sm font-medium transition-colors",
+                "flex w-full items-center justify-start rounded-lg px-2.5 py-2 text-left text-sm font-medium transition-colors",
                 "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 focus-visible:ring-offset-2",
                 item.disabled && "cursor-not-allowed opacity-50",
                 !item.disabled && item.variant === "danger" && "text-rose-600 hover:bg-rose-50",
@@ -222,7 +228,7 @@ export function FloatingActionMenu({
                 onClose();
               }}
             >
-              <span className="inline-flex items-center justify-center gap-2">
+              <span className="inline-flex w-full items-center justify-start gap-2">
                 {item.icon ? (
                   <span
                     aria-hidden

@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
+from urllib.parse import urlparse, urlunparse
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 
@@ -15,6 +16,7 @@ from shared.auth.admin_repo import (
     list_users_with_access,
     remove_tenant_app_role,
     remove_tenant_app_roles_for_tenant,
+    send_password_reset_for_user,
     set_tenant_app_role,
     set_tenant_user_status,
     unique_text_values,
@@ -77,6 +79,56 @@ def _require_admin(request: Request):
 
 def _invite_url(token: str) -> str:
     return build_invite_url(token=token, base_url=get_invite_base_url())
+
+
+def _normalized_frontend_base_url(candidate: str) -> str | None:
+    normalized = str(candidate or "").strip().rstrip("/")
+    if not normalized:
+        return None
+    parsed = urlparse(normalized)
+    if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+        return None
+
+    normalized_path = (parsed.path or "").rstrip("/")
+    if normalized_path.endswith("/auth/invite"):
+        normalized_path = normalized_path[: -len("/auth/invite")]
+    if normalized_path == "/":
+        normalized_path = ""
+
+    normalized_netloc = parsed.netloc
+    if (parsed.hostname or "").strip().lower() == "localhost":
+        host = "127.0.0.1"
+        try:
+            port_suffix = f":{parsed.port}" if parsed.port is not None else ""
+        except ValueError:
+            port_suffix = ""
+        userinfo = ""
+        if parsed.username:
+            userinfo = parsed.username
+            if parsed.password:
+                userinfo = f"{userinfo}:{parsed.password}"
+            userinfo = f"{userinfo}@"
+        normalized_netloc = f"{userinfo}{host}{port_suffix}"
+
+    return urlunparse((parsed.scheme, normalized_netloc, normalized_path, "", "", ""))
+
+
+def _password_reset_redirect_url(request: Request) -> str | None:
+    configured_base = str(get_invite_base_url() or "").strip()
+    origin_header = str(request.headers.get("origin") or "").strip()
+    request_origin = ""
+    request_url = getattr(request, "url", None)
+    request_scheme = str(getattr(request_url, "scheme", "") or "").strip()
+    request_netloc = str(getattr(request_url, "netloc", "") or "").strip()
+    if request_scheme and request_netloc:
+        request_origin = f"{request_scheme}://{request_netloc}"
+
+    for candidate in (configured_base, origin_header, request_origin):
+        normalized_base = _normalized_frontend_base_url(candidate)
+        if normalized_base:
+            return f"{normalized_base}/auth/update-password"
+
+    return None
 
 
 def _parse_profile_full_name(payload: dict[str, object]) -> str | None:
@@ -932,6 +984,21 @@ def _refresh_user_row(
     return next((item for item in refreshed if str(item.get("userId") or "") == user_id), {"userId": user_id})
 
 
+def _user_exists_anywhere(
+    *,
+    user_id: str,
+    current_tenant_id: str,
+    current_app_id: str,
+) -> bool:
+    rows = list_users_with_access(
+        scope_tenant_ids=None,
+        scope_app_ids=None,
+        primary_tenant_id=current_tenant_id,
+        primary_app_id=current_app_id,
+    )
+    return any(str(item.get("userId") or "").strip() == user_id for item in rows)
+
+
 def _update_user_access_impl(request: Request, user_id: str, payload: dict[str, object]) -> dict[str, object]:
     result, is_super_admin, admin_scopes = _require_admin(request)
     normalized_user_id = str(user_id or "").strip()
@@ -940,8 +1007,9 @@ def _update_user_access_impl(request: Request, user_id: str, payload: dict[str, 
     if not isinstance(payload, dict):
         raise HTTPException(status_code=400, detail="Invalid payload")
 
-    if is_user_super_admin(user_id=normalized_user_id):
-        raise HTTPException(status_code=403, detail="Super Admin users cannot be edited from this admin flow")
+    target_is_super_admin = is_user_super_admin(user_id=normalized_user_id)
+    if target_is_super_admin and not is_super_admin:
+        raise HTTPException(status_code=403, detail="Super Admin users can only be edited by workspace super admins")
 
     app_catalog = _resolve_app_catalog(
         is_super_admin=True,
@@ -1040,6 +1108,7 @@ def update_user_access_route(
         - Requires Authorization: Bearer <Supabase JWT>
         - Requires X-Tenant-Id
         - Requires admin manage permission (`tradsphere.admin` or `workspace.super_admin`)
+        - Super Admin targets can be edited only by workspace super admins
         - Access should be assigned through `appAssignments` (tenantId + appId/appCode + role)
         - Sending `appAssignments: []` removes managed-scope assignments for this user
         - Omitting `tenantMemberships` is supported; backend auto-manages tenant membership status from assignment rows
@@ -1072,6 +1141,76 @@ def update_user_access_v2_route(
         - `appAssignments` can be used as the single source of access updates; tenant memberships are reconciled automatically
     """
     return _update_user_access_impl(request=request, user_id=user_id, payload=payload if isinstance(payload, dict) else {})
+
+
+@router.post("/users/{user_id}/password-reset")
+def send_user_password_reset_route(
+    request: Request,
+    user_id: str,
+):
+    """
+    Send a secure Supabase password-reset email for a scoped user without exposing password values or tokens.
+
+    Example request:
+        POST /api/auth/v1/admin/users/762fec4b-1da3-4ba7-80e2-dd21622b6e0d/password-reset
+
+    Example response:
+        {
+          "userId": "762fec4b-1da3-4ba7-80e2-dd21622b6e0d",
+          "status": "sent",
+          "delivery": "supabase_recovery_email"
+        }
+
+    Requirements:
+        - Requires Authorization: Bearer <Supabase JWT>
+        - Requires X-Tenant-Id
+        - Requires admin manage permission (`tradsphere.admin` or `workspace.super_admin`)
+        - Non-super admins can only reset users in their managed tenant/app scope
+        - Never returns password values, recovery tokens, or service-role secrets
+    """
+    result, is_super_admin, admin_scopes = _require_admin(request)
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+
+    scoped_rows = _list_users_payload(
+        result=result,
+        is_super_admin=is_super_admin,
+        admin_scopes=admin_scopes,
+        include_all_tenants=None,
+    ).get("items")
+    scoped_items = scoped_rows if isinstance(scoped_rows, list) else []
+    can_manage_target = any(str(item.get("userId") or "").strip() == normalized_user_id for item in scoped_items if isinstance(item, dict))
+
+    if not can_manage_target:
+        user_exists = _user_exists_anywhere(
+            user_id=normalized_user_id,
+            current_tenant_id=result.access.tenant_id,
+            current_app_id=result.access.app_id,
+        )
+        if user_exists and not is_super_admin:
+            raise HTTPException(status_code=403, detail="Forbidden tenant/app scope")
+        raise HTTPException(status_code=404, detail="User not found")
+
+    redirect_to = _password_reset_redirect_url(request)
+    try:
+        send_password_reset_for_user(
+            user_id=normalized_user_id,
+            redirect_to=redirect_to,
+        )
+    except SupabaseClientError as exc:
+        detail = str(exc)
+        lowered = detail.lower()
+        if "smtp" in lowered or "mailer" in lowered or "email" in lowered:
+            detail = "Password reset email is unavailable. Configure Supabase email delivery and retry."
+        raise HTTPException(status_code=502, detail=detail) from exc
+
+    return {
+        "userId": normalized_user_id,
+        "status": "sent",
+        "delivery": "supabase_recovery_email",
+        "redirectTo": redirect_to,
+    }
 
 
 @router.get("/invitations")

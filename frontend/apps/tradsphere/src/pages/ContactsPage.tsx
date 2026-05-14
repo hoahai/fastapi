@@ -1,5 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Loader2 } from "lucide-react";
 
 import { ContactModal, type ContactModalMode, type ContactModalSubmitPayload } from "@/components/contacts/ContactModal";
 import { ContactResults } from "@/components/contacts/ContactResults";
@@ -29,6 +28,7 @@ import { shouldFetchNetwork, type CachePolicy } from "@shared/cache";
 import { useAuth } from "@shared/auth/useAuth";
 import { shouldProtectTradsphereFrontend } from "@shared/auth/guards";
 import { hasAppEditAccess } from "@shared/auth/permissions";
+import { SectionLoadingOverlay } from "@shared/components/status/LoadingOverlay";
 import { hasAtLeastOneSearchCriterion, shouldFetchSubmittedSearchNetwork } from "@shared/search";
 
 const CONTACTS_SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -1585,12 +1585,7 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
         />
 
         {shouldShowBlockingResultsOverlay ? (
-          <div className="absolute inset-0 z-20 flex items-center justify-center rounded-2xl bg-white/70 backdrop-blur-[1px]">
-            <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-medium text-slate-700 shadow-soft">
-              <Loader2 className="size-4 animate-spin text-blue-600" />
-              <span>Searching contacts...</span>
-            </div>
-          </div>
+          <SectionLoadingOverlay message="Searching contacts..." />
         ) : null}
       </div>
 
