@@ -155,15 +155,6 @@ def _filter_assignments_by_backend_app_config(assignments: list[dict[str, object
     return filtered
 
 
-def _status_code_for_access_error(exc: TenantAccessError) -> int:
-    code = str(getattr(exc, "code", "") or "").strip().lower()
-    if code == "missing_tenant":
-        return 400
-    if code == "supabase_unavailable":
-        return 503
-    return 403
-
-
 def _permission_set_for_assignment(*, app_code: str, role: str) -> set[str]:
     normalized_app_code = str(app_code or "").strip().lower()
     normalized_role = normalize_role_key(role)
@@ -267,23 +258,35 @@ def _build_validate_payload(
     assignments: list[dict[str, object]],
     scope: dict[str, bool],
     preferred_app_code: str | None = None,
+    include_selected_assignment: bool = True,
+    resolved_permissions: set[str] | None = None,
 ) -> dict[str, object]:
-    selected_assignment = _resolve_selected_assignment(
-        assignments=assignments,
-        tenant_slug=tenant_slug,
-        preferred_app_code=preferred_app_code,
-    )
+    selected_assignment: dict[str, object] | None = None
+    if include_selected_assignment:
+        selected_assignment = _resolve_selected_assignment(
+            assignments=assignments,
+            tenant_slug=tenant_slug,
+            preferred_app_code=preferred_app_code,
+        )
 
-    permission_set: set[str] = set()
-    for assignment in assignments:
-        if not isinstance(assignment, dict):
-            continue
-        app = assignment.get("app")
-        if not isinstance(app, dict):
-            continue
-        app_code = str(app.get("code") or "").strip().lower()
-        role = str(assignment.get("role") or "").strip()
-        permission_set.update(_permission_set_for_assignment(app_code=app_code, role=role))
+    permission_set: set[str]
+    if resolved_permissions is not None:
+        permission_set = {str(value or "").strip() for value in resolved_permissions if str(value or "").strip()}
+    else:
+        permission_set = set()
+        for assignment in assignments:
+            if not isinstance(assignment, dict):
+                continue
+            tenant = assignment.get("tenant")
+            app = assignment.get("app")
+            if not isinstance(tenant, dict) or not isinstance(app, dict):
+                continue
+            assignment_tenant_slug = str(tenant.get("slug") or "").strip().lower()
+            if assignment_tenant_slug != tenant_slug:
+                continue
+            app_code = str(app.get("code") or "").strip().lower()
+            role = str(assignment.get("role") or "").strip()
+            permission_set.update(_permission_set_for_assignment(app_code=app_code, role=role))
     if scope.get("isSuperAdmin"):
         permission_set.add("workspace.super_admin")
 
@@ -291,14 +294,17 @@ def _build_validate_payload(
     selected_app = selected_assignment.get("app") if isinstance(selected_assignment, dict) else None
     selected_role = normalize_role_key(str((selected_assignment or {}).get("role") or "").strip()) or None
 
-    response_tenant_id = str((selected_tenant or {}).get("id") if isinstance(selected_tenant, dict) else "").strip() or tenant_id
-    response_tenant_slug = (
-        str((selected_tenant or {}).get("slug") if isinstance(selected_tenant, dict) else "").strip().lower()
-        or tenant_slug
-    )
+    response_tenant_id = tenant_id
+    response_tenant_slug = tenant_slug
+    if include_selected_assignment:
+        response_tenant_id = str((selected_tenant or {}).get("id") if isinstance(selected_tenant, dict) else "").strip() or tenant_id
+        response_tenant_slug = (
+            str((selected_tenant or {}).get("slug") if isinstance(selected_tenant, dict) else "").strip().lower()
+            or tenant_slug
+        )
 
     app_payload: dict[str, object] | None = None
-    if isinstance(selected_app, dict):
+    if include_selected_assignment and isinstance(selected_app, dict):
         app_id = str(selected_app.get("id") or "").strip()
         app_code = str(selected_app.get("code") or "").strip().lower()
         if app_id and app_code:
@@ -317,12 +323,21 @@ def _build_validate_payload(
             "slug": response_tenant_slug,
         },
         "app": app_payload,
-        "role": selected_role,
+        "role": selected_role if include_selected_assignment else None,
         "assignments": assignments,
         "appAccess": _build_app_access_payload(assignments),
         "scope": scope,
         "permissions": sorted(permission_set),
     }
+
+
+def _status_code_for_access_error(exc: TenantAccessError) -> int:
+    code = str(getattr(exc, "code", "") or "").strip().lower()
+    if code == "missing_tenant":
+        return 400
+    if code == "supabase_unavailable":
+        return 503
+    return 403
 
 
 @router.get("/me")
@@ -542,7 +557,11 @@ def get_session_validate(request: Request):
     Requirements:
         - Requires Authorization: Bearer <Supabase JWT>
         - Requires X-Tenant-Id tenant slug
-        - Enforces active tenant membership (disabled users receive HTTP 403 with `tenant_membership_disabled`)
+        - Uses app-level validation only when X-App-Code is provided
+        - Without X-App-Code, validates active tenant membership and returns tenant-scoped assignments/appAccess
+        - Enforces active user status before tenant/app permission checks
+        - With X-App-Code, non-super users require active tenant membership + app role
+        - Super Admin can validate tenant/app access without explicit tenant/app assignment
         - Returns assignments and permission scopes in one call
     """
     principal = authenticate_bearer(request)
@@ -550,28 +569,70 @@ def get_session_validate(request: Request):
     if not tenant_slug:
         raise HTTPException(status_code=400, detail="Missing X-Tenant-Id header")
 
-    try:
-        tenant_id, resolved_tenant_slug = validate_active_tenant_membership(
-            user_id=principal.user_id,
-            tenant_slug=tenant_slug,
-        )
-    except TenantAccessError as exc:
-        raise HTTPException(
-            status_code=_status_code_for_access_error(exc),
-            detail={
-                "message": str(exc),
-                "code": str(getattr(exc, "code", "") or "").strip().lower() or "forbidden",
-            },
-        ) from exc
+    preferred_app_code = str(request.headers.get("x-app-code") or "").strip().lower()
+    tenant_id = ""
+    resolved_tenant_slug = tenant_slug
+    role = ""
+    permission_set: set[str] = set()
+    response_permissions: set[str] | None = None
+    include_selected_assignment = False
+
+    if preferred_app_code:
+        result = authorize_bearer_for_tenant_app(request=request, app_code=preferred_app_code)
+        tenant_id = result.access.tenant_id
+        resolved_tenant_slug = result.access.tenant_slug
+        role = result.access.role
+        permission_set = set(result.access.permissions)
+        response_permissions = set(result.access.permissions)
+        include_selected_assignment = True
+    else:
+        try:
+            tenant_id, resolved_tenant_slug = validate_active_tenant_membership(
+                user_id=principal.user_id,
+                tenant_slug=tenant_slug,
+            )
+        except TenantAccessError as exc:
+            raise HTTPException(
+                status_code=_status_code_for_access_error(exc),
+                detail={
+                    "message": str(exc),
+                    "code": str(getattr(exc, "code", "") or "").strip().lower() or "forbidden",
+                },
+            ) from exc
 
     assignments, scope = _build_assignments_scope_payload(
         user_id=principal.user_id,
-        role="",
-        permissions=set(),
+        role=role,
+        permissions=permission_set,
     )
+    if preferred_app_code and scope.get("isSuperAdmin") and not assignments:
+        try:
+            assignments = _build_super_admin_tenant_assignments_for_app(
+                app_id=result.access.app_id,
+                app_code=result.access.app_code,
+            )
+        except SupabaseClientError:
+            assignments = []
     assignments = _filter_assignments_by_backend_app_config(assignments)
 
-    preferred_app_code = str(request.headers.get("x-app-code") or "").strip().lower() or None
+    if response_permissions is None:
+        tenant_permission_set: set[str] = set()
+        for assignment in assignments:
+            if not isinstance(assignment, dict):
+                continue
+            tenant = assignment.get("tenant")
+            app = assignment.get("app")
+            if not isinstance(tenant, dict) or not isinstance(app, dict):
+                continue
+            assignment_tenant_slug = str(tenant.get("slug") or "").strip().lower()
+            if assignment_tenant_slug != resolved_tenant_slug:
+                continue
+            app_code = str(app.get("code") or "").strip().lower()
+            assignment_role = str(assignment.get("role") or "").strip()
+            tenant_permission_set.update(_permission_set_for_assignment(app_code=app_code, role=assignment_role))
+        if scope.get("isSuperAdmin"):
+            tenant_permission_set.add("workspace.super_admin")
+        response_permissions = tenant_permission_set
 
     return _build_validate_payload(
         user_id=principal.user_id,
@@ -580,7 +641,9 @@ def get_session_validate(request: Request):
         tenant_slug=resolved_tenant_slug,
         assignments=assignments,
         scope=scope,
-        preferred_app_code=preferred_app_code,
+        preferred_app_code=preferred_app_code or None,
+        include_selected_assignment=include_selected_assignment,
+        resolved_permissions=response_permissions,
     )
 
 

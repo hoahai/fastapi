@@ -131,6 +131,24 @@ class PermissionsRepoTests(unittest.TestCase):
                 resolve_tenant_access(user_id="user-1", tenant_slug="taaa", app_code="tradsphere")
         self.assertEqual(exc.exception.code, "tenant_membership_disabled")
 
+    def test_super_admin_without_membership_is_allowed(self):
+        class _SuperAdminNoMembershipProvider(_FakeProvider):
+            def select_single(self, table, filters, select):
+                if table == "user_global_roles":
+                    return {"id": "global-role-1", "user_id": "user-1", "role": "super_admin", "active": True}
+                return super().select_single(table, filters, select)
+
+            def select_many(self, table, filters, select):
+                if table == "tenant_users":
+                    return []
+                return super().select_many(table, filters, select)
+
+        provider = _SuperAdminNoMembershipProvider(membership_status="active")
+        with patch("shared.auth.permissions_repo.get_auth_provider", return_value=provider):
+            access = resolve_tenant_access(user_id="user-1", tenant_slug="taaa", app_code="tradsphere")
+        self.assertEqual(access.role, "super_admin")
+        self.assertIn("workspace.super_admin", access.permissions)
+
 
 if __name__ == "__main__":
     unittest.main()

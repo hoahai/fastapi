@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from apps.fundsphere.api.v1.endpoints.masterBudgetControl import (
     budgetData,
@@ -6,13 +6,17 @@ from apps.fundsphere.api.v1.endpoints.masterBudgetControl import (
     netSpend,
     settings,
 )
+from shared.auth.dependencies import enforce_fundsphere_permission
 
 
 # ============================================================
 # ROUTER
 # ============================================================
 
-router = APIRouter(prefix="/v1")
+router = APIRouter(
+    prefix="/v1",
+    dependencies=[Depends(enforce_fundsphere_permission)],
+)
 router.include_router(
     settings.router,
     prefix="/masterBudgetControl",

@@ -2,13 +2,13 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 
-from fastapi import APIRouter, Body, HTTPException, Request
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 
+from shared.auth.admin_repo import find_user_id_by_email, is_auth_user_active, list_tenant_users_with_app_role
 from shared.auth.config import get_invite_base_url
 from shared.auth.dependencies import authenticate_bearer, authorize_bearer_for_tenant_app
 from shared.auth.invite_url import build_invite_url
 from shared.auth.invitations_repo import (
-    VALID_TRADSPHERE_ROLES,
     activate_tenant_user,
     create_invitation,
     get_active_app,
@@ -21,18 +21,59 @@ from shared.auth.invitations_repo import (
     upsert_profile_for_invited_user,
 )
 from shared.auth.permissions_cache import permission_cache
-from shared.auth.profile_repo import compose_full_name
-from shared.auth.roles import normalize_role_key
+from shared.auth.profile_repo import compose_full_name, select_profile_for_user, split_full_name
+from shared.auth.providers import get_auth_provider
+from shared.auth.roles import ROLE_ADMIN, ROLE_EDITOR, ROLE_VIEWER, normalize_role_key
 from shared.auth.supabase_client import SupabaseClientError
 
 router = APIRouter(prefix="/invitations")
+VALID_SCOPED_ROLE_KEYS = {ROLE_VIEWER, ROLE_EDITOR, ROLE_ADMIN}
 
 
-def _require_admin(request: Request) -> tuple[str, str, str]:
-    result = authorize_bearer_for_tenant_app(request=request, app_code="tradsphere")
-    if "tradsphere.admin" not in result.access.permissions:
+def _normalize_app_code(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return ""
+    if not normalized.replace("-", "").replace("_", "").isalnum():
+        return ""
+    return normalized
+
+
+def _resolve_target_app_code(
+    *,
+    request: Request,
+    override_app_code: str | None = None,
+    fallback_app_code: str = "tradsphere",
+) -> str:
+    override = _normalize_app_code(override_app_code)
+    if override:
+        return override
+    header_code = _normalize_app_code(request.headers.get("x-app-code"))
+    if header_code:
+        return header_code
+    fallback = _normalize_app_code(fallback_app_code)
+    return fallback or "tradsphere"
+
+
+def _require_admin(
+    request: Request,
+    *,
+    app_code: str | None = None,
+) -> tuple[str, str, str, str, str, bool]:
+    target_app_code = _resolve_target_app_code(request=request, override_app_code=app_code)
+    result = authorize_bearer_for_tenant_app(request=request, app_code=target_app_code)
+    permissions = set(result.access.permissions)
+    is_super_admin = "workspace.super_admin" in permissions or str(result.access.role or "").strip().lower() == "super_admin"
+    if f"{target_app_code}.admin" not in permissions and not is_super_admin:
         raise HTTPException(status_code=403, detail="Forbidden")
-    return result.principal.user_id, result.access.tenant_id, result.access.tenant_slug
+    return (
+        result.principal.user_id,
+        result.access.tenant_id,
+        result.access.tenant_slug,
+        result.access.app_id,
+        result.access.app_code,
+        is_super_admin,
+    )
 
 
 def _invite_url(token: str) -> str:
@@ -46,13 +87,55 @@ def _parse_invitation_expiry(value: str) -> datetime:
         raise HTTPException(status_code=400, detail="Invitation expiration is invalid") from exc
 
 
+def _serialize_scoped_user_row(
+    *,
+    row: dict[str, object],
+    tenant_id: str,
+    app_id: str,
+) -> dict[str, object] | None:
+    user_id = str(row.get("userId") or "").strip()
+    if not user_id:
+        return None
+    email = str(row.get("email") or "").strip().lower() or None
+    full_name = str(row.get("fullName") or "").strip() or None
+    first_name, last_name = split_full_name(full_name)
+    status = str(row.get("status") or "").strip().lower() or "active"
+
+    app_assignments = row.get("appAssignments")
+    assignments = app_assignments if isinstance(app_assignments, list) else []
+    current_assignment = next(
+        (
+            item
+            for item in assignments
+            if isinstance(item, dict)
+            and str(item.get("tenantId") or "").strip() == tenant_id
+            and str(item.get("appId") or "").strip() == app_id
+        ),
+        None,
+    )
+    if not isinstance(current_assignment, dict):
+        return None
+
+    role = normalize_role_key(str(current_assignment.get("role") or "").strip()) or None
+    return {
+        "userId": user_id,
+        "email": email,
+        "fullName": full_name,
+        "firstName": first_name,
+        "lastName": last_name,
+        "status": status,
+        "role": role,
+        "assignedInScope": True,
+    }
+
+
 @router.post("")
 def create_invitation_route(
     request: Request,
     payload: dict = Body(...),
 ):
     """
-    Create a pending TradSphere invitation and return a reusable invite URL.
+    Create a pending app-scoped invitation and return a reusable invite URL.
 
     Example request:
         POST /api/auth/v1/invitations
@@ -70,21 +153,37 @@ def create_invitation_route(
     Requirements:
         - Requires Authorization: Bearer <Supabase JWT>
         - Requires X-Tenant-Id
-        - Requires tradsphere.admin permission
-        - appCode currently supports tradsphere only
+        - Requires current app admin permission for app-scope invites
+        - Non-super admins can invite only existing active users
+        - Brand-new user invites are restricted to workspace super admins
+        - Tenant/app admins can assign only: viewer, editor, admin
+        - super_admin cannot be assigned from this endpoint
     """
-    invited_by_user_id, tenant_id, _ = _require_admin(request)
+    payload_app_code = _normalize_app_code(payload.get("appCode"))
+    invited_by_user_id, tenant_id, _, _, app_code, is_super_admin = _require_admin(
+        request,
+        app_code=payload_app_code or None,
+    )
 
     email = str(payload.get("email") or "").strip().lower()
-    app_code = str(payload.get("appCode") or "tradsphere").strip().lower()
     role = normalize_role_key(str(payload.get("role") or "").strip())
 
     if not email:
         raise HTTPException(status_code=400, detail="email is required")
-    if app_code != "tradsphere":
-        raise HTTPException(status_code=400, detail="Only tradsphere app is supported in Phase 1")
-    if role not in VALID_TRADSPHERE_ROLES:
+    if role not in VALID_SCOPED_ROLE_KEYS:
         raise HTTPException(status_code=400, detail="Invalid role")
+    if not is_super_admin:
+        existing_user_id = find_user_id_by_email(email=email)
+        if not existing_user_id:
+            raise HTTPException(
+                status_code=403,
+                detail="Only Super Admin can invite brand-new users. Tenant/App admin can invite active existing users only.",
+            )
+        if not is_auth_user_active(user_id=existing_user_id):
+            raise HTTPException(
+                status_code=403,
+                detail="Tenant/App admin can invite active existing users only.",
+            )
 
     app_row = get_active_app(app_code=app_code)
     if not app_row:
@@ -109,6 +208,169 @@ def create_invitation_route(
         "status": created.get("status") or "pending",
         "expiresAt": created.get("expires_at"),
         "inviteUrl": _invite_url(token),
+    }
+
+
+@router.get("/users")
+def list_scoped_invitation_users_route(
+    request: Request,
+    query: str | None = Query(default=None),
+):
+    """
+    List users currently assigned to the active tenant + app scope for app-scoped access management UI.
+
+    Example request:
+        GET /api/auth/v1/invitations/users
+
+    Example request (with filter):
+        GET /api/auth/v1/invitations/users?query=alex@example.com
+
+    Example response:
+        {
+          "items": [
+            {
+              "userId": "762fec4b-1da3-4ba7-80e2-dd21622b6e0d",
+              "email": "alex@example.com",
+              "fullName": "Alex Johnson",
+              "firstName": "Alex",
+              "lastName": "Johnson",
+              "status": "active",
+              "role": "editor",
+              "assignedInScope": true
+            }
+          ],
+          "scope": {
+            "tenantId": "a4f4fd7d-2c0d-4bb2-bf73-26e5f7f918bf",
+            "appCode": "shiftzy"
+          }
+        }
+
+    Requirements:
+        - Requires Authorization: Bearer <Supabase JWT>
+        - Requires X-Tenant-Id
+        - Requires current app admin permission or workspace.super_admin
+    """
+    _, tenant_id, _, app_id, app_code, _ = _require_admin(request)
+    app_rows = list_tenant_users_with_app_role(tenant_id=tenant_id, app_id=app_id)
+    search_text = str(query or "").strip().lower()
+
+    items: list[dict[str, object]] = []
+    for row in app_rows:
+        if not isinstance(row, dict):
+            continue
+        normalized = _serialize_scoped_user_row(row=row, tenant_id=tenant_id, app_id=app_id)
+        if not normalized:
+            continue
+        if search_text:
+            haystack = " ".join(
+                [
+                    str(normalized.get("email") or ""),
+                    str(normalized.get("fullName") or ""),
+                    str(normalized.get("userId") or ""),
+                    str(normalized.get("role") or ""),
+                ]
+            ).lower()
+            if search_text not in haystack:
+                continue
+        items.append(normalized)
+
+    items.sort(key=lambda item: (str(item.get("email") or "~").lower(), str(item.get("userId") or "")))
+    return {
+        "items": items,
+        "scope": {
+            "tenantId": tenant_id,
+            "appCode": app_code,
+        },
+    }
+
+
+@router.get("/users/lookup")
+def lookup_active_existing_user_route(
+    request: Request,
+    email: str = Query(...),
+):
+    """
+    Lookup an active existing user by email for app-scoped access-add flows.
+
+    Example request:
+        GET /api/auth/v1/invitations/users/lookup?email=alex@example.com
+
+    Example response:
+        {
+          "items": [
+            {
+              "userId": "762fec4b-1da3-4ba7-80e2-dd21622b6e0d",
+              "email": "alex@example.com",
+              "fullName": "Alex Johnson",
+              "firstName": "Alex",
+              "lastName": "Johnson",
+              "status": "active",
+              "role": null,
+              "assignedInScope": false
+            }
+          ],
+          "scope": {
+            "tenantId": "a4f4fd7d-2c0d-4bb2-bf73-26e5f7f918bf",
+            "appCode": "shiftzy"
+          }
+        }
+
+    Requirements:
+        - Requires Authorization: Bearer <Supabase JWT>
+        - Requires X-Tenant-Id
+        - Requires current app admin permission or workspace.super_admin
+        - Returns only active existing users
+    """
+    _, tenant_id, _, app_id, app_code, _ = _require_admin(request)
+    normalized_email = str(email or "").strip().lower()
+    if not normalized_email or "@" not in normalized_email:
+        raise HTTPException(status_code=400, detail="Valid email is required")
+
+    user_id = find_user_id_by_email(email=normalized_email)
+    if not user_id or not is_auth_user_active(user_id=user_id):
+        return {
+            "items": [],
+            "scope": {
+                "tenantId": tenant_id,
+                "appCode": app_code,
+            },
+        }
+
+    scoped_rows = list_tenant_users_with_app_role(tenant_id=tenant_id, app_id=app_id)
+    for row in scoped_rows:
+        if not isinstance(row, dict):
+            continue
+        scoped_item = _serialize_scoped_user_row(row=row, tenant_id=tenant_id, app_id=app_id)
+        if scoped_item and str(scoped_item.get("userId") or "").strip() == user_id:
+            return {
+                "items": [scoped_item],
+                "scope": {
+                    "tenantId": tenant_id,
+                    "appCode": app_code,
+                },
+            }
+
+    profile = select_profile_for_user(provider=get_auth_provider(), user_id=user_id) or {}
+    full_name = str(profile.get("full_name") or "").strip() or None
+    first_name, last_name = split_full_name(full_name)
+    profile_email = str(profile.get("email") or "").strip().lower() or normalized_email
+    return {
+        "items": [
+            {
+                "userId": user_id,
+                "email": profile_email,
+                "fullName": full_name,
+                "firstName": first_name,
+                "lastName": last_name,
+                "status": "active",
+                "role": None,
+                "assignedInScope": False,
+            }
+        ],
+        "scope": {
+            "tenantId": tenant_id,
+            "appCode": app_code,
+        },
     }
 
 
@@ -316,9 +578,9 @@ def revoke_invitation_route(request: Request, invitation_id: str):
     Requirements:
         - Requires Authorization: Bearer <Supabase JWT>
         - Requires X-Tenant-Id
-        - Requires tradsphere.admin permission
+        - Requires current app admin permission
     """
-    _, tenant_id, _ = _require_admin(request)
+    _, tenant_id, _, _, _, _ = _require_admin(request)
 
     row = get_invitation_by_id(invitation_id=invitation_id, tenant_id=tenant_id)
     if not row:

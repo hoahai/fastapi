@@ -193,7 +193,9 @@ def resolve_tenant_access(*, user_id: str, tenant_slug: str, app_code: str) -> T
     except SupabaseClientError as exc:
         raise TenantAccessError("Unable to verify tenant permissions", code="supabase_unavailable") from exc
 
-    permissions = frozenset(expand_permissions_for_role(role, role_permissions))
+    permissions = frozenset(
+        expand_permissions_for_role(role, role_permissions, app_code=app.code)
+    )
     return TenantAccessProfile(
         tenant_id=tenant.tenant_id,
         tenant_slug=tenant.slug,

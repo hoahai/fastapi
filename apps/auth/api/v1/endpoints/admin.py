@@ -9,7 +9,6 @@ from shared.auth.admin_repo import (
     get_user_app_roles,
     get_user_memberships,
     is_user_super_admin,
-    list_admin_assignment_scopes_for_user,
     list_active_apps,
     list_active_tenants,
     list_role_keys_from_store,
@@ -72,9 +71,12 @@ def _require_admin(request: Request):
     if not _can_manage_admin_users(role=result.access.role, permissions=permissions):
         raise HTTPException(status_code=403, detail="Forbidden")
     is_super_admin = _is_super_admin(role=result.access.role, permissions=permissions)
-    admin_scopes = None if is_super_admin else list_admin_assignment_scopes_for_user(user_id=result.principal.user_id)
-    if not is_super_admin and not admin_scopes:
-        admin_scopes = {(result.access.tenant_id, result.access.app_id)}
+    if not is_super_admin:
+        raise HTTPException(
+            status_code=403,
+            detail="Global admin routes require Super Admin access",
+        )
+    admin_scopes = None
     return result, is_super_admin, admin_scopes
 
 
@@ -556,7 +558,7 @@ def list_tenants_route(request: Request):
     Requirements:
         - Requires Authorization: Bearer <Supabase JWT>
         - Requires X-Tenant-Id
-        - Requires admin manage permission (`tradsphere.admin` or `workspace.super_admin`)
+        - Requires `workspace.super_admin` permission
     """
     result, is_super_admin, admin_scopes = _require_admin(request)
     return {
@@ -591,7 +593,7 @@ def list_apps_route(request: Request):
     Requirements:
         - Requires Authorization: Bearer <Supabase JWT>
         - Requires X-Tenant-Id
-        - Requires admin manage permission (`tradsphere.admin` or `workspace.super_admin`)
+        - Requires `workspace.super_admin` permission
     """
     result, is_super_admin, admin_scopes = _require_admin(request)
     return {
@@ -624,7 +626,7 @@ def list_roles_route(request: Request):
     Requirements:
         - Requires Authorization: Bearer <Supabase JWT>
         - Requires X-Tenant-Id
-        - Requires admin manage permission (`tradsphere.admin` or `workspace.super_admin`)
+        - Requires `workspace.super_admin` permission
     """
     _require_admin(request)
     return _list_roles_payload()
@@ -659,7 +661,7 @@ def list_users_route(
     Requirements:
         - Requires Authorization: Bearer <Supabase JWT>
         - Requires X-Tenant-Id
-        - Requires admin manage permission (`tradsphere.admin` or `workspace.super_admin`)
+        - Requires `workspace.super_admin` permission
         - `includeAllTenants=true` is effective only for `workspace.super_admin`
     """
     result, is_super_admin, admin_scopes = _require_admin(request)
@@ -698,7 +700,7 @@ def load_admin_users_page_route(
     Requirements:
         - Requires Authorization: Bearer <Supabase JWT>
         - Requires X-Tenant-Id
-        - Requires admin manage permission (`tradsphere.admin` or `workspace.super_admin`)
+        - Requires `workspace.super_admin` permission
         - `includeAllTenants=true` is effective only for `workspace.super_admin`
         - `invitationStatus` accepts: pending, accepted, revoked, expired
     """
@@ -1154,7 +1156,7 @@ def update_user_access_route(
     Requirements:
         - Requires Authorization: Bearer <Supabase JWT>
         - Requires X-Tenant-Id
-        - Requires admin manage permission (`tradsphere.admin` or `workspace.super_admin`)
+        - Requires `workspace.super_admin` permission
         - Super Admin targets can be edited only by workspace super admins
         - When actor is `workspace.super_admin`, `status=disabled|active` also applies global auth ban/unban in Supabase
         - Access should be assigned through `appAssignments` (tenantId + appId/appCode + role)
@@ -1215,7 +1217,7 @@ def send_user_password_reset_route(
     Requirements:
         - Requires Authorization: Bearer <Supabase JWT>
         - Requires X-Tenant-Id
-        - Requires admin manage permission (`tradsphere.admin` or `workspace.super_admin`)
+        - Requires `workspace.super_admin` permission
         - Non-super admins can only reset users in their managed tenant/app scope
         - Never returns password values, recovery tokens, or service-role secrets
     """
@@ -1294,7 +1296,7 @@ def list_invitations_route(
     Requirements:
         - Requires Authorization: Bearer <Supabase JWT>
         - Requires X-Tenant-Id
-        - Requires admin manage permission (`tradsphere.admin` or `workspace.super_admin`)
+        - Requires `workspace.super_admin` permission
         - Optional status filter: pending, accepted, revoked, expired
     """
     result, is_super_admin, admin_scopes = _require_admin(request)
@@ -1432,7 +1434,7 @@ def create_invitation_admin_route(
     Requirements:
         - Requires Authorization: Bearer <Supabase JWT>
         - Requires X-Tenant-Id
-        - Requires admin manage permission (`tradsphere.admin` or `workspace.super_admin`)
+        - Requires `workspace.super_admin` permission
         - Invitation token stores multiple assignment rows via `invitation_assignments` when available
     """
     result, is_super_admin, admin_scopes = _require_admin(request)
@@ -1564,7 +1566,7 @@ def revoke_invitation_admin_route(request: Request, invitation_id: str):
     Requirements:
         - Requires Authorization: Bearer <Supabase JWT>
         - Requires X-Tenant-Id
-        - Requires admin manage permission (`tradsphere.admin` or `workspace.super_admin`)
+        - Requires `workspace.super_admin` permission
     """
     result, is_super_admin, admin_scopes = _require_admin(request)
 

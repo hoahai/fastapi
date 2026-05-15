@@ -82,7 +82,14 @@ class AdminEndpointTests(unittest.TestCase):
                 load_admin_users_page_route(request=request)
         self.assertEqual(exc.exception.status_code, 403)
 
-    def test_admin_users_load_returns_scoped_payload(self):
+    def test_admin_routes_forbid_tenant_admin_without_super_admin(self):
+        request = self._request()
+        with patch("apps.auth.api.v1.endpoints.admin.authorize_bearer_for_tenant_app", return_value=_admin_result()):
+            with self.assertRaises(HTTPException) as exc:
+                list_roles_route(request)
+        self.assertEqual(exc.exception.status_code, 403)
+
+    def test_admin_users_load_returns_global_payload_for_super_admin(self):
         request = self._request()
         users_payload = [
             {
@@ -129,10 +136,7 @@ class AdminEndpointTests(unittest.TestCase):
             },
         ]
 
-        with patch("apps.auth.api.v1.endpoints.admin.authorize_bearer_for_tenant_app", return_value=_admin_result()), patch(
-            "apps.auth.api.v1.endpoints.admin.list_admin_assignment_scopes_for_user",
-            return_value={("tenant-1", "app-1")},
-        ), patch(
+        with patch("apps.auth.api.v1.endpoints.admin.authorize_bearer_for_tenant_app", return_value=_super_admin_result()), patch(
             "apps.auth.api.v1.endpoints.admin.list_active_tenants",
             return_value=[
                 {"id": "tenant-1", "slug": "taaa", "name": "Tenant A", "active": True},
@@ -163,22 +167,15 @@ class AdminEndpointTests(unittest.TestCase):
         ):
             payload = load_admin_users_page_route(request=request)
 
-        self.assertEqual(len(payload["tenants"]), 1)
-        self.assertEqual(payload["tenants"][0]["id"], "tenant-1")
-        self.assertEqual(len(payload["apps"]), 1)
-        self.assertEqual(payload["apps"][0]["id"], "app-1")
-        self.assertEqual(len(payload["users"]), 1)
-        self.assertEqual(payload["users"][0]["userId"], "in-scope-user")
-        self.assertEqual(len(payload["invitations"]), 1)
-        self.assertEqual(payload["invitations"][0]["id"], "invite-1")
+        self.assertEqual(len(payload["tenants"]), 2)
+        self.assertEqual(len(payload["apps"]), 2)
+        self.assertEqual(len(payload["users"]), 2)
+        self.assertEqual(len(payload["invitations"]), 2)
         self.assertTrue(any(item.get("key") == "admin" for item in payload["roles"]))
 
     def test_role_catalog_includes_super_admin_entry(self):
         request = self._request()
-        with patch("apps.auth.api.v1.endpoints.admin.authorize_bearer_for_tenant_app", return_value=_admin_result()), patch(
-            "apps.auth.api.v1.endpoints.admin.list_admin_assignment_scopes_for_user",
-            return_value={("tenant-1", "app-1")},
-        ), patch(
+        with patch("apps.auth.api.v1.endpoints.admin.authorize_bearer_for_tenant_app", return_value=_super_admin_result()), patch(
             "apps.auth.api.v1.endpoints.admin.list_role_keys_from_store",
             return_value=["viewer", "editor", "admin"],
         ):
@@ -414,9 +411,6 @@ class AdminEndpointTests(unittest.TestCase):
     def test_update_user_access_forbids_self_access_change(self):
         request = self._request()
         with patch("apps.auth.api.v1.endpoints.admin.authorize_bearer_for_tenant_app", return_value=_admin_result()), patch(
-            "apps.auth.api.v1.endpoints.admin.list_admin_assignment_scopes_for_user",
-            return_value={("tenant-1", "app-1")},
-        ), patch(
             "apps.auth.api.v1.endpoints.admin.list_active_apps",
             return_value=[{"id": "app-1", "code": "tradsphere", "name": "TradSphere", "active": True}],
         ), patch(
@@ -440,9 +434,6 @@ class AdminEndpointTests(unittest.TestCase):
     def test_update_user_access_forbids_non_super_cross_tenant_scope(self):
         request = self._request()
         with patch("apps.auth.api.v1.endpoints.admin.authorize_bearer_for_tenant_app", return_value=_admin_result()), patch(
-            "apps.auth.api.v1.endpoints.admin.list_admin_assignment_scopes_for_user",
-            return_value={("tenant-1", "app-1")},
-        ), patch(
             "apps.auth.api.v1.endpoints.admin.list_active_apps",
             return_value=[{"id": "app-1", "code": "tradsphere", "name": "TradSphere", "active": True}],
         ), patch(
@@ -527,9 +518,6 @@ class AdminEndpointTests(unittest.TestCase):
     def test_update_user_access_super_admin_target_forbidden_for_non_super_actor(self):
         request = self._request()
         with patch("apps.auth.api.v1.endpoints.admin.authorize_bearer_for_tenant_app", return_value=_admin_result()), patch(
-            "apps.auth.api.v1.endpoints.admin.list_admin_assignment_scopes_for_user",
-            return_value={("tenant-1", "app-1")},
-        ), patch(
             "apps.auth.api.v1.endpoints.admin.is_user_super_admin",
             return_value=True,
         ):
@@ -586,10 +574,7 @@ class AdminEndpointTests(unittest.TestCase):
         self.assertEqual(mock_create.call_count, 1)
         mock_insert_assignments.assert_called_once()
 
-        with patch("apps.auth.api.v1.endpoints.admin.authorize_bearer_for_tenant_app", return_value=_admin_result()), patch(
-            "apps.auth.api.v1.endpoints.admin.list_admin_assignment_scopes_for_user",
-            return_value={("tenant-1", "app-1")},
-        ), patch(
+        with patch("apps.auth.api.v1.endpoints.admin.authorize_bearer_for_tenant_app", return_value=_super_admin_result()), patch(
             "apps.auth.api.v1.endpoints.admin.get_invitation_by_id",
             return_value={"id": "invite-1", "tenant_id": "tenant-1", "app_id": "app-1"},
         ), patch(
@@ -601,12 +586,9 @@ class AdminEndpointTests(unittest.TestCase):
         mock_patch.assert_called_once_with(invitation_id="invite-1", status="revoked")
         self.assertEqual(revoke_response, {"status": "revoked", "id": "invite-1"})
 
-    def test_send_password_reset_scoped_admin_allowed(self):
+    def test_send_password_reset_super_admin_allowed(self):
         request = self._request()
-        with patch("apps.auth.api.v1.endpoints.admin.authorize_bearer_for_tenant_app", return_value=_admin_result()), patch(
-            "apps.auth.api.v1.endpoints.admin.list_admin_assignment_scopes_for_user",
-            return_value={("tenant-1", "app-1")},
-        ), patch(
+        with patch("apps.auth.api.v1.endpoints.admin.authorize_bearer_for_tenant_app", return_value=_super_admin_result()), patch(
             "apps.auth.api.v1.endpoints.admin.list_users_with_access",
             return_value=[
                 {
@@ -636,31 +618,11 @@ class AdminEndpointTests(unittest.TestCase):
                 send_user_password_reset_route(request=request, user_id="target-user")
         self.assertEqual(exc.exception.status_code, 403)
 
-    def test_send_password_reset_forbids_out_of_scope_user(self):
+    def test_send_password_reset_forbids_non_super_admin_actor(self):
         request = self._request()
-        scoped_rows = [
-            {
-                "userId": "in-scope-user",
-                "tenantMemberships": [{"tenantId": "tenant-1", "status": "active"}],
-                "appAssignments": [{"tenantId": "tenant-1", "appId": "app-1", "role": "viewer"}],
-            }
-        ]
-        global_rows = [
-            {
-                "userId": "out-scope-user",
-                "tenantMemberships": [{"tenantId": "tenant-2", "status": "active"}],
-                "appAssignments": [{"tenantId": "tenant-2", "appId": "app-2", "role": "viewer"}],
-            }
-        ]
-        with patch("apps.auth.api.v1.endpoints.admin.authorize_bearer_for_tenant_app", return_value=_admin_result()), patch(
-            "apps.auth.api.v1.endpoints.admin.list_admin_assignment_scopes_for_user",
-            return_value={("tenant-1", "app-1")},
-        ), patch(
-            "apps.auth.api.v1.endpoints.admin.list_users_with_access",
-            side_effect=[scoped_rows, global_rows],
-        ):
+        with patch("apps.auth.api.v1.endpoints.admin.authorize_bearer_for_tenant_app", return_value=_admin_result()):
             with self.assertRaises(HTTPException) as exc:
-                send_user_password_reset_route(request=request, user_id="out-scope-user")
+                send_user_password_reset_route(request=request, user_id="target-user")
 
         self.assertEqual(exc.exception.status_code, 403)
 

@@ -7,6 +7,7 @@ import StationsPage from "@/pages/StationsPage";
 import ShiftzyEmployeesPage from "@shiftzy/ShiftzyAccountsPage";
 import ShiftzySchedulePage from "@shiftzy/ShiftzySchedulePage";
 import AdminUsersPage from "@/pages/AdminUsersPage";
+import AppScopedAdminPage from "@/pages/AppScopedAdminPage";
 import ProfilePage from "@/pages/ProfilePage";
 import { WorkspaceNotFoundPage } from "@home/WorkspaceNotFoundPage";
 import { WorkspacePortalPage } from "@home/WorkspacePortalPage";
@@ -16,12 +17,15 @@ import { ToastProvider } from "@/components/ui/toast";
 import { useRouteScrollRestoration } from "@/hooks/useRouteScrollRestoration";
 import { AuthProvider } from "@shared/auth/AuthProvider";
 import { AuthLoadingFallback, RequirePermission, RequireTenantAccess, shouldProtectTradsphereFrontend } from "@shared/auth/guards";
-import { hasAnyAdminScope, hasAppViewAccess } from "@shared/auth/permissions";
+import { hasAppViewAccess, hasSuperAdminAccess } from "@shared/auth/permissions";
 import { AuthCallbackPage, InviteAcceptPage, LoginPage, PendingInvitePage, UnauthorizedPage, UpdatePasswordPage } from "@shared/auth/pages";
 import { useAuth } from "@shared/auth/useAuth";
 
 function getFrontendPath(pathname: string): string {
   const normalizedPath = pathname || "/";
+  if (normalizedPath === "/tradsphere/users-access" || normalizedPath === "/tradsphere/users-access/") {
+    return "/tradsphere/admin";
+  }
   if (normalizedPath === "/fe" || normalizedPath === "/fe/") {
     return "/";
   }
@@ -42,6 +46,30 @@ function stripTrailingSlash(path: string): string {
     return path.slice(0, -1);
   }
   return path || "/";
+}
+
+function parseScopedAdminRoute(path: string): string | null {
+  const match = String(path || "").match(/^\/([a-z0-9-_]+)\/admin$/);
+  if (!match) {
+    return null;
+  }
+  return String(match[1] || "").trim().toLowerCase() || null;
+}
+
+function formatAppLabel(appCode: string): string {
+  const normalized = String(appCode || "").trim().toLowerCase();
+  if (!normalized) {
+    return "App";
+  }
+  const fromNav = APP_NAV_ITEMS.find((item) => String(item.id || "").trim().toLowerCase() === normalized);
+  if (fromNav?.label) {
+    return fromNav.label;
+  }
+  return normalized
+    .split(/[-_]+/g)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
 }
 
 function toFrontendHref(route: string): string {
@@ -83,6 +111,10 @@ function toScrollStorageKey(route: string): string {
   }
   if (route === "/tradsphere/stations") {
     return "tradsphere.stations.scrollY";
+  }
+  const scopedAdminMatch = route.match(/^\/([a-z0-9-_]+)\/admin$/);
+  if (scopedAdminMatch) {
+    return `${scopedAdminMatch[1]}.admin.scrollY`;
   }
   if (route === "/shiftzy/home") {
     return "shiftzy.home.scrollY";
@@ -199,8 +231,7 @@ function RequireAdminScope({ children, fallback }: { children: ReactNode; fallba
   if (!auth.accessProfile) {
     return <>{fallback}</>;
   }
-  const appCodes = APP_NAV_ITEMS.map((item) => item.id);
-  if (!hasAnyAdminScope(auth.accessProfile, appCodes)) {
+  if (!hasSuperAdminAccess(auth.accessProfile)) {
     return <>{fallback}</>;
   }
   return <>{children}</>;
@@ -259,6 +290,7 @@ function App() {
       "/shiftzy/employees",
     ]);
   }, []);
+  const scopedAdminAppCode = useMemo(() => parseScopedAdminRoute(frontendPath), [frontendPath]);
 
   function navigate(route: string) {
     const href = toFrontendHref(route);
@@ -306,6 +338,25 @@ function App() {
     );
   }
 
+  function renderScopedAppAdminRoute(appCode: string) {
+    const normalizedAppCode = String(appCode || "").trim().toLowerCase();
+    if (!normalizedAppCode) {
+      return <WorkspaceNotFoundPage onNavigate={navigate} />;
+    }
+    const appLabel = formatAppLabel(normalizedAppCode);
+    return (
+      <RequireSignedIn>
+        <RequireTenantAccess fallback={<UnauthorizedPage />}>
+          <RequireAppView appCode={normalizedAppCode} fallback={<UnauthorizedPage />}>
+            <RequireAnyPermission permissions={["workspace.super_admin", `${normalizedAppCode}.admin`]} fallback={<UnauthorizedPage />}>
+              <AppScopedAdminPage appCode={normalizedAppCode} appName={appLabel} />
+            </RequireAnyPermission>
+          </RequireAppView>
+        </RequireTenantAccess>
+      </RequireSignedIn>
+    );
+  }
+
   function renderProfileRoute() {
     return (
       <RequireSignedIn>
@@ -342,12 +393,13 @@ function App() {
       {frontendPath === "/admin/users" ? renderAdminRoute() : null}
       {frontendPath.startsWith("/tradsphere/") ? renderTradsphereRoute() : null}
       {frontendPath.startsWith("/shiftzy/") ? renderShiftzyRoute() : null}
+      {scopedAdminAppCode ? renderScopedAppAdminRoute(scopedAdminAppCode) : null}
       {frontendPath === HOME_ROUTE ? (
         <RequireSignedIn>
           <WorkspacePortalPage onNavigate={navigate} />
         </RequireSignedIn>
       ) : null}
-      {!knownRoutes.has(frontendPath) && !inviteToken ? <WorkspaceNotFoundPage onNavigate={navigate} /> : null}
+      {!knownRoutes.has(frontendPath) && !inviteToken && !scopedAdminAppCode ? <WorkspaceNotFoundPage onNavigate={navigate} /> : null}
     </>
   );
 

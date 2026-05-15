@@ -37,7 +37,6 @@ from shared.response import (
 from shared.auth.config import (
     get_auth_mode,
     is_legacy_api_key_fallback_enabled,
-    should_protect_tradsphere,
 )
 from shared.auth.dependencies import authorize_bearer_for_tenant_app
 _API_KEY_REGISTRY: dict[str, str] | None = None
@@ -250,6 +249,23 @@ def _should_validate_tenant(path: str, prefixes: tuple[str, ...] | None) -> bool
     if not prefixes:
         return True
     return any(path.startswith(prefix) for prefix in prefixes)
+
+
+def _resolve_api_app_code(path: str) -> str | None:
+    normalized = _normalize_path(path)
+    if normalized == "/api/tradsphere" or normalized.startswith("/api/tradsphere/"):
+        return "tradsphere"
+    if normalized == "/api/spendsphere" or normalized.startswith("/api/spendsphere/"):
+        return "spendsphere"
+    if normalized == "/spendsphere/api" or normalized.startswith("/spendsphere/api/"):
+        return "spendsphere"
+    if normalized == "/api/shiftzy" or normalized.startswith("/api/shiftzy/"):
+        return "shiftzy"
+    if normalized == "/api/fundsphere" or normalized.startswith("/api/fundsphere/"):
+        return "fundsphere"
+    if normalized == "/api/opssphere" or normalized.startswith("/api/opssphere/"):
+        return "opssphere"
+    return None
 
 
 def _resolve_tenant_validator(path: str, registry: object) -> tuple[str | None, object]:
@@ -614,11 +630,11 @@ async def api_key_auth_middleware(request: Request, call_next):
         or path.startswith("/api/")
         or path.startswith("/spendsphere/api")
     )
-    is_tradsphere_api = path.startswith("/api/tradsphere/")
     is_auth_api = path.startswith("/api/auth/")
+    app_code = _resolve_api_app_code(path)
+    is_protected_app_api = bool(app_code) and not is_auth_api
     auth_mode = get_auth_mode()
     legacy_fallback_enabled = is_legacy_api_key_fallback_enabled()
-    protect_tradsphere = should_protect_tradsphere()
 
     if request.method == "OPTIONS":
         return await call_next(request)
@@ -633,13 +649,13 @@ async def api_key_auth_middleware(request: Request, call_next):
             response.headers["X-API-Client"] = request.state.client_id
             return response
 
-        if is_tradsphere_api and protect_tradsphere:
+        if is_protected_app_api:
             bearer_token = _extract_bearer_token(request)
             if bearer_token:
                 try:
                     result = authorize_bearer_for_tenant_app(
                         request=request,
-                        app_code="tradsphere",
+                        app_code=str(app_code),
                     )
                 except Exception as exc:
                     detail = getattr(exc, "detail", None) or "Invalid bearer token"
@@ -711,18 +727,19 @@ async def api_key_auth_middleware(request: Request, call_next):
                 )
 
             request.state.client_id = client_id
-            if is_tradsphere_api and protect_tradsphere:
+            if is_protected_app_api:
                 request.state.auth_mode = "legacy_api_key"
             client_token = set_client_id(client_id)
             response = await call_next(request)
             response.headers["X-API-Client"] = client_id
-            if is_tradsphere_api and protect_tradsphere:
+            if is_protected_app_api:
                 response.headers["X-Auth-Deprecated"] = "api-key-fallback"
                 _API_LOGGER.warning(
-                    "Legacy API key fallback used for Tradsphere route",
+                    "Legacy API key fallback used for protected app route",
                     extra={
                         "extra_fields": {
                             "event": "legacy_api_key_fallback",
+                            "app_code": app_code,
                             "path": path,
                             "tenant_id": getattr(request.state, "tenant_id", None),
                             "client_id": client_id,

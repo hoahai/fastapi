@@ -69,6 +69,22 @@ class TradspherePermissionDependencyTests(unittest.TestCase):
         )
         enforce_tradsphere_permission(request)  # should not raise
 
+    def test_super_admin_bypasses_route_permission_checks(self):
+        profile = TenantAccessProfile(
+            tenant_id="tid",
+            tenant_slug="taaa",
+            app_id="aid",
+            app_code="tradsphere",
+            role="super_admin",
+            permissions=frozenset({"workspace.super_admin"}),
+        )
+        request = SimpleNamespace(
+            method="POST",
+            state=SimpleNamespace(auth_mode="supabase_jwt", tenant_access=profile),
+            url=SimpleNamespace(path="/api/tradsphere/v1/estNums"),
+        )
+        enforce_tradsphere_permission(request)  # should not raise
+
 
 if __name__ == "__main__":
     unittest.main()

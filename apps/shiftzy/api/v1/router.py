@@ -1,4 +1,4 @@
-from fastapi import APIRouter
+from fastapi import APIRouter, Depends
 
 from apps.shiftzy.api.v1.endpoints import (
     bootstrap,
@@ -8,8 +8,12 @@ from apps.shiftzy.api.v1.endpoints import (
     shifts,
     weeks,
 )
+from shared.auth.dependencies import enforce_shiftzy_permission
 
-router = APIRouter(prefix="/v1")
+router = APIRouter(
+    prefix="/v1",
+    dependencies=[Depends(enforce_shiftzy_permission)],
+)
 router.include_router(bootstrap.router, tags=["bootstrap"])
 router.include_router(weeks.router, tags=["weeks"])
 router.include_router(positions.router, tags=["positions"])

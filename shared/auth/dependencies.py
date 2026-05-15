@@ -5,11 +5,12 @@ from fastapi import HTTPException, Request
 from shared.auth.config import (
     get_auth_mode,
     is_legacy_api_key_fallback_enabled,
-    should_protect_tradsphere,
 )
 from shared.auth.jwt_verify import JwtVerificationError, verify_supabase_jwt
+from shared.auth.permission_registry import resolve_required_permissions
 from shared.auth.permissions_repo import TenantAccessError, get_tenant_access_cached
 from shared.auth.types import AuthorizationResult, AuthPrincipal, TenantAccessProfile
+from shared.auth.user_status import is_auth_user_disabled
 
 
 def _extract_bearer_token(request: Request) -> str | None:
@@ -38,6 +39,7 @@ def authorize_bearer_for_tenant_app(
     except JwtVerificationError as exc:
         status_code = int(getattr(exc, "status_code", 401) or 401)
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    _require_active_principal(principal)
 
     try:
         access = get_tenant_access_cached(
@@ -76,6 +78,7 @@ def authenticate_bearer(request: Request) -> AuthPrincipal:
     except JwtVerificationError as exc:
         status_code = int(getattr(exc, "status_code", 401) or 401)
         raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+    _require_active_principal(principal)
 
     request.state.auth_principal = principal
     request.state.auth_mode = "supabase_jwt"
@@ -103,41 +106,27 @@ def require_permission(request: Request, permission: str) -> None:
     access = get_tenant_access(request)
     if access is None:
         raise HTTPException(status_code=401, detail="Authentication required")
+    if "workspace.super_admin" in access.permissions:
+        return
     if permission not in access.permissions:
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
-def _is_read_method(method: str) -> bool:
-    return method in {"GET", "HEAD", "OPTIONS"}
+def _require_active_principal(principal: AuthPrincipal) -> None:
+    raw_user = principal.raw_user if isinstance(principal.raw_user, dict) else {}
+    if is_auth_user_disabled(raw_user):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": "Your account has been disabled. Contact your workspace administrator.",
+                "code": "user_disabled",
+            },
+        )
 
 
-def _resolve_tradsphere_permission(method: str, path: str) -> str:
-    normalized_path = str(path or "").lower()
-    if "/contacts" in normalized_path:
-        return "tradsphere.contacts.viewer" if _is_read_method(method) else "tradsphere.contacts.editor"
-    if "/stationscontacts" in normalized_path:
-        return "tradsphere.contacts.viewer" if _is_read_method(method) else "tradsphere.contacts.editor"
-    if "/stations" in normalized_path:
-        return "tradsphere.stations.viewer" if _is_read_method(method) else "tradsphere.stations.editor"
-    if "/estnums" in normalized_path:
-        return "tradsphere.estnums.viewer" if _is_read_method(method) else "tradsphere.estnums.editor"
-    if "/schedules" in normalized_path:
-        if _is_read_method(method):
-            return "tradsphere.schedules.viewer"
-        return "tradsphere.editor"
-    if "/broadcastcalendar" in normalized_path:
-        return "tradsphere.viewer"
-    if "/accounts" in normalized_path:
-        return "tradsphere.viewer" if _is_read_method(method) else "tradsphere.editor"
-    if "/deliverymethods" in normalized_path:
-        return "tradsphere.viewer" if _is_read_method(method) else "tradsphere.editor"
-    if "/ui/" in normalized_path:
-        return "tradsphere.viewer" if _is_read_method(method) else "tradsphere.editor"
-    return "tradsphere.viewer" if _is_read_method(method) else "tradsphere.editor"
-
-
-def enforce_tradsphere_permission(request: Request) -> None:
-    if not should_protect_tradsphere():
+def _enforce_route_permission_for_app(request: Request, *, app_code: str) -> None:
+    normalized_app_code = str(app_code or "").strip().lower()
+    if not normalized_app_code:
         return
 
     auth_mode = str(getattr(request.state, "auth_mode", "")).strip().lower()
@@ -151,9 +140,36 @@ def enforce_tradsphere_permission(request: Request) -> None:
     access = get_tenant_access(request)
     if access is None:
         raise HTTPException(status_code=401, detail="Authentication required")
+    if "workspace.super_admin" in access.permissions:
+        return
 
-    method = str(request.method or "").upper()
-    required_permission = _resolve_tradsphere_permission(method, request.url.path)
+    required_permissions = resolve_required_permissions(
+        app_code=normalized_app_code,
+        method=str(request.method or "").upper(),
+        path=str(request.url.path or ""),
+    )
+    if not required_permissions:
+        return
 
-    if required_permission not in access.permissions:
+    if not any(permission in access.permissions for permission in required_permissions):
         raise HTTPException(status_code=403, detail="Forbidden")
+
+
+def enforce_tradsphere_permission(request: Request) -> None:
+    _enforce_route_permission_for_app(request, app_code="tradsphere")
+
+
+def enforce_spendsphere_permission(request: Request) -> None:
+    _enforce_route_permission_for_app(request, app_code="spendsphere")
+
+
+def enforce_fundsphere_permission(request: Request) -> None:
+    _enforce_route_permission_for_app(request, app_code="fundsphere")
+
+
+def enforce_shiftzy_permission(request: Request) -> None:
+    _enforce_route_permission_for_app(request, app_code="shiftzy")
+
+
+def enforce_opssphere_permission(request: Request) -> None:
+    _enforce_route_permission_for_app(request, app_code="opssphere")

@@ -6,6 +6,7 @@ from shared.auth.providers import get_auth_provider
 from shared.auth.profile_repo import select_profile_for_user
 from shared.auth.roles import ROLE_ADMIN, ROLE_ORDER, ROLE_SUPER_ADMIN, normalize_role_key
 from shared.auth.supabase_client import SupabaseClientError
+from shared.auth.user_status import is_auth_user_disabled
 
 
 def _provider():
@@ -626,3 +627,26 @@ def set_auth_user_banned(*, user_id: str, banned: bool) -> None:
         user_id=normalized_user_id,
         attributes={"ban_duration": ban_duration},
     )
+
+
+def find_user_id_by_email(*, email: str) -> str | None:
+    normalized_email = str(email or "").strip().lower()
+    if not normalized_email:
+        return None
+    row = _provider().select_single(
+        table="profiles",
+        filters={"email": normalized_email},
+        select="user_id,email",
+    )
+    user_id = str((row or {}).get("user_id") or "").strip()
+    return user_id or None
+
+
+def is_auth_user_active(*, user_id: str) -> bool:
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        return False
+    auth_user = _provider().get_auth_user_by_id(user_id=normalized_user_id)
+    if not isinstance(auth_user, dict) or not auth_user:
+        return False
+    return not is_auth_user_disabled(auth_user)

@@ -6,6 +6,7 @@ import {
   MapPinned,
   RadioTower,
   Search,
+  UserCheck,
   Users,
   type LucideIcon,
   WalletCards,
@@ -128,5 +129,6 @@ export const TRADSPHERE_HOME_CHILD_ICON = House;
 export const TRADSPHERE_ESTNUMS_CHILD_ICON = Search;
 export const TRADSPHERE_CONTACTS_CHILD_ICON = ContactRound;
 export const TRADSPHERE_STATIONS_CHILD_ICON = MapPinned;
+export const TRADSPHERE_USERS_ACCESS_CHILD_ICON = UserCheck;
 export const SHIFTZY_SCHEDULES_CHILD_ICON = CalendarClock;
 export const SHIFTZY_ACCOUNTS_CHILD_ICON = Users;

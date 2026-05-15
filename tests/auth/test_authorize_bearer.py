@@ -83,6 +83,22 @@ class AuthorizeBearerTests(unittest.TestCase):
                 authorize_bearer_for_tenant_app(request=request, app_code="tradsphere")
         self.assertEqual(exc.exception.status_code, 503)
 
+    def test_disabled_user_is_blocked_before_tenant_access_lookup(self):
+        principal = AuthPrincipal(
+            user_id="user-1",
+            email="user@example.com",
+            raw_user={"banned_until": "2999-01-01T00:00:00+00:00"},
+        )
+        request = self._request("Bearer token-123")
+        with patch("shared.auth.dependencies.verify_supabase_jwt", return_value=principal), patch(
+            "shared.auth.dependencies.get_tenant_access_cached"
+        ) as mock_get_access:
+            with self.assertRaises(HTTPException) as exc:
+                authorize_bearer_for_tenant_app(request=request, app_code="tradsphere")
+        mock_get_access.assert_not_called()
+        self.assertEqual(exc.exception.status_code, 403)
+        self.assertEqual(exc.exception.detail["code"], "user_disabled")
+
 
 if __name__ == "__main__":
     unittest.main()

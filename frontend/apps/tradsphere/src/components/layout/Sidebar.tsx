@@ -33,7 +33,7 @@ import {
   type NormalizedAccessAssignment,
 } from "@shared/auth/accessAssignments";
 import { shouldProtectTradsphereFrontend } from "@shared/auth/guards";
-import { hasAnyAdminScope, hasSuperAdminAccess } from "@shared/auth/permissions";
+import { hasAppAdminAccess, hasSuperAdminAccess } from "@shared/auth/permissions";
 import { useAuth } from "@shared/auth/useAuth";
 
 type SidebarProps = {
@@ -70,16 +70,8 @@ export function Sidebar({
   const isCompact = !visuallyExpanded;
   const isSignedIn = auth.status === "authenticated" && Boolean(auth.user);
   const protectionEnabled = shouldProtectTradsphereFrontend();
-  const hasAdminPermission =
-    isSignedIn
-    && (
-      !protectionEnabled
-      || hasAnyAdminScope(
-        auth.accessProfile,
-        APP_NAV_ITEMS.filter((item) => item.available).map((item) => item.id),
-      )
-    );
-  const isSuperAdmin = protectionEnabled && hasSuperAdminAccess(auth.accessProfile);
+  const isSuperAdmin = isSignedIn && (!protectionEnabled || hasSuperAdminAccess(auth.accessProfile));
+  const hasAdminPermission = isSignedIn && isSuperAdmin;
   const navGroups = useMemo<AppNavGroup[]>(
     () => {
       if (!isSignedIn) {
@@ -144,6 +136,10 @@ export function Sidebar({
     const email = String(auth.user?.email || "").trim();
     return email || "Signed in";
   }, [auth.accessProfile?.user?.fullName, auth.user?.fullName, auth.user?.email]);
+  const currentAppLabel = useMemo(() => {
+    const matched = APP_NAV_ITEMS.find((item) => currentPath === `/${item.id}` || currentPath.startsWith(`/${item.id}/`));
+    return matched?.label ?? "TheSphereWorks";
+  }, [currentPath]);
 
   useEffect(() => {
     setExpandedById((current) => {
@@ -270,7 +266,7 @@ export function Sidebar({
 
         <div className="relative z-10 flex items-center justify-between gap-2 px-1 py-1">
           <div className={cn("min-w-0", isCompact && "lg:hidden")}>
-            <p className="text-[10px] font-bold uppercase tracking-[0.26em] text-blue-700">TheSphereWorks</p>
+            <p className="text-[10px] font-bold uppercase tracking-[0.26em] text-blue-700">{currentAppLabel}</p>
             <h2 className="mt-1 text-base font-extrabold text-slate-900">Workspace</h2>
           </div>
           <div className="flex items-center gap-1">
@@ -329,7 +325,21 @@ export function Sidebar({
           {navGroups.map((group) => {
             const topLevel = group.item;
             const tenantAssignments = group.tenantAssignments;
-            const hasChildren = !isCompact && Boolean(topLevel.children?.length);
+            const appCode = String(topLevel.id || "").trim().toLowerCase();
+            const canAccessScopedAdmin = topLevel.available && isSignedIn && (isSuperAdmin || hasAppAdminAccess(auth.accessProfile, appCode));
+            const adminChild = canAccessScopedAdmin
+              ? [{
+                id: `${appCode}-admin`,
+                label: "Admin",
+                route: `/${appCode}/admin`,
+                available: true,
+              } satisfies AppNavChildItem]
+              : [];
+            const visibleChildren = [...(topLevel.children || []), ...adminChild]
+              .filter((child, index, list) => list.findIndex((candidate) => candidate.route === child.route) === index);
+            const visibleMainChildren = visibleChildren.filter((child) => !child.route.endsWith("/admin"));
+            const visibleAdminChildren = visibleChildren.filter((child) => child.route.endsWith("/admin"));
+            const hasChildren = !isCompact && visibleChildren.length > 0;
             const expanded = Boolean(expandedById[topLevel.id]);
             const parentActive = isTopLevelActive(topLevel, currentPath);
             const hasMultipleTenants = hasChildren && tenantAssignments.length > 1;
@@ -387,7 +397,20 @@ export function Sidebar({
                             </span>
                           </button>
                           <div className="mt-1 space-y-1">
-                            {topLevel.children!.map((child) => (
+                            {visibleMainChildren.map((child) => (
+                              <SidebarChildItem
+                                key={`${child.id}::${tenantAssignment.tenantSlug}`}
+                                child={child}
+                                currentPath={currentPath}
+                                tenantSlug={tenantAssignment.tenantSlug}
+                                activeTenantSlug={auth.tenantSlug}
+                                onNavigate={handleSelectTenantRoute}
+                              />
+                            ))}
+                            {visibleMainChildren.length > 0 && visibleAdminChildren.length > 0 ? (
+                              <div className="mx-2 my-1 h-px rounded-full bg-blue-200/80" />
+                            ) : null}
+                            {visibleAdminChildren.map((child) => (
                               <SidebarChildItem
                                 key={`${child.id}::${tenantAssignment.tenantSlug}`}
                                 child={child}
@@ -403,7 +426,20 @@ export function Sidebar({
                     </div>
                   ) : (
                     <div className="space-y-1 border-l border-blue-100 pl-4">
-                      {topLevel.children!.map((child) => (
+                      {visibleMainChildren.map((child) => (
+                        <SidebarChildItem
+                          key={child.id}
+                          child={child}
+                          currentPath={currentPath}
+                          tenantSlug={defaultTenantSlug}
+                          activeTenantSlug={auth.tenantSlug}
+                          onNavigate={handleSelectTenantRoute}
+                        />
+                      ))}
+                      {visibleMainChildren.length > 0 && visibleAdminChildren.length > 0 ? (
+                        <div className="mx-2 my-1 h-px rounded-full bg-blue-200/80" />
+                      ) : null}
+                      {visibleAdminChildren.map((child) => (
                         <SidebarChildItem
                           key={child.id}
                           child={child}
@@ -664,6 +700,8 @@ function SidebarChildItem({ child, currentPath, tenantSlug, activeTenantSlug, on
         ? TRADSPHERE_CONTACTS_CHILD_ICON
         : child.route === "/tradsphere/stations"
           ? TRADSPHERE_STATIONS_CHILD_ICON
+          : child.route.endsWith("/admin")
+            ? ShieldCheck
           : child.route === "/shiftzy/home"
             ? SHIFTZY_SCHEDULES_CHILD_ICON
             : child.route === "/shiftzy/employees"
