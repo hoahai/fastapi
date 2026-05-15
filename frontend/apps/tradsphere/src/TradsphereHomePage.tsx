@@ -58,6 +58,8 @@ import { useToast } from "@/components/ui/toast";
 import { useApiRequest, type ApiRequestOptions } from "@/hooks/useApiRequest";
 import { usePersistentState } from "@/hooks/usePersistentState";
 import { useTradsphereAccountSelections } from "@/hooks/useTradsphereAccountSelections";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
+import { useDirtyRefreshGuard } from "@/hooks/useDirtyRefreshGuard";
 import {
   readBrowserCacheSnapshot,
   removeBrowserCacheByPrefix,
@@ -147,6 +149,7 @@ function App() {
   const toast = useToast();
   const { requestJson } = useApiRequest();
   const auth = useAuth();
+  const { isOnline } = useOnlineStatus();
   const [sidebarVisuallyExpanded, setSidebarVisuallyExpanded] = useState<boolean>(() => !readSidebarCollapsedState());
   const [selectedAccountCode, setSelectedAccountCode] = usePersistentState<string>(
     HOME_SELECTED_ACCOUNT_STORAGE_KEY,
@@ -196,6 +199,7 @@ function App() {
   const [stationModalMode, setStationModalMode] = useState<StationModalMode>("create");
   const [stationModalCode, setStationModalCode] = useState<string | null>(null);
   const [scheduleUploadSuccessMessage, setScheduleUploadSuccessMessage] = useState<string | null>(null);
+  const [dashboardDeferredMessage, setDashboardDeferredMessage] = useState<string | null>(null);
   const hasAttemptedDashboardRestoreRef = useRef(false);
   const requestHeaders = useMemo(
     () => buildSharedAuthHeaders(auth.session, auth.tenantSlug, false),
@@ -212,6 +216,7 @@ function App() {
     isLoadingSelections,
     isRefreshingSelections,
     selectionsError,
+    isOfflineSelections,
     selectionsCacheStatus,
     loadSelections,
   } = useTradsphereAccountSelections({
@@ -281,6 +286,15 @@ function App() {
         (accountOriginal.market ?? "") !== (accountForm.market ?? "") ||
         (accountOriginal.note ?? "") !== (accountForm.note ?? "")),
   );
+  const hasBlockingLocalEdits = hasEditableChanges || isEstimateNumberModalOpen || isStationModalOpen || isCreateAccountModalOpen;
+  const {
+    hasDeferredUpdate: hasDeferredDashboardUpdate,
+    beginRequest: beginDashboardLoadRequest,
+    invalidateRequests: invalidateDashboardLoadRequests,
+    isLatestRequest: isLatestDashboardLoadRequest,
+    applyFromRequest: applyDashboardLoadFromRequest,
+    clearDeferredUpdate: clearDeferredDashboardUpdate,
+  } = useDirtyRefreshGuard(hasBlockingLocalEdits);
 
   function resetLoadedDashboardData() {
     setAccountOriginal(null);
@@ -298,6 +312,9 @@ function App() {
   }
 
   function handleAccountChange(value: string) {
+    invalidateDashboardLoadRequests();
+    clearDeferredDashboardUpdate();
+    setDashboardDeferredMessage(null);
     setSelectedAccountCode(value.toUpperCase());
     setLoadError(null);
     setSaveError(null);
@@ -347,6 +364,18 @@ function App() {
   }, [accountSelections, isLoadingSelections, selectedAccountCode]);
 
   useEffect(() => {
+    if (!hasDeferredDashboardUpdate) {
+      setDashboardDeferredMessage(null);
+      return;
+    }
+    if (hasBlockingLocalEdits) {
+      setDashboardDeferredMessage("Newer dashboard data is ready and will apply after current edits are finished.");
+      return;
+    }
+    setDashboardDeferredMessage(null);
+  }, [hasBlockingLocalEdits, hasDeferredDashboardUpdate]);
+
+  useEffect(() => {
     if (isLoadingSelections || hasAttemptedDashboardRestoreRef.current) {
       return;
     }
@@ -371,6 +400,7 @@ function App() {
     if (!selectedAccountCode || isLoadingAccount || isSaving) {
       return { success: false, source: null };
     }
+    const requestId = beginDashboardLoadRequest();
 
     const loadCacheKey = getLoadCacheKey(selectedAccountCode);
     const cacheSnapshot = readBrowserCacheSnapshot<unknown>(loadCacheKey);
@@ -394,6 +424,16 @@ function App() {
       return { success: true, source: "cache" };
     }
 
+    if (!isOnline) {
+      if (canUseCachedData) {
+        return { success: true, source: "cache" };
+      }
+      setLoadError("You're offline. Dashboard data will load when connection is restored.");
+      setIsLoadingAccount(false);
+      setIsRefreshingAccount(false);
+      return { success: false, source: null };
+    }
+
     setIsLoadingAccount(!canUseCachedData);
     setIsRefreshingAccount(canUseCachedData);
     setLoadError(null);
@@ -412,15 +452,30 @@ function App() {
         throw new Error("Load response did not include account data.");
       }
 
-      writeBrowserCache(loadCacheKey, data, LOAD_CACHE_TTL_MS, { source: "network" });
-      applyLoadedData(data);
-      setHasLoadedDashboard(true);
-      setDashboardCacheStatus({
-        source: "network",
-        fetchedAt: Date.now(),
-      });
+      if (!isLatestDashboardLoadRequest(requestId)) {
+        return { success: false, source: null };
+      }
+      const fetchedAt = Date.now();
+      writeBrowserCache(loadCacheKey, data, LOAD_CACHE_TTL_MS, { source: "network", fetchedAt });
+      applyDashboardLoadFromRequest(
+        requestId,
+        () => {
+          applyLoadedData(data);
+          setHasLoadedDashboard(true);
+          setDashboardCacheStatus({
+            source: "network",
+            fetchedAt,
+          });
+          setDashboardDeferredMessage(null);
+          setLoadError(null);
+        },
+        { deferWhenDirty: true },
+      );
       return { success: true, source: "network" };
     } catch (error) {
+      if (!isLatestDashboardLoadRequest(requestId)) {
+        return { success: false, source: null };
+      }
       const errorMessage = getErrorMessage(error, "Unable to load account dashboard data.");
       if (canUseCachedData) {
         setLoadError(null);
@@ -432,8 +487,10 @@ function App() {
         return { success: false, source: null };
       }
     } finally {
-      setIsLoadingAccount(false);
-      setIsRefreshingAccount(false);
+      if (isLatestDashboardLoadRequest(requestId)) {
+        setIsLoadingAccount(false);
+        setIsRefreshingAccount(false);
+      }
     }
   }
 
@@ -467,6 +524,9 @@ function App() {
       return;
     }
 
+    invalidateDashboardLoadRequests();
+    clearDeferredDashboardUpdate();
+    setDashboardDeferredMessage(null);
     setIsSaving(true);
     setSaveError(null);
 
@@ -739,14 +799,18 @@ function App() {
       ? "Refreshing..."
       : selectionsCacheStatus
         ? `Selections source: ${selectionsCacheStatus.source}. Last updated ${formatRelativeTime(selectionsCacheStatus.fetchedAt)}.`
-        : null;
+        : isOfflineSelections
+          ? "Offline. No cached selections yet."
+          : null;
   const dashboardStatusText = isLoadingAccount
     ? "Loading..."
     : isRefreshingAccount
       ? "Refreshing..."
       : dashboardCacheStatus
         ? `Data source: ${dashboardCacheStatus.source}. Last updated ${formatRelativeTime(dashboardCacheStatus.fetchedAt)}.`
-        : null;
+        : !isOnline && hasLoadedDashboard
+          ? "Offline. Showing the last available dashboard snapshot."
+          : null;
   const pageCacheStatusText = dashboardStatusText ?? selectionsStatusText;
   const shouldBlockForSelectionsLoad = isLoadingSelections && accountSelections.length === 0;
   const shouldBlockForAccountLoad = isLoadingAccount && !hasLoadedDashboard;
@@ -785,6 +849,11 @@ function App() {
         <p className="flex items-center gap-2 text-sm text-rose-600">
           <AlertCircle className="size-4" />
           {loadError}
+        </p>
+      ) : null}
+      {dashboardDeferredMessage ? (
+        <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
+          {dashboardDeferredMessage}
         </p>
       ) : null}
 
@@ -828,7 +897,7 @@ function App() {
 
               <DashboardPanel
                 title="EstNums - Schedules"
-                icon={<CalendarDays className="size-5 text-blue-600" />}
+                icon={<CalendarDays className="size-5 text-blue-700" />}
                 searchValue={scheduleSearch}
                 onSearchChange={setScheduleSearch}
                 actions={
@@ -876,7 +945,7 @@ function App() {
 
               <DashboardPanel
                 title="Stations"
-                icon={<Monitor className="size-5 text-blue-600" />}
+                icon={<Monitor className="size-5 text-blue-700" />}
                 searchValue={stationSearch}
                 onSearchChange={setStationSearch}
                 actions={
@@ -919,10 +988,10 @@ function App() {
                 onRefresh={() => {
                   void handleRefreshAccount();
                 }}
-                disabled={!selectedAccountCode || isLoadingAccount || isRefreshingAccount || isSaving}
+                disabled={!selectedAccountCode || !isOnline || isLoadingAccount || isRefreshingAccount || isSaving}
                 refreshing={isRefreshingAccount}
                 refreshLabel="Refresh data"
-                tooltipText="Click to refresh data"
+                tooltipText={isOnline ? "Click to refresh data" : "Offline. Reconnect to refresh data."}
                 containerClassName="pointer-events-auto"
                 className="max-w-[min(90vw,32rem)]"
               />

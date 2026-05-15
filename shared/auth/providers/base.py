@@ -21,6 +21,9 @@ class AuthDataProvider(Protocol):
     def send_password_recovery_email(self, *, email: str, redirect_to: str | None = None) -> None:
         ...
 
+    def update_auth_user_by_id(self, *, user_id: str, attributes: dict[str, Any]) -> dict[str, Any] | None:
+        ...
+
     def select_single(
         self,
         *,

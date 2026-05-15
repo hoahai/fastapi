@@ -1,4 +1,4 @@
-import { ChevronDown, Copy, Filter, Plus, ShieldCheck, Trash2, UserMinus, X } from "lucide-react";
+import { ChevronDown, Copy, Filter, Plus, ShieldCheck, Trash2, UserCheck, UserMinus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { ActionIconButton } from "@/components/dashboard/ActionIconButton";
@@ -17,11 +17,16 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { canModalClose, shouldBlockOutsideClose } from "@/components/ui/modal-close-guard";
 import { Spinner } from "@/components/ui/spinner";
+import { UnsavedChangesDialog } from "@/components/ui/unsaved-changes-dialog";
 import { useApiRequest } from "@/hooks/useApiRequest";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { readBrowserCacheSnapshot, writeBrowserCache } from "@/lib/browserCache";
+import { SectionHeader } from "@shared/components";
 import { Tooltip } from "@shared/components/actions/Tooltip";
 import { PageLoadingOverlay } from "@shared/components/status/LoadingOverlay";
+import { useAuth } from "@shared/auth/useAuth";
 
 type RoleItem = {
   key: string;
@@ -110,6 +115,7 @@ type AdminInvitation = {
 type DisableTarget = {
   userId: string;
   email: string | null;
+  status: AdminUser["status"];
 };
 
 type PasswordResetTarget = {
@@ -173,14 +179,6 @@ const ROLE_GROUP_LABEL: Record<(typeof ROLE_GROUP_ORDER)[number], string> = {
   editor: "Editor",
   viewer: "Viewer",
   other: "Other / Unknown",
-};
-
-const ROLE_GROUP_DESCRIPTIONS: Record<(typeof ROLE_GROUP_ORDER)[number], string> = {
-  super_admin: "Global workspace-level control",
-  admin: "Can manage members and app-level settings",
-  editor: "Can edit operational records",
-  viewer: "Read-only access",
-  other: "Legacy or unmapped role values",
 };
 
 const ADMIN_PAGE_CACHE_KEY = "admin-users:page:v1";
@@ -351,14 +349,17 @@ function invitationStatusChipClass(status: AdminInvitation["status"]): string {
 }
 
 function DisableMemberIconButton({
-  disabled,
-  onDisable,
+  status,
+  onToggle,
 }: {
-  disabled: boolean;
-  onDisable: () => void;
+  status: AdminUser["status"];
+  onToggle: () => void;
 }) {
   const anchorRef = useRef<HTMLButtonElement | null>(null);
   const [tooltipOpen, setTooltipOpen] = useState(false);
+  const isDisabled = status === "disabled";
+  const actionLabel = isDisabled ? "Enable access" : "Disable access";
+  const tooltipText = isDisabled ? "Enable access" : "Disable access";
 
   return (
     <>
@@ -366,29 +367,26 @@ function DisableMemberIconButton({
         ref={anchorRef}
         type="button"
         onClick={(event) => {
-          if (disabled) {
-            return;
-          }
           event.stopPropagation();
-          onDisable();
+          onToggle();
         }}
         onMouseEnter={() => setTooltipOpen(true)}
         onMouseLeave={() => setTooltipOpen(false)}
         onFocus={() => setTooltipOpen(true)}
         onBlur={() => setTooltipOpen(false)}
-        className={`inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-600 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300 ${
-          disabled
-            ? "pointer-events-none cursor-default opacity-50"
-            : "hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700"
+        className={`inline-flex h-7 w-7 items-center justify-center rounded-full border bg-white transition-colors focus-visible:outline-none focus-visible:ring-2 ${
+          isDisabled
+            ? "border-emerald-300 text-emerald-700 hover:border-emerald-400 hover:bg-emerald-50 focus-visible:ring-emerald-300"
+            : "border-slate-300 text-slate-600 hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700 focus-visible:ring-rose-300"
         }`}
-        aria-label={disabled ? "Access already disabled" : "Disable access"}
+        aria-label={actionLabel}
       >
-        <UserMinus className="size-3.5" />
+        {isDisabled ? <UserCheck className="size-3.5" /> : <UserMinus className="size-3.5" />}
       </button>
       <Tooltip
         open={tooltipOpen}
         anchorRef={anchorRef}
-        text={disabled ? "Already disabled" : "Disable access"}
+        text={tooltipText}
       />
     </>
   );
@@ -476,6 +474,27 @@ function buildInitialDraft(user: AdminUser): EditDraft {
   };
 }
 
+function buildEmptyInviteAssignmentRow(id: string): InviteAssignmentRow {
+  return {
+    id,
+    tenantId: "",
+    appId: "",
+    role: "",
+  };
+}
+
+function normalizeInviteAssignmentsComparable(assignments: InviteAssignmentRow[]): string[] {
+  return assignments
+    .map((item) => ({
+      tenantId: String(item.tenantId || "").trim(),
+      appId: String(item.appId || "").trim(),
+      role: normalizeRoleKey(String(item.role || "").trim()),
+    }))
+    .filter((item) => item.tenantId || item.appId || item.role)
+    .map((item) => `${item.tenantId}::${item.appId}::${item.role}`)
+    .sort((a, b) => a.localeCompare(b));
+}
+
 function tenantDisplayName(tenant: TenantItem): string {
   return tenant.name || tenant.slug || tenant.id;
 }
@@ -556,7 +575,10 @@ function buildAppDropdownOptions(apps: AppItem[]): Array<{ value: string; label:
 }
 
 export default function AdminUsersPage() {
+  const auth = useAuth();
+  const currentUserId = String(auth.user?.id || "").trim();
   const { requestJson } = useApiRequest();
+  const { isOnline } = useOnlineStatus();
   const loadDataRef = useRef<(showRefreshing: boolean) => Promise<void>>(async () => undefined);
   const loadInvocationRef = useRef(0);
 
@@ -579,6 +601,7 @@ export default function AdminUsersPage() {
   const [creatingInvite, setCreatingInvite] = useState(false);
   const [inviteAssignmentsTouched, setInviteAssignmentsTouched] = useState(false);
   const [isInviteModalOpen, setIsInviteModalOpen] = useState(false);
+  const [isInviteUnsavedDialogOpen, setIsInviteUnsavedDialogOpen] = useState(false);
   const [memberSearch, setMemberSearch] = useState("");
   const [memberRoleFilter, setMemberRoleFilter] = useState<string>("all");
   const [memberStatusFilter, setMemberStatusFilter] = useState<string>("all");
@@ -588,6 +611,7 @@ export default function AdminUsersPage() {
   const [editDraft, setEditDraft] = useState<EditDraft | null>(null);
   const [originalEditDraft, setOriginalEditDraft] = useState<EditDraft | null>(null);
   const [isEditModalOpen, setIsEditModalOpen] = useState(false);
+  const [isEditUnsavedDialogOpen, setIsEditUnsavedDialogOpen] = useState(false);
   const [savingEdit, setSavingEdit] = useState(false);
   const [passwordResetTarget, setPasswordResetTarget] = useState<PasswordResetTarget | null>(null);
   const [sendingPasswordReset, setSendingPasswordReset] = useState(false);
@@ -625,14 +649,7 @@ export default function AdminUsersPage() {
         if (current.length > 0) {
           return current;
         }
-        return [
-          {
-            id: "invite-row-initial",
-            tenantId: "",
-            appId: "",
-            role: "",
-          },
-        ];
+        return [buildEmptyInviteAssignmentRow("invite-row-initial")];
       });
     }
   }, []);
@@ -836,6 +853,22 @@ export default function AdminUsersPage() {
     }
     setError(null);
 
+    if (!isOnline) {
+      if (!canUseCachedData) {
+        if (loadInvocationRef.current !== loadInvocationId) {
+          return;
+        }
+        setError("You're offline. Admin data is unavailable until connection is restored.");
+        setCacheStatus(null);
+      }
+      if (loadInvocationRef.current === loadInvocationId) {
+        setLoading(false);
+        setRefreshing(false);
+        setBackgroundRefreshing(false);
+      }
+      return;
+    }
+
     try {
       const bundledData = await requestBundledAdminLoad();
       const nextRoles = Array.isArray(bundledData.roles) ? bundledData.roles : [];
@@ -874,7 +907,7 @@ export default function AdminUsersPage() {
       setRefreshing(false);
       setBackgroundRefreshing(false);
     }
-  }, [applyLoadedData, requestBundledAdminLoad]);
+  }, [applyLoadedData, isOnline, requestBundledAdminLoad]);
 
   useEffect(() => {
     loadDataRef.current = loadData;
@@ -915,7 +948,17 @@ export default function AdminUsersPage() {
     };
   }, []);
 
+  function resetInviteDraft() {
+    setInviteEmail("");
+    setInviteExpirationHours("72");
+    setInviteAssignmentsTouched(false);
+    setInviteAssignments([buildEmptyInviteAssignmentRow("invite-row-initial")]);
+  }
+
   function openEditUser(user: AdminUser) {
+    if (currentUserId && user.userId === currentUserId) {
+      return;
+    }
     const isSuperAdminMember = summarizeUserRole(user) === "super_admin" || Boolean(user.isSuperAdmin);
     if (isSuperAdminMember && !scope?.isSuperAdmin) {
       return;
@@ -928,6 +971,7 @@ export default function AdminUsersPage() {
     setEditingUser(user);
     setEditDraft(draft);
     setOriginalEditDraft(draft);
+    setIsEditUnsavedDialogOpen(false);
     setIsEditModalOpen(true);
   }
 
@@ -936,6 +980,7 @@ export default function AdminUsersPage() {
       return;
     }
     setPasswordResetTarget(null);
+    setIsEditUnsavedDialogOpen(false);
     setIsEditModalOpen(false);
   }
 
@@ -1016,14 +1061,12 @@ export default function AdminUsersPage() {
   }
 
   function updateInviteAssignmentRow(rowId: string, patch: Partial<InviteAssignmentRow>) {
-    setInviteAssignmentsTouched(true);
     setInviteAssignments((current) =>
       current.map((item) => (item.id === rowId ? { ...item, ...patch } : item)),
     );
   }
 
   function addInviteAssignmentRow() {
-    setInviteAssignmentsTouched(true);
     setInviteAssignments((current) => [
       ...current,
       {
@@ -1036,7 +1079,6 @@ export default function AdminUsersPage() {
   }
 
   function removeInviteAssignmentRow(rowId: string) {
-    setInviteAssignmentsTouched(true);
     setInviteAssignments((current) => current.filter((item) => item.id !== rowId));
   }
 
@@ -1132,8 +1174,8 @@ export default function AdminUsersPage() {
       if (firstInviteUrl) {
         await navigator.clipboard.writeText(firstInviteUrl).catch(() => undefined);
       }
-      setInviteEmail("");
-      setInviteAssignmentsTouched(false);
+      resetInviteDraft();
+      setIsInviteUnsavedDialogOpen(false);
       setIsInviteModalOpen(false);
       await loadData(true);
     } finally {
@@ -1156,17 +1198,21 @@ export default function AdminUsersPage() {
     if (!disableTarget) {
       return;
     }
+    const nextStatus: AdminUser["status"] = disableTarget.status === "disabled" ? "active" : "disabled";
+    const isEnableAction = nextStatus === "active";
 
     setProcessingDisable(true);
     try {
       await requestJson(`/api/auth/v1/admin/users/${encodeURIComponent(disableTarget.userId)}`, {
         method: "PATCH",
         body: {
-          status: "disabled",
+          status: nextStatus,
         },
         successToast: {
-          title: "Access disabled",
-          message: `${disableTarget.email || disableTarget.userId} no longer has active tenant access in this scope.`,
+          title: isEnableAction ? "Account enabled" : "Account disabled",
+          message: isEnableAction
+            ? `${disableTarget.email || disableTarget.userId} can sign in again.`
+            : `${disableTarget.email || disableTarget.userId} is now banned from sign-in.`,
         },
       });
       setDisableTarget(null);
@@ -1198,6 +1244,8 @@ export default function AdminUsersPage() {
 
   const cacheStatusText = (refreshing || backgroundRefreshing)
     ? "Refreshing..."
+    : !isOnline && cacheStatus
+      ? `Offline. Showing cached data from ${formatRelativeTime(cacheStatus.fetchedAt)}.`
     : cacheStatus
       ? `Data source: ${cacheStatus.source}. Last updated ${formatRelativeTime(cacheStatus.fetchedAt)}.`
       : "No cached data yet";
@@ -1254,10 +1302,58 @@ export default function AdminUsersPage() {
     return JSON.stringify(current) !== JSON.stringify(original);
   }, [editDraft, originalEditDraft]);
 
-  const canSubmitEdit = Boolean(editingUser && editDraft && hasEditChanges && !editValidationError);
+  const hasInviteChanges = useMemo(() => {
+    const normalizedEmail = inviteEmail.trim().toLowerCase();
+    const normalizedExpirationHours = inviteExpirationHours.trim();
+    const normalizedAssignments = normalizeInviteAssignmentsComparable(inviteAssignments);
+    return Boolean(normalizedEmail || normalizedExpirationHours !== "72" || normalizedAssignments.length > 0);
+  }, [inviteAssignments, inviteEmail, inviteExpirationHours]);
+
+  const isEditingSelf = Boolean(editingUser && currentUserId && editingUser.userId === currentUserId);
+  const canSubmitEdit = Boolean(editingUser && editDraft && hasEditChanges && !editValidationError && !isEditingSelf);
   const shouldShowSaveButton = canSubmitEdit || savingEdit;
-  const canSubmitInvite = Boolean(!creatingInvite && inviteEmail.trim() && inviteAssignments.length > 0 && !inviteValidationError);
-  const shouldShowCreateInviteButton = creatingInvite || (inviteAssignmentsTouched && canSubmitInvite);
+  const canSubmitInvite = Boolean(
+    hasInviteChanges &&
+      !creatingInvite &&
+      inviteEmail.trim() &&
+      inviteAssignments.length > 0 &&
+      !inviteValidationError,
+  );
+  const shouldShowCreateInviteButton = creatingInvite || canSubmitInvite;
+
+  function handleEditModalOpenChange(nextOpen: boolean) {
+    const allowClose = canModalClose({
+      nextOpen,
+      isBusy: savingEdit || sendingPasswordReset,
+      hasUnsavedChanges: hasEditChanges,
+    });
+    if (!allowClose) {
+      if (!nextOpen && hasEditChanges && !savingEdit && !sendingPasswordReset) {
+        setIsEditUnsavedDialogOpen(true);
+      }
+      return;
+    }
+    if (nextOpen) {
+      setIsEditModalOpen(true);
+      return;
+    }
+    closeEditUser();
+  }
+
+  function handleInviteModalOpenChange(nextOpen: boolean) {
+    const allowClose = canModalClose({
+      nextOpen,
+      isBusy: creatingInvite,
+      hasUnsavedChanges: hasInviteChanges,
+    });
+    if (!allowClose) {
+      if (!nextOpen && hasInviteChanges && !creatingInvite) {
+        setIsInviteUnsavedDialogOpen(true);
+      }
+      return;
+    }
+    setIsInviteModalOpen(nextOpen);
+  }
 
   return (
     <div className="mx-auto flex min-h-[100dvh] w-full max-w-[1680px] flex-col gap-6">
@@ -1270,7 +1366,13 @@ export default function AdminUsersPage() {
         action={(
           <Button
             className="min-w-36"
-            onClick={() => setIsInviteModalOpen(true)}
+            onClick={() => {
+              setIsInviteUnsavedDialogOpen(false);
+              if (inviteAssignments.length === 0) {
+                setInviteAssignments([buildEmptyInviteAssignmentRow("invite-row-initial")]);
+              }
+              setIsInviteModalOpen(true);
+            }}
           >
             Invite User
           </Button>
@@ -1284,101 +1386,95 @@ export default function AdminUsersPage() {
       ) : null}
 
       <section className="rounded-2xl border border-blue-100 bg-white/95 p-5 shadow-soft">
-        <div className="flex flex-wrap items-center justify-between gap-3">
-          <div>
-            <h2 className="text-base font-semibold text-slate-900">Invitations</h2>
-            <p className="text-sm text-slate-600">Manage pending invitation links and invite status.</p>
-          </div>
-          <p className="text-sm text-slate-500">{pendingInvitations.length} pending</p>
+        <SectionHeader
+          title="Invitations"
+          description="Manage pending invitation links and invite status."
+          actions={<p className="text-sm text-slate-500">{pendingInvitations.length} pending</p>}
+        />
+        <div className="mt-4 flex items-center justify-between gap-2">
+          <h3 className="text-sm font-semibold text-slate-800">Pending invitations</h3>
+          <p className="text-xs uppercase tracking-[0.14em] text-slate-500">{pendingInvitations.length}</p>
         </div>
-        <div className="mt-4 rounded-xl border border-slate-200 bg-white p-4">
-          <div className="flex items-center justify-between gap-2">
-            <h3 className="text-sm font-semibold text-slate-800">Pending invitations</h3>
-            <p className="text-xs uppercase tracking-[0.14em] text-slate-500">{pendingInvitations.length}</p>
-          </div>
 
-          <div className="mt-3 space-y-2">
-            {loading && pendingInvitations.length === 0 ? (
-              <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
-                <div className="flex items-center gap-2">
-                  <Spinner className="size-4" />
-                  <span>Loading invitations...</span>
+        <div className="mt-3 space-y-2">
+          {loading && pendingInvitations.length === 0 ? (
+            <div className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
+              <div className="flex items-center gap-2">
+                <Spinner className="size-4" />
+                <span>Loading invitations...</span>
+              </div>
+            </div>
+          ) : null}
+          {!loading && pendingInvitations.length === 0 ? (
+            <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
+              No pending invitations.
+            </p>
+          ) : null}
+          {pendingInvitations.map((invite) => (
+            <article key={invite.id} className="space-y-2 rounded-lg border border-slate-200 bg-slate-50/70 p-3">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-slate-900">{invite.email}</p>
+                  <p className="mt-0.5 text-xs text-slate-500">
+                    Created: {formatDate(invite.createdAt)} · Expires: {formatDate(invite.expiresAt)}
+                  </p>
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold capitalize ${invitationStatusChipClass(invite.status)}`}>
+                    {invite.status}
+                  </span>
+                  <Button
+                    variant="outline"
+                    className="h-8 px-2.5 text-xs"
+                    onClick={() => void navigator.clipboard.writeText(String(invite.inviteUrl || "")).catch(() => undefined)}
+                    disabled={!invite.inviteUrl}
+                  >
+                    <Copy className="size-3.5" />
+                    Copy link
+                  </Button>
+                  <Button
+                    variant="secondary"
+                    className="h-8 px-2.5 text-xs"
+                    onClick={() => void handleRevokeInvite(invite.id, invite.email)}
+                  >
+                    Revoke
+                  </Button>
                 </div>
               </div>
-            ) : null}
-            {!loading && pendingInvitations.length === 0 ? (
-              <p className="rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
-                No pending invitations.
-              </p>
-            ) : null}
-            {pendingInvitations.map((invite) => (
-              <article key={invite.id} className="space-y-2 rounded-lg border border-slate-200 bg-slate-50/70 p-3">
-                <div className="flex flex-wrap items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-slate-900">{invite.email}</p>
-                    <p className="mt-0.5 text-xs text-slate-500">
-                      Created: {formatDate(invite.createdAt)} · Expires: {formatDate(invite.expiresAt)}
-                    </p>
-                  </div>
-                  <div className="flex items-center gap-1.5">
-                    <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold capitalize ${invitationStatusChipClass(invite.status)}`}>
-                      {invite.status}
-                    </span>
-                    <Button
-                      variant="outline"
-                      className="h-8 px-2.5 text-xs"
-                      onClick={() => void navigator.clipboard.writeText(String(invite.inviteUrl || "")).catch(() => undefined)}
-                      disabled={!invite.inviteUrl}
-                    >
-                      <Copy className="size-3.5" />
-                      Copy link
-                    </Button>
-                    <Button
-                      variant="secondary"
-                      className="h-8 px-2.5 text-xs"
-                      onClick={() => void handleRevokeInvite(invite.id, invite.email)}
-                    >
-                      Revoke
-                    </Button>
-                  </div>
-                </div>
-                <div className="flex flex-wrap gap-1">
-                  {Array.isArray(invite.assignments) && invite.assignments.length > 0 ? (
-                    invite.assignments.map((assignment) => {
-                      const tenantLabel = assignment.tenantName || assignment.tenantSlug || assignment.tenantId || "-";
-                      const appLabel = assignment.appName || assignment.appCode || assignment.appId || "-";
-                      const roleLabel = displayRole(assignment.role || null, roleLabels);
-                      return (
-                        <span key={`${invite.id}-${tenantLabel}-${appLabel}-${roleLabel}`} className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
-                          {tenantLabel}: {appLabel} ({roleLabel})
-                        </span>
-                      );
-                    })
-                  ) : (
-                    <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-xs text-slate-600">
-                      {(invite.tenantName || invite.tenantSlug || invite.tenantId)}: {(invite.appName || invite.appCode || invite.appId)} ({displayRole(invite.role, roleLabels)})
-                    </span>
-                  )}
-                </div>
-              </article>
-            ))}
-          </div>
+              <div className="flex flex-wrap gap-1">
+                {Array.isArray(invite.assignments) && invite.assignments.length > 0 ? (
+                  invite.assignments.map((assignment) => {
+                    const tenantLabel = assignment.tenantName || assignment.tenantSlug || assignment.tenantId || "-";
+                    const appLabel = assignment.appName || assignment.appCode || assignment.appId || "-";
+                    const roleLabel = displayRole(assignment.role || null, roleLabels);
+                    return (
+                      <span key={`${invite.id}-${tenantLabel}-${appLabel}-${roleLabel}`} className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
+                        {tenantLabel}: {appLabel} ({roleLabel})
+                      </span>
+                    );
+                  })
+                ) : (
+                  <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-xs text-slate-600">
+                    {(invite.tenantName || invite.tenantSlug || invite.tenantId)}: {(invite.appName || invite.appCode || invite.appId)} ({displayRole(invite.role, roleLabels)})
+                  </span>
+                )}
+              </div>
+            </article>
+          ))}
         </div>
       </section>
 
       <section className="rounded-2xl border border-blue-100 bg-white/95 p-5 shadow-soft">
-        <div className="flex flex-wrap items-start justify-between gap-3">
-          <div>
-            <h2 className="text-base font-semibold text-slate-900">Members</h2>
-            <p className="text-sm text-slate-600">
-              Grouped by access role with tenant/app assignment visibility and in-place admin actions.
+        <SectionHeader
+          title="Members"
+          description="Grouped by access role with tenant/app assignment visibility and in-place admin actions."
+          actions={(
+            <p className="text-sm text-slate-500">
+              {filteredUserCount}/{users.length} users
+              {scope?.isSuperAdmin ? " · super-admin scope" : ""}
             </p>
-          </div>
-          <p className="text-sm text-slate-500">
-            {filteredUserCount}/{users.length} users
-            {scope?.isSuperAdmin ? " · super-admin scope" : ""}
-          </p>
-        </div>
+          )}
+        />
 
         <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -1432,28 +1528,24 @@ export default function AdminUsersPage() {
                   return null;
                 }
                 return (
-                  <details key={groupKey} open className="group rounded-2xl border border-blue-100 bg-white shadow-soft">
-                    <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-5 py-4">
-                      <div>
-                        <h3 className="text-lg font-bold text-blue-900 md:text-xl">{ROLE_GROUP_LABEL[groupKey]}</h3>
-                        <p className="mt-1 text-xs text-slate-500">
-                          {groupUsers.length} members · {ROLE_GROUP_DESCRIPTIONS[groupKey]}
-                        </p>
+                  <details key={groupKey} open className="group overflow-hidden rounded-2xl border border-blue-100 bg-slate-50/70">
+                    <summary className="flex cursor-pointer list-none items-center justify-between gap-2 border-b border-blue-100 bg-blue-50/70 px-4 py-3">
+                      <p className="text-sm font-bold uppercase tracking-[0.14em] text-blue-800">
+                        {ROLE_GROUP_LABEL[groupKey]} Members
+                      </p>
+                      <div className="flex items-center gap-2">
+                        <p className="text-xs text-slate-500">{groupUsers.length} members</p>
+                        <ChevronDown className="size-4 text-slate-500 transition-transform group-open:rotate-180" />
                       </div>
-                      <ChevronDown className="size-4 text-slate-500 transition-transform group-open:rotate-180" />
                     </summary>
-
-                    <section className="mx-3 mb-4 overflow-hidden rounded-xl border border-slate-100 bg-slate-50/70">
-                      <header className="border-b border-blue-100 bg-blue-50/70 px-4 py-2.5">
-                        <p className="text-sm font-bold uppercase tracking-[0.14em] text-blue-800">
-                          {ROLE_GROUP_LABEL[groupKey]} Members
-                        </p>
-                      </header>
-                      <div className="grid gap-3 p-3 sm:grid-cols-2 xl:grid-cols-3">
+                    <div className="p-3">
+                      <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
                         {groupUsers.map((user) => {
                           const resolvedRole = summarizeUserRole(user);
                           const isSuperAdminMember = resolvedRole === "super_admin" || Boolean(user.isSuperAdmin);
+                          const isSelfMember = Boolean(currentUserId && user.userId === currentUserId);
                           const canEditMember = !isSuperAdminMember || Boolean(scope?.isSuperAdmin);
+                          const canEditMemberAccess = canEditMember && !isSelfMember;
                           const assignmentLabels = unique(
                             user.appAssignments.map((item) => {
                               const appLabel = item.appName || item.appCode || appNameById[item.appId] || item.appId;
@@ -1466,16 +1558,16 @@ export default function AdminUsersPage() {
                           return (
                             <article
                               key={user.userId}
-                              role="button"
-                              tabIndex={canEditMember ? 0 : -1}
+                              role={canEditMemberAccess ? "button" : undefined}
+                              tabIndex={canEditMemberAccess ? 0 : -1}
                               onClick={() => {
-                                if (!canEditMember) {
+                                if (!canEditMemberAccess) {
                                   return;
                                 }
                                 openEditUser(user);
                               }}
                               onKeyDown={(event) => {
-                                if (!canEditMember) {
+                                if (!canEditMemberAccess) {
                                   return;
                                 }
                                 if (event.key === "Enter" || event.key === " ") {
@@ -1484,7 +1576,7 @@ export default function AdminUsersPage() {
                                 }
                               }}
                               className={`rounded-xl p-4 shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 ${
-                                canEditMember
+                                canEditMemberAccess
                                   ? "cursor-pointer border border-slate-200 bg-white hover:border-blue-200 hover:bg-blue-50/40"
                                   : "cursor-default border border-slate-200 bg-white"
                               }`}
@@ -1495,10 +1587,14 @@ export default function AdminUsersPage() {
                                   <p className="mt-0.5 break-all text-xs text-slate-600">{user.email || user.userId}</p>
                                 </div>
                                 <div className="flex items-center gap-2">
-                                  {!isSuperAdminMember ? (
+                                  {!isSuperAdminMember && !isSelfMember ? (
                                     <DisableMemberIconButton
-                                      disabled={user.status === "disabled"}
-                                      onDisable={() => setDisableTarget({ userId: user.userId, email: user.email })}
+                                      status={user.status}
+                                      onToggle={() => setDisableTarget({
+                                        userId: user.userId,
+                                        email: user.email,
+                                        status: user.status,
+                                      })}
                                     />
                                   ) : null}
                                   <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${roleChipClass(resolvedRole)}`}>
@@ -1541,7 +1637,7 @@ export default function AdminUsersPage() {
                           );
                         })}
                       </div>
-                    </section>
+                    </div>
                   </details>
                 );
               })}
@@ -1552,15 +1648,26 @@ export default function AdminUsersPage() {
 
       <Dialog
         open={isEditModalOpen}
-        onOpenChange={(open) => {
-          if (!open) {
-            closeEditUser();
-          } else {
-            setIsEditModalOpen(true);
-          }
-        }}
+        onOpenChange={handleEditModalOpenChange}
       >
-        <DialogContent className="max-w-[860px] rounded-xl bg-white p-6">
+        <DialogContent
+          className="max-w-[860px] rounded-xl bg-white p-6"
+          onEscapeKeyDown={(event) => {
+            if (savingEdit || sendingPasswordReset) {
+              event.preventDefault();
+            }
+          }}
+          onInteractOutside={(event) => {
+            if (
+              shouldBlockOutsideClose({
+                isBusy: savingEdit || sendingPasswordReset,
+                hasUnsavedChanges: hasEditChanges,
+              })
+            ) {
+              event.preventDefault();
+            }
+          }}
+        >
           <DialogClose
             className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
             aria-label="Close edit user modal"
@@ -1683,30 +1790,79 @@ export default function AdminUsersPage() {
       </Dialog>
 
       <Dialog open={Boolean(disableTarget)} onOpenChange={(open) => !open && !processingDisable && setDisableTarget(null)}>
-        <DialogContent className="max-w-[560px]">
+        <DialogContent
+          className="max-w-[560px]"
+          onEscapeKeyDown={(event) => {
+            if (processingDisable) {
+              event.preventDefault();
+            }
+          }}
+          onInteractOutside={(event) => {
+            if (processingDisable) {
+              event.preventDefault();
+            }
+          }}
+        >
+          <DialogClose
+            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
+            aria-label="Close account status modal"
+            disabled={processingDisable}
+          >
+            <X className="size-4" />
+          </DialogClose>
           <DialogHeader>
-            <DialogTitle>Disable tenant access</DialogTitle>
+            <DialogTitle>{disableTarget?.status === "disabled" ? "Enable account" : "Disable account"}</DialogTitle>
           </DialogHeader>
 
           <p className="text-sm text-slate-700">
-            Disable access for <span className="font-semibold">{disableTarget?.email || disableTarget?.userId}</span>?
+            {disableTarget?.status === "disabled" ? "Enable" : "Disable"} account for{" "}
+            <span className="font-semibold">{disableTarget?.email || disableTarget?.userId}</span>?
           </p>
 
           <DialogFooter>
             <Button
-              className="bg-rose-600 text-white hover:bg-rose-700 border border-rose-700"
+              className={
+                disableTarget?.status === "disabled"
+                  ? "border border-emerald-700 bg-emerald-600 text-white hover:bg-emerald-700"
+                  : "border border-rose-700 bg-rose-600 text-white hover:bg-rose-700"
+              }
               onClick={() => void handleDisableConfirmed()}
               disabled={processingDisable}
             >
               {processingDisable ? <Spinner className="size-4" /> : null}
-              {processingDisable ? "Disabling..." : "Disable access"}
+              {processingDisable
+                ? disableTarget?.status === "disabled"
+                  ? "Enabling..."
+                  : "Disabling..."
+                : disableTarget?.status === "disabled"
+                  ? "Enable account"
+                  : "Disable account"}
             </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>
 
       <Dialog open={Boolean(passwordResetTarget)} onOpenChange={(open) => !open && !sendingPasswordReset && setPasswordResetTarget(null)}>
-        <DialogContent className="max-w-[560px]">
+        <DialogContent
+          className="max-w-[560px]"
+          onEscapeKeyDown={(event) => {
+            if (sendingPasswordReset) {
+              event.preventDefault();
+            }
+          }}
+          onInteractOutside={(event) => {
+            if (sendingPasswordReset) {
+              event.preventDefault();
+            }
+          }}
+        >
+          <DialogClose
+            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
+            aria-label="Close password reset modal"
+            disabled={sendingPasswordReset}
+          >
+            <X className="size-4" />
+          </DialogClose>
           <DialogHeader>
             <DialogTitle>Send password reset</DialogTitle>
           </DialogHeader>
@@ -1731,8 +1887,32 @@ export default function AdminUsersPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={isInviteModalOpen} onOpenChange={(open) => !creatingInvite && setIsInviteModalOpen(open)}>
-        <DialogContent className="max-w-[920px] rounded-xl bg-white p-6">
+      <Dialog open={isInviteModalOpen} onOpenChange={handleInviteModalOpenChange}>
+        <DialogContent
+          className="max-w-[920px] rounded-xl bg-white p-6"
+          onEscapeKeyDown={(event) => {
+            if (creatingInvite) {
+              event.preventDefault();
+            }
+          }}
+          onInteractOutside={(event) => {
+            if (
+              shouldBlockOutsideClose({
+                isBusy: creatingInvite,
+                hasUnsavedChanges: hasInviteChanges,
+              })
+            ) {
+              event.preventDefault();
+            }
+          }}
+        >
+          <DialogClose
+            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
+            aria-label="Close create invitation modal"
+            disabled={creatingInvite}
+          >
+            <X className="size-4" />
+          </DialogClose>
           <DialogHeader>
             <DialogTitle>Create invitation</DialogTitle>
             <DialogDescription>
@@ -1831,6 +2011,25 @@ export default function AdminUsersPage() {
         </DialogContent>
       </Dialog>
 
+      <UnsavedChangesDialog
+        open={isEditUnsavedDialogOpen}
+        onKeepEditing={() => setIsEditUnsavedDialogOpen(false)}
+        onDiscardChanges={() => {
+          setIsEditUnsavedDialogOpen(false);
+          closeEditUser();
+        }}
+      />
+
+      <UnsavedChangesDialog
+        open={isInviteUnsavedDialogOpen}
+        onKeepEditing={() => setIsInviteUnsavedDialogOpen(false)}
+        onDiscardChanges={() => {
+          setIsInviteUnsavedDialogOpen(false);
+          setIsInviteModalOpen(false);
+          resetInviteDraft();
+        }}
+      />
+
       {shouldShowRefreshingOverlay ? (
         <PageLoadingOverlay message="Refreshing admin data..." />
       ) : null}
@@ -1842,10 +2041,14 @@ export default function AdminUsersPage() {
               <CacheStatusChip
                 text={cacheStatusText}
                 onRefresh={() => void loadData(true)}
-                disabled={refreshing || backgroundRefreshing || loading}
+                disabled={refreshing || backgroundRefreshing || loading || !isOnline}
                 refreshing={refreshing || backgroundRefreshing}
                 refreshLabel="Refresh admin data"
-                tooltipText="Click to refresh admin users, invitations, tenants, apps, and roles"
+                tooltipText={
+                  isOnline
+                    ? "Click to refresh admin users, invitations, tenants, apps, and roles"
+                    : "Offline. Reconnect to refresh admin data."
+                }
                 containerClassName="pointer-events-auto"
                 className="max-w-[min(90vw,38rem)]"
               />

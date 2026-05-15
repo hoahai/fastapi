@@ -539,12 +539,14 @@ export function EstimateNumberModal({
   const [hasAttemptedDetailLoad, setHasAttemptedDetailLoad] = useState(false);
   const [detailRefreshToken, setDetailRefreshToken] = useState(0);
   const [detailCacheStatus, setDetailCacheStatus] = useState<{ source: "cache" | "network"; fetchedAt: number } | null>(null);
+  const [hasDeferredDetailUpdate, setHasDeferredDetailUpdate] = useState(false);
   const handledDetailRefreshTokenRef = useRef(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false);
 
   useEffect(() => {
     if (!open) {
+      setHasDeferredDetailUpdate(false);
       setOriginalForm(null);
       setHasAutoSeededDefaultDates(false);
       setSubmitError(null);
@@ -650,6 +652,18 @@ export function EstimateNumberModal({
           }
           return;
         }
+        if (hasUnsavedChangesRef.current) {
+          if (detailResult.source && detailResult.fetchedAt) {
+            setDetailCacheStatus({
+              source: detailResult.source,
+              fetchedAt: detailResult.fetchedAt,
+            });
+          }
+          setHasDeferredDetailUpdate(true);
+          setHasAttemptedDetailLoad(true);
+          return;
+        }
+        setHasDeferredDetailUpdate(false);
         if (detailResult.source && detailResult.fetchedAt) {
           setDetailCacheStatus({
             source: detailResult.source,
@@ -739,7 +753,20 @@ export function EstimateNumberModal({
   const isReadOnly = !canEdit;
   const hasUnsavedChanges =
     hasFormChanges(form, originalForm) || (isEditMode && hasAutoSeededDefaultDates);
+  const hasUnsavedChangesRef = useRef(hasUnsavedChanges);
   const isDetailReady = !isEditMode || (hasAttemptedDetailLoad && !isLoadingDetail && !detailError && !!originalForm);
+
+  useEffect(() => {
+    hasUnsavedChangesRef.current = hasUnsavedChanges;
+  }, [hasUnsavedChanges]);
+
+  useEffect(() => {
+    if (!open || hasUnsavedChanges || !hasDeferredDetailUpdate || isLoadingDetail) {
+      return;
+    }
+    setHasDeferredDetailUpdate(false);
+    setDetailRefreshToken((current) => current + 1);
+  }, [hasDeferredDetailUpdate, hasUnsavedChanges, isLoadingDetail, open]);
 
   function handleDialogOpenChange(nextOpen: boolean) {
     const allowClose = canModalClose({
@@ -1092,16 +1119,25 @@ export function EstimateNumberModal({
             <CacheStatusChip
               text={detailStatusText}
               onRefresh={() => {
-                if (!isLoadingDetail && !isSubmitting && isEditMode) {
+                if (!isLoadingDetail && !isSubmitting && isEditMode && !hasUnsavedChanges) {
                   setDetailRefreshToken((current) => current + 1);
                 }
               }}
-              disabled={!isEditMode || isLoadingDetail || isSubmitting}
+              disabled={!isEditMode || isLoadingDetail || isSubmitting || hasUnsavedChanges}
               refreshing={isRefreshingDetail}
               refreshLabel="Refresh estimate detail"
-              tooltipText="Click to refresh this data"
+              tooltipText={
+                hasUnsavedChanges
+                  ? "Save or discard your edits before refreshing estimate detail."
+                  : "Click to refresh this data"
+              }
             />
           </footer>
+        ) : null}
+        {hasDeferredDetailUpdate ? (
+          <p className="mt-2 text-sm text-amber-700">
+            Newer estimate data is available and will apply after your current edits are saved or discarded.
+          </p>
         ) : null}
       </DialogContent>
 

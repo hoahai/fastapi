@@ -51,41 +51,46 @@ export function StationResults({
   }
 
   return (
-    <div className="space-y-4">
-      {groups.map((group) => {
-        const isOpen = groupOpenState[group.key] ?? true;
-        return (
-          <section key={group.key} className="rounded-2xl border border-blue-100 bg-white shadow-soft">
-            <button
-              type="button"
-              onClick={() => onToggleGroup(group.key)}
-              className="flex w-full items-center justify-between gap-3 rounded-2xl px-5 py-3 text-left"
-            >
-              <div>
-                <h3 className="text-base font-bold text-blue-900">{group.label}</h3>
-                <p className="mt-0.5 text-xs text-slate-500">{group.items.length} stations</p>
-              </div>
-              <span className="inline-flex items-center text-slate-500" aria-hidden="true">
-                <ChevronDown className={`size-4 transition-transform ${isOpen ? "rotate-180" : "rotate-0"}`} />
-              </span>
-            </button>
+    <section className="rounded-2xl border border-blue-100 bg-white/95 p-4 shadow-soft">
+      <header className="border-b border-slate-200 pb-2">
+        <h3 className="text-sm font-semibold text-slate-800">Results</h3>
+      </header>
+      <div className="mt-3 space-y-4">
+        {groups.map((group) => {
+          const isOpen = groupOpenState[group.key] ?? true;
+          return (
+            <section key={group.key} className="group overflow-hidden rounded-2xl border border-blue-100 bg-slate-50/70">
+              <button
+                type="button"
+                onClick={() => onToggleGroup(group.key)}
+                className="flex w-full items-center justify-between gap-2 border-b border-blue-100 bg-blue-50/70 px-4 py-3 text-left"
+              >
+                <p className="text-sm font-bold uppercase tracking-[0.14em] text-blue-800">{group.label}</p>
+                <span className="inline-flex items-center text-slate-500" aria-hidden="true">
+                  <span className="mr-2 text-xs">{group.items.length} stations</span>
+                  <ChevronDown className={`size-4 transition-transform ${isOpen ? "rotate-180" : "rotate-0"}`} />
+                </span>
+              </button>
 
-            {isOpen ? (
-              <div className="grid gap-3 px-3 pb-4 sm:grid-cols-2 xl:grid-cols-3">
-                {group.items.map((station) => (
-                  <StationResultCard
-                    key={station.code}
-                    station={station}
-                    disabled={disabled}
-                    onEdit={onEdit}
-                  />
-                ))}
-              </div>
-            ) : null}
-          </section>
-        );
-      })}
-    </div>
+              {isOpen ? (
+                <div className="p-3">
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                    {group.items.map((station) => (
+                      <StationResultCard
+                        key={station.code}
+                        station={station}
+                        disabled={disabled}
+                        onEdit={onEdit}
+                      />
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </section>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 

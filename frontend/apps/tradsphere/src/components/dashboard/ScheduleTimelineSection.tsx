@@ -6,6 +6,7 @@ import {
   ChevronRight,
   ChevronUp,
   Loader2,
+  X,
 } from "lucide-react";
 
 import { ActionIconButton } from "@/components/dashboard/ActionIconButton";
@@ -13,12 +14,14 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CacheStatusChip } from "@/components/ui/cache-status-chip";
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
 import { useApiRequest } from "@/hooks/useApiRequest";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { usePersistentState } from "@/hooks/usePersistentState";
 import {
   listBrowserCacheSnapshotsByPrefix,
@@ -524,6 +527,7 @@ export function ScheduleTimelineSection({
   disabled = false,
 }: ScheduleTimelineSectionProps) {
   const { requestJson } = useApiRequest();
+  const { isOnline } = useOnlineStatus();
   const currentWeekStart = useMemo(() => mondayOfIsoDate(getTodayInChicagoIso()), []);
   const [isCollapsed, setIsCollapsed] = usePersistentState<boolean>(
     TIMELINE_COLLAPSED_STATE_KEY,
@@ -574,11 +578,14 @@ export function ScheduleTimelineSection({
     if (isRefreshing) {
       return "Refreshing...";
     }
+    if (!isOnline && cacheStatus) {
+      return `Offline. Showing cached data from ${formatRelativeTime(cacheStatus.fetchedAt)}.`;
+    }
     if (!cacheStatus) {
       return null;
     }
     return `Timeline source: ${cacheStatus.source}. Last updated ${formatRelativeTime(cacheStatus.fetchedAt)}.`;
-  }, [cacheStatus, isLoading, isRefreshing]);
+  }, [cacheStatus, isLoading, isOnline, isRefreshing]);
 
   const monthGroups = useMemo(() => buildMonthGroups(weeks), [weeks]);
   const weekIndexByStart = useMemo(() => {
@@ -732,6 +739,13 @@ export function ScheduleTimelineSection({
     }
 
     if (!shouldFetchFromNetwork) {
+      return;
+    }
+    if (!isOnline) {
+      if (!canUseCache && mode === "replace") {
+        setTimeline(null);
+        setError("You're offline. Connect to load schedule timeline.");
+      }
       return;
     }
 
@@ -944,12 +958,12 @@ export function ScheduleTimelineSection({
 
   return (
     <>
-      <Card>
-        <CardHeader className="border-b border-blue-100 bg-secondary/60 py-4">
+      <Card className="overflow-hidden">
+        <CardHeader className="border-b border-blue-100 bg-blue-50/70 py-3">
           <div className="flex items-center justify-between gap-3">
             <CardTitle className="flex items-center gap-3">
-              <CalendarRange className="size-5 text-blue-600" />
-              <span className="text-lg font-semibold text-blue-700">Schedule Timeline</span>
+              <CalendarRange className="size-5 text-blue-700" />
+              <span className="text-sm font-bold uppercase tracking-[0.14em] text-blue-800">Schedule Timeline</span>
             </CardTitle>
             <ActionIconButton
               aria-label={isCollapsed ? "Expand schedule timeline" : "Collapse schedule timeline"}
@@ -1225,10 +1239,14 @@ export function ScheduleTimelineSection({
                   onRefresh={() => {
                     void handleRefreshVisibleWindows();
                   }}
-                  disabled={!canInteract || isRefreshing || isLoading || isLoadingNext || isLoadingPrevious}
+                  disabled={!canInteract || !isOnline || isRefreshing || isLoading || isLoadingNext || isLoadingPrevious}
                   refreshing={isRefreshing}
                   refreshLabel="Refresh timeline"
-                  tooltipText="Refresh timeline for the current account and loaded visible range"
+                  tooltipText={
+                    !isOnline
+                      ? "Offline. Reconnect to refresh timeline data."
+                      : "Refresh timeline for the current account and loaded visible range"
+                  }
                   className="max-w-[min(90vw,34rem)]"
                 />
               </div>
@@ -1240,6 +1258,12 @@ export function ScheduleTimelineSection({
 
       <Dialog open={Boolean(selectedDetail)} onOpenChange={(open) => !open && setSelectedDetail(null)}>
         <DialogContent className="max-w-xl">
+          <DialogClose
+            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label="Close schedule timeline detail modal"
+          >
+            <X className="size-4" />
+          </DialogClose>
           <DialogHeader>
             <DialogTitle>Schedule Timeline Detail</DialogTitle>
             <DialogDescription>

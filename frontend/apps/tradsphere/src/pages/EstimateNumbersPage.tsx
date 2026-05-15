@@ -21,6 +21,7 @@ import { CacheStatusChip } from "@/components/ui/cache-status-chip";
 import { useToast } from "@/components/ui/toast";
 import { useApiRequest } from "@/hooks/useApiRequest";
 import { usePersistentState } from "@/hooks/usePersistentState";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { useTradsphereAccountSelections } from "@/hooks/useTradsphereAccountSelections";
 import {
   listBrowserCacheSnapshotsByPrefix,
@@ -1318,6 +1319,7 @@ function buildSearchPlan(draft: EstimateNumberSearchFormValues): BuildSearchPlan
 export default function EstimateNumbersPage() {
   const toast = useToast();
   const { requestJson } = useApiRequest();
+  const { isOnline } = useOnlineStatus();
   const auth = useAuth();
   const requestHeaders = useMemo(
     () => buildSharedAuthHeaders(auth.session, auth.tenantSlug, false),
@@ -1433,6 +1435,8 @@ export default function EstimateNumbersPage() {
   const isAnyModalOpen = isScheduleModalOpen || isEstimateModalOpen;
   const cacheStatusText = isRefreshing
     ? "Refreshing..."
+    : !isOnline && cacheStatus
+      ? `Offline. Showing cached data from ${formatRelativeTime(cacheStatus.fetchedAt)}.`
     : cacheStatus
       ? `Data source: ${cacheStatus.source}. Last updated ${formatRelativeTime(cacheStatus.fetchedAt)}.`
       : "No cached data yet";
@@ -1641,6 +1645,23 @@ export default function EstimateNumbersPage() {
 
     const shouldFetch = options.append ? true : shouldFetchSubmittedSearchNetwork(options.policy, snapshot);
     if (!shouldFetch) {
+      return;
+    }
+
+    if (!isOnline) {
+      if (!options.append && localCacheResult?.page) {
+        setRefreshMessage("You're offline. Showing cached estimate numbers.");
+        setIsRefreshing(false);
+        return;
+      }
+      if (options.append) {
+        setRefreshMessage("You're offline. Cannot load more results right now.");
+        setIsLoadingMore(false);
+        return;
+      }
+      setState("error");
+      setError("You're offline. Connect to the internet to load estimate numbers.");
+      setIsRefreshing(false);
       return;
     }
 
@@ -1972,10 +1993,10 @@ export default function EstimateNumbersPage() {
               <CacheStatusChip
                 text={cacheStatusText}
                 onRefresh={handleRefreshSearch}
-                disabled={isRefreshing || isLoadingMore}
+                disabled={isRefreshing || isLoadingMore || !isOnline}
                 refreshing={isRefreshing}
                 refreshLabel="Refresh estimate numbers"
-                tooltipText="Click to refresh last submitted search"
+                tooltipText={isOnline ? "Click to refresh last submitted search" : "Offline. Reconnect to refresh estimate numbers."}
                 containerClassName="pointer-events-auto"
                 className="max-w-[min(90vw,34rem)]"
               />

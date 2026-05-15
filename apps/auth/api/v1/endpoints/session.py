@@ -4,9 +4,11 @@ from fastapi import APIRouter, Body, HTTPException, Request
 
 from shared.auth.admin_repo import is_user_super_admin, list_active_apps, list_active_tenants, list_user_access_assignments
 from shared.auth.config import is_debug_endpoint_enabled
-from shared.auth.dependencies import authorize_bearer_for_tenant_app
+from shared.auth.dependencies import authenticate_bearer, authorize_bearer_for_tenant_app
+from shared.auth.permissions_repo import TenantAccessError, validate_active_tenant_membership
 from shared.auth.profile_repo import compose_full_name, select_profile_for_user, split_full_name, upsert_profile_basic_info
 from shared.auth.providers import get_auth_provider
+from shared.auth.roles import normalize_role_key
 from shared.auth.supabase_client import SupabaseClientError
 from shared.tenant import TenantConfigError, reset_tenant_context, set_tenant_context
 from apps.tradsphere.api.v1.helpers.config import validate_tenant_config as validate_tradsphere_tenant_config
@@ -153,6 +155,176 @@ def _filter_assignments_by_backend_app_config(assignments: list[dict[str, object
     return filtered
 
 
+def _status_code_for_access_error(exc: TenantAccessError) -> int:
+    code = str(getattr(exc, "code", "") or "").strip().lower()
+    if code == "missing_tenant":
+        return 400
+    if code == "supabase_unavailable":
+        return 503
+    return 403
+
+
+def _permission_set_for_assignment(*, app_code: str, role: str) -> set[str]:
+    normalized_app_code = str(app_code or "").strip().lower()
+    normalized_role = normalize_role_key(role)
+    if not normalized_app_code:
+        return set()
+
+    permissions = {f"{normalized_app_code}.viewer"}
+    if normalized_role in {"editor", "admin", "super_admin"}:
+        permissions.add(f"{normalized_app_code}.editor")
+    if normalized_role in {"admin", "super_admin"}:
+        permissions.add(f"{normalized_app_code}.admin")
+    return permissions
+
+
+def _build_app_access_payload(assignments: list[dict[str, object]]) -> list[dict[str, object]]:
+    by_app: dict[str, dict[str, object]] = {}
+    role_priority = {"viewer": 0, "editor": 1, "admin": 2, "super_admin": 3}
+
+    for assignment in assignments:
+        if not isinstance(assignment, dict):
+            continue
+        app = assignment.get("app")
+        if not isinstance(app, dict):
+            continue
+        app_id = str(app.get("id") or "").strip()
+        app_code = str(app.get("code") or "").strip().lower()
+        app_name = str(app.get("name") or "").strip() or None
+        role = normalize_role_key(str(assignment.get("role") or "").strip())
+        if not app_id or not app_code:
+            continue
+
+        key = f"{app_code}::{app_id}"
+        candidate_permissions = sorted(_permission_set_for_assignment(app_code=app_code, role=role))
+        candidate_rank = role_priority.get(role, -1)
+        existing = by_app.get(key)
+        existing_role = normalize_role_key(str((existing or {}).get("role") or ""))
+        existing_rank = role_priority.get(existing_role, -1)
+
+        if existing and candidate_rank <= existing_rank:
+            continue
+
+        by_app[key] = {
+            "app": {
+                "id": app_id,
+                "code": app_code,
+                "name": app_name,
+            },
+            "role": role or "viewer",
+            "permissions": candidate_permissions,
+        }
+
+    return sorted(
+        by_app.values(),
+        key=lambda item: (
+            str(((item.get("app") or {}).get("code") if isinstance(item.get("app"), dict) else "") or "~").lower(),
+            str(((item.get("app") or {}).get("id") if isinstance(item.get("app"), dict) else "") or ""),
+        ),
+    )
+
+
+def _resolve_selected_assignment(
+    *,
+    assignments: list[dict[str, object]],
+    tenant_slug: str,
+    preferred_app_code: str | None,
+) -> dict[str, object] | None:
+    normalized_tenant_slug = str(tenant_slug or "").strip().lower()
+    normalized_preferred_app_code = str(preferred_app_code or "").strip().lower()
+
+    def _matches(item: dict[str, object], *, require_app: bool) -> bool:
+        tenant = item.get("tenant")
+        app = item.get("app")
+        if not isinstance(tenant, dict) or not isinstance(app, dict):
+            return False
+        item_tenant_slug = str(tenant.get("slug") or "").strip().lower()
+        item_app_code = str(app.get("code") or "").strip().lower()
+        if item_tenant_slug != normalized_tenant_slug:
+            return False
+        if require_app:
+            return bool(item_app_code and item_app_code == normalized_preferred_app_code)
+        return bool(item_app_code)
+
+    if normalized_preferred_app_code:
+        match = next((item for item in assignments if isinstance(item, dict) and _matches(item, require_app=True)), None)
+        if match:
+            return match
+
+    match = next((item for item in assignments if isinstance(item, dict) and _matches(item, require_app=False)), None)
+    if match:
+        return match
+
+    return next((item for item in assignments if isinstance(item, dict)), None)
+
+
+def _build_validate_payload(
+    *,
+    user_id: str,
+    user_email: str | None,
+    tenant_id: str,
+    tenant_slug: str,
+    assignments: list[dict[str, object]],
+    scope: dict[str, bool],
+    preferred_app_code: str | None = None,
+) -> dict[str, object]:
+    selected_assignment = _resolve_selected_assignment(
+        assignments=assignments,
+        tenant_slug=tenant_slug,
+        preferred_app_code=preferred_app_code,
+    )
+
+    permission_set: set[str] = set()
+    for assignment in assignments:
+        if not isinstance(assignment, dict):
+            continue
+        app = assignment.get("app")
+        if not isinstance(app, dict):
+            continue
+        app_code = str(app.get("code") or "").strip().lower()
+        role = str(assignment.get("role") or "").strip()
+        permission_set.update(_permission_set_for_assignment(app_code=app_code, role=role))
+    if scope.get("isSuperAdmin"):
+        permission_set.add("workspace.super_admin")
+
+    selected_tenant = selected_assignment.get("tenant") if isinstance(selected_assignment, dict) else None
+    selected_app = selected_assignment.get("app") if isinstance(selected_assignment, dict) else None
+    selected_role = normalize_role_key(str((selected_assignment or {}).get("role") or "").strip()) or None
+
+    response_tenant_id = str((selected_tenant or {}).get("id") if isinstance(selected_tenant, dict) else "").strip() or tenant_id
+    response_tenant_slug = (
+        str((selected_tenant or {}).get("slug") if isinstance(selected_tenant, dict) else "").strip().lower()
+        or tenant_slug
+    )
+
+    app_payload: dict[str, object] | None = None
+    if isinstance(selected_app, dict):
+        app_id = str(selected_app.get("id") or "").strip()
+        app_code = str(selected_app.get("code") or "").strip().lower()
+        if app_id and app_code:
+            app_payload = {
+                "id": app_id,
+                "code": app_code,
+            }
+
+    return {
+        "user": _build_user_payload(
+            user_id=user_id,
+            email=user_email,
+        ),
+        "tenant": {
+            "id": response_tenant_id,
+            "slug": response_tenant_slug,
+        },
+        "app": app_payload,
+        "role": selected_role,
+        "assignments": assignments,
+        "appAccess": _build_app_access_payload(assignments),
+        "scope": scope,
+        "permissions": sorted(permission_set),
+    }
+
+
 @router.get("/me")
 def get_session_me(request: Request):
     """
@@ -220,6 +392,7 @@ def get_session_me(request: Request):
         - Requires Authorization: Bearer <Supabase JWT>
         - Requires X-Tenant-Id tenant slug
         - Validates membership and app access for TradSphere
+        - Disabled tenant membership is rejected with HTTP 403 and error code `tenant_membership_disabled`
     """
     result = authorize_bearer_for_tenant_app(request=request, app_code="tradsphere")
     assignments, scope = _build_assignments_scope_payload(
@@ -255,6 +428,160 @@ def get_session_me(request: Request):
         "scope": scope,
         "permissions": sorted(result.access.permissions),
     }
+
+
+@router.get("/assignments")
+def get_session_assignments(request: Request):
+    """
+    Return all tenant-app assignments for the authenticated user without requiring a tenant header, for auth recovery/tenant-selection UX.
+
+    Example request:
+        GET /api/auth/v1/session/assignments
+
+    Example response:
+        {
+          "assignments": [
+            {
+              "tenant": {"id": "tenant-1", "slug": "taaa", "name": "TAAA"},
+              "app": {"id": "app-1", "code": "tradsphere", "name": "Tradsphere"},
+              "role": "viewer"
+            }
+          ]
+        }
+
+    Requirements:
+        - Requires Authorization: Bearer <Supabase JWT>
+        - Returns assignments with active tenant membership only
+    """
+    principal = authenticate_bearer(request)
+    assignments = list_user_access_assignments(user_id=principal.user_id)
+    try:
+        is_super = is_user_super_admin(user_id=principal.user_id)
+    except SupabaseClientError:
+        is_super = False
+
+    if is_super and not assignments:
+        tradsphere_app = next(
+            (
+                app
+                for app in list_active_apps()
+                if str(app.get("code") or "").strip().lower() == "tradsphere"
+            ),
+            None,
+        )
+        if tradsphere_app:
+            assignments = _build_super_admin_tenant_assignments_for_app(
+                app_id=str(tradsphere_app.get("id") or "").strip(),
+                app_code=str(tradsphere_app.get("code") or "").strip().lower(),
+            )
+
+    assignments = _filter_assignments_by_backend_app_config(assignments)
+    return {"assignments": assignments}
+
+
+@router.get("/validate")
+def get_session_validate(request: Request):
+    """
+    Validate session + tenant membership and return user access state in one response for frontend auth guards.
+
+    Example request:
+        GET /api/auth/v1/session/validate
+
+    Example response:
+        {
+          "user": {
+            "id": "762fec4b-1da3-4ba7-80e2-dd21622b6e0d",
+            "email": "alex@example.com",
+            "fullName": "Alex Johnson",
+            "firstName": "Alex",
+            "lastName": "Johnson"
+          },
+          "tenant": {
+            "id": "a4f4fd7d-2c0d-4bb2-bf73-26e5f7f918bf",
+            "slug": "taaa"
+          },
+          "app": {
+            "id": "f57fc74c-b429-4ce2-8bd0-c6f154a2cb18",
+            "code": "tradsphere"
+          },
+          "role": "viewer",
+          "assignments": [
+            {
+              "tenant": {
+                "id": "a4f4fd7d-2c0d-4bb2-bf73-26e5f7f918bf",
+                "slug": "taaa",
+                "name": "TAAA",
+                "status": "active"
+              },
+              "app": {
+                "id": "f57fc74c-b429-4ce2-8bd0-c6f154a2cb18",
+                "code": "tradsphere",
+                "name": "Tradsphere"
+              },
+              "role": "viewer"
+            }
+          ],
+          "appAccess": [
+            {
+              "app": {
+                "id": "f57fc74c-b429-4ce2-8bd0-c6f154a2cb18",
+                "code": "tradsphere",
+                "name": "Tradsphere"
+              },
+              "role": "viewer",
+              "permissions": ["tradsphere.viewer"]
+            }
+          ],
+          "scope": {
+            "isSuperAdmin": false,
+            "hasAnyAdminScope": false
+          },
+          "permissions": ["tradsphere.viewer"]
+        }
+
+    Requirements:
+        - Requires Authorization: Bearer <Supabase JWT>
+        - Requires X-Tenant-Id tenant slug
+        - Enforces active tenant membership (disabled users receive HTTP 403 with `tenant_membership_disabled`)
+        - Returns assignments and permission scopes in one call
+    """
+    principal = authenticate_bearer(request)
+    tenant_slug = str(request.headers.get("x-tenant-id") or "").strip().lower()
+    if not tenant_slug:
+        raise HTTPException(status_code=400, detail="Missing X-Tenant-Id header")
+
+    try:
+        tenant_id, resolved_tenant_slug = validate_active_tenant_membership(
+            user_id=principal.user_id,
+            tenant_slug=tenant_slug,
+        )
+    except TenantAccessError as exc:
+        raise HTTPException(
+            status_code=_status_code_for_access_error(exc),
+            detail={
+                "message": str(exc),
+                "code": str(getattr(exc, "code", "") or "").strip().lower() or "forbidden",
+            },
+        ) from exc
+
+    assignments, scope = _build_assignments_scope_payload(
+        user_id=principal.user_id,
+        role="",
+        permissions=set(),
+    )
+    assignments = _filter_assignments_by_backend_app_config(assignments)
+
+    preferred_app_code = str(request.headers.get("x-app-code") or "").strip().lower() or None
+
+    return _build_validate_payload(
+        user_id=principal.user_id,
+        user_email=principal.email,
+        tenant_id=tenant_id,
+        tenant_slug=resolved_tenant_slug,
+        assignments=assignments,
+        scope=scope,
+        preferred_app_code=preferred_app_code,
+    )
 
 
 @router.patch("/me/profile")

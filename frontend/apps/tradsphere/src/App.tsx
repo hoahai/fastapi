@@ -4,6 +4,7 @@ import TradsphereHomePage from "@/TradsphereHomePage";
 import EstimateNumbersPage from "@/pages/EstimateNumbersPage";
 import ContactsPage from "@/pages/ContactsPage";
 import StationsPage from "@/pages/StationsPage";
+import ShiftzyEmployeesPage from "@shiftzy/ShiftzyAccountsPage";
 import ShiftzySchedulePage from "@shiftzy/ShiftzySchedulePage";
 import AdminUsersPage from "@/pages/AdminUsersPage";
 import ProfilePage from "@/pages/ProfilePage";
@@ -86,6 +87,9 @@ function toScrollStorageKey(route: string): string {
   if (route === "/shiftzy/home") {
     return "shiftzy.home.scrollY";
   }
+  if (route === "/shiftzy/employees") {
+    return "shiftzy.employees.scrollY";
+  }
   if (route === "/admin/users") {
     return "workspace.admin.users.scrollY";
   }
@@ -105,6 +109,17 @@ function RedirectToLogin() {
   }, []);
 
   return <div className="p-6 text-sm text-slate-600">Redirecting to login...</div>;
+}
+
+function RedirectToHome() {
+  useEffect(() => {
+    if (window.location.pathname === "/") {
+      return;
+    }
+    window.location.replace("/");
+  }, []);
+
+  return <div className="p-6 text-sm text-slate-600">Redirecting to workspace home...</div>;
 }
 
 function RequireSignedIn({ children }: { children: ReactNode }) {
@@ -241,6 +256,7 @@ function App() {
       "/tradsphere/contacts",
       "/tradsphere/stations",
       "/shiftzy/home",
+      "/shiftzy/employees",
     ]);
   }, []);
 
@@ -265,8 +281,8 @@ function App() {
   function renderTradsphereRoute() {
     return (
       <RequireSignedIn>
-        <RequireTenantAccess fallback={<UnauthorizedPage />}>
-          <RequirePermission permission="tradsphere.viewer" fallback={<UnauthorizedPage />}>
+        <RequireTenantAccess fallback={<RedirectToHome />}>
+          <RequirePermission permission="tradsphere.viewer" fallback={<RedirectToHome />}>
             {frontendPath === "/tradsphere/home" ? <TradsphereHomePage /> : null}
             {frontendPath === "/tradsphere/estnums" ? <EstimateNumbersPage /> : null}
             {frontendPath === "/tradsphere/contacts" ? <ContactsPage /> : null}
@@ -280,9 +296,10 @@ function App() {
   function renderShiftzyRoute() {
     return (
       <RequireSignedIn>
-        <RequireTenantAccess fallback={<UnauthorizedPage />}>
-          <RequireAppView appCode="shiftzy" fallback={<UnauthorizedPage />}>
+        <RequireTenantAccess fallback={<RedirectToHome />}>
+          <RequireAppView appCode="shiftzy" fallback={<RedirectToHome />}>
             {frontendPath === "/shiftzy/home" ? <ShiftzySchedulePage /> : null}
+            {frontendPath === "/shiftzy/employees" ? <ShiftzyEmployeesPage /> : null}
           </RequireAppView>
         </RequireTenantAccess>
       </RequireSignedIn>
@@ -313,27 +330,44 @@ function App() {
     );
   }
 
+  const routeContent = (
+    <>
+      {frontendPath === "/auth/login" ? <LoginPage /> : null}
+      {frontendPath === "/auth/callback" ? <AuthCallbackPage /> : null}
+      {frontendPath === "/auth/update-password" ? <UpdatePasswordPage /> : null}
+      {frontendPath === "/auth/unauthorized" ? <UnauthorizedPage /> : null}
+      {frontendPath === "/auth/invite/pending" ? <PendingInvitePage /> : null}
+      {inviteToken ? <InviteAcceptPage token={inviteToken} /> : null}
+      {frontendPath === "/profile" ? renderProfileRoute() : null}
+      {frontendPath === "/admin/users" ? renderAdminRoute() : null}
+      {frontendPath.startsWith("/tradsphere/") ? renderTradsphereRoute() : null}
+      {frontendPath.startsWith("/shiftzy/") ? renderShiftzyRoute() : null}
+      {frontendPath === HOME_ROUTE ? (
+        <RequireSignedIn>
+          <WorkspacePortalPage onNavigate={navigate} />
+        </RequireSignedIn>
+      ) : null}
+      {!knownRoutes.has(frontendPath) && !inviteToken ? <WorkspaceNotFoundPage onNavigate={navigate} /> : null}
+    </>
+  );
+
   return (
     <AuthProvider>
       <ToastProvider>
-        <AppShell currentPath={frontendPath} onNavigate={navigate}>
-          {frontendPath === "/auth/login" ? <LoginPage /> : null}
-          {frontendPath === "/auth/callback" ? <AuthCallbackPage /> : null}
-          {frontendPath === "/auth/update-password" ? <UpdatePasswordPage /> : null}
-          {frontendPath === "/auth/unauthorized" ? <UnauthorizedPage /> : null}
-          {frontendPath === "/auth/invite/pending" ? <PendingInvitePage /> : null}
-          {inviteToken ? <InviteAcceptPage token={inviteToken} /> : null}
-          {frontendPath === "/profile" ? renderProfileRoute() : null}
-          {frontendPath === "/admin/users" ? renderAdminRoute() : null}
-          {frontendPath.startsWith("/tradsphere/") ? renderTradsphereRoute() : null}
-          {frontendPath.startsWith("/shiftzy/") ? renderShiftzyRoute() : null}
-          {frontendPath === HOME_ROUTE ? (
-            <RequireSignedIn>
-              <WorkspacePortalPage onNavigate={navigate} />
-            </RequireSignedIn>
-          ) : null}
-          {!knownRoutes.has(frontendPath) && !inviteToken ? <WorkspaceNotFoundPage onNavigate={navigate} /> : null}
-        </AppShell>
+        {frontendPath === "/auth/login" ? (
+          <div className="relative min-h-screen overflow-hidden bg-app-gradient text-foreground">
+            <div className="pointer-events-none absolute -left-16 top-0 size-72 rounded-full bg-blue-200/40 blur-3xl" />
+            <div className="pointer-events-none absolute right-0 top-16 size-72 rounded-full bg-cyan-200/30 blur-3xl" />
+            <div className="pointer-events-none absolute left-[45%] top-8 size-64 rounded-full bg-violet-200/20 blur-3xl" />
+            <main className="relative min-h-screen w-full space-y-6 px-4 py-5 sm:px-6 lg:px-8">
+              {routeContent}
+            </main>
+          </div>
+        ) : (
+          <AppShell currentPath={frontendPath} onNavigate={navigate}>
+            {routeContent}
+          </AppShell>
+        )}
       </ToastProvider>
     </AuthProvider>
   );

@@ -1356,7 +1356,12 @@ export function StationModal({
   const [hasAttemptedDetailLoad, setHasAttemptedDetailLoad] = useState(false);
   const [detailRefreshToken, setDetailRefreshToken] = useState(0);
   const [detailCacheStatus, setDetailCacheStatus] = useState<{ source: "cache" | "network"; fetchedAt: number } | null>(null);
+  const [hasDeferredDetailUpdate, setHasDeferredDetailUpdate] = useState(false);
   const handledDetailRefreshTokenRef = useRef(0);
+  const pendingDetailDraftRef = useRef<{
+    draft: StationModalDraft;
+    cacheStatus: { source: "cache" | "network"; fetchedAt: number };
+  } | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -1466,6 +1471,24 @@ export function StationModal({
       Number.isFinite(Number(selectedExistingContactId)) &&
       hasAddExistingContactChanges,
   );
+  const hasUnsavedChangesRef = useRef(hasUnsavedChanges);
+
+  useEffect(() => {
+    hasUnsavedChangesRef.current = hasUnsavedChanges;
+  }, [hasUnsavedChanges]);
+
+  function applyLoadedDetailDraft(
+    nextDraft: StationModalDraft,
+    cacheStatus: { source: "cache" | "network"; fetchedAt: number },
+  ) {
+    setDraft(nextDraft);
+    setOriginalDraft(nextDraft);
+    setHasDeferredDetailUpdate(false);
+    pendingDetailDraftRef.current = null;
+    setDetailCacheStatus(cacheStatus);
+    setHasAttemptedDetailLoad(true);
+    setDetailError(null);
+  }
 
   const linkedContactIdSet = useMemo(
     () =>
@@ -1491,6 +1514,8 @@ export function StationModal({
 
   useEffect(() => {
     if (!open) {
+      pendingDetailDraftRef.current = null;
+      setHasDeferredDetailUpdate(false);
       setIsLoadingDetail(false);
       setIsRefreshingDetail(false);
       setHasAttemptedDetailLoad(false);
@@ -1578,15 +1603,12 @@ export function StationModal({
         const sanitizedCached = redactDeliveryMethodPassword(cachedSnapshot.data);
         const synced = syncContactsAndLinks(sanitizedCached.contacts, sanitizedCached.station.code);
         const cachedDraft = { ...sanitizedCached, ...synced };
-        setDraft(cachedDraft);
-        setOriginalDraft(cachedDraft);
-        setHasAttemptedDetailLoad(true);
-        setIsLoadingDetail(false);
-        setIsRefreshingDetail(false);
-        setDetailCacheStatus({
+        applyLoadedDetailDraft(cachedDraft, {
           source: "cache",
           fetchedAt: cachedSnapshot.fetchedAt,
         });
+        setIsLoadingDetail(false);
+        setIsRefreshingDetail(false);
         return;
       }
     }
@@ -1610,18 +1632,25 @@ export function StationModal({
         }
         const synced = syncContactsAndLinks(parsed.contacts, parsed.station.code);
         const nextDraft = { ...parsed, ...synced };
-        setDraft(nextDraft);
-        setOriginalDraft(nextDraft);
         const fetchedAt = Date.now();
         writeBrowserCache(cacheKey, redactDeliveryMethodPassword(nextDraft), STATION_DETAIL_CACHE_TTL_MS, {
           source: "network",
           fetchedAt,
         });
-        setDetailCacheStatus({
+        const nextCacheStatus = {
           source: "network",
           fetchedAt,
-        });
-        setHasAttemptedDetailLoad(true);
+        } as const;
+        if (hasUnsavedChangesRef.current) {
+          pendingDetailDraftRef.current = {
+            draft: nextDraft,
+            cacheStatus: nextCacheStatus,
+          };
+          setHasDeferredDetailUpdate(true);
+          setHasAttemptedDetailLoad(true);
+          return;
+        }
+        applyLoadedDetailDraft(nextDraft, nextCacheStatus);
       })
       .catch((error) => {
         if (!isMounted) {
@@ -1641,6 +1670,17 @@ export function StationModal({
       isMounted = false;
     };
   }, [detailRefreshToken, headers, mode, open, requestJson, stationCode]);
+
+  useEffect(() => {
+    if (!open || hasUnsavedChanges) {
+      return;
+    }
+    const pending = pendingDetailDraftRef.current;
+    if (!pending) {
+      return;
+    }
+    applyLoadedDetailDraft(pending.draft, pending.cacheStatus);
+  }, [hasUnsavedChanges, open]);
 
   useEffect(() => {
     if (!open || mode !== "create" || deliveryMethodOptions.length === 0) {
@@ -2684,16 +2724,25 @@ export function StationModal({
               <CacheStatusChip
                 text={detailStatusText}
                 onRefresh={() => {
-                  if (!isLoadingDetail && !isSubmitting && isEditMode) {
+                  if (!isLoadingDetail && !isSubmitting && isEditMode && !hasUnsavedChanges) {
                     setDetailRefreshToken((current) => current + 1);
                   }
                 }}
-                disabled={!isEditMode || isLoadingDetail || isSubmitting}
+                disabled={!isEditMode || isLoadingDetail || isSubmitting || hasUnsavedChanges}
                 refreshing={isRefreshingDetail}
                 refreshLabel="Refresh station detail"
-                tooltipText="Click to refresh this data"
+                tooltipText={
+                  hasUnsavedChanges
+                    ? "Save or discard your edits before refreshing station detail."
+                    : "Click to refresh this data"
+                }
               />
             </footer>
+          ) : null}
+          {hasDeferredDetailUpdate ? (
+            <p className="mt-2 text-sm text-amber-700">
+              Newer station detail is available and will apply after your current edits are saved or discarded.
+            </p>
           ) : null}
         </DialogContent>
 

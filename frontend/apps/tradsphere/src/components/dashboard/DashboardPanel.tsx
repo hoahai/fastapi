@@ -23,12 +23,12 @@ export function DashboardPanel({
   className,
 }: DashboardPanelProps) {
   return (
-    <Card className={className}>
-      <CardHeader className="border-b border-blue-100 bg-secondary/60 py-4">
+    <Card className={`overflow-hidden ${className ?? ""}`}>
+      <CardHeader className="border-b border-blue-100 bg-blue-50/70 py-3">
         <div className="flex items-center justify-between gap-3">
           <CardTitle className="flex items-center gap-3">
             {icon}
-            <span className="text-lg font-semibold text-blue-700">{title}</span>
+            <span className="text-sm font-bold uppercase tracking-[0.14em] text-blue-800">{title}</span>
           </CardTitle>
           <div className="flex items-center gap-1">{actions}</div>
         </div>

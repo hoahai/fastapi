@@ -39,9 +39,9 @@ type ContactFormState = {
 };
 
 type ContactFieldTouchedState = {
-  email: boolean;
-  office: boolean;
-  cell: boolean;
+  email: string | null;
+  office: string | null;
+  cell: string | null;
 };
 
 export type ContactModalSubmitPayload = {
@@ -223,6 +223,30 @@ function normalizePhoneDisplay(value: string, allowExtension: boolean): string {
   return formatted ?? text;
 }
 
+function normalizePhoneOnInput(value: string, allowExtension: boolean): string {
+  const text = value.replace(/\s+/g, " ").trimStart();
+  if (!text) {
+    return "";
+  }
+
+  if (allowExtension) {
+    const match = OFFICE_EXT_RE.exec(text);
+    if (!match || typeof match.groups?.base !== "string") {
+      return text;
+    }
+    const base = match.groups.base.trim();
+    const ext = typeof match.groups.ext === "string" ? match.groups.ext : "";
+    const formattedBase = formatUsPhoneBase(base);
+    if (!formattedBase) {
+      return text;
+    }
+    return ext ? `${formattedBase} x${ext}` : formattedBase;
+  }
+
+  const formatted = formatUsPhoneBase(text);
+  return formatted ?? text;
+}
+
 function validatePhoneField(value: string, options: { field: string; maxLength: number; allowExtension: boolean }): string | null {
   const text = asString(value);
   if (!text) {
@@ -295,6 +319,7 @@ export function ContactModal({
   onSubmit,
 }: ContactModalProps) {
   const usageSectionRef = useRef<HTMLDivElement | null>(null);
+  const emailInputRef = useRef<HTMLInputElement | null>(null);
 
   const [form, setForm] = useState<ContactFormState>(() =>
     buildFormFromContact(initialContact),
@@ -305,29 +330,56 @@ export function ContactModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false);
+  const [hasDeferredServerUpdate, setHasDeferredServerUpdate] = useState(false);
   const [isFullNameManuallyEdited, setIsFullNameManuallyEdited] = useState(false);
+  const pendingServerContactRef = useRef<ContactRecord | null>(null);
   const [fieldTouched, setFieldTouched] = useState<ContactFieldTouchedState>({
-    email: false,
-    office: false,
-    cell: false,
+    email: null,
+    office: null,
+    cell: null,
   });
+  const hasUnsavedChanges = useMemo(() => !formsEqual(form, baseline), [baseline, form]);
 
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    const next = buildFormFromContact(initialContact);
+  function applyIncomingContact(nextContact: ContactRecord | null) {
+    const next = buildFormFromContact(nextContact);
     setForm(next);
     setBaseline(next);
     setSubmitError(null);
     setIsSubmitting(false);
     setIsFullNameManuallyEdited(false);
     setFieldTouched({
-      email: false,
-      office: false,
-      cell: false,
+      email: null,
+      office: null,
+      cell: null,
     });
-  }, [initialContact, open]);
+  }
+
+  useEffect(() => {
+    if (!open) {
+      pendingServerContactRef.current = null;
+      setHasDeferredServerUpdate(false);
+      setIsDiscardDialogOpen(false);
+      applyIncomingContact(null);
+      return;
+    }
+
+    if (mode !== "edit") {
+      applyIncomingContact(initialContact);
+      pendingServerContactRef.current = null;
+      setHasDeferredServerUpdate(false);
+      return;
+    }
+
+    if (hasUnsavedChanges && !isSubmitting) {
+      pendingServerContactRef.current = initialContact;
+      setHasDeferredServerUpdate(true);
+      return;
+    }
+
+    applyIncomingContact(initialContact);
+    pendingServerContactRef.current = null;
+    setHasDeferredServerUpdate(false);
+  }, [initialContact, isSubmitting, mode, open]);
 
   useEffect(() => {
     if (!open) {
@@ -342,9 +394,20 @@ export function ContactModal({
     return () => window.cancelAnimationFrame(frameId);
   }, [focusUsageToken, open]);
 
-  const hasUnsavedChanges = useMemo(() => !formsEqual(form, baseline), [baseline, form]);
   const showUsageSections = mode === "edit";
   const isReadOnly = !canEdit;
+
+  useEffect(() => {
+    if (!open || hasUnsavedChanges) {
+      return;
+    }
+    if (!pendingServerContactRef.current) {
+      return;
+    }
+    applyIncomingContact(pendingServerContactRef.current);
+    pendingServerContactRef.current = null;
+    setHasDeferredServerUpdate(false);
+  }, [hasUnsavedChanges, open]);
 
   const email = asString(form.email).toLowerCase();
   const isEmailValid = EMAIL_RE.test(email);
@@ -368,9 +431,9 @@ export function ContactModal({
     [form.cell],
   );
   const isFormValid = !emailError && !officeError && !cellError;
-  const visibleEmailError = fieldTouched.email ? emailError : null;
-  const visibleOfficeError = fieldTouched.office ? officeError : null;
-  const visibleCellError = fieldTouched.cell ? cellError : null;
+  const visibleEmailError = fieldTouched.email;
+  const visibleOfficeError = fieldTouched.office;
+  const visibleCellError = fieldTouched.cell;
 
   const canSubmit = hasUnsavedChanges && isFormValid && !isSubmitting && canEdit;
   const shouldShowSubmitButton = canEdit && (isSubmitting || canSubmit);
@@ -387,8 +450,8 @@ export function ContactModal({
     }
   }
 
-  function markTouched(field: keyof ContactFieldTouchedState) {
-    setFieldTouched((current) => (current[field] ? current : { ...current, [field]: true }));
+  function markTouched(field: keyof ContactFieldTouchedState, nextError: string | null) {
+    setFieldTouched((current) => ({ ...current, [field]: nextError }));
   }
 
   function updateNameField(field: "firstName" | "lastName", value: string) {
@@ -464,7 +527,7 @@ export function ContactModal({
       <Dialog open={open} onOpenChange={handleDialogOpenChange}>
         <DialogContent
           className={`flex max-h-[90vh] ${
-            showUsageSections ? "w-[min(92vw,1180px)]" : "w-[min(92vw,760px)]"
+            showUsageSections ? "w-[min(92vw,1180px)]" : "w-[min(92vw,560px)]"
           } max-w-none flex-col overflow-hidden rounded-xl bg-white px-8 py-6`}
           onInteractOutside={(event) => {
             if (isAppDropdownInteractionEvent(event)) {
@@ -476,7 +539,10 @@ export function ContactModal({
             }
           }}
         >
-          <DialogClose className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300">
+          <DialogClose
+            className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
+            aria-label="Close contact modal"
+          >
             <X className="size-4" />
           </DialogClose>
 
@@ -514,6 +580,16 @@ export function ContactModal({
                         event.preventDefault();
                         applyFullNameFromUserInput(pasted);
                       }}
+                      onKeyDown={(event) => {
+                        const isEnter = event.key === "Enter";
+                        const isForwardTab = event.key === "Tab" && !event.shiftKey;
+                        if (!isEnter && !isForwardTab) {
+                          return;
+                        }
+                        event.preventDefault();
+                        applyFullNameFromUserInput((event.currentTarget as HTMLInputElement).value);
+                        emailInputRef.current?.focus();
+                      }}
                       maxLength={255}
                       autoComplete="off"
                       disabled={isSubmitting || isReadOnly}
@@ -550,9 +626,18 @@ export function ContactModal({
                     }
                   >
                     <Input
+                      ref={emailInputRef}
                       value={form.email}
                       onChange={(event) => updateForm("email", event.target.value)}
-                      onBlur={() => markTouched("email")}
+                      onBlur={(event) => {
+                        const nextEmail = asString(event.target.value).toLowerCase();
+                        const nextError = !nextEmail
+                          ? "Email is required."
+                          : EMAIL_RE.test(nextEmail)
+                            ? null
+                            : "Email must be valid.";
+                        markTouched("email", nextError);
+                      }}
                       inputMode="email"
                       maxLength={255}
                       autoComplete="off"
@@ -586,10 +671,20 @@ export function ContactModal({
                   <LabeledField label="Office">
                     <Input
                       value={form.office}
-                      onChange={(event) => updateForm("office", event.target.value)}
+                      onChange={(event) =>
+                        updateForm("office", normalizePhoneOnInput(event.target.value, true))
+                      }
                       onBlur={(event) => {
-                        markTouched("office");
-                        updateForm("office", normalizePhoneDisplay(event.target.value, true));
+                        const normalized = normalizePhoneDisplay(event.target.value, true);
+                        updateForm("office", normalized);
+                        markTouched(
+                          "office",
+                          validatePhoneField(normalized, {
+                            field: "Office",
+                            maxLength: 35,
+                            allowExtension: true,
+                          }),
+                        );
                       }}
                       inputMode="tel"
                       maxLength={35}
@@ -602,10 +697,20 @@ export function ContactModal({
                   <LabeledField label="Cell">
                     <Input
                       value={form.cell}
-                      onChange={(event) => updateForm("cell", event.target.value)}
+                      onChange={(event) =>
+                        updateForm("cell", normalizePhoneOnInput(event.target.value, false))
+                      }
                       onBlur={(event) => {
-                        markTouched("cell");
-                        updateForm("cell", normalizePhoneDisplay(event.target.value, false));
+                        const normalized = normalizePhoneDisplay(event.target.value, false);
+                        updateForm("cell", normalized);
+                        markTouched(
+                          "cell",
+                          validatePhoneField(normalized, {
+                            field: "Cell",
+                            maxLength: 20,
+                            allowExtension: false,
+                          }),
+                        );
                       }}
                       inputMode="tel"
                       maxLength={20}
@@ -651,7 +756,6 @@ export function ContactModal({
                           }`}
                         />
                       </span>
-                      <span>{form.active ? "Active" : "Inactive"}</span>
                     </button>
                   </LabeledField>
                 </Section>
@@ -666,6 +770,11 @@ export function ContactModal({
             </div>
 
             {submitError ? <p className="mt-3 text-sm text-rose-600">{submitError}</p> : null}
+            {hasDeferredServerUpdate ? (
+              <p className="mt-3 text-sm text-amber-700">
+                Newer contact data is available and will apply after you save or discard current edits.
+              </p>
+            ) : null}
           </div>
 
           <ModalFooter className="mt-4 flex-col gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">

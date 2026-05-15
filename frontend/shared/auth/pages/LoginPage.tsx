@@ -5,6 +5,7 @@ import { PageBanner } from "@/components/layout/PageBanner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
+import { shouldProtectTradsphereFrontend } from "@shared/auth/guards";
 import { useAuth } from "@shared/auth/useAuth";
 
 function normalizeAuthError(error: unknown, fallback: string): string {
@@ -25,10 +26,37 @@ function normalizeAuthError(error: unknown, fallback: string): string {
   if (message.includes("network") || message.includes("failed to fetch")) {
     return "Network issue detected. Check your connection and try again.";
   }
+  if (message.includes("disabled")) {
+    return "Your account has been disabled. Contact your workspace administrator.";
+  }
+  if (message.includes("pending activation")) {
+    return "Your account is pending activation. Contact your workspace administrator.";
+  }
   if (message.includes("supabase frontend env vars are not configured")) {
     return "Sign-in is not configured for this environment yet.";
   }
   return fallback;
+}
+
+function normalizeAccessErrorMessage(message: string | null | undefined): string | null {
+  const raw = String(message || "").trim();
+  if (!raw) {
+    return null;
+  }
+  const normalized = raw.toLowerCase();
+  if (normalized.includes("disabled")) {
+    return "Your account has been disabled. Contact your workspace administrator.";
+  }
+  if (normalized.includes("pending activation")) {
+    return "Your account is pending activation. Contact your workspace administrator.";
+  }
+  if (normalized.includes("does not have access to this app")) {
+    return "Your account is active, but it has no app access yet. Contact your workspace administrator.";
+  }
+  if (normalized.includes("tenant membership") || normalized.includes("forbidden")) {
+    return "Your account cannot access this workspace. Contact your workspace administrator.";
+  }
+  return raw;
 }
 
 function resolvePostLoginPath(): string {
@@ -48,29 +76,60 @@ export function LoginPage() {
   const [password, setPassword] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [isSigningIn, setIsSigningIn] = useState(false);
+  const [isAwaitingValidation, setIsAwaitingValidation] = useState(false);
   const passwordInputRef = useRef<HTMLInputElement | null>(null);
 
   const normalizedEmail = useMemo(() => email.trim().toLowerCase(), [email]);
   const postLoginPath = useMemo(() => resolvePostLoginPath(), []);
   const tenantLabel = auth.tenantSlug || String(import.meta.env.VITE_DEFAULT_TENANT_SLUG || "").trim().toLowerCase();
+  const authProtectionEnabled = shouldProtectTradsphereFrontend();
+  const resolvedAccessError = normalizeAccessErrorMessage(auth.accessError);
+  const hasNoAppAccessError = String(auth.accessError || "").toLowerCase().includes("does not have access to this app");
+  const accessValidationResolved = !authProtectionEnabled
+    || (!auth.accessLoading && (Boolean(auth.accessProfile) || Boolean(auth.accessError)));
+  const readyForRedirect = auth.status === "authenticated"
+    && Boolean(auth.user)
+    && (
+      !authProtectionEnabled
+      || (Boolean(auth.accessProfile) && auth.accessCacheStatus?.source === "network")
+      || (accessValidationResolved && hasNoAppAccessError)
+    );
+  const isBusy = isSigningIn || isAwaitingValidation;
 
   useEffect(() => {
-    if (auth.status === "authenticated" && auth.user) {
+    if (readyForRedirect) {
       window.location.replace(postLoginPath);
     }
-  }, [auth.status, auth.user, postLoginPath]);
+  }, [postLoginPath, readyForRedirect]);
+
+  useEffect(() => {
+    if (!isAwaitingValidation) {
+      return;
+    }
+    if (auth.status !== "authenticated") {
+      setIsAwaitingValidation(false);
+      return;
+    }
+    if (!accessValidationResolved) {
+      return;
+    }
+    setIsAwaitingValidation(false);
+  }, [accessValidationResolved, auth.status, isAwaitingValidation]);
 
   async function handlePasswordLogin() {
     if (!normalizedEmail || !password || isSigningIn) {
       return;
     }
+    auth.clearAuthNotice();
     setError(null);
+    setIsAwaitingValidation(false);
     setIsSigningIn(true);
     try {
       await auth.signInWithPassword(normalizedEmail, password);
-      window.location.assign(postLoginPath);
+      setIsAwaitingValidation(true);
     } catch (err) {
       setError(normalizeAuthError(err, "Unable to sign in right now. Please try again."));
+      setIsAwaitingValidation(false);
     } finally {
       setIsSigningIn(false);
     }
@@ -120,16 +179,22 @@ export function LoginPage() {
           />
           <Button
             type="submit"
-            disabled={isSigningIn || !normalizedEmail || !password}
+            disabled={isBusy || !normalizedEmail || !password}
             className="w-full"
           >
-            {isSigningIn ? <Spinner className="size-4" /> : <ShieldCheck className="size-4" />}
-            {isSigningIn ? "Signing in..." : "Sign in"}
+            {isBusy ? <Spinner className="size-4" /> : <ShieldCheck className="size-4" />}
+            {isSigningIn ? "Signing in..." : isAwaitingValidation ? "Validating access..." : "Sign in"}
           </Button>
         </form>
 
         {error ? (
           <p className="mt-4 rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</p>
+        ) : null}
+        {!error && resolvedAccessError ? (
+          <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{resolvedAccessError}</p>
+        ) : null}
+        {!error && !resolvedAccessError && auth.authNotice ? (
+          <p className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">{auth.authNotice}</p>
         ) : null}
 
         <div className="mt-5 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">

@@ -46,10 +46,19 @@ def authorize_bearer_for_tenant_app(
             app_code=app_code,
         )
     except TenantAccessError as exc:
+        code = str(getattr(exc, "code", "") or "").strip().lower()
         status_code = 403
-        if exc.code in {"missing_tenant", "tenant_not_found"}:
-            status_code = 403
-        raise HTTPException(status_code=status_code, detail=str(exc)) from exc
+        if code == "missing_tenant":
+            status_code = 400
+        elif code == "supabase_unavailable":
+            status_code = 503
+        raise HTTPException(
+            status_code=status_code,
+            detail={
+                "message": str(exc),
+                "code": code or "forbidden",
+            },
+        ) from exc
 
     request.state.auth_principal = principal
     request.state.tenant_access = access

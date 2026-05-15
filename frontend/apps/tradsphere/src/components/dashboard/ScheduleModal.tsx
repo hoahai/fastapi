@@ -5,6 +5,7 @@ import type { EsnumItem } from "@/components/dashboard/types";
 import { CacheStatusChip } from "@/components/ui/cache-status-chip";
 import { Dialog, DialogContent, DialogTitle } from "@/components/ui/dialog";
 import { useApiRequest } from "@/hooks/useApiRequest";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import {
   readBrowserCacheSnapshot,
   removeBrowserCacheByPrefix,
@@ -217,6 +218,7 @@ export function ScheduleModal({
   invalidatedEstnum,
 }: ScheduleModalProps) {
   const { requestJson } = useApiRequest();
+  const { isOnline } = useOnlineStatus();
   const [mode, setMode] = useState<ScheduleViewMode>("compact");
   const [isLoading, setIsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -372,6 +374,20 @@ export function ScheduleModal({
         return;
       }
 
+      if (!isOnline) {
+        if (effectiveCache) {
+          setIsLoading(false);
+          setIsRefreshing(false);
+          setError(null);
+          return;
+        }
+        setIsLoading(false);
+        setIsRefreshing(false);
+        setError("You're offline. Connect to load schedule data.");
+        setTableData(null);
+        return;
+      }
+
       if (!effectiveCache) {
         setTableData(null);
       }
@@ -462,14 +478,12 @@ export function ScheduleModal({
     cacheInvalidationToken,
     normalizedAccountCode,
     refreshRequestId,
+    isOnline,
   ]);
 
   return (
     <Dialog open={open} onOpenChange={onOpenChange}>
       <DialogContent
-        onInteractOutside={(event) => {
-          event.preventDefault();
-        }}
         className={cn(
           "flex min-h-0 max-h-[min(90vh,calc(100dvh-1rem))] flex-col overflow-hidden rounded-2xl border border-slate-200 bg-white !inset-0 !m-auto !p-0",
           shouldUseCompactModalFrame
@@ -531,22 +545,24 @@ export function ScheduleModal({
         </div>
 
         <footer className="shrink-0 border-t border-slate-100 bg-white px-4 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
-          <CacheStatusChip
-            text={
-              isLoading
-                ? "Loading..."
-                : isRefreshing
-                  ? "Refreshing..."
-                  : lastUpdatedAt
-                    ? `Last updated ${formatRelativeTime(lastUpdatedAt)}`
-                    : "No cached data yet"
-            }
+            <CacheStatusChip
+              text={
+                isLoading
+                  ? "Loading..."
+                  : isRefreshing
+                    ? "Refreshing..."
+                    : !isOnline && lastUpdatedAt
+                      ? `Offline. Showing cached data from ${formatRelativeTime(lastUpdatedAt)}`
+                    : lastUpdatedAt
+                      ? `Last updated ${formatRelativeTime(lastUpdatedAt)}`
+                      : "No cached data yet"
+              }
             onRefresh={() => {
               if (!isLoading && !isRefreshing) {
                 setRefreshRequestId((current) => current + 1);
               }
             }}
-            disabled={isLoading || isRefreshing}
+              disabled={isLoading || isRefreshing || !isOnline}
             refreshing={isRefreshing}
             refreshLabel="Refresh schedule data"
             tooltipText="Click to refresh schedule data"

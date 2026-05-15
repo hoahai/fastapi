@@ -53,6 +53,25 @@ class AuthorizeBearerTests(unittest.TestCase):
                 authorize_bearer_for_tenant_app(request=request, app_code="tradsphere")
 
         self.assertEqual(exc.exception.status_code, 403)
+        self.assertEqual(exc.exception.detail["code"], "tenant_not_found")
+
+    def test_disabled_membership_forbidden_with_structured_code(self):
+        principal = AuthPrincipal(user_id="user-1", email="user@example.com", raw_user={})
+        request = self._request("Bearer token-123")
+
+        with patch("shared.auth.dependencies.verify_supabase_jwt", return_value=principal), patch(
+            "shared.auth.dependencies.get_tenant_access_cached",
+            side_effect=TenantAccessError(
+                "Your account has been disabled. Contact your workspace administrator.",
+                code="tenant_membership_disabled",
+            ),
+        ):
+            with self.assertRaises(HTTPException) as exc:
+                authorize_bearer_for_tenant_app(request=request, app_code="tradsphere")
+
+        self.assertEqual(exc.exception.status_code, 403)
+        self.assertEqual(exc.exception.detail["code"], "tenant_membership_disabled")
+        self.assertIn("disabled", str(exc.exception.detail["message"]).lower())
 
     def test_auth_service_timeout_returns_503(self):
         request = self._request("Bearer token-123")

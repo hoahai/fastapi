@@ -19,6 +19,9 @@ class SupabaseAuthProvider:
     def send_password_recovery_email(self, *, email: str, redirect_to: str | None = None) -> None:
         supabase_client.send_password_recovery_email(email=email, redirect_to=redirect_to)
 
+    def update_auth_user_by_id(self, *, user_id: str, attributes: dict[str, Any]) -> dict[str, Any] | None:
+        return supabase_client.update_auth_user_by_id(user_id=user_id, attributes=attributes)
+
     def select_single(
         self,
         *,

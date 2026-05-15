@@ -14,6 +14,7 @@ import { useEffect, useMemo, useState, type ComponentType, type FocusEvent } fro
 import { Button } from "@/components/ui/button";
 import {
   APP_NAV_ITEMS,
+  SHIFTZY_ACCOUNTS_CHILD_ICON,
   SHIFTZY_SCHEDULES_CHILD_ICON,
   TRADSPHERE_CONTACTS_CHILD_ICON,
   TRADSPHERE_ESTNUMS_CHILD_ICON,
@@ -599,7 +600,7 @@ function SidebarParentItem({
   onToggleExpand,
   onExpand,
 }: SidebarParentItemProps) {
-  const iconTone = active || expanded ? "active" : available ? "default" : "muted";
+  const iconTone = active ? "active" : available ? "default" : "muted";
 
   return (
     <button
@@ -622,7 +623,7 @@ function SidebarParentItem({
       aria-current={active ? "page" : undefined}
       className={cn(
         "group flex w-full items-center gap-2.5 rounded-2xl px-2.5 py-2 text-left text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
-        active || expanded
+        active
           ? "bg-gradient-to-r from-blue-100/85 via-cyan-50/70 to-white/80 text-blue-900"
           : "text-slate-700 hover:bg-white/70 hover:text-slate-900",
         !available && "cursor-not-allowed text-slate-500 opacity-70 hover:bg-transparent",
@@ -665,6 +666,8 @@ function SidebarChildItem({ child, currentPath, tenantSlug, activeTenantSlug, on
           ? TRADSPHERE_STATIONS_CHILD_ICON
           : child.route === "/shiftzy/home"
             ? SHIFTZY_SCHEDULES_CHILD_ICON
+            : child.route === "/shiftzy/employees"
+              ? SHIFTZY_ACCOUNTS_CHILD_ICON
           : TRADSPHERE_HOME_CHILD_ICON;
 
   return (

@@ -17,6 +17,7 @@ from shared.auth.admin_repo import (
     remove_tenant_app_role,
     remove_tenant_app_roles_for_tenant,
     send_password_reset_for_user,
+    set_auth_user_banned,
     set_tenant_app_role,
     set_tenant_user_status,
     unique_text_values,
@@ -144,6 +145,16 @@ def _parse_profile_full_name(payload: dict[str, object]) -> str | None:
 def _parse_optional_email(payload: dict[str, object]) -> str | None:
     email = str(payload.get("email") or "").strip().lower()
     return email or None
+
+
+def _parse_status_toggle(payload: dict[str, object]) -> str | None:
+    raw = payload.get("status")
+    if raw is None:
+        return None
+    normalized = str(raw).strip().lower()
+    if normalized in {"active", "disabled"}:
+        return normalized
+    return None
 
 
 def _normalized_role_keys() -> list[str]:
@@ -727,6 +738,42 @@ def _normalize_membership_payload(
     return memberships
 
 
+def _expand_status_memberships_for_scope(
+    *,
+    user_id: str,
+    desired_memberships: dict[str, str],
+    payload: dict[str, object],
+    is_super_admin: bool,
+    admin_scopes: set[tuple[str, str]] | None,
+    current_tenant_id: str,
+) -> dict[str, str]:
+    has_explicit_memberships = isinstance(payload.get("tenantMemberships"), list)
+    if has_explicit_memberships:
+        return desired_memberships
+
+    raw_status = payload.get("status")
+    normalized_status = str(raw_status or "").strip().lower() if raw_status is not None else ""
+    if not normalized_status:
+        return desired_memberships
+
+    tenant_scope = _scope_tenants_for_actor(
+        is_super_admin=is_super_admin,
+        admin_scopes=admin_scopes,
+        current_tenant_id=current_tenant_id,
+    )
+    scoped_memberships = get_user_memberships(user_id=user_id, scope_tenant_ids=tenant_scope)
+    tenant_ids = {
+        str(item.get("tenant_id") or "").strip()
+        for item in scoped_memberships
+        if str(item.get("tenant_id") or "").strip()
+    }
+
+    if not tenant_ids:
+        return desired_memberships
+
+    return {tenant_id: normalized_status for tenant_id in tenant_ids}
+
+
 def _normalize_assignment_payload(
     payload: dict[str, object],
     *,
@@ -930,27 +977,8 @@ def _apply_membership_and_role_changes(
             affected_tenant_ids.add(tenant_id)
             affected_app_ids.add(app_id)
 
-    if replace_assignments and not replace_memberships:
-        managed_tenant_ids = {tenant_id for tenant_id, _ in desired_assignments.keys()} | {
-            tenant_id for tenant_id, _ in existing_role_keys
-        }
-        if managed_tenant_ids:
-            latest_roles = get_user_app_roles(user_id=user_id, scope_tenant_ids=None)
-            latest_memberships = get_user_memberships(user_id=user_id, scope_tenant_ids=tenant_scope)
-            for tenant_id in managed_tenant_ids:
-                has_any_role = any(str(row.get("tenant_id") or "").strip() == tenant_id for row in latest_roles)
-                if has_any_role:
-                    continue
-                membership_row = next(
-                    (item for item in latest_memberships if str(item.get("tenant_id") or "").strip() == tenant_id),
-                    None,
-                )
-                membership_status = str((membership_row or {}).get("status") or "").strip().lower()
-                if membership_status == "disabled":
-                    continue
-                set_tenant_user_status(tenant_id=tenant_id, user_id=user_id, status="disabled")
-                changed = True
-                affected_tenant_ids.add(tenant_id)
+    # Removing all app assignments should not implicitly disable tenant membership.
+    # Membership status changes must come from explicit status/tenantMemberships input.
 
     return changed, affected_tenant_ids, affected_app_ids
 
@@ -1020,7 +1048,16 @@ def _update_user_access_impl(request: Request, user_id: str, payload: dict[str, 
 
     replace_memberships = isinstance(payload.get("tenantMemberships"), list)
     replace_assignments = isinstance(payload.get("appAssignments"), list)
+    requested_status_toggle = _parse_status_toggle(payload)
     desired_memberships = _normalize_membership_payload(payload, default_tenant_id=result.access.tenant_id)
+    desired_memberships = _expand_status_memberships_for_scope(
+        user_id=normalized_user_id,
+        desired_memberships=desired_memberships,
+        payload=payload,
+        is_super_admin=is_super_admin,
+        admin_scopes=admin_scopes,
+        current_tenant_id=result.access.tenant_id,
+    )
     desired_assignments = _normalize_assignment_payload(
         payload,
         default_tenant_id=result.access.tenant_id,
@@ -1030,6 +1067,7 @@ def _update_user_access_impl(request: Request, user_id: str, payload: dict[str, 
 
     full_name_updated = False
     memberships_or_roles_updated = False
+    auth_user_ban_updated = False
 
     role_items, assignable_roles, _ = _role_catalog()
     _ = role_items
@@ -1039,6 +1077,8 @@ def _update_user_access_impl(request: Request, user_id: str, payload: dict[str, 
         or bool(desired_memberships)
         or bool(desired_assignments)
     )
+    if normalized_user_id == str(result.principal.user_id or "").strip() and has_access_update_intent:
+        raise HTTPException(status_code=403, detail="You cannot modify your own access from this endpoint")
     if not has_access_update_intent and _parse_profile_full_name(payload) is None:
         raise HTTPException(status_code=400, detail="At least one of tenantMemberships, appAssignments, status, role, or fullName is required")
 
@@ -1056,6 +1096,12 @@ def _update_user_access_impl(request: Request, user_id: str, payload: dict[str, 
                 replace_memberships=replace_memberships,
                 replace_assignments=replace_assignments,
             )
+            if is_super_admin and requested_status_toggle in {"active", "disabled"}:
+                set_auth_user_banned(
+                    user_id=normalized_user_id,
+                    banned=requested_status_toggle == "disabled",
+                )
+                auth_user_ban_updated = True
         full_name_updated = _upsert_user_profile(user_id=normalized_user_id, payload=payload)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
@@ -1073,6 +1119,7 @@ def _update_user_access_impl(request: Request, user_id: str, payload: dict[str, 
     row["permissionCacheInvalidated"] = True
     row["updatedMembershipOrRole"] = memberships_or_roles_updated
     row["updatedProfile"] = full_name_updated
+    row["updatedAuthBan"] = auth_user_ban_updated
     return row
 
 
@@ -1109,11 +1156,13 @@ def update_user_access_route(
         - Requires X-Tenant-Id
         - Requires admin manage permission (`tradsphere.admin` or `workspace.super_admin`)
         - Super Admin targets can be edited only by workspace super admins
+        - When actor is `workspace.super_admin`, `status=disabled|active` also applies global auth ban/unban in Supabase
         - Access should be assigned through `appAssignments` (tenantId + appId/appCode + role)
         - Sending `appAssignments: []` removes managed-scope assignments for this user
-        - Omitting `tenantMemberships` is supported; backend auto-manages tenant membership status from assignment rows
+        - Omitting `tenantMemberships` is supported; membership status changes are applied only when explicit `status`/`tenantMemberships` are provided
         - Membership status must be one of: active, pending, disabled
         - Role keys must exist in assignable role catalog
+        - Admin actors cannot modify their own access/membership via this endpoint
     """
     return _update_user_access_impl(request=request, user_id=user_id, payload=payload if isinstance(payload, dict) else {})
 
@@ -1138,7 +1187,9 @@ def update_user_access_v2_route(
 
     Requirements:
         - Same as `PATCH /api/auth/v1/admin/users/{user_id}`
-        - `appAssignments` can be used as the single source of access updates; tenant memberships are reconciled automatically
+        - Super Admin `status=disabled|active` triggers global auth ban/unban in Supabase
+        - `appAssignments` can be used as the single source of app-role updates without implicitly disabling tenant membership
+        - Admin actors cannot modify their own access/membership via this endpoint
     """
     return _update_user_access_impl(request=request, user_id=user_id, payload=payload if isinstance(payload, dict) else {})
 

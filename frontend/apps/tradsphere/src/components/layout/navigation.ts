@@ -6,6 +6,7 @@ import {
   MapPinned,
   RadioTower,
   Search,
+  Users,
   type LucideIcon,
   WalletCards,
   Wrench,
@@ -106,6 +107,12 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
         route: "/shiftzy/home",
         available: true,
       },
+      {
+        id: "shiftzy-employees",
+        label: "Employees",
+        route: "/shiftzy/employees",
+        available: true,
+      },
     ],
   },
 ];
@@ -122,3 +129,4 @@ export const TRADSPHERE_ESTNUMS_CHILD_ICON = Search;
 export const TRADSPHERE_CONTACTS_CHILD_ICON = ContactRound;
 export const TRADSPHERE_STATIONS_CHILD_ICON = MapPinned;
 export const SHIFTZY_SCHEDULES_CHILD_ICON = CalendarClock;
+export const SHIFTZY_ACCOUNTS_CHILD_ICON = Users;

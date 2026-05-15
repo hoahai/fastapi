@@ -74,17 +74,36 @@ def _resolve_active_app(app_code: str) -> _ResolvedApp:
 
 def _resolve_active_tenant_user(*, tenant_id: str, user_id: str) -> None:
     provider = get_auth_provider()
-    row = provider.select_single(
+    rows = provider.select_many(
         table="tenant_users",
         filters={
             "tenant_id": tenant_id,
             "user_id": user_id,
-            "status": "active",
         },
         select="id,tenant_id,user_id,status",
     )
-    if not row:
-        raise TenantAccessError("User is not an active member of tenant", code="tenant_membership_required")
+    if not rows:
+        raise TenantAccessError("User is not a member of tenant", code="tenant_membership_required")
+
+    statuses = {str((row or {}).get("status") or "").strip().lower() for row in rows}
+    statuses.discard("")
+
+    if statuses & {"disabled", "inactive", "terminated"}:
+        raise TenantAccessError(
+            "Your account has been disabled. Contact your workspace administrator.",
+            code="tenant_membership_disabled",
+        )
+
+    if "active" in statuses:
+        return
+
+    if "pending" in statuses:
+        raise TenantAccessError(
+            "Your account is pending activation. Contact your workspace administrator.",
+            code="tenant_membership_pending",
+        )
+
+    raise TenantAccessError("User is not an active member of tenant", code="tenant_membership_inactive")
 
 
 def _resolve_tenant_role(*, tenant_id: str, user_id: str, app_id: str) -> tuple[str, str]:
@@ -152,6 +171,19 @@ def resolve_tenant_access(*, user_id: str, tenant_slug: str, app_code: str) -> T
         app = _resolve_active_app(app_code)
         is_super_admin = _has_global_super_admin(user_id=user_id)
         if is_super_admin:
+            # Super-admin scope still respects tenant membership disable state when a membership row exists.
+            # This keeps status enforcement as the top-priority gate.
+            provider = get_auth_provider()
+            membership_rows = provider.select_many(
+                table="tenant_users",
+                filters={
+                    "tenant_id": tenant.tenant_id,
+                    "user_id": user_id,
+                },
+                select="id,tenant_id,user_id,status",
+            )
+            if membership_rows:
+                _resolve_active_tenant_user(tenant_id=tenant.tenant_id, user_id=user_id)
             role = ROLE_SUPER_ADMIN
             raw_role: str | None = ROLE_SUPER_ADMIN
         else:
@@ -172,9 +204,31 @@ def resolve_tenant_access(*, user_id: str, tenant_slug: str, app_code: str) -> T
     )
 
 
+def validate_active_tenant_membership(*, user_id: str, tenant_slug: str) -> tuple[str, str]:
+    """
+    Validate that tenant exists/active and the user has an active membership for that tenant.
+
+    Returns:
+        tuple[str, str]: (tenant_id, tenant_slug)
+    """
+    try:
+        tenant = _resolve_active_tenant(tenant_slug)
+        _resolve_active_tenant_user(tenant_id=tenant.tenant_id, user_id=user_id)
+    except SupabaseClientError as exc:
+        raise TenantAccessError("Unable to verify tenant permissions", code="supabase_unavailable") from exc
+    return tenant.tenant_id, tenant.slug
+
+
 def get_tenant_access_cached(*, user_id: str, tenant_slug: str, app_code: str) -> TenantAccessProfile:
     cached = permission_cache.get(user_id=user_id, tenant_slug=tenant_slug, app_code=app_code)
     if cached is not None:
+        normalized_role = normalize_role_key(cached.role)
+        is_super_admin = normalized_role == ROLE_SUPER_ADMIN or "workspace.super_admin" in cached.permissions
+        if not is_super_admin:
+            try:
+                _resolve_active_tenant_user(tenant_id=cached.tenant_id, user_id=user_id)
+            except SupabaseClientError as exc:
+                raise TenantAccessError("Unable to verify tenant permissions", code="supabase_unavailable") from exc
         return cached
 
     fresh = resolve_tenant_access(user_id=user_id, tenant_slug=tenant_slug, app_code=app_code)

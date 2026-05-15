@@ -8,15 +8,21 @@ const SESSION_STORAGE_KEY = "workspace.auth.session.v1";
 const USER_STORAGE_KEY = "workspace.auth.user.v1";
 const TENANT_STORAGE_KEY = "workspace.auth.tenantSlug.v1";
 const ACCESS_PROFILE_CACHE_KEY = "workspace.auth.accessProfileCache.v1";
+const AUTH_NOTICE_STORAGE_KEY = "workspace.auth.notice.v1";
 const ACCESS_PROFILE_CACHE_TTL_MS = 30 * 60 * 1000;
+const ACCESS_PROFILE_REVALIDATE_INTERVAL_MS = 60 * 60 * 1000;
+const DISABLED_ACCOUNT_NOTICE = "Your account has been disabled. Contact your workspace administrator.";
 
 class AccessProfileRequestError extends Error {
   status: number;
+  code: string | null;
 
-  constructor(message: string, status: number) {
+  constructor(message: string, status: number, code?: string | null) {
     super(message);
     this.name = "AccessProfileRequestError";
     this.status = status;
+    const normalizedCode = String(code || "").trim().toLowerCase();
+    this.code = normalizedCode || null;
   }
 }
 
@@ -33,18 +39,20 @@ type AuthContextValue = {
   user: AuthUser | null;
   session: SupabaseSession | null;
   tenantSlug: string;
+  authNotice: string | null;
   accessProfile: AccessProfile | null;
   accessLoading: boolean;
   accessError: string | null;
   accessCacheStatus: AccessProfileCacheStatus | null;
   providerName: string;
   setTenantSlug: (tenantSlug: string) => void;
+  clearAuthNotice: () => void;
   signInWithPassword: (email: string, password: string) => Promise<void>;
   signUpWithPassword: (email: string, password: string) => Promise<{ status: "signed_in" | "confirm_email" }>;
   updatePassword: (newPassword: string) => Promise<void>;
   sendPasswordResetEmail: (email: string, options?: { redirectTo?: string }) => Promise<void>;
   setSessionFromTokens: (tokens: { accessToken: string; refreshToken?: string | null; expiresInSeconds?: number | null }) => void;
-  signOut: () => Promise<void>;
+  signOut: (options?: { notice?: string | null }) => Promise<void>;
   ensureFreshSession: () => Promise<SupabaseSession | null>;
   getAccessToken: () => string | null;
   refreshAccessProfile: () => void;
@@ -98,27 +106,60 @@ function getDefaultTenantSlug(): string {
 }
 
 async function fetchAccessProfile(session: SupabaseSession, tenantSlug: string): Promise<AccessProfile> {
-  const response = await fetch("/api/auth/v1/session/me", {
+  const appCode = getCurrentAppCodeFromLocation();
+  const headers: Record<string, string> = {
+    Authorization: `Bearer ${session.accessToken}`,
+    "X-Tenant-Id": tenantSlug,
+  };
+  if (appCode) {
+    headers["X-App-Code"] = appCode;
+  }
+
+  const response = await fetch("/api/auth/v1/session/validate", {
     method: "GET",
-    headers: {
-      Authorization: `Bearer ${session.accessToken}`,
-      "X-Tenant-Id": tenantSlug,
-    },
+    headers,
   });
 
   const payload = await response.json().catch(() => null);
-  const unwrapped = payload && typeof payload === "object" && "data" in (payload as Record<string, unknown>)
+  const envelope = payload && typeof payload === "object" ? (payload as Record<string, unknown>) : null;
+  const unwrapped = envelope && "data" in envelope
     ? (payload as { data?: unknown }).data
     : payload;
+  const errorPayload = envelope && "error" in envelope
+    ? envelope.error
+    : unwrapped;
 
   if (!response.ok) {
-    const message =
-      typeof (unwrapped as { detail?: unknown })?.detail === "string"
-        ? (unwrapped as { detail: string }).detail
-        : typeof (unwrapped as { message?: unknown })?.message === "string"
-          ? (unwrapped as { message: string }).message
-          : `Session lookup failed (${response.status})`;
-    throw new AccessProfileRequestError(message, response.status);
+    let message = `Session lookup failed (${response.status})`;
+    let code: string | null = null;
+
+    if (errorPayload && typeof errorPayload === "object") {
+      const errorRecord = errorPayload as Record<string, unknown>;
+      const detail = errorRecord.detail;
+      if (typeof errorRecord.message === "string" && errorRecord.message.trim()) {
+        message = errorRecord.message.trim();
+      } else if (typeof detail === "string" && detail.trim()) {
+        message = detail.trim();
+      } else if (detail && typeof detail === "object") {
+        const detailRecord = detail as Record<string, unknown>;
+        if (typeof detailRecord.message === "string" && detailRecord.message.trim()) {
+          message = detailRecord.message.trim();
+        }
+      }
+
+      if (typeof errorRecord.code === "string" && errorRecord.code.trim()) {
+        code = errorRecord.code.trim().toLowerCase();
+      } else if (detail && typeof detail === "object") {
+        const detailRecord = detail as Record<string, unknown>;
+        if (typeof detailRecord.code === "string" && detailRecord.code.trim()) {
+          code = detailRecord.code.trim().toLowerCase();
+        }
+      }
+    } else if (typeof errorPayload === "string" && errorPayload.trim()) {
+      message = errorPayload.trim();
+    }
+
+    throw new AccessProfileRequestError(message, response.status, code);
   }
 
   if (!unwrapped || typeof unwrapped !== "object") {
@@ -126,6 +167,25 @@ async function fetchAccessProfile(session: SupabaseSession, tenantSlug: string):
   }
 
   return unwrapped as AccessProfile;
+}
+
+function getCurrentAppCodeFromLocation(): string | null {
+  if (typeof window === "undefined") {
+    return null;
+  }
+  const pathname = String(window.location.pathname || "").trim().toLowerCase();
+  if (!pathname) {
+    return null;
+  }
+  const segments = pathname.split("/").filter(Boolean);
+  if (!segments.length) {
+    return null;
+  }
+  const first = segments[0];
+  if (first === "tradsphere" || first === "shiftzy" || first === "spendsphere" || first === "fundsphere") {
+    return first;
+  }
+  return null;
 }
 
 function accessProfileCacheEntryKey(userId: string, tenantSlug: string): string {
@@ -201,6 +261,17 @@ function removeCachedAccessProfile(userId: string, tenantSlug: string): void {
   writeAccessProfileCacheStore(store);
 }
 
+function isDisabledMembershipError(error: unknown): boolean {
+  if (!(error instanceof AccessProfileRequestError)) {
+    return false;
+  }
+  const code = String(error.code || "").trim().toLowerCase();
+  if (code === "tenant_membership_disabled") {
+    return true;
+  }
+  return String(error.message || "").toLowerCase().includes("account has been disabled");
+}
+
 export function AuthProvider({ children }: { children: ReactNode }) {
   const provider = useMemo(() => createAuthProvider(), []);
   const [status, setStatus] = useState<AuthStatus>("loading");
@@ -214,6 +285,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return getDefaultTenantSlug();
   });
   const [accessProfile, setAccessProfile] = useState<AccessProfile | null>(null);
+  const [authNotice, setAuthNotice] = useState<string | null>(() => {
+    const stored = readJson<string>(AUTH_NOTICE_STORAGE_KEY);
+    if (typeof stored !== "string") {
+      return null;
+    }
+    const normalized = stored.trim();
+    return normalized || null;
+  });
   const [accessLoading, setAccessLoading] = useState(false);
   const [accessError, setAccessError] = useState<string | null>(null);
   const [accessCacheStatus, setAccessCacheStatus] = useState<AccessProfileCacheStatus | null>(null);
@@ -224,6 +303,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     const normalized = String(value || "").trim().toLowerCase();
     setTenantSlugState(normalized);
     writeJson(TENANT_STORAGE_KEY, normalized);
+  }, []);
+
+  const clearAuthNotice = useCallback(() => {
+    setAuthNotice(null);
+    removeStorage(AUTH_NOTICE_STORAGE_KEY);
   }, []);
 
   const setSessionFromTokens = useCallback((tokens: { accessToken: string; refreshToken?: string | null; expiresInSeconds?: number | null }) => {
@@ -241,10 +325,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setSession(nextSession);
     writeJson(SESSION_STORAGE_KEY, nextSession);
     setStatus("authenticated");
+    clearAuthNotice();
     setAccessError(null);
-  }, []);
+  }, [clearAuthNotice]);
 
-  const signOut = useCallback(async () => {
+  const signOut = useCallback(async (options?: { notice?: string | null }) => {
+    const notice = String(options?.notice || "").trim();
     await provider.signOut();
     setSession(null);
     setUser(null);
@@ -253,10 +339,16 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setAccessError(null);
     setAccessCacheStatus(null);
     setStatus("unauthenticated");
+    if (notice) {
+      setAuthNotice(notice);
+      writeJson(AUTH_NOTICE_STORAGE_KEY, notice);
+    } else {
+      clearAuthNotice();
+    }
     removeStorage(SESSION_STORAGE_KEY);
     removeStorage(USER_STORAGE_KEY);
     removeStorage(ACCESS_PROFILE_CACHE_KEY);
-  }, [provider]);
+  }, [clearAuthNotice, provider]);
 
   const hydrateFromSession = useCallback(async (nextSession: SupabaseSession, nextUser?: AuthUser) => {
     const resolvedUser = nextUser ?? await provider.getUser(nextSession.accessToken);
@@ -268,11 +360,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [provider]);
 
   const signInWithPassword = useCallback(async (email: string, password: string) => {
+    clearAuthNotice();
     const result = await provider.signInWithPassword(email, password);
     await hydrateFromSession(result.session, result.user);
-  }, [provider, hydrateFromSession]);
+  }, [clearAuthNotice, provider, hydrateFromSession]);
 
   const signUpWithPassword = useCallback(async (email: string, password: string) => {
+    clearAuthNotice();
     const result: SignUpWithPasswordResult = await provider.signUpWithPassword(email, password);
     if (result.session) {
       await hydrateFromSession(result.session, result.user ?? undefined);
@@ -283,7 +377,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setStatus("unauthenticated");
     removeStorage(SESSION_STORAGE_KEY);
     return { status: "confirm_email" as const };
-  }, [provider, hydrateFromSession]);
+  }, [clearAuthNotice, provider, hydrateFromSession]);
 
   const getAccessToken = useCallback((): string | null => {
     return provider.getAccessToken(session);
@@ -413,7 +507,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           source: "cache",
           fetchedAt: cachedEntry.cachedAt,
         });
-        setAccessLoading(false);
+        setAccessLoading(true);
       } else {
         setAccessLoading(true);
       }
@@ -476,12 +570,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               writeCachedAccessProfile(retriedProfile.user.id, tenantSlug, retriedProfile);
               return;
             }
-          } catch {
+          } catch (refreshError) {
+            if (cancelled) {
+              return;
+            }
+            if (isDisabledMembershipError(refreshError)) {
+              await signOut({ notice: DISABLED_ACCOUNT_NOTICE });
+              return;
+            }
             // Fall through to normal unauthorized handling.
           }
         }
 
         if (cancelled) {
+          return;
+        }
+        if (isDisabledMembershipError(error)) {
+          await signOut({ notice: DISABLED_ACCOUNT_NOTICE });
           return;
         }
         if (statusCode === 401) {
@@ -515,17 +620,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [status, session, tenantSlug, user, ensureFreshSession, provider, accessRefreshVersion]);
 
+  useEffect(() => {
+    if (status !== "authenticated" || !session?.accessToken) {
+      return undefined;
+    }
+
+    const intervalId = window.setInterval(() => {
+      refreshAccessProfile();
+    }, ACCESS_PROFILE_REVALIDATE_INTERVAL_MS);
+
+    return () => {
+      window.clearInterval(intervalId);
+    };
+  }, [refreshAccessProfile, session?.accessToken, status]);
+
   const value = useMemo<AuthContextValue>(() => ({
     status,
     user,
     session,
     tenantSlug,
+    authNotice,
     accessProfile,
     accessLoading,
     accessError,
     accessCacheStatus,
     providerName: provider.name,
     setTenantSlug,
+    clearAuthNotice,
     signInWithPassword,
     signUpWithPassword,
     updatePassword,
@@ -542,12 +663,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     user,
     session,
     tenantSlug,
+    authNotice,
     accessProfile,
     accessLoading,
     accessError,
     accessCacheStatus,
     provider.name,
     setTenantSlug,
+    clearAuthNotice,
     signInWithPassword,
     signUpWithPassword,
     updatePassword,

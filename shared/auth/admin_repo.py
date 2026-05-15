@@ -213,6 +213,10 @@ def _role_rows_by_scope(
     return filtered
 
 
+def _is_active_membership_status(value: object) -> bool:
+    return str(value or "").strip().lower() == "active"
+
+
 def list_users_with_access(
     *,
     scope_tenant_ids: set[str] | None = None,
@@ -307,20 +311,34 @@ def list_users_with_access(
             {**item, "role": normalize_role_key(str(item.get("role") or "").strip()) or item.get("role")}
             for item in assignments
         ]
+        active_membership_tenant_ids = {
+            str(item.get("tenantId") or "").strip()
+            for item in memberships
+            if _is_active_membership_status(item.get("status"))
+        }
+        effective_assignments = [
+            item
+            for item in normalized_assignments
+            if str(item.get("tenantId") or "").strip() in active_membership_tenant_ids
+        ]
 
         primary_membership = primary_membership_by_user.get(user_id)
         primary_assignment = primary_role_by_user.get(user_id)
         if primary_membership is None and memberships:
             primary_membership = memberships[0]
-        if primary_assignment is None and assignments:
-            primary_assignment = assignments[0]
+        if primary_assignment is None and effective_assignments:
+            primary_assignment = effective_assignments[0]
+        elif primary_assignment is not None:
+            primary_tenant_id = str(primary_assignment.get("tenantId") or "").strip()
+            if primary_tenant_id not in active_membership_tenant_ids:
+                primary_assignment = effective_assignments[0] if effective_assignments else None
 
         top_role = None
-        if normalized_assignments:
+        if effective_assignments:
             top_role = sorted(
                 [
                     normalize_role_key(str(item.get("role") or "").strip())
-                    for item in normalized_assignments
+                    for item in effective_assignments
                     if normalize_role_key(str(item.get("role") or "").strip())
                 ],
                 key=_role_rank,
@@ -352,7 +370,7 @@ def list_users_with_access(
                 "updatedAt": updated_at,
                 "roleUpdatedAt": (primary_assignment or {}).get("updatedAt") or (primary_assignment or {}).get("createdAt"),
                 "tenantMemberships": memberships,
-                "appAssignments": normalized_assignments,
+                "appAssignments": effective_assignments,
                 "globalRoles": global_roles,
                 "isSuperAdmin": ROLE_SUPER_ADMIN in global_roles,
             }
@@ -478,16 +496,16 @@ def list_user_access_assignments(*, user_id: str) -> list[dict[str, object]]:
 
 def set_tenant_user_status(*, tenant_id: str, user_id: str, status: str) -> None:
     provider = _provider()
-    existing = provider.select_single(
+    existing = provider.select_many(
         table="tenant_users",
         filters={"tenant_id": tenant_id, "user_id": user_id},
-        select="id,status",
+        select="id,status,tenant_id,user_id",
     )
 
     if existing:
         provider.patch_rows(
             table="tenant_users",
-            filters={"id": str(existing.get("id") or "")},
+            filters={"tenant_id": tenant_id, "user_id": user_id},
             patch={"status": status, "updated_at": provider.now_iso()},
         )
         return
@@ -595,3 +613,16 @@ def send_password_reset_for_user(*, user_id: str, redirect_to: str | None = None
         raise SupabaseClientError("Target user email is unavailable for password reset")
     provider.send_password_recovery_email(email=email, redirect_to=redirect_to)
     return email.lower()
+
+
+def set_auth_user_banned(*, user_id: str, banned: bool) -> None:
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        raise SupabaseClientError("user_id is required")
+    # Supabase GoTrue admin API uses ban_duration.
+    # "none" clears an existing ban.
+    ban_duration = "876000h" if banned else "none"
+    _provider().update_auth_user_by_id(
+        user_id=normalized_user_id,
+        attributes={"ban_duration": ban_duration},
+    )

@@ -17,6 +17,7 @@ import { CacheStatusChip } from "@/components/ui/cache-status-chip";
 import { useToast } from "@/components/ui/toast";
 import { useApiRequest } from "@/hooks/useApiRequest";
 import { usePersistentState } from "@/hooks/usePersistentState";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import {
   listBrowserCacheSnapshotsByPrefix,
   readBrowserCacheSnapshot,
@@ -1022,6 +1023,7 @@ function buildContactPayload(form: ContactModalSubmitPayload["form"]): Record<st
 export default function ContactsPage() {
   const toast = useToast();
   const { requestJson } = useApiRequest();
+  const { isOnline } = useOnlineStatus();
   const auth = useAuth();
   const requestHeaders = useMemo(
     () => buildSharedAuthHeaders(auth.session, auth.tenantSlug, false),
@@ -1077,6 +1079,8 @@ export default function ContactsPage() {
 
   const cacheStatusText = isRefreshing
     ? "Refreshing..."
+    : !isOnline && cacheStatus
+      ? `Offline. Showing cached data from ${formatRelativeTime(cacheStatus.fetchedAt)}.`
     : cacheStatus
       ? `Data source: ${cacheStatus.source}. Last updated ${formatRelativeTime(cacheStatus.fetchedAt)}.`
       : "No cached data yet";
@@ -1267,6 +1271,12 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
       }
       return;
     }
+    if (!isOnline) {
+      if (requestToken === modalDetailRequestTokenRef.current) {
+        setIsModalDetailRefreshing(false);
+      }
+      return;
+    }
 
     setIsModalDetailRefreshing(true);
     try {
@@ -1333,6 +1343,18 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
 
     const shouldFetch = shouldFetchSubmittedSearchNetwork(options.policy, effectiveSnapshot);
     if (!shouldFetch) {
+      return;
+    }
+
+    if (!isOnline) {
+      if (localCacheResult.contacts.length > 0) {
+        setRefreshMessage("You're offline. Showing cached contacts.");
+        setIsRefreshing(false);
+        return;
+      }
+      setState("error");
+      setError("You're offline. Connect to the internet to load contacts.");
+      setIsRefreshing(false);
       return;
     }
 
@@ -1596,10 +1618,10 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
               <CacheStatusChip
                 text={cacheStatusText}
                 onRefresh={handleRefreshSearch}
-                disabled={isRefreshing}
+                disabled={isRefreshing || !isOnline}
                 refreshing={isRefreshing}
                 refreshLabel="Refresh contacts"
-                tooltipText="Click to refresh last submitted search"
+                tooltipText={isOnline ? "Click to refresh last submitted search" : "Offline. Reconnect to refresh contacts."}
                 containerClassName="pointer-events-auto"
                 className="max-w-[min(90vw,34rem)]"
               />

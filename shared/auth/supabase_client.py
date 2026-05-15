@@ -234,6 +234,25 @@ class SupabaseRestClient:
             return None
         return result
 
+    def update_auth_user_by_id(self, *, user_id: str, attributes: dict[str, Any]) -> dict[str, Any] | None:
+        normalized_user_id = str(user_id or "").strip()
+        if not normalized_user_id:
+            raise SupabaseClientError("user_id is required")
+        payload = attributes if isinstance(attributes, dict) else {}
+        if not payload:
+            raise SupabaseClientError("attributes payload is required")
+
+        result = self._request(
+            path=f"/auth/v1/admin/users/{normalized_user_id}",
+            method="PUT",
+            body=payload,
+            use_service_role=True,
+            force_key_as_bearer=True,
+        )
+        if not isinstance(result, dict):
+            return None
+        return result
+
     def send_password_recovery_email(self, *, email: str, redirect_to: str | None = None) -> None:
         normalized_email = str(email or "").strip().lower()
         if not normalized_email:

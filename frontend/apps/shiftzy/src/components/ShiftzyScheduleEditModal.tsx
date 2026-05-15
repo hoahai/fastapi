@@ -7,6 +7,7 @@ import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, Di
 import { Input } from "@/components/ui/input";
 import { canModalClose, shouldBlockOutsideClose } from "@/components/ui/modal-close-guard";
 import { Textarea } from "@/components/ui/textarea";
+import { UnsavedChangesDialog } from "@/components/ui/unsaved-changes-dialog";
 import { FormRow } from "@shared/components/form/FormRow";
 import type {
   ShiftzyEmployee,
@@ -88,6 +89,7 @@ export function ShiftzyScheduleEditModal({
   onSave,
 }: ShiftzyScheduleEditModalProps) {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
+  const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false);
 
   const initialForm = useMemo<FormState>(() => {
     if (!schedule) {
@@ -113,9 +115,11 @@ export function ShiftzyScheduleEditModal({
   useEffect(() => {
     if (!open) {
       setForm(EMPTY_FORM);
+      setIsDiscardDialogOpen(false);
       return;
     }
     setForm(initialForm);
+    setIsDiscardDialogOpen(false);
   }, [initialForm, open]);
 
   const employeeOptions = useMemo(
@@ -168,6 +172,9 @@ export function ShiftzyScheduleEditModal({
       isBusy: saving,
       hasUnsavedChanges,
     })) {
+      if (!nextOpen && hasUnsavedChanges && !saving) {
+        setIsDiscardDialogOpen(true);
+      }
       return;
     }
     onOpenChange(nextOpen);
@@ -190,35 +197,36 @@ export function ShiftzyScheduleEditModal({
   }
 
   return (
-    <Dialog open={open} onOpenChange={handleOpenChange}>
-      <DialogContent
-        className="w-[calc(100%-1.5rem)] max-w-[720px] rounded-xl bg-white p-6"
-        onPointerDownOutside={(event) => {
-          if (blockOutsideClose) {
-            event.preventDefault();
-          }
-        }}
-      >
-        <DialogClose
-          className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/70"
-          aria-label="Close shift editor"
+    <>
+      <Dialog open={open} onOpenChange={handleOpenChange}>
+        <DialogContent
+          className="w-[calc(100%-1.5rem)] max-w-[720px] rounded-xl bg-white p-6"
+          onPointerDownOutside={(event) => {
+            if (blockOutsideClose) {
+              event.preventDefault();
+            }
+          }}
         >
-          <X className="size-4" />
-        </DialogClose>
+          <DialogClose
+            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/70"
+            aria-label="Close shift editor"
+          >
+            <X className="size-4" />
+          </DialogClose>
 
-        <DialogHeader>
-          <DialogTitle>{mode === "create" ? "Add Shift" : "Edit Shift"}</DialogTitle>
-          <DialogDescription>
-            {canEdit
-              ? mode === "create"
-                ? "Add a new shift card. Changes are staged locally until you click Save on the schedule board."
-                : "Update this card. Changes are staged locally until you click Save on the schedule board."
-              : "You have view access only for this schedule card."}
-          </DialogDescription>
-        </DialogHeader>
+          <DialogHeader>
+            <DialogTitle>{mode === "create" ? "Add Shift" : "Edit Shift"}</DialogTitle>
+            <DialogDescription>
+              {canEdit
+                ? mode === "create"
+                  ? "Add a new shift card. Changes are staged locally until you click Save on the schedule board."
+                  : "Update this card. Changes are staged locally until you click Save on the schedule board."
+                : "You have view access only for this schedule card."}
+            </DialogDescription>
+          </DialogHeader>
 
-        {schedule ? (
-          <div className="mt-4 space-y-3">
+          {schedule ? (
+            <div className="mt-4 space-y-3">
             <FormRow label="Employee">
               <AppDropdown
                 value={form.employeeId}
@@ -304,24 +312,34 @@ export function ShiftzyScheduleEditModal({
                 disabled={inputsDisabled}
               />
             </FormRow>
-          </div>
-        ) : null}
-
-        <DialogFooter>
-          {canEdit && hasUnsavedChanges && canSave ? (
-            <Button onClick={() => void handleSubmit()} disabled={!canSave || saving}>
-              {saving ? (
-                <>
-                  <Loader2 className="size-4 animate-spin" />
-                  Saving...
-                </>
-              ) : (
-                mode === "create" ? "Add" : "Edit"
-              )}
-            </Button>
+            </div>
           ) : null}
-        </DialogFooter>
-      </DialogContent>
-    </Dialog>
+
+          <DialogFooter>
+            {canEdit && hasUnsavedChanges && canSave ? (
+              <Button onClick={() => void handleSubmit()} disabled={!canSave || saving}>
+                {saving ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  mode === "create" ? "Add" : "Edit"
+                )}
+              </Button>
+            ) : null}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <UnsavedChangesDialog
+        open={isDiscardDialogOpen}
+        onKeepEditing={() => setIsDiscardDialogOpen(false)}
+        onDiscardChanges={() => {
+          setIsDiscardDialogOpen(false);
+          onOpenChange(false);
+        }}
+      />
+    </>
   );
 }

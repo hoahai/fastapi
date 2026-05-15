@@ -1,8 +1,8 @@
 import { useState } from "react";
-import { Save, X } from "lucide-react";
+import { Building2, Save, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import {
   Dialog,
   DialogClose,
@@ -40,11 +40,14 @@ export function AccountInformationCard({
   const editableDisabled = !account || isSaving || !canEdit;
 
   return (
-    <Card className="h-fit border-blue-100 shadow-[0_14px_30px_-18px_rgba(37,99,235,0.45)]">
-      <CardHeader className="pb-2">
-        <CardTitle className="text-base font-semibold text-blue-700">Account Information</CardTitle>
+    <Card className="h-fit overflow-hidden border-blue-100 shadow-soft">
+      <CardHeader className="border-b border-blue-100 bg-blue-50/70 py-3">
+        <div className="flex min-h-9 items-center gap-3">
+          <Building2 className="size-5 text-blue-700" />
+          <h3 className="text-sm font-bold uppercase tracking-[0.14em] text-blue-800">Account Information</h3>
+        </div>
       </CardHeader>
-      <CardContent className="space-y-6 pb-6">
+      <CardContent className="space-y-6 pb-6 pt-5">
         <LogoBlock account={account} />
 
         <div className="space-y-4">

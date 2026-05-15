@@ -56,34 +56,39 @@ export function ContactResults({
   }
 
   return (
-    <div className="space-y-4">
-      {groups.map((group) => (
-        <details key={group.key} open className="group rounded-2xl border border-blue-100 bg-white shadow-soft">
-          <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-5 py-3">
-            <div>
-              <h3 className="text-base font-bold text-blue-900">{group.label}</h3>
-              <p className="mt-0.5 text-xs text-slate-500">{group.items.length} contacts</p>
-            </div>
-            <span className="inline-flex items-center text-slate-500" aria-hidden="true">
-              <ChevronDown className="size-4 transition-transform group-open:rotate-180" />
-            </span>
-          </summary>
+    <section className="rounded-2xl border border-blue-100 bg-white/95 p-4 shadow-soft">
+      <header className="border-b border-slate-200 pb-2">
+        <h3 className="text-sm font-semibold text-slate-800">Results</h3>
+      </header>
+      <div className="mt-3 space-y-4">
+        {groups.map((group) => (
+          <details key={group.key} open className="group overflow-hidden rounded-2xl border border-blue-100 bg-slate-50/70">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-2 border-b border-blue-100 bg-blue-50/70 px-4 py-3">
+              <p className="text-sm font-bold uppercase tracking-[0.14em] text-blue-800">{group.label}</p>
+              <span className="inline-flex items-center gap-2 text-slate-500" aria-hidden="true">
+                <span className="text-xs">{group.items.length} contacts</span>
+                <ChevronDown className="size-4 transition-transform group-open:rotate-180" />
+              </span>
+            </summary>
 
-          <div className="grid gap-3 px-3 pb-4 sm:grid-cols-2 xl:grid-cols-3">
-            {group.items.map((contact) => (
-              <ContactResultCard
-                key={contact.id}
-                contact={contact}
-                disabled={disabled}
-                onCopy={onCopy}
-                onEdit={onEdit}
-                onViewUsage={onViewUsage}
-              />
-            ))}
-          </div>
-        </details>
-      ))}
-    </div>
+            <div className="p-3">
+              <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                {group.items.map((contact) => (
+                  <ContactResultCard
+                    key={contact.id}
+                    contact={contact}
+                    disabled={disabled}
+                    onCopy={onCopy}
+                    onEdit={onEdit}
+                    onViewUsage={onViewUsage}
+                  />
+                ))}
+              </div>
+            </div>
+          </details>
+        ))}
+      </div>
+    </section>
   );
 }
 

@@ -85,6 +85,34 @@ export type ShiftzyDuplicateSchedulesInput = {
   returnSchedules?: boolean;
 };
 
+export type ShiftzyEmployeesFetchOptions = {
+  includeAll?: boolean;
+  employeeId?: string | null;
+};
+
+export type ShiftzyPositionsFetchOptions = {
+  includeAll?: boolean;
+  code?: string | null;
+};
+
+export type ShiftzyEmployeeCreateInput = {
+  id?: string | null;
+  name: string;
+  scheduleSection: string;
+  note?: string | null;
+  refPositionCode?: string | null;
+  active?: boolean;
+};
+
+export type ShiftzyEmployeeUpdateInput = {
+  id: string;
+  name?: string | null;
+  scheduleSection?: string | null;
+  note?: string | null;
+  refPositionCode?: string | null;
+  active?: boolean;
+};
+
 function buildShiftzyCompatHeaders(): HeadersInit {
   const headers: Record<string, string> = {};
   const authMode = String(import.meta.env.VITE_AUTH_MODE || "compat").trim().toLowerCase();
@@ -425,4 +453,103 @@ export async function exportShiftzySchedulesPdf(
     throw new Error("Could not export schedules PDF.");
   }
   return payload;
+}
+
+export async function fetchShiftzyEmployees(
+  requestJson: ShiftzyRequestJson,
+  options: ShiftzyEmployeesFetchOptions = {},
+): Promise<ShiftzyEmployee[]> {
+  const params = new URLSearchParams();
+  if (options.employeeId && String(options.employeeId).trim()) {
+    params.set("id", String(options.employeeId).trim());
+  }
+  params.set("all", options.includeAll === false ? "false" : "true");
+  const payload = await requestJson(`/api/shiftzy/v1/employees?${params.toString()}`, {
+    headers: buildShiftzyCompatHeaders(),
+    errorToast: { title: "Could not load Shiftzy employees" },
+  });
+  return normalizeList(unwrapData(payload), normalizeEmployee);
+}
+
+export async function fetchShiftzyPositions(
+  requestJson: ShiftzyRequestJson,
+  options: ShiftzyPositionsFetchOptions = {},
+): Promise<ShiftzyPosition[]> {
+  const params = new URLSearchParams();
+  if (options.code && String(options.code).trim()) {
+    params.set("code", String(options.code).trim());
+  }
+  params.set("all", options.includeAll === false ? "false" : "true");
+  const payload = await requestJson(`/api/shiftzy/v1/positions?${params.toString()}`, {
+    headers: buildShiftzyCompatHeaders(),
+    errorToast: { title: "Could not load Shiftzy positions" },
+  });
+  return normalizeList(unwrapData(payload), normalizePosition);
+}
+
+export async function createShiftzyEmployees(
+  requestJson: ShiftzyRequestJson,
+  input: ShiftzyEmployeeCreateInput | ShiftzyEmployeeCreateInput[],
+): Promise<void> {
+  const rows = Array.isArray(input) ? input : [input];
+  const payload = rows.map((item) => ({
+    id: item.id || undefined,
+    name: String(item.name || "").trim(),
+    schedule_section: String(item.scheduleSection || "").trim(),
+    note: item.note ?? null,
+    ref_positionCode: item.refPositionCode ?? null,
+    active: item.active ?? true,
+  }));
+  await requestJson("/api/shiftzy/v1/employees", {
+    method: "POST",
+    headers: buildShiftzyCompatHeaders(),
+    body: payload,
+    successToast: "Employee added",
+    errorToast: { title: "Could not add employee" },
+  });
+}
+
+export async function updateShiftzyEmployees(
+  requestJson: ShiftzyRequestJson,
+  input: ShiftzyEmployeeUpdateInput | ShiftzyEmployeeUpdateInput[],
+): Promise<void> {
+  const rows = Array.isArray(input) ? input : [input];
+  const payload = rows.map((item) => ({
+    id: String(item.id || "").trim(),
+    ...(item.name !== undefined ? { name: item.name } : {}),
+    ...(item.scheduleSection !== undefined
+      ? { schedule_section: item.scheduleSection }
+      : {}),
+    ...(item.note !== undefined ? { note: item.note } : {}),
+    ...(item.refPositionCode !== undefined
+      ? { ref_positionCode: item.refPositionCode }
+      : {}),
+    ...(item.active !== undefined ? { active: item.active } : {}),
+  }));
+  await requestJson("/api/shiftzy/v1/employees", {
+    method: "PUT",
+    headers: buildShiftzyCompatHeaders(),
+    body: payload,
+    successToast: "Employee updated",
+    errorToast: { title: "Could not update employee" },
+  });
+}
+
+export async function deleteShiftzyEmployees(
+  requestJson: ShiftzyRequestJson,
+  employeeIds: string[],
+): Promise<void> {
+  const ids = employeeIds
+    .map((id) => String(id).trim())
+    .filter(Boolean);
+  if (!ids.length) {
+    return;
+  }
+  await requestJson("/api/shiftzy/v1/employees", {
+    method: "DELETE",
+    headers: buildShiftzyCompatHeaders(),
+    body: ids,
+    successToast: "Employee removed",
+    errorToast: { title: "Could not remove employee" },
+  });
 }

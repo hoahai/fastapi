@@ -8,6 +8,7 @@ import {
   TRADSPHERE_SELECTIONS_CACHE_TTL_MS,
   normalizeTradsphereAccountSelections,
 } from "@/lib/tradsphereAccountSelections";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { shouldFetchNetwork, type CachePolicy } from "@shared/cache";
 
 type CacheStatus = {
@@ -34,10 +35,12 @@ export function useTradsphereAccountSelections({
   loadErrorMessage = "Unable to load account selections.",
   requestOptions,
 }: UseTradsphereAccountSelectionsOptions) {
+  const { isOnline } = useOnlineStatus();
   const [accountSelections, setAccountSelections] = useState<AccountSelection[]>([]);
   const [isLoadingSelections, setIsLoadingSelections] = useState(true);
   const [isRefreshingSelections, setIsRefreshingSelections] = useState(false);
   const [selectionsError, setSelectionsError] = useState<string | null>(null);
+  const [isOfflineSelections, setIsOfflineSelections] = useState(false);
   const [selectionsCacheStatus, setSelectionsCacheStatus] = useState<CacheStatus | null>(null);
 
   const loadSelections = useCallback(
@@ -57,14 +60,29 @@ export function useTradsphereAccountSelections({
       }
 
       if (!shouldFetchFromNetwork) {
+        setIsOfflineSelections(false);
         setIsLoadingSelections(false);
         setIsRefreshingSelections(false);
+        return;
+      }
+
+      if (!isOnline) {
+        setIsOfflineSelections(true);
+        setIsLoadingSelections(false);
+        setIsRefreshingSelections(false);
+        if (!shouldUseCache) {
+          setSelectionsError("You're offline. Account selections are unavailable until connection is restored.");
+          setAccountSelections([]);
+        } else {
+          setSelectionsError(null);
+        }
         return;
       }
 
       setIsLoadingSelections(!shouldUseCache);
       setIsRefreshingSelections(shouldUseCache);
       setSelectionsError(null);
+      setIsOfflineSelections(false);
 
       try {
         const payload = await requestJson("/api/tradsphere/v1/ui/main/selections", {
@@ -102,7 +120,7 @@ export function useTradsphereAccountSelections({
         setIsRefreshingSelections(false);
       }
     },
-    [loadErrorMessage, requestHeaders, requestJson, requestOptions],
+    [isOnline, loadErrorMessage, requestHeaders, requestJson, requestOptions],
   );
 
   useEffect(() => {
@@ -117,6 +135,7 @@ export function useTradsphereAccountSelections({
     isLoadingSelections,
     isRefreshingSelections,
     selectionsError,
+    isOfflineSelections,
     selectionsCacheStatus,
     loadSelections,
   };

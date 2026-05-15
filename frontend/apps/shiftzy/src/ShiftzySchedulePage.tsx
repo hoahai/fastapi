@@ -11,7 +11,6 @@ import {
   Grip,
   Loader2,
   MoreHorizontal,
-  RefreshCw,
   Trash2,
   Users,
   X,
@@ -1080,16 +1079,6 @@ export default function ShiftzySchedulePage() {
         title="Schedules"
         description="Manage weekly workforce schedules by day, then update any shift card in-place."
         gradientVariant="shiftzy"
-        action={(
-          <Button
-            variant="secondary"
-            onClick={() => void loadInitialData({ showRefreshing: true })}
-            disabled={loadingPage || refreshing || savingChanges || hasPendingChanges || !hasSessionToken}
-          >
-            {loadingPage || refreshing ? <Loader2 className="size-4 animate-spin" /> : <RefreshCw className="size-4" />}
-            Refresh
-          </Button>
-        )}
       />
       <FloatingActionMenu
         open={topActionMenuOpen}
