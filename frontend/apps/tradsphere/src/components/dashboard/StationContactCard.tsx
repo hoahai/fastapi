@@ -27,6 +27,8 @@ interface StationContactCardProps {
   onEdit: () => void;
   onRemove: () => void;
   onCopy: () => void;
+  showEditAction?: boolean;
+  showRemoveAction?: boolean;
 }
 
 function displayValue(value?: string | null): string {
@@ -80,6 +82,8 @@ export function StationContactCard({
   onEdit,
   onRemove,
   onCopy,
+  showEditAction = true,
+  showRemoveAction = true,
 }: StationContactCardProps) {
   const fullName = displayValue(contact.fullName);
   const email = displayValue(contact.email);
@@ -108,21 +112,25 @@ export function StationContactCard({
           ) : null}
         </div>
         <div className="flex items-center gap-0.5">
-          <ActionIconButton
-            icon={<Trash2 />}
-            tooltip="Remove contact from station"
-            onClick={onRemove}
-            disabled={isMutationDisabled}
-            className="!h-6 !w-6 !p-0 text-rose-500 hover:text-rose-600 focus-visible:text-rose-600 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-3.5 [&_svg]:!w-3.5 [&_svg]:text-rose-500 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110 hover:[&_svg]:text-rose-600 focus-visible:[&_svg]:text-rose-600"
-            aria-label="Remove contact from station"
-          />
-          <ActionIconButton
-            icon={<Pencil />}
-            tooltip="Edit contact"
-            onClick={onEdit}
-            disabled={isMutationDisabled}
-            className="!h-6 !w-6 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-3.5 [&_svg]:!w-3.5 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
-          />
+          {showRemoveAction ? (
+            <ActionIconButton
+              icon={<Trash2 />}
+              tooltip="Remove contact from station"
+              onClick={onRemove}
+              disabled={isMutationDisabled}
+              className="!h-6 !w-6 !p-0 text-rose-500 hover:text-rose-600 focus-visible:text-rose-600 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-3.5 [&_svg]:!w-3.5 [&_svg]:text-rose-500 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110 hover:[&_svg]:text-rose-600 focus-visible:[&_svg]:text-rose-600"
+              aria-label="Remove contact from station"
+            />
+          ) : null}
+          {showEditAction ? (
+            <ActionIconButton
+              icon={<Pencil />}
+              tooltip="Edit contact"
+              onClick={onEdit}
+              disabled={isMutationDisabled}
+              className="!h-6 !w-6 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-3.5 [&_svg]:!w-3.5 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
+            />
+          ) : null}
           <ActionIconButton
             icon={<Copy />}
             tooltip="Copy contact"

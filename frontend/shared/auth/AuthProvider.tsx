@@ -1,5 +1,6 @@
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
+import { clearScopedPageStatesForUser } from "@shared/cache";
 import { createAuthProvider } from "./provider";
 import type { SignUpWithPasswordResult } from "./provider/types";
 import type { AccessProfile, AuthStatus, AuthUser, SupabaseSession } from "./types";
@@ -10,7 +11,9 @@ const TENANT_STORAGE_KEY = "workspace.auth.tenantSlug.v1";
 const ACCESS_PROFILE_CACHE_KEY = "workspace.auth.accessProfileCache.v1";
 const AUTH_NOTICE_STORAGE_KEY = "workspace.auth.notice.v1";
 const ACCESS_PROFILE_CACHE_TTL_MS = 30 * 60 * 1000;
+const ACCESS_PROFILE_CACHE_STALE_RETAIN_MS = 7 * 24 * 60 * 60 * 1000;
 const ACCESS_PROFILE_REVALIDATE_INTERVAL_MS = 60 * 60 * 1000;
+const ACCESS_PROFILE_MANUAL_REFRESH_MIN_INTERVAL_MS = 15 * 1000;
 const DISABLED_ACCOUNT_NOTICE = "Your account has been disabled. Contact your workspace administrator.";
 
 class AccessProfileRequestError extends Error {
@@ -33,6 +36,10 @@ type AccessProfileCacheEntry = {
 
 type AccessProfileCacheStore = Record<string, AccessProfileCacheEntry>;
 type AccessProfileCacheStatus = { source: "cache" | "network"; fetchedAt: number };
+type AccessProfileCacheReadResult = {
+  entry: AccessProfileCacheEntry;
+  isExpired: boolean;
+};
 
 type AuthContextValue = {
   status: AuthStatus;
@@ -41,6 +48,11 @@ type AuthContextValue = {
   tenantSlug: string;
   authNotice: string | null;
   accessProfile: AccessProfile | null;
+  initialAuthLoading: boolean;
+  accessReadyFromCache: boolean;
+  accessRefreshing: boolean;
+  accessRefreshError: string | null;
+  unauthorized: boolean;
   accessLoading: boolean;
   accessError: string | null;
   accessCacheStatus: AccessProfileCacheStatus | null;
@@ -105,17 +117,32 @@ function getDefaultTenantSlug(): string {
   return envValue;
 }
 
+function getCurrentAppCodeFromLocation(): string {
+  if (typeof window === "undefined") {
+    return "workspace";
+  }
+  const pathname = String(window.location.pathname || "").trim().toLowerCase();
+  if (!pathname) {
+    return "workspace";
+  }
+  const segments = pathname.split("/").filter(Boolean);
+  if (!segments.length) {
+    return "workspace";
+  }
+  const first = segments[0];
+  if (first === "tradsphere" || first === "shiftzy" || first === "spendsphere" || first === "fundsphere" || first === "opssphere") {
+    return first;
+  }
+  return "workspace";
+}
+
 async function fetchAccessProfile(session: SupabaseSession, tenantSlug: string): Promise<AccessProfile> {
-  const appCode = getCurrentAppCodeFromLocation();
   const headers: Record<string, string> = {
     Authorization: `Bearer ${session.accessToken}`,
     "X-Tenant-Id": tenantSlug,
   };
-  if (appCode) {
-    headers["X-App-Code"] = appCode;
-  }
 
-  const response = await fetch("/api/auth/v1/session/validate", {
+  const response = await fetch("/api/auth/v1/session/me", {
     method: "GET",
     headers,
   });
@@ -169,27 +196,8 @@ async function fetchAccessProfile(session: SupabaseSession, tenantSlug: string):
   return unwrapped as AccessProfile;
 }
 
-function getCurrentAppCodeFromLocation(): string | null {
-  if (typeof window === "undefined") {
-    return null;
-  }
-  const pathname = String(window.location.pathname || "").trim().toLowerCase();
-  if (!pathname) {
-    return null;
-  }
-  const segments = pathname.split("/").filter(Boolean);
-  if (!segments.length) {
-    return null;
-  }
-  const first = segments[0];
-  if (first === "tradsphere" || first === "shiftzy" || first === "spendsphere" || first === "fundsphere") {
-    return first;
-  }
-  return null;
-}
-
-function accessProfileCacheEntryKey(userId: string, tenantSlug: string): string {
-  return `${String(userId || "").trim().toLowerCase()}::${String(tenantSlug || "").trim().toLowerCase()}`;
+function accessProfileCacheEntryKey(userId: string, tenantSlug: string, appCode: string): string {
+  return `${String(userId || "").trim().toLowerCase()}::${String(tenantSlug || "").trim().toLowerCase()}::${String(appCode || "").trim().toLowerCase()}`;
 }
 
 function readAccessProfileCacheStore(): AccessProfileCacheStore {
@@ -208,7 +216,7 @@ function pruneAccessProfileCacheStore(store: AccessProfileCacheStore, now: numbe
   const next: AccessProfileCacheStore = {};
   for (const [key, entry] of Object.entries(store)) {
     const cachedAt = Number(entry?.cachedAt ?? NaN);
-    if (!Number.isFinite(cachedAt) || cachedAt <= 0 || now - cachedAt > ACCESS_PROFILE_CACHE_TTL_MS) {
+    if (!Number.isFinite(cachedAt) || cachedAt <= 0 || now - cachedAt > ACCESS_PROFILE_CACHE_STALE_RETAIN_MS) {
       continue;
     }
     if (!entry?.profile || typeof entry.profile !== "object") {
@@ -219,8 +227,8 @@ function pruneAccessProfileCacheStore(store: AccessProfileCacheStore, now: numbe
   return next;
 }
 
-function readCachedAccessProfileEntry(userId: string, tenantSlug: string): AccessProfileCacheEntry | null {
-  const key = accessProfileCacheEntryKey(userId, tenantSlug);
+function readCachedAccessProfileEntry(userId: string, tenantSlug: string, appCode: string): AccessProfileCacheReadResult | null {
+  const key = accessProfileCacheEntryKey(userId, tenantSlug, appCode);
   if (!key) {
     return null;
   }
@@ -231,11 +239,14 @@ function readCachedAccessProfileEntry(userId: string, tenantSlug: string): Acces
   if (!entry || !entry.profile || !Number.isFinite(Number(entry.cachedAt))) {
     return null;
   }
-  return entry;
+  return {
+    entry,
+    isExpired: now - entry.cachedAt > ACCESS_PROFILE_CACHE_TTL_MS,
+  };
 }
 
-function writeCachedAccessProfile(userId: string, tenantSlug: string, profile: AccessProfile): void {
-  const key = accessProfileCacheEntryKey(userId, tenantSlug);
+function writeCachedAccessProfile(userId: string, tenantSlug: string, appCode: string, profile: AccessProfile): void {
+  const key = accessProfileCacheEntryKey(userId, tenantSlug, appCode);
   if (!key) {
     return;
   }
@@ -248,8 +259,8 @@ function writeCachedAccessProfile(userId: string, tenantSlug: string, profile: A
   writeAccessProfileCacheStore(store);
 }
 
-function removeCachedAccessProfile(userId: string, tenantSlug: string): void {
-  const key = accessProfileCacheEntryKey(userId, tenantSlug);
+function removeCachedAccessProfile(userId: string, tenantSlug: string, appCode: string): void {
+  const key = accessProfileCacheEntryKey(userId, tenantSlug, appCode);
   if (!key) {
     return;
   }
@@ -294,10 +305,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     return normalized || null;
   });
   const [accessLoading, setAccessLoading] = useState(false);
+  const [accessRefreshing, setAccessRefreshing] = useState(false);
   const [accessError, setAccessError] = useState<string | null>(null);
+  const [accessRefreshError, setAccessRefreshError] = useState<string | null>(null);
   const [accessCacheStatus, setAccessCacheStatus] = useState<AccessProfileCacheStatus | null>(null);
   const [accessRefreshVersion, setAccessRefreshVersion] = useState(0);
   const handledRefreshVersionRef = useRef(0);
+  const lastManualRefreshAtRef = useRef(0);
 
   const setTenantSlug = useCallback((value: string) => {
     const normalized = String(value || "").trim().toLowerCase();
@@ -327,16 +341,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     setStatus("authenticated");
     clearAuthNotice();
     setAccessError(null);
+    setAccessRefreshError(null);
   }, [clearAuthNotice]);
 
   const signOut = useCallback(async (options?: { notice?: string | null }) => {
     const notice = String(options?.notice || "").trim();
+    const currentUserStateKey = String(user?.id || user?.email || "").trim().toLowerCase();
     await provider.signOut();
     setSession(null);
     setUser(null);
     setAccessProfile(null);
     setAccessLoading(false);
+    setAccessRefreshing(false);
     setAccessError(null);
+    setAccessRefreshError(null);
     setAccessCacheStatus(null);
     setStatus("unauthenticated");
     if (notice) {
@@ -348,7 +366,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     removeStorage(SESSION_STORAGE_KEY);
     removeStorage(USER_STORAGE_KEY);
     removeStorage(ACCESS_PROFILE_CACHE_KEY);
-  }, [clearAuthNotice, provider]);
+    if (currentUserStateKey) {
+      clearScopedPageStatesForUser(currentUserStateKey);
+    }
+  }, [clearAuthNotice, provider, user?.email, user?.id]);
 
   const hydrateFromSession = useCallback(async (nextSession: SupabaseSession, nextUser?: AuthUser) => {
     const resolvedUser = nextUser ?? await provider.getUser(nextSession.accessToken);
@@ -413,6 +434,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   }, [provider, session, signOut]);
 
   const refreshAccessProfile = useCallback(() => {
+    const now = Date.now();
+    if (now - lastManualRefreshAtRef.current < ACCESS_PROFILE_MANUAL_REFRESH_MIN_INTERVAL_MS) {
+      return;
+    }
+    lastManualRefreshAtRef.current = now;
     setAccessRefreshVersion((value) => value + 1);
   }, []);
 
@@ -483,14 +509,18 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (status !== "authenticated" || !session?.accessToken) {
         setAccessProfile(null);
         setAccessLoading(false);
+        setAccessRefreshing(false);
         setAccessError(null);
+        setAccessRefreshError(null);
         setAccessCacheStatus(null);
         return;
       }
       if (!tenantSlug) {
         setAccessProfile(null);
         setAccessLoading(false);
+        setAccessRefreshing(false);
         setAccessError("Missing tenant selection");
+        setAccessRefreshError(null);
         setAccessCacheStatus(null);
         return;
       }
@@ -500,16 +530,34 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         handledRefreshVersionRef.current = accessRefreshVersion;
       }
       const currentUserId = String(user?.id || "").trim();
-      const cachedEntry = currentUserId ? readCachedAccessProfileEntry(currentUserId, tenantSlug) : null;
+      const currentAppCode = getCurrentAppCodeFromLocation();
+      const cachedEntry = currentUserId ? readCachedAccessProfileEntry(currentUserId, tenantSlug, currentAppCode) : null;
+      const hasCachedAccess = Boolean(cachedEntry?.entry?.profile);
+      const shouldWarmRefresh = Boolean(cachedEntry && !isManualRefresh && !accessProfile);
+      const shouldRefreshFromNetwork = isManualRefresh || !cachedEntry || cachedEntry.isExpired || shouldWarmRefresh;
+
       if (cachedEntry && !isManualRefresh) {
-        setAccessProfile(cachedEntry.profile);
+        setAccessProfile(cachedEntry.entry.profile);
         setAccessCacheStatus({
           source: "cache",
-          fetchedAt: cachedEntry.cachedAt,
+          fetchedAt: cachedEntry.entry.cachedAt,
         });
-        setAccessLoading(true);
+        setAccessError(null);
+      }
+
+      if (hasCachedAccess) {
+        setAccessLoading(false);
+        setAccessRefreshing(shouldRefreshFromNetwork);
+        setAccessRefreshError(null);
       } else {
         setAccessLoading(true);
+        setAccessRefreshing(false);
+      }
+
+      if (!shouldRefreshFromNetwork) {
+        setAccessLoading(false);
+        setAccessRefreshing(false);
+        return;
       }
 
       const activeSession = await ensureFreshSession();
@@ -519,7 +567,9 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (!activeSession?.accessToken) {
         setAccessProfile(null);
         setAccessLoading(false);
+        setAccessRefreshing(false);
         setAccessError("Your session has expired. Please sign in again.");
+        setAccessRefreshError(null);
         setAccessCacheStatus(null);
         return;
       }
@@ -535,12 +585,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         }
         setAccessProfile(profile);
         setAccessLoading(false);
+        setAccessRefreshing(false);
         setAccessError(null);
+        setAccessRefreshError(null);
         setAccessCacheStatus({
           source: "network",
           fetchedAt: Date.now(),
         });
-        writeCachedAccessProfile(profile.user.id, tenantSlug, profile);
+        writeCachedAccessProfile(profile.user.id, tenantSlug, currentAppCode, profile);
       } catch (error) {
         const statusCode = error instanceof AccessProfileRequestError ? error.status : 0;
         if (statusCode === 401 && activeSession.refreshToken) {
@@ -562,12 +614,14 @@ export function AuthProvider({ children }: { children: ReactNode }) {
               }
               setAccessProfile(retriedProfile);
               setAccessLoading(false);
+              setAccessRefreshing(false);
               setAccessError(null);
+              setAccessRefreshError(null);
               setAccessCacheStatus({
                 source: "network",
                 fetchedAt: Date.now(),
               });
-              writeCachedAccessProfile(retriedProfile.user.id, tenantSlug, retriedProfile);
+              writeCachedAccessProfile(retriedProfile.user.id, tenantSlug, currentAppCode, retriedProfile);
               return;
             }
           } catch (refreshError) {
@@ -597,20 +651,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         const shouldInvalidateCache = statusCode === 401 || statusCode === 403;
 
         if (shouldInvalidateCache && currentUserId) {
-          removeCachedAccessProfile(currentUserId, tenantSlug);
+          removeCachedAccessProfile(currentUserId, tenantSlug, currentAppCode);
           setAccessProfile(null);
           setAccessCacheStatus(null);
+          setAccessError(message);
+          setAccessRefreshError(null);
         } else if (!cachedEntry) {
           setAccessProfile(null);
           setAccessCacheStatus(null);
+          setAccessError(message);
+          setAccessRefreshError(null);
         } else {
           setAccessCacheStatus({
             source: "cache",
-            fetchedAt: cachedEntry.cachedAt,
+            fetchedAt: cachedEntry.entry.cachedAt,
           });
+          setAccessError(null);
+          setAccessRefreshError(message);
         }
         setAccessLoading(false);
-        setAccessError(message);
+        setAccessRefreshing(false);
       }
     }
 
@@ -634,6 +694,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     };
   }, [refreshAccessProfile, session?.accessToken, status]);
 
+  const initialAuthLoading = status === "loading" && !session?.accessToken && !user;
+  const accessReadyFromCache = Boolean(accessProfile && accessCacheStatus?.source === "cache");
+  const unauthorized = status === "unauthenticated"
+    || (status === "authenticated" && !accessLoading && !accessRefreshing && !accessProfile && Boolean(accessError));
+
   const value = useMemo<AuthContextValue>(() => ({
     status,
     user,
@@ -641,6 +706,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     tenantSlug,
     authNotice,
     accessProfile,
+    initialAuthLoading,
+    accessReadyFromCache,
+    accessRefreshing,
+    accessRefreshError,
+    unauthorized,
     accessLoading,
     accessError,
     accessCacheStatus,
@@ -665,6 +735,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     tenantSlug,
     authNotice,
     accessProfile,
+    initialAuthLoading,
+    accessReadyFromCache,
+    accessRefreshing,
+    accessRefreshError,
+    unauthorized,
     accessLoading,
     accessError,
     accessCacheStatus,

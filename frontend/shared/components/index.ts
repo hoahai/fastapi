@@ -5,6 +5,7 @@ export * from "./entities/EntityItem";
 export * from "./form/FormRow";
 export * from "./form/ReadOnlyField";
 export * from "./layout/Section";
+export * from "./layout/SectionCard";
 export * from "./layout/SectionHeader";
 export * from "./modal/ModalFooter";
 export * from "./modal/ModalShell";

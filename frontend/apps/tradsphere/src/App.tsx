@@ -4,7 +4,8 @@ import TradsphereHomePage from "@/TradsphereHomePage";
 import EstimateNumbersPage from "@/pages/EstimateNumbersPage";
 import ContactsPage from "@/pages/ContactsPage";
 import StationsPage from "@/pages/StationsPage";
-import ShiftzyEmployeesPage from "@shiftzy/ShiftzyAccountsPage";
+import InvoiceChecklistPage from "@/pages/InvoiceChecklistPage";
+import ShiftzyEmployeesPage from "@shiftzy/ShiftzyEmployeesPage";
 import ShiftzySchedulePage from "@shiftzy/ShiftzySchedulePage";
 import AdminUsersPage from "@/pages/AdminUsersPage";
 import AppScopedAdminPage from "@/pages/AppScopedAdminPage";
@@ -112,6 +113,9 @@ function toScrollStorageKey(route: string): string {
   if (route === "/tradsphere/stations") {
     return "tradsphere.stations.scrollY";
   }
+  if (route === "/tradsphere/invoice-checklists") {
+    return "tradsphere.invoice-checklists.scrollY";
+  }
   const scopedAdminMatch = route.match(/^\/([a-z0-9-_]+)\/admin$/);
   if (scopedAdminMatch) {
     return `${scopedAdminMatch[1]}.admin.scrollY`;
@@ -154,6 +158,18 @@ function RedirectToHome() {
   return <div className="p-6 text-sm text-slate-600">Redirecting to workspace home...</div>;
 }
 
+function isAccessResolutionPending(
+  status: string,
+  accessLoading: boolean,
+  accessProfile: unknown,
+  accessError: string | null,
+): boolean {
+  if (status !== "authenticated") {
+    return false;
+  }
+  return !accessProfile && (accessLoading || !accessError);
+}
+
 function RequireSignedIn({ children }: { children: ReactNode }) {
   const auth = useAuth();
 
@@ -178,6 +194,12 @@ function RequireAnyPermission({
   fallback: ReactNode;
 }) {
   const auth = useAuth();
+  if (isAccessResolutionPending(auth.status, auth.accessLoading, auth.accessProfile, auth.accessError)) {
+    return <AuthLoadingFallback />;
+  }
+  if (!auth.accessProfile) {
+    return <>{fallback}</>;
+  }
   const granted = new Set(auth.accessProfile?.permissions ?? []);
   const allowed = permissions.some((permission) => granted.has(permission));
   if (!allowed) {
@@ -205,7 +227,7 @@ function RequireAppView({
   if (auth.status !== "authenticated") {
     return <>{fallback}</>;
   }
-  if (auth.accessLoading && !auth.accessProfile) {
+  if (isAccessResolutionPending(auth.status, auth.accessLoading, auth.accessProfile, auth.accessError)) {
     return <AuthLoadingFallback />;
   }
   if (!hasAppViewAccess(auth.accessProfile, appCode)) {
@@ -225,7 +247,7 @@ function RequireAdminScope({ children, fallback }: { children: ReactNode; fallba
   if (auth.status !== "authenticated") {
     return <>{fallback}</>;
   }
-  if (auth.accessLoading && !auth.accessProfile) {
+  if (isAccessResolutionPending(auth.status, auth.accessLoading, auth.accessProfile, auth.accessError)) {
     return <AuthLoadingFallback />;
   }
   if (!auth.accessProfile) {
@@ -286,6 +308,7 @@ function App() {
       "/tradsphere/estnums",
       "/tradsphere/contacts",
       "/tradsphere/stations",
+      "/tradsphere/invoice-checklists",
       "/shiftzy/home",
       "/shiftzy/employees",
     ]);
@@ -319,6 +342,7 @@ function App() {
             {frontendPath === "/tradsphere/estnums" ? <EstimateNumbersPage /> : null}
             {frontendPath === "/tradsphere/contacts" ? <ContactsPage /> : null}
             {frontendPath === "/tradsphere/stations" ? <StationsPage /> : null}
+            {frontendPath === "/tradsphere/invoice-checklists" ? <InvoiceChecklistPage /> : null}
           </RequirePermission>
         </RequireTenantAccess>
       </RequireSignedIn>

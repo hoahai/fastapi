@@ -1,18 +1,18 @@
 import type { ShiftzyEmployee } from "@shiftzy/lib/shiftzyApi";
 
-export type ShiftzyAccountSearchFormValues = {
+export type ShiftzyEmployeeSearchFormValues = {
   name: string;
   scheduleSection: string;
   positionCode: string;
   status: "" | "active" | "inactive";
 };
 
-export type ShiftzyAccountItem = ShiftzyEmployee & {
+export type ShiftzyEmployeeItem = ShiftzyEmployee & {
   positionName: string;
 };
 
-export type ShiftzyAccountSectionGroup = {
+export type ShiftzyEmployeeSectionGroup = {
   key: string;
   label: string;
-  items: ShiftzyAccountItem[];
+  items: ShiftzyEmployeeItem[];
 };

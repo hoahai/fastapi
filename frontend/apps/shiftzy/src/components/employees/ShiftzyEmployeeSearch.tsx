@@ -6,13 +6,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Section, SectionHeader } from "@shared/components";
 
-import type { ShiftzyAccountSearchFormValues } from "./types";
+import type { ShiftzyEmployeeSearchFormValues } from "./types";
 
-type ShiftzyAccountSearchProps = {
-  value: ShiftzyAccountSearchFormValues;
-  onChange: <K extends keyof ShiftzyAccountSearchFormValues>(
+type ShiftzyEmployeeSearchProps = {
+  value: ShiftzyEmployeeSearchFormValues;
+  onChange: <K extends keyof ShiftzyEmployeeSearchFormValues>(
     field: K,
-    nextValue: ShiftzyAccountSearchFormValues[K],
+    nextValue: ShiftzyEmployeeSearchFormValues[K],
   ) => void;
   onSubmit: () => void;
   onClear: () => void;
@@ -31,7 +31,7 @@ const STATUS_OPTIONS = [
   { value: "inactive", label: "Inactive" },
 ];
 
-export function ShiftzyAccountSearch({
+export function ShiftzyEmployeeSearch({
   value,
   onChange,
   onSubmit,
@@ -43,7 +43,7 @@ export function ShiftzyAccountSearch({
   resultText,
   sectionOptions,
   positionOptions,
-}: ShiftzyAccountSearchProps) {
+}: ShiftzyEmployeeSearchProps) {
   return (
     <Section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-soft">
       <SectionHeader
@@ -112,7 +112,7 @@ export function ShiftzyAccountSearch({
             <AppDropdown
               ariaLabel="Active"
               value={value.status}
-              onValueChange={(nextValue) => onChange("status", nextValue as ShiftzyAccountSearchFormValues["status"])}
+              onValueChange={(nextValue) => onChange("status", nextValue as ShiftzyEmployeeSearchFormValues["status"])}
               options={STATUS_OPTIONS}
               placeholder=""
               searchable={false}

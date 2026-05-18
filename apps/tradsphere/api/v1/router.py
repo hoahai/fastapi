@@ -6,6 +6,10 @@ from apps.tradsphere.api.v1.endpoints.core import (
     contacts,
     deliveryMethods,
     estNums,
+    invoiceChecklistNotes,
+    invoiceChecklistStations,
+    invoiceChecklists,
+    invoiceNoteAttachments,
     schedules,
     schedulesImport,
     schedulesWeeks,
@@ -29,4 +33,8 @@ router.include_router(schedulesWeeks.router, tags=["tradsphere"])
 router.include_router(contacts.router, tags=["tradsphere"])
 router.include_router(stationsContacts.router, tags=["tradsphere"])
 router.include_router(broadcastCalendar.router, tags=["tradsphere"])
+router.include_router(invoiceChecklists.router, tags=["tradsphere"])
+router.include_router(invoiceChecklistStations.router, tags=["tradsphere"])
+router.include_router(invoiceChecklistNotes.router, tags=["tradsphere"])
+router.include_router(invoiceNoteAttachments.router, tags=["tradsphere"])
 router.include_router(uiMain.router, tags=["tradsphere"])

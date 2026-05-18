@@ -19,6 +19,7 @@ import {
   TRADSPHERE_CONTACTS_CHILD_ICON,
   TRADSPHERE_ESTNUMS_CHILD_ICON,
   TRADSPHERE_HOME_CHILD_ICON,
+  TRADSPHERE_INVOICE_CHECKLISTS_CHILD_ICON,
   TRADSPHERE_STATIONS_CHILD_ICON,
   type AppNavChildItem,
   type AppNavItem,
@@ -698,6 +699,8 @@ function SidebarChildItem({ child, currentPath, tenantSlug, activeTenantSlug, on
       ? TRADSPHERE_ESTNUMS_CHILD_ICON
       : child.route === "/tradsphere/contacts"
         ? TRADSPHERE_CONTACTS_CHILD_ICON
+        : child.route === "/tradsphere/invoice-checklists"
+          ? TRADSPHERE_INVOICE_CHECKLISTS_CHILD_ICON
         : child.route === "/tradsphere/stations"
           ? TRADSPHERE_STATIONS_CHILD_ICON
           : child.route.endsWith("/admin")

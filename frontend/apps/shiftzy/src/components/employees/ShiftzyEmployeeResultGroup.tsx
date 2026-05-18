@@ -3,23 +3,23 @@ import { ChevronDown, UserMinus, UserRoundCheck } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 import { Tooltip } from "@shared/components/actions/Tooltip";
-import type { ShiftzyAccountItem, ShiftzyAccountSectionGroup } from "./types";
+import type { ShiftzyEmployeeItem, ShiftzyEmployeeSectionGroup } from "./types";
 
-type ShiftzyAccountResultGroupProps = {
-  group: ShiftzyAccountSectionGroup;
+type ShiftzyEmployeeResultGroupProps = {
+  group: ShiftzyEmployeeSectionGroup;
   disabled?: boolean;
   canEdit: boolean;
-  onEdit: (item: ShiftzyAccountItem) => void;
-  onToggleActive: (item: ShiftzyAccountItem) => void;
+  onEdit: (item: ShiftzyEmployeeItem) => void;
+  onToggleActive: (item: ShiftzyEmployeeItem) => void;
 };
 
-export function ShiftzyAccountResultGroup({
+export function ShiftzyEmployeeResultGroup({
   group,
   disabled,
   canEdit,
   onEdit,
   onToggleActive,
-}: ShiftzyAccountResultGroupProps) {
+}: ShiftzyEmployeeResultGroupProps) {
   const canOpen = canEdit && !disabled;
 
   return (

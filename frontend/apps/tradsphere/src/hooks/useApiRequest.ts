@@ -134,8 +134,6 @@ export function useApiRequest() {
       const method = options.method ?? "GET";
       const hasBody = options.body !== undefined;
       const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
-      // Keep workspace access fresh on each user action without blocking request execution.
-      authRef.current.refreshAccessProfile();
       const ensuredSession = await authRef.current.ensureFreshSession();
       const baseHeaders = buildAuthHeaders(ensuredSession, authRef.current.tenantSlug, false);
       const requestHeaders = new Headers(baseHeaders);
@@ -188,6 +186,9 @@ export function useApiRequest() {
         if (response.status === 401) {
           await authRef.current.signOut();
           throw new Error("Your session has expired. Please sign in again.");
+        }
+        if (response.status === 403) {
+          authRef.current.refreshAccessProfile();
         }
 
         const errorToast = getToastContent(options.errorToast ?? true, {

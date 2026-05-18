@@ -36,13 +36,15 @@ export function EntityItemCard({
     <>
       <HoverCircle
         className={cn(
-          "mx-auto mb-3 grid size-20 place-items-center rounded-full bg-blue-50 text-blue-600 shadow-[0_0_0_0_rgba(59,130,246,0)] transition-[background-color,box-shadow,color] duration-200 group-hover:bg-blue-100 group-hover:shadow-[0_0_18px_4px_rgba(59,130,246,0.2)]",
+          "mx-auto mb-3 size-20 overflow-visible rounded-full bg-blue-50 text-blue-600 shadow-[0_0_0_0_rgba(59,130,246,0)] transition-[background-color,box-shadow,color] duration-200 group-hover:bg-blue-100 group-hover:shadow-[0_0_18px_4px_rgba(59,130,246,0.2)]",
           !isInteractive && "transition-none group-hover:scale-100 group-hover:bg-blue-50 group-hover:shadow-none",
           circleClassName,
         )}
       >
         {badge}
-        {circleContent}
+        <span className="absolute inset-0 flex items-center justify-center whitespace-nowrap text-center leading-none">
+          {circleContent}
+        </span>
       </HoverCircle>
       <p className="text-base font-medium text-slate-700">{title}</p>
       {subtitle !== undefined ? (

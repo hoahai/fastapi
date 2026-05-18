@@ -18,6 +18,11 @@ from apps.tradsphere.api.v1.helpers.estNums import (
     get_est_num_broadcast_weeks,
     list_est_nums_data,
 )
+from apps.tradsphere.api.v1.helpers.invoiceChecklists import (
+    NotFoundError,
+    SafeDatabaseError,
+    get_invoice_checklists_ui_load_data,
+)
 from apps.tradsphere.api.v1.helpers.schedules import list_schedules_data
 from apps.tradsphere.api.v1.helpers.stations import build_rep_contact_full_name
 
@@ -435,3 +440,94 @@ def get_ui_main_load_route(
         return _build_ui_accounts_load_payload(account_code)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/invoice-checklists/load")
+def get_ui_invoice_checklists_load_route(
+    year: int | None = Query(None),
+    month: int | None = Query(None),
+    checklist_id: str | None = Query(None, alias="checklistId"),
+):
+    """
+    Return Invoice Reconciliation Checklist UI payload for a selected period.
+
+    Example request:
+        GET /api/tradsphere/v1/ui/invoice-checklists/load?year=2026&month=4
+
+    Example request (with selected checklist):
+        GET /api/tradsphere/v1/ui/invoice-checklists/load?year=2026&month=4&checklistId=f3f4502f-b0c3-4ef7-b315-72f9850e36d2
+
+    Example response:
+        {
+          "meta": {"timestamp": "2026-05-18T10:00:00+07:00", "duration_ms": 6},
+          "data": {
+            "periods": [
+              {"year": 2026, "month": 4, "quarter": 2, "value": "2026-04", "label": "April 2026"}
+            ],
+            "selectedPeriod": {"year": 2026, "month": 4, "quarter": 2, "value": "2026-04", "label": "April 2026"},
+            "checklists": [
+              {
+                "id": "f3f4502f-b0c3-4ef7-b315-72f9850e36d2",
+                "accountCode": "TAAA",
+                "accountName": "Alpha Motors",
+                "year": 2026,
+                "month": 4,
+                "quarter": 2,
+                "status": "OPEN",
+                "stationCount": 4,
+                "searchStations": [
+                  {"estNum": 2041, "stationCode": "SPEC-AUSTIN"},
+                  {"estNum": 2042, "stationCode": "KABC"}
+                ]
+              }
+            ],
+            "selectedChecklistId": "f3f4502f-b0c3-4ef7-b315-72f9850e36d2",
+            "selectedChecklist": {
+              "id": "f3f4502f-b0c3-4ef7-b315-72f9850e36d2",
+              "accountCode": "TAAA",
+              "accountName": "Alpha Motors",
+              "year": 2026,
+              "month": 4,
+              "quarter": 2,
+              "stations": [
+                {
+                  "id": 12,
+                  "stationCode": "KABC",
+                  "stationName": "KABC Los Angeles",
+                  "repContacts": [
+                    {
+                      "fullName": "Mina Tran",
+                      "email": "rep@kabc.com",
+                      "office": "213-555-0100",
+                      "mobile": "213-555-0101"
+                    }
+                  ]
+                }
+              ]
+            }
+          }
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - year and month must be provided together when filtering
+        - year must be between 1901 and 2155
+        - month must be between 1 and 12
+        - checklistId is optional; when omitted route selects first checklist in selected period
+        - Checklist summaries include lightweight station search metadata (`searchStations`) for client-side filtering
+        - Provides period options, checklist summaries, and selected checklist detail in one request
+        - Mutation actions must still use checklist CRUD endpoints
+    """
+    try:
+        return get_invoice_checklists_ui_load_data(
+            year=year,
+            month=month,
+            checklist_id=checklist_id,
+        )
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except SafeDatabaseError:
+        raise HTTPException(status_code=500, detail="Failed to load invoice checklist UI data")

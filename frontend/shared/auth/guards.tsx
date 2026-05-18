@@ -7,6 +7,18 @@ export function AuthLoadingFallback({ message = "Loading access..." }: { message
   return <PageLoadingOverlay message={message} />;
 }
 
+function isAccessResolutionPending(
+  status: string,
+  accessLoading: boolean,
+  accessProfile: unknown,
+  accessError: string | null,
+): boolean {
+  if (status !== "authenticated") {
+    return false;
+  }
+  return !accessProfile && (accessLoading || !accessError);
+}
+
 export function shouldProtectTradsphereFrontend(): boolean {
   const value = String(import.meta.env.VITE_AUTH_PROTECT_TRADSPHERE || "false").trim().toLowerCase();
   return value === "1" || value === "true" || value === "yes" || value === "on";
@@ -37,7 +49,7 @@ export function RequireTenantAccess({ children, fallback }: { children: ReactNod
   if (auth.status !== "authenticated") {
     return <>{fallback}</>;
   }
-  if (auth.accessLoading && !auth.accessProfile) {
+  if (isAccessResolutionPending(auth.status, auth.accessLoading, auth.accessProfile, auth.accessError)) {
     return <AuthLoadingFallback />;
   }
   if (!auth.tenantSlug || !auth.accessProfile) {
@@ -65,7 +77,7 @@ export function RequirePermission({
   if (auth.status !== "authenticated") {
     return <>{fallback}</>;
   }
-  if (auth.accessLoading && !auth.accessProfile) {
+  if (isAccessResolutionPending(auth.status, auth.accessLoading, auth.accessProfile, auth.accessError)) {
     return <AuthLoadingFallback />;
   }
   if (!auth.accessProfile) {

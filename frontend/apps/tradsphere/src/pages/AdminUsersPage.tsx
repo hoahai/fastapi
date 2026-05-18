@@ -23,7 +23,7 @@ import { UnsavedChangesDialog } from "@/components/ui/unsaved-changes-dialog";
 import { useApiRequest } from "@/hooks/useApiRequest";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { readBrowserCacheSnapshot, writeBrowserCache } from "@/lib/browserCache";
-import { SectionHeader } from "@shared/components";
+import { SectionCard } from "@shared/components";
 import { Tooltip } from "@shared/components/actions/Tooltip";
 import { PageLoadingOverlay } from "@shared/components/status/LoadingOverlay";
 import { useAuth } from "@shared/auth/useAuth";
@@ -1385,12 +1385,12 @@ export default function AdminUsersPage() {
         </section>
       ) : null}
 
-      <section className="rounded-2xl border border-blue-100 bg-white/95 p-5 shadow-soft">
-        <SectionHeader
-          title="Invitations"
-          description="Manage pending invitation links and invite status."
-          actions={<p className="text-sm text-slate-500">{pendingInvitations.length} pending</p>}
-        />
+      <SectionCard
+        title="Invitations"
+        description="Manage pending invitation links and invite status."
+        actions={<p className="text-sm text-slate-500">{pendingInvitations.length} pending</p>}
+        className="p-5"
+      >
         <div className="mt-4 flex items-center justify-between gap-2">
           <h3 className="text-sm font-semibold text-slate-800">Pending invitations</h3>
           <p className="text-xs uppercase tracking-[0.14em] text-slate-500">{pendingInvitations.length}</p>
@@ -1462,19 +1462,19 @@ export default function AdminUsersPage() {
             </article>
           ))}
         </div>
-      </section>
+      </SectionCard>
 
-      <section className="rounded-2xl border border-blue-100 bg-white/95 p-5 shadow-soft">
-        <SectionHeader
-          title="Members"
-          description="Grouped by access role with tenant/app assignment visibility and in-place admin actions."
-          actions={(
-            <p className="text-sm text-slate-500">
-              {filteredUserCount}/{users.length} users
-              {scope?.isSuperAdmin ? " · super-admin scope" : ""}
-            </p>
-          )}
-        />
+      <SectionCard
+        title="Members"
+        description="Grouped by access role with tenant/app assignment visibility and in-place admin actions."
+        actions={(
+          <p className="text-sm text-slate-500">
+            {filteredUserCount}/{users.length} users
+            {scope?.isSuperAdmin ? " · super-admin scope" : ""}
+          </p>
+        )}
+        className="p-5"
+      >
 
         <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -1644,7 +1644,7 @@ export default function AdminUsersPage() {
             </div>
           )}
         </div>
-      </section>
+      </SectionCard>
 
       <Dialog
         open={isEditModalOpen}

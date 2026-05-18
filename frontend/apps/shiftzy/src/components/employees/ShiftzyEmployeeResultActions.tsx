@@ -2,23 +2,23 @@ import { Pencil, UserRoundCheck, UserRoundX } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 
-import type { ShiftzyAccountItem } from "./types";
+import type { ShiftzyEmployeeItem } from "./types";
 
-type ShiftzyAccountResultActionsProps = {
-  item: ShiftzyAccountItem;
+type ShiftzyEmployeeResultActionsProps = {
+  item: ShiftzyEmployeeItem;
   disabled?: boolean;
   canEdit: boolean;
-  onEdit: (item: ShiftzyAccountItem) => void;
-  onToggleActive: (item: ShiftzyAccountItem) => void;
+  onEdit: (item: ShiftzyEmployeeItem) => void;
+  onToggleActive: (item: ShiftzyEmployeeItem) => void;
 };
 
-export function ShiftzyAccountResultActions({
+export function ShiftzyEmployeeResultActions({
   item,
   disabled,
   canEdit,
   onEdit,
   onToggleActive,
-}: ShiftzyAccountResultActionsProps) {
+}: ShiftzyEmployeeResultActionsProps) {
   return (
     <div className="mt-3 flex flex-wrap items-center justify-end gap-2 border-t border-slate-200 pt-3">
       <Button

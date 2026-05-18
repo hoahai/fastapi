@@ -8,7 +8,15 @@ import { useToast } from "@/components/ui/toast";
 import { useApiRequest } from "@/hooks/useApiRequest";
 import { hasAppEditAccess } from "@shared/auth/permissions";
 import { useAuth } from "@shared/auth/useAuth";
-import { readCacheSnapshot, setCacheData, type CacheSource } from "@shared/cache";
+import {
+  buildScopedPageStateStorageKey,
+  readCacheSnapshot,
+  readScopedPageState,
+  setCacheData,
+  writeScopedPageState,
+  type CacheSource,
+  type ScopedPageState,
+} from "@shared/cache";
 import { CacheStatusChip } from "@shared/components/status/CacheStatusChip";
 import { PageLoadingOverlay } from "@shared/components/status/LoadingOverlay";
 import {
@@ -21,14 +29,14 @@ import {
   type ShiftzyPosition,
 } from "@shiftzy/lib/shiftzyApi";
 
-import { ShiftzyAccountEditModal, type ShiftzyAccountFormPayload } from "@shiftzy/components/accounts/ShiftzyAccountEditModal";
-import { ShiftzyAccountResults } from "@shiftzy/components/accounts/ShiftzyAccountResults";
-import { ShiftzyAccountSearch } from "@shiftzy/components/accounts/ShiftzyAccountSearch";
+import { ShiftzyEmployeeEditModal, type ShiftzyEmployeeFormPayload } from "@shiftzy/components/employees/ShiftzyEmployeeEditModal";
+import { ShiftzyEmployeeResults } from "@shiftzy/components/employees/ShiftzyEmployeeResults";
+import { ShiftzyEmployeeSearch } from "@shiftzy/components/employees/ShiftzyEmployeeSearch";
 import type {
-  ShiftzyAccountItem,
-  ShiftzyAccountSearchFormValues,
-  ShiftzyAccountSectionGroup,
-} from "@shiftzy/components/accounts/types";
+  ShiftzyEmployeeItem,
+  ShiftzyEmployeeSearchFormValues,
+  ShiftzyEmployeeSectionGroup,
+} from "@shiftzy/components/employees/types";
 
 type ResultsState = "loading" | "idle" | "ready" | "empty" | "error";
 
@@ -47,22 +55,29 @@ type DeactivateTarget = {
   name: string;
 };
 
+type PersistedShiftzyEmployeesPageState = {
+  draft: ShiftzyEmployeeSearchFormValues;
+  submittedSearch: ShiftzyEmployeeSearchFormValues | null;
+};
+
 const SHIFTZY_CACHE_NAMESPACE = "shiftzy:cache:";
 const SHIFTZY_EMPLOYEES_CACHE_KEY = "employees:search:v1";
 const SHIFTZY_EMPLOYEES_CACHE_TTL_MS = 10 * 60 * 1000;
 
-const INITIAL_SEARCH_FORM: ShiftzyAccountSearchFormValues = {
+const INITIAL_SEARCH_FORM: ShiftzyEmployeeSearchFormValues = {
   name: "",
   scheduleSection: "",
   positionCode: "",
   status: "",
 };
+const SHIFTZY_EMPLOYEES_PAGE_CODE = "employees";
+const SHIFTZY_APP_CODE = "shiftzy";
 
 function normalizeText(value: string | null | undefined): string {
   return String(value || "").trim().toLowerCase();
 }
 
-function normalizeSearchValues(values: ShiftzyAccountSearchFormValues): ShiftzyAccountSearchFormValues {
+function normalizeSearchValues(values: ShiftzyEmployeeSearchFormValues): ShiftzyEmployeeSearchFormValues {
   return {
     name: String(values.name || "").trim(),
     scheduleSection: String(values.scheduleSection || "").trim(),
@@ -71,9 +86,38 @@ function normalizeSearchValues(values: ShiftzyAccountSearchFormValues): ShiftzyA
   };
 }
 
+function isValidSearchStatus(value: unknown): value is ShiftzyEmployeeSearchFormValues["status"] {
+  return value === "" || value === "active" || value === "inactive";
+}
+
+function isShiftzySearchFormValue(value: unknown): value is ShiftzyEmployeeSearchFormValues {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    typeof record.name === "string"
+    && typeof record.scheduleSection === "string"
+    && typeof record.positionCode === "string"
+    && isValidSearchStatus(record.status)
+  );
+}
+
+function isPersistedShiftzyEmployeesPageState(value: unknown): value is PersistedShiftzyEmployeesPageState {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  const submittedSearch = record.submittedSearch;
+  return (
+    isShiftzySearchFormValue(record.draft)
+    && (submittedSearch === null || isShiftzySearchFormValue(submittedSearch))
+  );
+}
+
 function isSameSearchValues(
-  left: ShiftzyAccountSearchFormValues,
-  right: ShiftzyAccountSearchFormValues,
+  left: ShiftzyEmployeeSearchFormValues,
+  right: ShiftzyEmployeeSearchFormValues,
 ): boolean {
   const a = normalizeSearchValues(left);
   const b = normalizeSearchValues(right);
@@ -102,8 +146,8 @@ function toPositionMap(positions: ShiftzyPosition[]): Map<string, ShiftzyPositio
   return map;
 }
 
-function buildGroups(items: ShiftzyAccountItem[]): ShiftzyAccountSectionGroup[] {
-  const sectionMap = new Map<string, { area: string; position: string; items: ShiftzyAccountItem[] }>();
+function buildGroups(items: ShiftzyEmployeeItem[]): ShiftzyEmployeeSectionGroup[] {
+  const sectionMap = new Map<string, { area: string; position: string; items: ShiftzyEmployeeItem[] }>();
   for (const item of items) {
     const area = String(item.scheduleSection || "").trim() || "Unassigned Area";
     const position = String(item.positionName || "").trim() || "Unassigned Position";
@@ -157,12 +201,15 @@ export default function ShiftzyEmployeesPage() {
   const toast = useToast();
   const hasSessionToken = Boolean(auth.session?.accessToken);
   const canEditShiftzy = hasAppEditAccess(auth.accessProfile, "shiftzy");
+  const pageStateUserKey = String(auth.user?.id || auth.user?.email || "").trim().toLowerCase();
+  const pageStateTenantKey = String(auth.tenantSlug || "").trim().toLowerCase();
+  const canRestorePageState = auth.status === "authenticated" && hasSessionToken && Boolean(pageStateUserKey) && Boolean(pageStateTenantKey);
 
-  const [draft, setDraft] = useState<ShiftzyAccountSearchFormValues>(INITIAL_SEARCH_FORM);
-  const [submittedSearch, setSubmittedSearch] = useState<ShiftzyAccountSearchFormValues | null>(null);
+  const [draft, setDraft] = useState<ShiftzyEmployeeSearchFormValues>(INITIAL_SEARCH_FORM);
+  const [submittedSearch, setSubmittedSearch] = useState<ShiftzyEmployeeSearchFormValues | null>(null);
   const [employees, setEmployees] = useState<ShiftzyEmployee[]>([]);
   const [positions, setPositions] = useState<ShiftzyPosition[]>([]);
-  const [groups, setGroups] = useState<ShiftzyAccountSectionGroup[]>([]);
+  const [groups, setGroups] = useState<ShiftzyEmployeeSectionGroup[]>([]);
   const [resultsState, setResultsState] = useState<ResultsState>("loading");
   const [error, setError] = useState<string | null>(null);
   const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
@@ -178,6 +225,7 @@ export default function ShiftzyEmployeesPage() {
   const [editMode, setEditMode] = useState<"create" | "edit">("create");
   const [editingEmployee, setEditingEmployee] = useState<ShiftzyEmployee | null>(null);
   const [deactivateTarget, setDeactivateTarget] = useState<DeactivateTarget | null>(null);
+  const hydratedPageStateScopeRef = useRef<string | null>(null);
 
   const positionMap = useMemo(() => toPositionMap(positions), [positions]);
 
@@ -244,12 +292,38 @@ export default function ShiftzyEmployeesPage() {
     return `Data source: ${cacheStatus.source}. Last updated ${formatRelativeTime(cacheStatus.fetchedAt)}.`;
   }, [backgroundRefreshing, cacheStatus, refreshing]);
 
+  const pageStateScope = useMemo<ScopedPageState | null>(() => {
+    if (!canRestorePageState) {
+      return null;
+    }
+    return {
+      userKey: pageStateUserKey,
+      tenantSlug: pageStateTenantKey,
+      appCode: SHIFTZY_APP_CODE,
+      pageCode: SHIFTZY_EMPLOYEES_PAGE_CODE,
+    };
+  }, [canRestorePageState, pageStateTenantKey, pageStateUserKey]);
+
+  const pageStateStorageKey = useMemo(() => {
+    if (!pageStateScope) {
+      return null;
+    }
+    return buildScopedPageStateStorageKey(pageStateScope);
+  }, [pageStateScope]);
+
+  useEffect(() => {
+    if (canRestorePageState) {
+      return;
+    }
+    hydratedPageStateScopeRef.current = null;
+  }, [canRestorePageState]);
+
   function getCacheScope(): string {
     return String(auth.tenantSlug || "default").trim().toLowerCase() || "default";
   }
 
   const applySearch = useCallback((
-    criteria: ShiftzyAccountSearchFormValues,
+    criteria: ShiftzyEmployeeSearchFormValues,
     sourceRows: ShiftzyEmployee[],
     sourcePositionMap: Map<string, ShiftzyPosition>,
   ) => {
@@ -276,7 +350,7 @@ export default function ShiftzyEmployeesPage() {
         }
         return true;
       })
-      .map<ShiftzyAccountItem>((item) => ({
+      .map<ShiftzyEmployeeItem>((item) => ({
         ...item,
         positionName: asPositionName(item.refPositionCode, sourcePositionMap),
       }))
@@ -291,7 +365,7 @@ export default function ShiftzyEmployeesPage() {
   const loadData = useCallback(async (
     options: {
       refreshing?: boolean;
-      criteria?: ShiftzyAccountSearchFormValues | null;
+      criteria?: ShiftzyEmployeeSearchFormValues | null;
       networkOnly?: boolean;
     } = {},
   ) => {
@@ -303,7 +377,7 @@ export default function ShiftzyEmployeesPage() {
     const networkOnly = options.networkOnly === true;
     const criteria = options.criteria ?? null;
     const syncResults = (
-      nextCriteria: ShiftzyAccountSearchFormValues | null,
+      nextCriteria: ShiftzyEmployeeSearchFormValues | null,
       sourceEmployees: ShiftzyEmployee[],
       sourcePositions: ShiftzyPosition[],
     ) => {
@@ -417,15 +491,42 @@ export default function ShiftzyEmployeesPage() {
   }, [applySearch, auth.status, auth.tenantSlug, hasSessionToken, requestJson]);
 
   useEffect(() => {
-    if (auth.status !== "authenticated" || !hasSessionToken || !auth.tenantSlug) {
+    if (!canRestorePageState || !pageStateScope || !pageStateStorageKey) {
       return;
     }
-    void loadData();
-  }, [auth.status, auth.tenantSlug, hasSessionToken, loadData]);
+    if (hydratedPageStateScopeRef.current === pageStateStorageKey) {
+      return;
+    }
+    hydratedPageStateScopeRef.current = pageStateStorageKey;
+    const persistedState = readScopedPageState<PersistedShiftzyEmployeesPageState>(
+      pageStateScope,
+      isPersistedShiftzyEmployeesPageState,
+    );
+    const restoredDraft = persistedState?.draft ? normalizeSearchValues(persistedState.draft) : INITIAL_SEARCH_FORM;
+    const restoredSubmittedSearch = persistedState?.submittedSearch
+      ? normalizeSearchValues(persistedState.submittedSearch)
+      : null;
+    setDraft(restoredDraft);
+    setSubmittedSearch(restoredSubmittedSearch);
+    void loadData({ criteria: restoredSubmittedSearch });
+  }, [canRestorePageState, loadData, pageStateScope, pageStateStorageKey]);
 
-  function handleDraftChange<K extends keyof ShiftzyAccountSearchFormValues>(
+  useEffect(() => {
+    if (!canRestorePageState || !pageStateScope || !pageStateStorageKey) {
+      return;
+    }
+    if (hydratedPageStateScopeRef.current !== pageStateStorageKey) {
+      return;
+    }
+    writeScopedPageState<PersistedShiftzyEmployeesPageState>(pageStateScope, {
+      draft: normalizeSearchValues(draft),
+      submittedSearch: submittedSearch ? normalizeSearchValues(submittedSearch) : null,
+    });
+  }, [canRestorePageState, draft, pageStateScope, pageStateStorageKey, submittedSearch]);
+
+  function handleDraftChange<K extends keyof ShiftzyEmployeeSearchFormValues>(
     field: K,
-    nextValue: ShiftzyAccountSearchFormValues[K],
+    nextValue: ShiftzyEmployeeSearchFormValues[K],
   ) {
     setDraft((current) => ({ ...current, [field]: nextValue }));
   }
@@ -456,13 +557,13 @@ export default function ShiftzyEmployeesPage() {
     setIsEditModalOpen(true);
   }
 
-  function handleOpenEdit(item: ShiftzyAccountItem) {
+  function handleOpenEdit(item: ShiftzyEmployeeItem) {
     setEditMode("edit");
     setEditingEmployee(item);
     setIsEditModalOpen(true);
   }
 
-  async function handleSaveAccount(payload: ShiftzyAccountFormPayload) {
+  async function handleSaveEmployee(payload: ShiftzyEmployeeFormPayload) {
     if (!canEditShiftzy) {
       return;
     }
@@ -505,7 +606,7 @@ export default function ShiftzyEmployeesPage() {
     }
   }
 
-  async function handleToggleActive(item: ShiftzyAccountItem) {
+  async function handleToggleActive(item: ShiftzyEmployeeItem) {
     if (!canEditShiftzy || saving || processingDeactivate) {
       return;
     }
@@ -533,7 +634,7 @@ export default function ShiftzyEmployeesPage() {
     }
   }
 
-  function handleRequestToggleActive(item: ShiftzyAccountItem) {
+  function handleRequestToggleActive(item: ShiftzyEmployeeItem) {
     if (item.active) {
       setDeactivateTarget({ id: item.id, name: item.name });
       return;
@@ -578,7 +679,7 @@ export default function ShiftzyEmployeesPage() {
         )}
       />
 
-      <ShiftzyAccountSearch
+      <ShiftzyEmployeeSearch
         value={draft}
         onChange={handleDraftChange}
         onSubmit={handleSubmitSearch}
@@ -596,7 +697,7 @@ export default function ShiftzyEmployeesPage() {
         <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">{refreshMessage}</p>
       ) : null}
 
-      <ShiftzyAccountResults
+      <ShiftzyEmployeeResults
         state={resultsState}
         groups={groups}
         error={error}
@@ -606,7 +707,7 @@ export default function ShiftzyEmployeesPage() {
         onToggleActive={handleRequestToggleActive}
       />
 
-      <ShiftzyAccountEditModal
+      <ShiftzyEmployeeEditModal
         open={isEditModalOpen}
         mode={editMode}
         employee={editingEmployee}
@@ -614,7 +715,7 @@ export default function ShiftzyEmployeesPage() {
         canEdit={canEditShiftzy}
         saving={saving}
         onOpenChange={setIsEditModalOpen}
-        onSave={handleSaveAccount}
+        onSave={handleSaveEmployee}
       />
 
       <Dialog

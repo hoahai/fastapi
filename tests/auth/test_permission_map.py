@@ -8,19 +8,19 @@ class PermissionMapTests(unittest.TestCase):
         perms = expand_permissions_for_role("super_admin")
         self.assertIn("workspace.super_admin", perms)
         self.assertIn("tradsphere.admin", perms)
-        self.assertIn("tradsphere.invites.admin", perms)
+        self.assertNotIn("tradsphere.invites.admin", perms)
 
     def test_viewer_permissions_include_base(self):
         perms = expand_permissions_for_role("viewer")
         self.assertIn("tradsphere.viewer", perms)
-        self.assertIn("tradsphere.contacts.viewer", perms)
+        self.assertNotIn("tradsphere.contacts.viewer", perms)
         self.assertNotIn("tradsphere.editor", perms)
 
-    def test_editor_permissions_include_feature_editors(self):
+    def test_editor_permissions_include_app_editor(self):
         perms = expand_permissions_for_role("editor")
         self.assertIn("tradsphere.editor", perms)
-        self.assertIn("tradsphere.contacts.editor", perms)
-        self.assertIn("tradsphere.stations.editor", perms)
+        self.assertNotIn("tradsphere.contacts.editor", perms)
+        self.assertNotIn("tradsphere.stations.editor", perms)
 
 
 if __name__ == "__main__":

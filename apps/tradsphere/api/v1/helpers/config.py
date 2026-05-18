@@ -30,6 +30,10 @@ _DEFAULT_DB_TABLES = {
     "SCHEDULESWEEKS": "TradSphere_ScheduleWeeks",
     "CONTACTS": "TradSphere_Contacts",
     "STATIONSCONTACTS": "TradSphere_StationsContacts",
+    "INVCHECKLISTS": "TradSphere_InvChecklist",
+    "INVCHECKLISTSTATIONS": "TradSphere_InvChecklistStation",
+    "INVCHECKLISTNOTES": "TradSphere_InvChecklistNote",
+    "INVNOTEATTACHMENTS": "TradSphere_InvNoteAttachment",
 }
 
 _DB_KEY_ALIASES = {
@@ -47,6 +51,14 @@ _DB_KEY_ALIASES = {
     "contacts": "CONTACTS",
     "stationscontacts": "STATIONSCONTACTS",
     "stations_contacts": "STATIONSCONTACTS",
+    "invchecklists": "INVCHECKLISTS",
+    "inv_checklists": "INVCHECKLISTS",
+    "invcheckliststations": "INVCHECKLISTSTATIONS",
+    "inv_checklist_stations": "INVCHECKLISTSTATIONS",
+    "invchecklistnotes": "INVCHECKLISTNOTES",
+    "inv_checklist_notes": "INVCHECKLISTNOTES",
+    "invnoteattachments": "INVNOTEATTACHMENTS",
+    "inv_note_attachments": "INVNOTEATTACHMENTS",
 }
 
 _DEFAULT_MEDIA_TYPES = ["TV", "RA", "CA", "OD", "NP", "CINE", "OTT"]

@@ -10,7 +10,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { useApiRequest } from "@/hooks/useApiRequest";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { readBrowserCacheSnapshot, writeBrowserCache } from "@/lib/browserCache";
-import { SectionHeader } from "@shared/components";
+import { SectionCard } from "@shared/components";
 import { roleLabel } from "@shared/auth/accessAssignments";
 import { useAuth } from "@shared/auth/useAuth";
 
@@ -421,11 +421,11 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
         className="[&>div.relative]:min-h-[136px] [&>div.relative]:py-6 md:[&>div.relative]:min-h-[164px] md:[&>div.relative]:py-8"
       />
 
-      <section className="rounded-2xl border border-blue-100 bg-white/95 p-5 shadow-soft">
-        <SectionHeader
-          title="Add Existing User"
-          description="Tenant/app admins can add active existing users only. Brand-new user invites remain Super Admin-only from global admin tools."
-        />
+      <SectionCard
+        title="Add Existing User"
+        description="Tenant/app admins can add active existing users only. Brand-new user invites remain Super Admin-only from global admin tools."
+        className="p-5"
+      >
 
         <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -495,30 +495,30 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
             </div>
           </div>
         ) : null}
-      </section>
+      </SectionCard>
 
-      <section className="rounded-2xl border border-blue-100 bg-white/95 p-5 shadow-soft">
-        <SectionHeader
-          title={`Current ${appLabel} Users`}
-          description={`Users currently assigned to this tenant + ${appLabel} scope.`}
-          actions={(
-            <div className="flex items-center gap-2">
-              <p className="text-sm text-slate-500">
-                {filteredUsers.length}/{users.length} users
-              </p>
-              <Button
-                type="button"
-                variant="outline"
-                disabled={refreshingUsers || backgroundRefreshingUsers || loadingUsers || !isOnline}
-                onClick={() => void loadScopedUsers(true)}
-                className="h-8 px-2.5 text-xs"
-              >
-                {refreshingUsers ? <Spinner className="size-3.5" /> : <RefreshCw className="size-3.5" />}
-                Refresh
-              </Button>
-            </div>
-          )}
-        />
+      <SectionCard
+        title={`Current ${appLabel} Users`}
+        description={`Users currently assigned to this tenant + ${appLabel} scope.`}
+        actions={(
+          <div className="flex items-center gap-2">
+            <p className="text-sm text-slate-500">
+              {filteredUsers.length}/{users.length} users
+            </p>
+            <Button
+              type="button"
+              variant="outline"
+              disabled={refreshingUsers || backgroundRefreshingUsers || loadingUsers || !isOnline}
+              onClick={() => void loadScopedUsers(true)}
+              className="h-8 px-2.5 text-xs"
+            >
+              {refreshingUsers ? <Spinner className="size-3.5" /> : <RefreshCw className="size-3.5" />}
+              Refresh
+            </Button>
+          </div>
+        )}
+        className="p-5"
+      >
 
         <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -598,7 +598,7 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
             ))}
           </div>
         ) : null}
-      </section>
+      </SectionCard>
 
       {showCacheChip ? (
         <div className="pointer-events-none fixed inset-x-0 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40">

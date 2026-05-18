@@ -3121,3 +3121,615 @@ def get_all_schedule_ids() -> list[str]:
         if schedule_row_id:
             out.append(schedule_row_id)
     return sorted(set(out))
+
+
+def list_inv_checklists(
+    *,
+    account_code: str | None = None,
+    year: int | None = None,
+    month: int | None = None,
+    status: str | None = None,
+) -> list[dict]:
+    tables = get_db_tables()
+    checklist_table = _quote_table_name(tables["INVCHECKLISTS"])
+    station_table = _quote_table_name(tables["INVCHECKLISTSTATIONS"])
+
+    where_clauses: list[str] = []
+    params: list[object] = []
+
+    normalized_account_code = _normalize_account_code(account_code) if account_code else ""
+    if normalized_account_code:
+        where_clauses.append("UPPER(c.accountCode) = UPPER(%s)")
+        params.append(normalized_account_code)
+
+    if year is not None:
+        where_clauses.append("c.year = %s")
+        params.append(int(year))
+
+    if month is not None:
+        where_clauses.append("c.month = %s")
+        params.append(int(month))
+
+    normalized_status = _normalize_optional_input_text(status)
+    if normalized_status is not None:
+        where_clauses.append("c.status = %s")
+        params.append(normalized_status)
+
+    query = (
+        "SELECT "
+        "c.id AS id, "
+        "c.accountCode AS accountCode, "
+        "c.year AS year, "
+        "c.month AS month, "
+        "c.status AS status, "
+        "c.note AS note, "
+        "c.dateCreated AS dateCreated, "
+        "c.dateUpdated AS dateUpdated, "
+        "COALESCE(s.stationCount, 0) AS stationCount "
+        f"FROM {checklist_table} c "
+        "LEFT JOIN ("
+        "SELECT checklistId, COUNT(*) AS stationCount "
+        f"FROM {station_table} "
+        "GROUP BY checklistId"
+        ") s ON s.checklistId = c.id"
+    )
+    if where_clauses:
+        query += " WHERE " + " AND ".join(where_clauses)
+    query += " ORDER BY c.year DESC, c.month DESC, c.accountCode ASC, c.dateUpdated DESC"
+
+    return fetch_all(query, tuple(params))
+
+
+def get_inv_checklist_row(*, checklist_id: str) -> dict | None:
+    checklist_id_text = str(checklist_id or "").strip()
+    if not checklist_id_text:
+        return None
+    tables = get_db_tables()
+    checklist_table = _quote_table_name(tables["INVCHECKLISTS"])
+    rows = fetch_all(
+        (
+            "SELECT "
+            "id, accountCode, year, month, status, note, dateCreated, dateUpdated "
+            f"FROM {checklist_table} "
+            "WHERE id = %s "
+            "LIMIT 1"
+        ),
+        (checklist_id_text,),
+    )
+    if not rows:
+        return None
+    return rows[0]
+
+
+def get_inv_checklist_detail_rows(*, checklist_id: str) -> list[dict]:
+    checklist_id_text = str(checklist_id or "").strip()
+    if not checklist_id_text:
+        return []
+    tables = get_db_tables()
+    checklist_table = _quote_table_name(tables["INVCHECKLISTS"])
+    station_table = _quote_table_name(tables["INVCHECKLISTSTATIONS"])
+    note_table = _quote_table_name(tables["INVCHECKLISTNOTES"])
+    attachment_table = _quote_table_name(tables["INVNOTEATTACHMENTS"])
+
+    query = (
+        "SELECT "
+        "c.id AS checklistId, "
+        "c.accountCode AS checklistAccountCode, "
+        "c.year AS checklistYear, "
+        "c.month AS checklistMonth, "
+        "c.status AS checklistStatus, "
+        "c.note AS checklistNote, "
+        "c.dateCreated AS checklistDateCreated, "
+        "c.dateUpdated AS checklistDateUpdated, "
+        "s.id AS stationRowId, "
+        "s.estNum AS stationEstNum, "
+        "s.stationCode AS stationCode, "
+        "s.status AS stationStatus, "
+        "s.dateCreated AS stationDateCreated, "
+        "s.dateUpdated AS stationDateUpdated, "
+        "n.id AS noteId, "
+        "n.amount AS noteAmount, "
+        "n.note AS noteText, "
+        "n.dateCreated AS noteDateCreated, "
+        "n.dateUpdated AS noteDateUpdated, "
+        "a.id AS attachmentId, "
+        "a.url AS attachmentUrl, "
+        "a.fileName AS attachmentFileName, "
+        "a.fileType AS attachmentFileType, "
+        "a.dateCreated AS attachmentDateCreated, "
+        "a.dateUpdated AS attachmentDateUpdated "
+        f"FROM {checklist_table} c "
+        f"LEFT JOIN {station_table} s ON s.checklistId = c.id "
+        f"LEFT JOIN {note_table} n ON n.checklistStationId = s.id "
+        f"LEFT JOIN {attachment_table} a ON a.noteId = n.id "
+        "WHERE c.id = %s "
+        "ORDER BY s.id ASC, n.id ASC, a.id ASC"
+    )
+    return fetch_all(query, (checklist_id_text,))
+
+
+def insert_inv_checklist(item: dict) -> int:
+    tables = get_db_tables()
+    checklist_table = _quote_table_name(tables["INVCHECKLISTS"])
+    query = (
+        f"INSERT INTO {checklist_table} "
+        "(id, accountCode, year, month, status, note) "
+        "VALUES (%s, %s, %s, %s, %s, %s)"
+    )
+    values = (
+        str(item.get("id") or "").strip(),
+        _normalize_account_code(item.get("accountCode")),
+        int(item.get("year")),
+        int(item.get("month")),
+        _normalize_optional_input_text(item.get("status")),
+        _normalize_optional_input_text(item.get("note")),
+    )
+    return execute_many(query, [values])
+
+
+def update_inv_checklist(
+    *,
+    checklist_id: str,
+    fields: dict[str, object],
+) -> int:
+    if not fields:
+        return 0
+    tables = get_db_tables()
+    checklist_table = _quote_table_name(tables["INVCHECKLISTS"])
+
+    updates: list[str] = []
+    params: list[object] = []
+    if "accountCode" in fields:
+        updates.append("accountCode = %s")
+        params.append(_normalize_account_code(fields.get("accountCode")))
+    if "year" in fields:
+        updates.append("year = %s")
+        params.append(int(fields.get("year")))
+    if "month" in fields:
+        updates.append("month = %s")
+        params.append(int(fields.get("month")))
+    if "status" in fields:
+        updates.append("status = %s")
+        params.append(_normalize_optional_input_text(fields.get("status")))
+    if "note" in fields:
+        updates.append("note = %s")
+        params.append(_normalize_optional_input_text(fields.get("note")))
+    if not updates:
+        return 0
+
+    params.append(str(checklist_id or "").strip())
+    query = (
+        f"UPDATE {checklist_table} "
+        "SET " + ", ".join(updates) + " "
+        "WHERE id = %s"
+    )
+    return run_transaction(
+        lambda cursor: (
+            cursor.execute(query, tuple(params)) or int(cursor.rowcount or 0)
+        )
+    )
+
+
+def delete_inv_checklist(*, checklist_id: str) -> int:
+    checklist_id_text = str(checklist_id or "").strip()
+    if not checklist_id_text:
+        return 0
+    tables = get_db_tables()
+    checklist_table = _quote_table_name(tables["INVCHECKLISTS"])
+    return run_transaction(
+        lambda cursor: (
+            cursor.execute(
+                f"DELETE FROM {checklist_table} WHERE id = %s",
+                (checklist_id_text,),
+            )
+            or int(cursor.rowcount or 0)
+        )
+    )
+
+
+def get_inv_checklist_station_row(*, station_row_id: int) -> dict | None:
+    station_row_id_int = int(station_row_id)
+    tables = get_db_tables()
+    station_table = _quote_table_name(tables["INVCHECKLISTSTATIONS"])
+    rows = fetch_all(
+        (
+            "SELECT "
+            "id, checklistId, estNum, stationCode, status, dateCreated, dateUpdated "
+            f"FROM {station_table} "
+            "WHERE id = %s "
+            "LIMIT 1"
+        ),
+        (station_row_id_int,),
+    )
+    if not rows:
+        return None
+    return rows[0]
+
+
+def list_inv_checklist_stations(
+    *,
+    checklist_id: str | None = None,
+    station_row_id: int | None = None,
+    est_num: int | None = None,
+    station_code: str | None = None,
+    status: str | None = None,
+) -> list[dict]:
+    tables = get_db_tables()
+    station_table = _quote_table_name(tables["INVCHECKLISTSTATIONS"])
+    where_clauses: list[str] = []
+    params: list[object] = []
+
+    checklist_id_text = str(checklist_id or "").strip()
+    if checklist_id_text:
+        where_clauses.append("checklistId = %s")
+        params.append(checklist_id_text)
+
+    if station_row_id is not None:
+        where_clauses.append("id = %s")
+        params.append(int(station_row_id))
+
+    if est_num is not None:
+        where_clauses.append("estNum = %s")
+        params.append(int(est_num))
+
+    normalized_station_code = _normalize_account_code(station_code) if station_code else ""
+    if normalized_station_code:
+        where_clauses.append("UPPER(stationCode) = UPPER(%s)")
+        params.append(normalized_station_code)
+
+    normalized_status = _normalize_optional_input_text(status)
+    if normalized_status is not None:
+        where_clauses.append("status = %s")
+        params.append(normalized_status)
+
+    query = (
+        "SELECT "
+        "id, checklistId, estNum, stationCode, status, dateCreated, dateUpdated "
+        f"FROM {station_table}"
+    )
+    if where_clauses:
+        query += " WHERE " + " AND ".join(where_clauses)
+    query += " ORDER BY id ASC"
+    return fetch_all(query, tuple(params))
+
+
+def list_inv_checklist_station_search_rows(*, checklist_ids: list[str]) -> list[dict]:
+    normalized_ids: list[str] = []
+    seen: set[str] = set()
+    for raw in checklist_ids:
+        checklist_id = str(raw or "").strip()
+        if not checklist_id or checklist_id in seen:
+            continue
+        seen.add(checklist_id)
+        normalized_ids.append(checklist_id)
+    if not normalized_ids:
+        return []
+
+    tables = get_db_tables()
+    station_table = _quote_table_name(tables["INVCHECKLISTSTATIONS"])
+    placeholders = ", ".join(["%s"] * len(normalized_ids))
+    query = (
+        "SELECT "
+        "checklistId, estNum, stationCode "
+        f"FROM {station_table} "
+        f"WHERE checklistId IN ({placeholders}) "
+        "ORDER BY checklistId ASC, id ASC"
+    )
+    return fetch_all(query, tuple(normalized_ids))
+
+
+def insert_inv_checklist_station(item: dict) -> int:
+    tables = get_db_tables()
+    station_table = _quote_table_name(tables["INVCHECKLISTSTATIONS"])
+    query = (
+        f"INSERT INTO {station_table} "
+        "(checklistId, estNum, stationCode, status) "
+        "VALUES (%s, %s, %s, %s)"
+    )
+
+    def _work(cursor) -> int:
+        cursor.execute(
+            query,
+            (
+                str(item.get("checklistId") or "").strip(),
+                int(item.get("estNum")),
+                _normalize_account_code(item.get("stationCode")),
+                _normalize_optional_input_text(item.get("status")),
+            ),
+        )
+        return int(cursor.lastrowid or 0)
+
+    return run_transaction(_work)
+
+
+def update_inv_checklist_station(
+    *,
+    station_row_id: int,
+    fields: dict[str, object],
+) -> int:
+    if not fields:
+        return 0
+    tables = get_db_tables()
+    station_table = _quote_table_name(tables["INVCHECKLISTSTATIONS"])
+    updates: list[str] = []
+    params: list[object] = []
+    if "estNum" in fields:
+        updates.append("estNum = %s")
+        params.append(int(fields.get("estNum")))
+    if "stationCode" in fields:
+        updates.append("stationCode = %s")
+        params.append(_normalize_account_code(fields.get("stationCode")))
+    if "status" in fields:
+        updates.append("status = %s")
+        params.append(_normalize_optional_input_text(fields.get("status")))
+    if not updates:
+        return 0
+
+    params.append(int(station_row_id))
+    query = (
+        f"UPDATE {station_table} "
+        "SET " + ", ".join(updates) + " "
+        "WHERE id = %s"
+    )
+    return run_transaction(
+        lambda cursor: (
+            cursor.execute(query, tuple(params)) or int(cursor.rowcount or 0)
+        )
+    )
+
+
+def delete_inv_checklist_station(*, station_row_id: int) -> int:
+    station_row_id_int = int(station_row_id)
+    tables = get_db_tables()
+    station_table = _quote_table_name(tables["INVCHECKLISTSTATIONS"])
+    return run_transaction(
+        lambda cursor: (
+            cursor.execute(
+                f"DELETE FROM {station_table} WHERE id = %s",
+                (station_row_id_int,),
+            )
+            or int(cursor.rowcount or 0)
+        )
+    )
+
+
+def get_inv_checklist_note_row(*, note_id: int) -> dict | None:
+    note_id_int = int(note_id)
+    tables = get_db_tables()
+    note_table = _quote_table_name(tables["INVCHECKLISTNOTES"])
+    rows = fetch_all(
+        (
+            "SELECT "
+            "id, checklistStationId, amount, note, dateCreated, dateUpdated "
+            f"FROM {note_table} "
+            "WHERE id = %s "
+            "LIMIT 1"
+        ),
+        (note_id_int,),
+    )
+    if not rows:
+        return None
+    return rows[0]
+
+
+def list_inv_checklist_notes(
+    *,
+    checklist_station_id: int | None = None,
+    note_id: int | None = None,
+) -> list[dict]:
+    tables = get_db_tables()
+    note_table = _quote_table_name(tables["INVCHECKLISTNOTES"])
+    where_clauses: list[str] = []
+    params: list[object] = []
+
+    if checklist_station_id is not None:
+        where_clauses.append("checklistStationId = %s")
+        params.append(int(checklist_station_id))
+
+    if note_id is not None:
+        where_clauses.append("id = %s")
+        params.append(int(note_id))
+
+    query = (
+        "SELECT "
+        "id, checklistStationId, amount, note, dateCreated, dateUpdated "
+        f"FROM {note_table}"
+    )
+    if where_clauses:
+        query += " WHERE " + " AND ".join(where_clauses)
+    query += " ORDER BY id ASC"
+    return fetch_all(query, tuple(params))
+
+
+def insert_inv_checklist_note(item: dict) -> int:
+    tables = get_db_tables()
+    note_table = _quote_table_name(tables["INVCHECKLISTNOTES"])
+    query = (
+        f"INSERT INTO {note_table} "
+        "(checklistStationId, amount, note) "
+        "VALUES (%s, %s, %s)"
+    )
+
+    def _work(cursor) -> int:
+        cursor.execute(
+            query,
+            (
+                int(item.get("checklistStationId")),
+                item.get("amount"),
+                _normalize_input_text(item.get("note")),
+            ),
+        )
+        return int(cursor.lastrowid or 0)
+
+    return run_transaction(_work)
+
+
+def update_inv_checklist_note(
+    *,
+    note_id: int,
+    fields: dict[str, object],
+) -> int:
+    if not fields:
+        return 0
+    tables = get_db_tables()
+    note_table = _quote_table_name(tables["INVCHECKLISTNOTES"])
+    updates: list[str] = []
+    params: list[object] = []
+    if "amount" in fields:
+        updates.append("amount = %s")
+        params.append(fields.get("amount"))
+    if "note" in fields:
+        updates.append("note = %s")
+        params.append(_normalize_input_text(fields.get("note")))
+    if not updates:
+        return 0
+
+    params.append(int(note_id))
+    query = (
+        f"UPDATE {note_table} "
+        "SET " + ", ".join(updates) + " "
+        "WHERE id = %s"
+    )
+    return run_transaction(
+        lambda cursor: (
+            cursor.execute(query, tuple(params)) or int(cursor.rowcount or 0)
+        )
+    )
+
+
+def delete_inv_checklist_note(*, note_id: int) -> int:
+    note_id_int = int(note_id)
+    tables = get_db_tables()
+    note_table = _quote_table_name(tables["INVCHECKLISTNOTES"])
+    return run_transaction(
+        lambda cursor: (
+            cursor.execute(
+                f"DELETE FROM {note_table} WHERE id = %s",
+                (note_id_int,),
+            )
+            or int(cursor.rowcount or 0)
+        )
+    )
+
+
+def get_inv_note_attachment_row(*, attachment_id: int) -> dict | None:
+    attachment_id_int = int(attachment_id)
+    tables = get_db_tables()
+    attachment_table = _quote_table_name(tables["INVNOTEATTACHMENTS"])
+    rows = fetch_all(
+        (
+            "SELECT "
+            "id, noteId, url, fileName, fileType, dateCreated, dateUpdated "
+            f"FROM {attachment_table} "
+            "WHERE id = %s "
+            "LIMIT 1"
+        ),
+        (attachment_id_int,),
+    )
+    if not rows:
+        return None
+    return rows[0]
+
+
+def list_inv_note_attachments(
+    *,
+    note_id: int | None = None,
+    attachment_id: int | None = None,
+) -> list[dict]:
+    tables = get_db_tables()
+    attachment_table = _quote_table_name(tables["INVNOTEATTACHMENTS"])
+    where_clauses: list[str] = []
+    params: list[object] = []
+
+    if note_id is not None:
+        where_clauses.append("noteId = %s")
+        params.append(int(note_id))
+
+    if attachment_id is not None:
+        where_clauses.append("id = %s")
+        params.append(int(attachment_id))
+
+    query = (
+        "SELECT "
+        "id, noteId, url, fileName, fileType, dateCreated, dateUpdated "
+        f"FROM {attachment_table}"
+    )
+    if where_clauses:
+        query += " WHERE " + " AND ".join(where_clauses)
+    query += " ORDER BY id ASC"
+    return fetch_all(query, tuple(params))
+
+
+def insert_inv_note_attachment(item: dict) -> int:
+    tables = get_db_tables()
+    attachment_table = _quote_table_name(tables["INVNOTEATTACHMENTS"])
+    query = (
+        f"INSERT INTO {attachment_table} "
+        "(noteId, url, fileName, fileType) "
+        "VALUES (%s, %s, %s, %s)"
+    )
+
+    def _work(cursor) -> int:
+        cursor.execute(
+            query,
+            (
+                int(item.get("noteId")),
+                _normalize_input_text(item.get("url")),
+                _normalize_optional_input_text(item.get("fileName")),
+                _normalize_optional_input_text(item.get("fileType")),
+            ),
+        )
+        return int(cursor.lastrowid or 0)
+
+    return run_transaction(_work)
+
+
+def update_inv_note_attachment(
+    *,
+    attachment_id: int,
+    fields: dict[str, object],
+) -> int:
+    if not fields:
+        return 0
+    tables = get_db_tables()
+    attachment_table = _quote_table_name(tables["INVNOTEATTACHMENTS"])
+    updates: list[str] = []
+    params: list[object] = []
+    if "url" in fields:
+        updates.append("url = %s")
+        params.append(_normalize_input_text(fields.get("url")))
+    if "fileName" in fields:
+        updates.append("fileName = %s")
+        params.append(_normalize_optional_input_text(fields.get("fileName")))
+    if "fileType" in fields:
+        updates.append("fileType = %s")
+        params.append(_normalize_optional_input_text(fields.get("fileType")))
+    if not updates:
+        return 0
+
+    params.append(int(attachment_id))
+    query = (
+        f"UPDATE {attachment_table} "
+        "SET " + ", ".join(updates) + " "
+        "WHERE id = %s"
+    )
+    return run_transaction(
+        lambda cursor: (
+            cursor.execute(query, tuple(params)) or int(cursor.rowcount or 0)
+        )
+    )
+
+
+def delete_inv_note_attachment(*, attachment_id: int) -> int:
+    attachment_id_int = int(attachment_id)
+    tables = get_db_tables()
+    attachment_table = _quote_table_name(tables["INVNOTEATTACHMENTS"])
+    return run_transaction(
+        lambda cursor: (
+            cursor.execute(
+                f"DELETE FROM {attachment_table} WHERE id = %s",
+                (attachment_id_int,),
+            )
+            or int(cursor.rowcount or 0)
+        )
+    )

@@ -1,22 +1,24 @@
 import type { ReactNode } from "react";
 import { AlertCircle, Loader2, Search } from "lucide-react";
 
-import { ShiftzyAccountResultGroup } from "./ShiftzyAccountResultGroup";
-import type { ShiftzyAccountItem, ShiftzyAccountSectionGroup } from "./types";
+import { SectionCard } from "@shared/components/layout/SectionCard";
 
-type ShiftzyAccountResultsState = "idle" | "loading" | "error" | "empty" | "ready";
+import { ShiftzyEmployeeResultGroup } from "./ShiftzyEmployeeResultGroup";
+import type { ShiftzyEmployeeItem, ShiftzyEmployeeSectionGroup } from "./types";
 
-type ShiftzyAccountResultsProps = {
-  state: ShiftzyAccountResultsState;
-  groups: ShiftzyAccountSectionGroup[];
+type ShiftzyEmployeeResultsState = "idle" | "loading" | "error" | "empty" | "ready";
+
+type ShiftzyEmployeeResultsProps = {
+  state: ShiftzyEmployeeResultsState;
+  groups: ShiftzyEmployeeSectionGroup[];
   error?: string | null;
   canEdit: boolean;
   disabled?: boolean;
-  onEdit: (item: ShiftzyAccountItem) => void;
-  onToggleActive: (item: ShiftzyAccountItem) => void;
+  onEdit: (item: ShiftzyEmployeeItem) => void;
+  onToggleActive: (item: ShiftzyEmployeeItem) => void;
 };
 
-export function ShiftzyAccountResults({
+export function ShiftzyEmployeeResults({
   state,
   groups,
   error,
@@ -24,7 +26,7 @@ export function ShiftzyAccountResults({
   disabled,
   onEdit,
   onToggleActive,
-}: ShiftzyAccountResultsProps) {
+}: ShiftzyEmployeeResultsProps) {
   if (state === "idle") {
     return (
       <EmptyPanel
@@ -57,13 +59,9 @@ export function ShiftzyAccountResults({
   }
 
   return (
-    <section className="rounded-2xl border border-blue-100 bg-white/95 p-4 shadow-soft">
-      <header className="border-b border-slate-200 pb-2">
-        <h3 className="text-sm font-semibold text-slate-800">Results</h3>
-      </header>
-      <div className="mt-3 space-y-4">
+    <SectionCard title="Results" contentClassName="space-y-4">
         {groups.map((group) => (
-          <ShiftzyAccountResultGroup
+          <ShiftzyEmployeeResultGroup
             key={group.key}
             group={group}
             disabled={disabled}
@@ -72,8 +70,7 @@ export function ShiftzyAccountResults({
             onToggleActive={onToggleActive}
           />
         ))}
-      </div>
-    </section>
+    </SectionCard>
   );
 }
 

@@ -11,7 +11,7 @@ import { UnsavedChangesDialog } from "@/components/ui/unsaved-changes-dialog";
 import { FormRow } from "@shared/components/form/FormRow";
 import type { ShiftzyEmployee, ShiftzyPosition } from "@shiftzy/lib/shiftzyApi";
 
-type ShiftzyAccountEditModalProps = {
+type ShiftzyEmployeeEditModalProps = {
   open: boolean;
   mode: "create" | "edit";
   employee: ShiftzyEmployee | null;
@@ -19,10 +19,10 @@ type ShiftzyAccountEditModalProps = {
   canEdit: boolean;
   saving: boolean;
   onOpenChange: (open: boolean) => void;
-  onSave: (payload: ShiftzyAccountFormPayload) => Promise<void>;
+  onSave: (payload: ShiftzyEmployeeFormPayload) => Promise<void>;
 };
 
-export type ShiftzyAccountFormPayload = {
+export type ShiftzyEmployeeFormPayload = {
   id?: string;
   name: string;
   scheduleSection: string;
@@ -73,7 +73,7 @@ function formsEqual(left: FormState, right: FormState): boolean {
   );
 }
 
-export function ShiftzyAccountEditModal({
+export function ShiftzyEmployeeEditModal({
   open,
   mode,
   employee,
@@ -82,7 +82,7 @@ export function ShiftzyAccountEditModal({
   saving,
   onOpenChange,
   onSave,
-}: ShiftzyAccountEditModalProps) {
+}: ShiftzyEmployeeEditModalProps) {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false);
 

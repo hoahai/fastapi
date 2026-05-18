@@ -1,5 +1,7 @@
 import { AlertCircle, ChevronDown, Search } from "lucide-react";
 
+import { SectionCard } from "@shared/components/layout/SectionCard";
+
 import { StationResultCard } from "./StationResultCard";
 import type { StationGroup, StationRecord } from "./types";
 
@@ -51,11 +53,7 @@ export function StationResults({
   }
 
   return (
-    <section className="rounded-2xl border border-blue-100 bg-white/95 p-4 shadow-soft">
-      <header className="border-b border-slate-200 pb-2">
-        <h3 className="text-sm font-semibold text-slate-800">Results</h3>
-      </header>
-      <div className="mt-3 space-y-4">
+    <SectionCard title="Results" contentClassName="space-y-4">
         {groups.map((group) => {
           const isOpen = groupOpenState[group.key] ?? true;
           return (
@@ -89,8 +87,7 @@ export function StationResults({
             </section>
           );
         })}
-      </div>
-    </section>
+    </SectionCard>
   );
 }
 
