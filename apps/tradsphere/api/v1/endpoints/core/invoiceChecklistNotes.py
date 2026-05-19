@@ -19,6 +19,11 @@ router = APIRouter(prefix="/invoice-checklist-notes")
 def get_invoice_checklist_notes_route(
     checklist_station_id: int | None = Query(None, alias="checklistStationId", ge=0),
     note_id: int | None = Query(None, alias="noteId", ge=0),
+    est_num: int | None = Query(None, alias="estNum", ge=0),
+    station_code: str | None = Query(None, alias="stationCode"),
+    checklist_id: str | None = Query(None, alias="checklistId"),
+    include_attachments: bool = Query(False, alias="includeAttachments"),
+    limit: int | None = Query(None, ge=1),
 ):
     """
     Return checklist note rows filtered by query parameters.
@@ -29,6 +34,9 @@ def get_invoice_checklist_notes_route(
     Example request (single note):
         GET /api/tradsphere/v1/invoice-checklist-notes?noteId=5
 
+    Example request (station match across checklists):
+        GET /api/tradsphere/v1/invoice-checklist-notes?estNum=26001&stationCode=KABC&includeAttachments=true&limit=10
+
     Example response:
         {
           "meta": {"timestamp": "2026-05-16T10:00:00+07:00", "duration_ms": 2},
@@ -36,8 +44,20 @@ def get_invoice_checklist_notes_route(
             {
               "id": 5,
               "checklistStationId": 12,
+              "checklistId": "f3f4502f-b0c3-4ef7-b315-72f9850e36d2",
+              "estNum": 26001,
+              "stationCode": "KABC",
               "amount": -125.5,
-              "note": "Credit memo expected"
+              "note": "Credit memo expected",
+              "attachments": [
+                {
+                  "id": 21,
+                  "noteId": 5,
+                  "url": "https://cdn.example.com/docs/invoice-123.pdf",
+                  "fileName": "invoice-123.pdf",
+                  "fileType": "application/pdf"
+                }
+              ]
             }
           ]
         }
@@ -45,13 +65,21 @@ def get_invoice_checklist_notes_route(
     Requirements:
         - Requires X-Tenant-Id header
         - Requires valid API key
-        - checklistStationId and noteId must be unsigned integers when provided
+        - checklistStationId, noteId, estNum, and limit must be unsigned integers when provided
+        - stationCode max length is 10 when provided
+        - estNum and stationCode must be provided together
+        - includeAttachments=true includes attachment arrays per note
         - Unknown query params are rejected (400)
     """
     try:
         return list_invoice_checklist_notes_data(
             checklist_station_id=checklist_station_id,
             note_id=note_id,
+            est_num=est_num,
+            station_code=station_code,
+            checklist_id=checklist_id,
+            include_attachments=include_attachments,
+            limit=limit,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

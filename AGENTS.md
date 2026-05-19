@@ -1293,3 +1293,40 @@ npm run install:all
 npm run build:all
 npm run sync-ui:all
 npm run serve:api
+
+
+<!--
+
+Read the repo guidance markdown files first.
+
+I am happy with the current version. Please make it the new clean baseline, then clean up old temporary checkpoints.
+
+Requirements:
+- Inspect and report current branch, `git status`, recent commits, stash list, and checkpoint/safety/WIP branches.
+- Do not modify files unless needed for the baseline commit.
+- Do not modify Render config.
+- Do not expose secrets/tokens.
+- Do not push.
+
+Baseline:
+- Create a safety branch named `base/current-good-version-2026-05-20`.
+- If there are uncommitted intended changes, review them, add them, and commit with:
+  `baseline: current good version`
+- If the tree is already clean, tag current HEAD as:
+  `baseline/current-good-version-2026-05-20`
+
+Cleanup:
+- List old checkpoint/stash/branch/tag candidates before deleting.
+- Keep main/current branch and the new baseline.
+- Only remove old temporary checkpoints that are clearly safe.
+- Do not delete branches with unique work unless you explain and keep them.
+
+End with:
+1. Guidance files read.
+2. Baseline branch/tag/commit created.
+3. Old checkpoints found and removed.
+4. What was kept.
+5. Final `git status`.
+6. Confirm Render config unchanged and no secrets exposed.
+
+-->

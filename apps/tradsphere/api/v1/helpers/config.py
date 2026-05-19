@@ -19,6 +19,15 @@ APP_ENV_PREFIX = "TRADSPHERE"
 _DB_TABLE_RE = re.compile(r"^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)*$")
 _DEFAULT_DB_VALIDATION_TTL_SECONDS = 300
 _DEFAULT_DB_READ_TTL_SECONDS = 300
+_DB_READ_TTL_DEFAULT_OVERRIDES = {
+    "db_inv_checklists_ttl_time": 60,
+    "db_inv_checklist_row_ttl_time": 60,
+    "db_inv_checklist_stations_ttl_time": 60,
+    "db_inv_checklist_station_rows_ttl_time": 60,
+    "db_inv_checklist_station_search_ttl_time": 60,
+    # Station-matched invoice checklist notes are read-heavy in UI.
+    "db_invoice_checklist_notes_ttl_time": 43200,
+}
 
 _DEFAULT_DB_TABLES = {
     "ACCOUNTS": "TradSphere_Accounts",
@@ -212,9 +221,16 @@ def get_validation_cache_ttl_seconds() -> int:
 
 
 def get_db_read_cache_ttl_seconds(*, key: str | None = None) -> int:
+    normalized_key = str(key or "").strip().lower()
+    default_seconds = int(
+        _DB_READ_TTL_DEFAULT_OVERRIDES.get(
+            normalized_key,
+            _DEFAULT_DB_READ_TTL_SECONDS,
+        )
+    )
     return get_shared_cache_ttl_seconds(
         key=key or "db_read_ttl_time",
-        default_seconds=_DEFAULT_DB_READ_TTL_SECONDS,
+        default_seconds=default_seconds,
         app_name=APP_NAME,
     )
 

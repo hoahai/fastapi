@@ -18,8 +18,10 @@ from apps.tradsphere.api.v1.helpers.dbQueries import (
     delete_inv_checklist_note,
     delete_inv_checklist_station,
     delete_inv_note_attachment,
-    list_inv_checklist_notes,
+    invalidate_inv_checklist_related_cache_for_bulk_write,
+    list_inv_checklist_note_detail_rows,
     list_inv_checklist_stations,
+    list_inv_checklist_station_rows_for_checklists,
     list_inv_checklist_station_search_rows,
     get_inv_checklist_detail_rows,
     get_inv_checklist_note_row,
@@ -32,6 +34,7 @@ from apps.tradsphere.api.v1.helpers.dbQueries import (
     insert_inv_note_attachment,
     list_inv_checklists,
     list_inv_note_attachments,
+    list_schedule_invoice_checklist_expected_rows,
     update_inv_checklist,
     update_inv_checklist_note,
     update_inv_checklist_station,
@@ -697,18 +700,86 @@ def list_invoice_checklist_notes_data(
     *,
     checklist_station_id: int | None = None,
     note_id: int | None = None,
+    est_num: int | None = None,
+    station_code: str | None = None,
+    checklist_id: str | None = None,
+    include_attachments: bool = False,
+    limit: int | None = None,
 ) -> list[dict]:
     checklist_station_id_value = _ensure_optional_unsigned_int(
         checklist_station_id,
         field="checklistStationId",
     )
     note_id_value = _ensure_optional_unsigned_int(note_id, field="noteId")
+    est_num_value = _ensure_optional_unsigned_int(est_num, field="estNum")
+    station_code_value = None
+    if station_code is not None:
+        station_code_value = _ensure_required_text(
+            station_code,
+            field="stationCode",
+            max_length=10,
+            uppercase=True,
+        )
+    checklist_id_value = str(checklist_id or "").strip() or None
+    if (est_num_value is None) != (station_code_value is None):
+        raise ValueError("estNum and stationCode must be provided together")
+    limit_value = _ensure_optional_unsigned_int(limit, field="limit")
+    if limit_value is not None and limit_value <= 0:
+        raise ValueError("limit must be greater than 0")
+
     rows = _safe_db_call(
-        list_inv_checklist_notes,
+        list_inv_checklist_note_detail_rows,
         checklist_station_id=checklist_station_id_value,
         note_id=note_id_value,
+        est_num=est_num_value,
+        station_code=station_code_value,
+        checklist_id=checklist_id_value,
+        limit=limit_value,
     )
-    return [_serialize_note_row(row) for row in rows]
+    notes_by_id: dict[int, dict] = {}
+    ordered_note_ids: list[int] = []
+    for row in rows:
+        note_row_id = row.get("noteId")
+        if note_row_id is None:
+            continue
+        parsed_note_id = int(note_row_id)
+        note_entry = notes_by_id.get(parsed_note_id)
+        if note_entry is None:
+            ordered_note_ids.append(parsed_note_id)
+            amount_value = row.get("amount")
+            note_entry = {
+                "id": parsed_note_id,
+                "checklistStationId": int(row.get("checklistStationId")),
+                "checklistId": str(row.get("checklistId") or "").strip() or None,
+                "estNum": int(row.get("estNum")) if row.get("estNum") is not None else None,
+                "stationCode": str(row.get("stationCode") or "").strip().upper() or None,
+                "amount": float(amount_value) if amount_value is not None else 0.0,
+                "note": row.get("note"),
+                "dateCreated": row.get("dateCreated").isoformat() if row.get("dateCreated") else None,
+                "dateUpdated": row.get("dateUpdated").isoformat() if row.get("dateUpdated") else None,
+            }
+            if include_attachments:
+                note_entry["attachments"] = []
+            notes_by_id[parsed_note_id] = note_entry
+
+        if not include_attachments:
+            continue
+        attachment_row_id = row.get("attachmentId")
+        if attachment_row_id is None:
+            continue
+        note_entry["attachments"].append(
+            {
+                "id": int(attachment_row_id),
+                "noteId": int(row.get("attachmentNoteId")),
+                "url": row.get("attachmentUrl"),
+                "fileName": row.get("attachmentFileName"),
+                "fileType": row.get("attachmentFileType"),
+                "dateCreated": row.get("attachmentDateCreated").isoformat() if row.get("attachmentDateCreated") else None,
+                "dateUpdated": row.get("attachmentDateUpdated").isoformat() if row.get("attachmentDateUpdated") else None,
+            }
+        )
+
+    return [notes_by_id[key] for key in ordered_note_ids]
 
 
 def create_invoice_checklist_note_data(*, payload: dict) -> dict:
@@ -937,6 +1008,323 @@ def _build_checklist_station_search_map(checklist_ids: list[str]) -> dict[str, l
     return mapped
 
 
+def _build_expected_schedule_pairs_by_account(
+    *,
+    year: int,
+    month: int,
+) -> dict[str, set[tuple[int, str]]]:
+    rows = _safe_db_call(
+        list_schedule_invoice_checklist_expected_rows,
+        broadcast_year=int(year),
+        broadcast_month=int(month),
+    )
+    mapped: dict[str, set[tuple[int, str]]] = {}
+    for row in rows:
+        account_code = str(row.get("accountCode") or "").strip().upper()
+        est_num = _ensure_optional_unsigned_int(row.get("estNum"), field="estNum")
+        station_code = str(row.get("stationCode") or "").strip().upper()
+        if not account_code or est_num is None or not station_code:
+            continue
+        mapped.setdefault(account_code, set()).add((int(est_num), station_code))
+    return mapped
+
+
+def _build_mismatch_rows_for_period(
+    *,
+    checklist_rows: list[dict],
+    expected_pairs_by_account: dict[str, set[tuple[int, str]]],
+) -> list[dict]:
+    checklist_ids: list[str] = []
+    checklist_by_id: dict[str, dict] = {}
+    for row in checklist_rows:
+        checklist_id = str(row.get("id") or "").strip()
+        if not checklist_id:
+            continue
+        checklist_ids.append(checklist_id)
+        checklist_by_id[checklist_id] = row
+
+    if not checklist_ids:
+        return []
+
+    station_rows = _safe_db_call(
+        list_inv_checklist_station_rows_for_checklists,
+        checklist_ids=checklist_ids,
+    )
+
+    mismatches: list[dict] = []
+    for station_row in station_rows:
+        checklist_id = str(station_row.get("checklistId") or "").strip()
+        checklist = checklist_by_id.get(checklist_id)
+        if not checklist:
+            continue
+        account_code = str(checklist.get("accountCode") or "").strip().upper()
+        est_num = _ensure_optional_unsigned_int(station_row.get("estNum"), field="estNum")
+        station_code = str(station_row.get("stationCode") or "").strip().upper()
+        if not account_code or est_num is None or not station_code:
+            continue
+        expected_pairs = expected_pairs_by_account.get(account_code, set())
+        if (int(est_num), station_code) in expected_pairs:
+            continue
+        mismatches.append(
+            {
+                "stationRowId": int(station_row.get("id")),
+                "checklistId": checklist_id,
+                "accountCode": account_code,
+                "estNum": int(est_num),
+                "stationCode": station_code,
+                "status": str(station_row.get("status") or "").strip(),
+                "reasonCode": "NOT_IN_CURRENT_PERIOD_SCHEDULE",
+            }
+        )
+    return mismatches
+
+
+def sync_invoice_checklists_for_period_data(
+    *,
+    year: object,
+    month: object,
+    preview_only: bool = False,
+) -> dict:
+    selected_year = _ensure_required_year(year)
+    selected_month = _ensure_required_month(month)
+
+    expected_pairs_by_account = _build_expected_schedule_pairs_by_account(
+        year=selected_year,
+        month=selected_month,
+    )
+
+    existing_before = list_invoice_checklists_data(
+        year=selected_year,
+        month=selected_month,
+    )
+    had_existing_checklists = len(existing_before) > 0
+
+    checklist_by_account: dict[str, dict] = {}
+    for row in existing_before:
+        account_code = str(row.get("accountCode") or "").strip().upper()
+        if not account_code:
+            continue
+        checklist_by_account[account_code] = row
+
+    planned_checklists: list[dict] = []
+    for account_code in sorted(expected_pairs_by_account.keys()):
+        if account_code in checklist_by_account:
+            continue
+        planned_checklists.append(
+            {
+                "accountCode": account_code,
+                "year": selected_year,
+                "month": selected_month,
+            }
+        )
+
+    checklist_rows_for_plan = existing_before
+    checklist_id_to_row_for_plan = {
+        str(row.get("id") or "").strip(): row
+        for row in checklist_rows_for_plan
+        if str(row.get("id") or "").strip()
+    }
+    planned_station_rows: list[dict] = []
+    if checklist_id_to_row_for_plan:
+        station_rows_for_plan = _safe_db_call(
+            list_inv_checklist_station_rows_for_checklists,
+            checklist_ids=list(checklist_id_to_row_for_plan.keys()),
+        )
+    else:
+        station_rows_for_plan = []
+
+    existing_station_pairs_by_checklist_for_plan: dict[str, set[tuple[int, str]]] = {}
+    for station_row in station_rows_for_plan:
+        checklist_id = str(station_row.get("checklistId") or "").strip()
+        est_num = _ensure_optional_unsigned_int(station_row.get("estNum"), field="estNum")
+        station_code = str(station_row.get("stationCode") or "").strip().upper()
+        if not checklist_id or est_num is None or not station_code:
+            continue
+        existing_station_pairs_by_checklist_for_plan.setdefault(checklist_id, set()).add((int(est_num), station_code))
+
+    checklist_id_by_account_for_plan: dict[str, str] = {}
+    for checklist_id, checklist in checklist_id_to_row_for_plan.items():
+        account_code = str(checklist.get("accountCode") or "").strip().upper()
+        if not account_code:
+            continue
+        checklist_id_by_account_for_plan[account_code] = checklist_id
+
+    for account_code, expected_pairs in expected_pairs_by_account.items():
+        checklist_id = checklist_id_by_account_for_plan.get(account_code)
+        if not checklist_id:
+            for est_num, station_code in sorted(expected_pairs, key=lambda item: (item[0], item[1])):
+                planned_station_rows.append(
+                    {
+                        "checklistId": None,
+                        "accountCode": account_code,
+                        "estNum": est_num,
+                        "stationCode": station_code,
+                    }
+                )
+            continue
+        existing_pairs = existing_station_pairs_by_checklist_for_plan.get(checklist_id, set())
+        for est_num, station_code in sorted(expected_pairs, key=lambda item: (item[0], item[1])):
+            if (est_num, station_code) in existing_pairs:
+                continue
+            planned_station_rows.append(
+                {
+                    "checklistId": checklist_id,
+                    "accountCode": account_code,
+                    "estNum": est_num,
+                    "stationCode": station_code,
+                }
+            )
+
+    created_checklists: list[dict] = []
+    if preview_only:
+        mismatch_rows_preview = _build_mismatch_rows_for_period(
+            checklist_rows=existing_before,
+            expected_pairs_by_account=expected_pairs_by_account,
+        )
+        return {
+            "action": "generate" if not had_existing_checklists else "update",
+            "previewOnly": True,
+            "period": {
+                "year": selected_year,
+                "month": selected_month,
+                "quarter": _quarter_for_month(selected_month),
+                "value": _period_value(selected_year, selected_month),
+                "label": _period_label(selected_year, selected_month),
+            },
+            "expectedAccountsCount": len(expected_pairs_by_account),
+            "expectedStationRowsCount": sum(len(pairs) for pairs in expected_pairs_by_account.values()),
+            "plannedChecklistsCount": len(planned_checklists),
+            "plannedStationsCount": len(planned_station_rows),
+            "mismatchStationCount": len(mismatch_rows_preview),
+            "plannedChecklists": planned_checklists,
+            "plannedStations": planned_station_rows,
+            "mismatchStations": mismatch_rows_preview,
+        }
+
+    for account_code in sorted(expected_pairs_by_account.keys()):
+        if account_code in checklist_by_account:
+            continue
+        was_created = False
+        try:
+            created = create_invoice_checklist_data(
+                {
+                    "accountCode": account_code,
+                    "year": selected_year,
+                    "month": selected_month,
+                    "status": None,
+                    "note": None,
+                }
+            )
+            was_created = True
+        except ConflictError:
+            rows = list_invoice_checklists_data(
+                account_code=account_code,
+                year=selected_year,
+                month=selected_month,
+            )
+            created = rows[0] if rows else None
+        if not created:
+            continue
+        if was_created:
+            created_checklists.append(created)
+        checklist_by_account[account_code] = created
+
+    checklist_rows = list_invoice_checklists_data(
+        year=selected_year,
+        month=selected_month,
+    )
+    checklist_id_to_row = {
+        str(row.get("id") or "").strip(): row
+        for row in checklist_rows
+        if str(row.get("id") or "").strip()
+    }
+
+    station_rows = _safe_db_call(
+        list_inv_checklist_station_rows_for_checklists,
+        checklist_ids=list(checklist_id_to_row.keys()),
+    )
+    existing_station_pairs_by_checklist: dict[str, set[tuple[int, str]]] = {}
+    for station_row in station_rows:
+        checklist_id = str(station_row.get("checklistId") or "").strip()
+        est_num = _ensure_optional_unsigned_int(station_row.get("estNum"), field="estNum")
+        station_code = str(station_row.get("stationCode") or "").strip().upper()
+        if not checklist_id or est_num is None or not station_code:
+            continue
+        existing_station_pairs_by_checklist.setdefault(checklist_id, set()).add((int(est_num), station_code))
+
+    created_station_rows: list[dict] = []
+    for checklist_id, checklist in checklist_id_to_row.items():
+        account_code = str(checklist.get("accountCode") or "").strip().upper()
+        if not account_code:
+            continue
+        expected_pairs = expected_pairs_by_account.get(account_code, set())
+        existing_pairs = existing_station_pairs_by_checklist.get(checklist_id, set())
+        for est_num, station_code in sorted(expected_pairs, key=lambda item: (item[0], item[1])):
+            if (est_num, station_code) in existing_pairs:
+                continue
+            try:
+                station_id = insert_inv_checklist_station(
+                    {
+                        "checklistId": checklist_id,
+                        "estNum": est_num,
+                        "stationCode": station_code,
+                        "status": None,
+                    }
+                )
+            except Exception as exc:
+                mapped = _map_db_exception(exc)
+                if isinstance(mapped, ConflictError):
+                    existing_pairs.add((est_num, station_code))
+                    continue
+                raise mapped from exc
+            created_station_rows.append(
+                {
+                    "id": int(station_id),
+                    "checklistId": checklist_id,
+                    "accountCode": account_code,
+                    "estNum": est_num,
+                    "stationCode": station_code,
+                }
+            )
+            existing_pairs.add((est_num, station_code))
+
+    if created_checklists or created_station_rows:
+        _safe_db_call(invalidate_inv_checklist_related_cache_for_bulk_write)
+
+    final_checklist_rows = list_invoice_checklists_data(
+        year=selected_year,
+        month=selected_month,
+    )
+    mismatch_rows = _build_mismatch_rows_for_period(
+        checklist_rows=final_checklist_rows,
+        expected_pairs_by_account=expected_pairs_by_account,
+    )
+
+    return {
+        "action": "generate" if not had_existing_checklists else "update",
+        "previewOnly": False,
+        "period": {
+            "year": selected_year,
+            "month": selected_month,
+            "quarter": _quarter_for_month(selected_month),
+            "value": _period_value(selected_year, selected_month),
+            "label": _period_label(selected_year, selected_month),
+        },
+        "expectedAccountsCount": len(expected_pairs_by_account),
+        "expectedStationRowsCount": sum(len(pairs) for pairs in expected_pairs_by_account.values()),
+        "createdChecklistsCount": len(created_checklists),
+        "createdStationsCount": len(created_station_rows),
+        "mismatchStationCount": len(mismatch_rows),
+        "plannedChecklistsCount": len(planned_checklists),
+        "plannedStationsCount": len(planned_station_rows),
+        "createdChecklists": created_checklists,
+        "createdStations": created_station_rows,
+        "plannedChecklists": planned_checklists,
+        "plannedStations": planned_station_rows,
+        "mismatchStations": mismatch_rows,
+    }
+
+
 def get_invoice_checklists_ui_load_data(
     *,
     year: int | None = None,
@@ -1019,6 +1407,21 @@ def get_invoice_checklists_ui_load_data(
     checklist_station_search_map = _build_checklist_station_search_map(
         [str(item.get("id") or "").strip() for item in selected_checklists]
     )
+    expected_pairs_by_account = _build_expected_schedule_pairs_by_account(
+        year=selected_year,
+        month=selected_month,
+    )
+    mismatch_rows_for_period = _build_mismatch_rows_for_period(
+        checklist_rows=selected_checklists,
+        expected_pairs_by_account=expected_pairs_by_account,
+    )
+    mismatch_count_by_checklist: dict[str, int] = {}
+    for row in mismatch_rows_for_period:
+        checklist_row_id = str(row.get("checklistId") or "").strip()
+        if not checklist_row_id:
+            continue
+        mismatch_count_by_checklist[checklist_row_id] = mismatch_count_by_checklist.get(checklist_row_id, 0) + 1
+
     checklist_summaries: list[dict] = []
     for item in selected_checklists:
         row = dict(item)
@@ -1028,6 +1431,9 @@ def get_invoice_checklists_ui_load_data(
         row["accountName"] = account_name_by_code.get(account_code, "")
         row["quarter"] = _quarter_for_month(_ensure_optional_unsigned_int(row.get("month"), field="month"))
         row["searchStations"] = checklist_station_search_map.get(checklist_row_id, [])
+        row["expectedStationCount"] = len(expected_pairs_by_account.get(account_code, set()))
+        row["mismatchStationCount"] = mismatch_count_by_checklist.get(checklist_row_id, 0)
+        row["hasScheduleMismatch"] = row["mismatchStationCount"] > 0
         checklist_summaries.append(row)
 
     selected_checklist_id = str(checklist_id or "").strip() or None
@@ -1064,18 +1470,36 @@ def get_invoice_checklists_ui_load_data(
         ]
         station_metadata = _build_station_metadata(station_codes)
         stations: list[dict] = []
+        expected_pairs_for_selected_checklist = expected_pairs_by_account.get(account_code, set())
+        selected_checklist_mismatch_count = 0
         for station_row in (selected_checklist.get("stations") or []):
             if not isinstance(station_row, dict):
                 continue
             station = dict(station_row)
+            station_est_num = _ensure_optional_unsigned_int(station.get("estNum"), field="estNum")
             station_code = str(station.get("stationCode") or "").strip().upper()
             meta = station_metadata.get(station_code, {})
             station["stationCode"] = station_code
             station["stationName"] = str(meta.get("stationName") or "").strip()
             station["mediaType"] = str(meta.get("mediaType") or "").strip().upper()
             station["repContacts"] = meta.get("repContacts") if isinstance(meta.get("repContacts"), list) else []
+            in_current_schedule = bool(
+                station_est_num is not None
+                and station_code
+                and (int(station_est_num), station_code) in expected_pairs_for_selected_checklist
+            )
+            station["inCurrentSchedule"] = in_current_schedule
+            station["scheduleMismatch"] = not in_current_schedule
+            station["scheduleMismatchReason"] = (
+                "NOT_IN_CURRENT_PERIOD_SCHEDULE" if not in_current_schedule else None
+            )
+            if not in_current_schedule:
+                selected_checklist_mismatch_count += 1
             stations.append(station)
         selected_checklist["stations"] = stations
+        selected_checklist["expectedStationCount"] = len(expected_pairs_for_selected_checklist)
+        selected_checklist["mismatchStationCount"] = selected_checklist_mismatch_count
+        selected_checklist["hasScheduleMismatch"] = selected_checklist_mismatch_count > 0
 
     return {
         "periods": periods,
@@ -1083,4 +1507,5 @@ def get_invoice_checklists_ui_load_data(
         "checklists": checklist_summaries,
         "selectedChecklistId": selected_checklist_id,
         "selectedChecklist": selected_checklist,
+        "mismatchStations": mismatch_rows_for_period,
     }

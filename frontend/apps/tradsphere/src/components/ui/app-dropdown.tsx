@@ -25,6 +25,7 @@ interface AppDropdownProps {
   disabled?: boolean;
   loading?: boolean;
   searchable?: boolean;
+  allowCustomValue?: boolean;
   emptyText?: string;
   className?: string;
   size?: "default" | "sm";
@@ -42,6 +43,7 @@ export function AppDropdown({
   disabled = false,
   loading = false,
   searchable = true,
+  allowCustomValue = false,
   emptyText = "No option found.",
   className,
   size = "default",
@@ -95,6 +97,22 @@ export function AppDropdown({
       [option.label, option.value, option.keywords ?? ""].join(" ").toLowerCase().includes(normalizedQuery),
     );
   }, [options, query, searchable]);
+
+  const normalizedQuery = query.trim();
+  const normalizedQueryLower = normalizedQuery.toLowerCase();
+  const hasExactMatch = normalizedQueryLower.length > 0 && options.some((option) => (
+    option.value.trim().toLowerCase() === normalizedQueryLower
+    || option.label.trim().toLowerCase() === normalizedQueryLower
+  ));
+  const customOption = allowCustomValue && normalizedQuery && !hasExactMatch
+    ? {
+        value: normalizedQuery,
+        label: `Use "${normalizedQuery}"`,
+      }
+    : null;
+  const filteredOptionsWithCustom = customOption
+    ? filteredOptions.concat(customOption)
+    : filteredOptions;
 
   useEffect(() => {
     if (!isOpen) {
@@ -191,7 +209,7 @@ export function AppDropdown({
   }, [isOpen]);
 
   function handleListKeyDown(event: KeyboardEvent<HTMLElement>) {
-    if (!filteredOptions.length) {
+    if (!filteredOptionsWithCustom.length) {
       if (event.key === "Escape") {
         event.preventDefault();
         setIsOpen(false);
@@ -201,7 +219,7 @@ export function AppDropdown({
 
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setHighlightedIndex((current) => Math.min(current + 1, filteredOptions.length - 1));
+      setHighlightedIndex((current) => Math.min(current + 1, filteredOptionsWithCustom.length - 1));
       return;
     }
 
@@ -213,7 +231,7 @@ export function AppDropdown({
 
     if (event.key === "Enter") {
       event.preventDefault();
-      const highlighted = filteredOptions[highlightedIndex];
+      const highlighted = filteredOptionsWithCustom[highlightedIndex];
       if (highlighted) {
         selectValue(highlighted.value);
       }
@@ -233,7 +251,7 @@ export function AppDropdown({
       : selectedOptions.length <= 2
         ? selectedOptions.map((option) => option.label).join(", ")
         : `${selectedOptions[0]?.label || ""}, +${selectedOptions.length - 1}`
-    : (selectedOption?.label || placeholder);
+    : (selectedOption?.label || value || placeholder);
 
   return (
     <div ref={containerRef} data-app-dropdown-root="true" className={cn("relative w-full", className)}>
@@ -293,19 +311,19 @@ export function AppDropdown({
             }}
             onKeyDown={handleListKeyDown}
           >
-            {!filteredOptions.length ? (
+            {!filteredOptionsWithCustom.length ? (
               <p className={cn("px-2 py-3 text-slate-500", isCompact ? "text-xs" : "text-sm")}>
                 {emptyText}
               </p>
             ) : (
               <ul>
-                {filteredOptions.map((option, index) => {
+                {filteredOptionsWithCustom.map((option, index) => {
                   const isSelected = multiple
                     ? selectedValues.includes(option.value)
                     : option.value === value;
                   const isHighlighted = index === highlightedIndex;
                   return (
-                    <li key={option.value}>
+                    <li key={`${option.value}:${index}`}>
                       <button
                         type="button"
                         className={cn(

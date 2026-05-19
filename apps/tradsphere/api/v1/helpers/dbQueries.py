@@ -9,6 +9,7 @@ from shared.normalization import (
     normalize_optional_input_text as _normalize_optional_input_text,
 )
 from shared.tenantDataCache import (
+    delete_tenant_shared_cache_values_by_prefix,
     get_tenant_shared_cache_value,
     set_tenant_shared_cache_value,
 )
@@ -22,8 +23,12 @@ from apps.tradsphere.api.v1.helpers.config import (
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_]+$")
 _DB_READ_CACHE_BUCKET = "db_reads"
 _DB_READ_CACHE_PREFIX = "tradsphere_db_reads::"
+_INV_CHECKLIST_READ_CACHE_PREFIX = _DB_READ_CACHE_PREFIX + "inv_checklist_"
+_INV_CHECKLIST_NOTE_DETAIL_CACHE_SCOPE = "inv_checklist_note_detail"
+_INV_CHECKLIST_NOTE_DETAIL_CACHE_PREFIX = _DB_READ_CACHE_PREFIX + _INV_CHECKLIST_NOTE_DETAIL_CACHE_SCOPE + "::"
 _SCHEDULE_EXISTS_CACHE_BUCKET = "db_reads"
 _SCHEDULE_EXISTS_CACHE_PREFIX = "tradsphere_validation::schedule_has_estnum::"
+_PDF_SCHEDULE_CACHE_PREFIX = "tradsphere_pdf::schedules_data::"
 _EST_NUMS_CREATED_COLUMN_CANDIDATES = (
     "createdAt",
     "created_at",
@@ -181,6 +186,202 @@ def _set_cached_value(cache_key: str, value: object) -> None:
     )
 
 
+def _build_db_read_cache_prefix(cache_scope: str) -> str:
+    return _DB_READ_CACHE_PREFIX + str(cache_scope).strip() + "::"
+
+
+def _invalidate_db_read_cache_scopes(*cache_scopes: str) -> int:
+    removed = 0
+    for cache_scope in cache_scopes:
+        scope = str(cache_scope or "").strip()
+        if not scope:
+            continue
+        removed += int(
+            delete_tenant_shared_cache_values_by_prefix(
+                bucket=_DB_READ_CACHE_BUCKET,
+                cache_key_prefix=_build_db_read_cache_prefix(scope),
+            )
+            or 0
+        )
+    return removed
+
+
+def _invalidate_schedule_exists_cache(*, est_nums: list[int] | None = None) -> int:
+    normalized = _normalized_int_cache_values([int(item) for item in (est_nums or [])])
+    if not normalized:
+        return int(
+            delete_tenant_shared_cache_values_by_prefix(
+                bucket=_SCHEDULE_EXISTS_CACHE_BUCKET,
+                cache_key_prefix=_SCHEDULE_EXISTS_CACHE_PREFIX,
+            )
+            or 0
+        )
+
+    removed = 0
+    for est_num in normalized:
+        removed += int(
+            delete_tenant_shared_cache_values_by_prefix(
+                bucket=_SCHEDULE_EXISTS_CACHE_BUCKET,
+                cache_key_prefix=f"{_SCHEDULE_EXISTS_CACHE_PREFIX}{est_num}",
+            )
+            or 0
+        )
+    return removed
+
+
+def _invalidate_pdf_schedule_cache() -> int:
+    return int(
+        delete_tenant_shared_cache_values_by_prefix(
+            bucket=_DB_READ_CACHE_BUCKET,
+            cache_key_prefix=_PDF_SCHEDULE_CACHE_PREFIX,
+        )
+        or 0
+    )
+
+
+def _invalidate_accounts_related_cache() -> None:
+    _invalidate_db_read_cache_scopes(
+        "accounts",
+        "invoice_checklist_expected_rows",
+    )
+
+
+def _invalidate_est_nums_related_cache() -> None:
+    _invalidate_db_read_cache_scopes(
+        "est_nums",
+        "est_nums_search",
+        "stations",
+        "station_account_codes",
+        "schedule_timeline",
+        "invoice_checklist_expected_rows",
+    )
+    _invalidate_pdf_schedule_cache()
+
+
+def _invalidate_schedules_related_cache(*, est_nums: list[int] | None = None) -> None:
+    _invalidate_db_read_cache_scopes(
+        "schedules",
+        "schedule_weeks",
+        "schedule_timeline",
+        "stations",
+        "station_account_codes",
+        "invoice_checklist_expected_rows",
+    )
+    _invalidate_schedule_exists_cache(est_nums=est_nums)
+    _invalidate_pdf_schedule_cache()
+
+
+def _invalidate_schedule_weeks_related_cache() -> None:
+    _invalidate_db_read_cache_scopes(
+        "schedule_weeks",
+        "schedule_timeline",
+    )
+    _invalidate_pdf_schedule_cache()
+
+
+def _invalidate_delivery_methods_related_cache() -> None:
+    _invalidate_db_read_cache_scopes(
+        "delivery_methods",
+        "stations",
+        "station_detail",
+    )
+
+
+def _invalidate_stations_related_cache() -> None:
+    _invalidate_db_read_cache_scopes(
+        "stations",
+        "station_media_types",
+        "station_detail",
+        "station_contacts_detail",
+        "stations_contacts",
+        "contacts",
+        "contacts_by_station_codes",
+    )
+    _invalidate_pdf_schedule_cache()
+
+
+def _invalidate_contacts_related_cache() -> None:
+    _invalidate_db_read_cache_scopes(
+        "contacts",
+        "contacts_by_station_codes",
+        "station_contacts_detail",
+    )
+
+
+def _invalidate_stations_contacts_related_cache() -> None:
+    _invalidate_db_read_cache_scopes(
+        "stations_contacts",
+        "contacts",
+        "contacts_by_station_codes",
+        "station_contacts_detail",
+    )
+
+
+def _invalidate_inv_checklist_note_detail_cache() -> None:
+    delete_tenant_shared_cache_values_by_prefix(
+        bucket=_DB_READ_CACHE_BUCKET,
+        cache_key_prefix=_INV_CHECKLIST_NOTE_DETAIL_CACHE_PREFIX,
+    )
+
+
+def _invalidate_inv_checklist_list_cache() -> int:
+    return _invalidate_db_read_cache_scopes("inv_checklists")
+
+
+def _invalidate_inv_checklist_row_cache(*, checklist_ids: list[str] | None = None) -> int:
+    normalized_ids = _normalized_text_cache_values(
+        [str(item or "").strip() for item in (checklist_ids or [])]
+    )
+    if not normalized_ids:
+        return _invalidate_db_read_cache_scopes("inv_checklist_row")
+
+    tables = get_db_tables()
+    checklist_table = _quote_table_name(tables["INVCHECKLISTS"])
+    removed = 0
+    for checklist_id in normalized_ids:
+        removed += int(
+            delete_tenant_shared_cache_values_by_prefix(
+                bucket=_DB_READ_CACHE_BUCKET,
+                cache_key_prefix=_build_db_read_cache_key(
+                    "inv_checklist_row",
+                    "schema=v1",
+                    f"table={checklist_table}",
+                    f"checklist_id={checklist_id}",
+                ),
+            )
+            or 0
+        )
+    return removed
+
+
+def _invalidate_inv_checklist_station_scopes(
+    *,
+    include_checklists_scope: bool,
+) -> int:
+    scopes: list[str] = [
+        "inv_checklist_stations",
+        "inv_checklist_station_rows",
+        "inv_checklist_station_search",
+    ]
+    if include_checklists_scope:
+        scopes.insert(0, "inv_checklists")
+    return _invalidate_db_read_cache_scopes(*scopes)
+
+
+def _invalidate_inv_checklist_all_related_scopes() -> int:
+    return int(
+        delete_tenant_shared_cache_values_by_prefix(
+            bucket=_DB_READ_CACHE_BUCKET,
+            cache_key_prefix=_INV_CHECKLIST_READ_CACHE_PREFIX,
+        )
+        or 0
+    )
+
+
+def invalidate_inv_checklist_related_cache_for_bulk_write() -> int:
+    return _invalidate_inv_checklist_all_related_scopes()
+
+
 def _get_table_columns(
     *,
     table_name_quoted: str,
@@ -311,7 +512,10 @@ def insert_accounts(items: list[dict]) -> int:
         f"INSERT INTO {accounts_table} (accountCode, billingType, market, note) "
         "VALUES (%s, %s, %s, %s)"
     )
-    return execute_many(query, values)
+    inserted = execute_many(query, values)
+    if int(inserted or 0) > 0:
+        _invalidate_accounts_related_cache()
+    return inserted
 
 
 def update_accounts(items: list[dict]) -> int:
@@ -362,7 +566,10 @@ def update_accounts(items: list[dict]) -> int:
             updated += int(cursor.rowcount or 0)
         return updated
 
-    return run_transaction(_work)
+    updated = run_transaction(_work)
+    if int(updated or 0) > 0:
+        _invalidate_accounts_related_cache()
+    return updated
 
 
 def get_est_nums(
@@ -661,7 +868,10 @@ def insert_est_nums(items: list[dict]) -> int:
         f"INSERT INTO {est_nums_table} (estNum, accountCode, flightStart, flightEnd, mediaType, buyer, note) "
         "VALUES (%s, %s, %s, %s, %s, %s, %s)"
     )
-    return execute_many(query, values)
+    inserted = execute_many(query, values)
+    if int(inserted or 0) > 0:
+        _invalidate_est_nums_related_cache()
+    return inserted
 
 
 def update_est_nums(items: list[dict]) -> int:
@@ -732,7 +942,10 @@ def update_est_nums(items: list[dict]) -> int:
             updated += int(cursor.rowcount or 0)
         return updated
 
-    return run_transaction(_work)
+    updated = run_transaction(_work)
+    if int(updated or 0) > 0:
+        _invalidate_est_nums_related_cache()
+    return updated
 
 
 def get_schedules(
@@ -866,6 +1079,54 @@ def get_schedules(
         query += " WHERE " + " AND ".join(where_clauses)
     query += " ORDER BY broadcastYear ASC, broadcastMonth ASC, startDate ASC, id ASC"
     rows = fetch_all(query, tuple(params))
+    _set_cached_value(cache_key, rows)
+    return rows
+
+
+def list_schedule_invoice_checklist_expected_rows(
+    *,
+    broadcast_year: int,
+    broadcast_month: int,
+) -> list[dict]:
+    tables = get_db_tables()
+    schedules_table = _quote_table_name(tables["SCHEDULES"])
+    est_nums_table = _quote_table_name(tables["ESTNUMS"])
+    tradsphere_accounts_table = _quote_table_name(tables["ACCOUNTS"])
+
+    normalized_broadcast_year = int(broadcast_year)
+    normalized_broadcast_month = int(broadcast_month)
+
+    cache_key = _build_db_read_cache_key(
+        "invoice_checklist_expected_rows",
+        "schema=v1",
+        f"schedules_table={schedules_table}",
+        f"est_nums_table={est_nums_table}",
+        f"tradsphere_accounts_table={tradsphere_accounts_table}",
+        f"broadcast_year={normalized_broadcast_year}",
+        f"broadcast_month={normalized_broadcast_month}",
+    )
+    cached_rows = _get_cached_list(
+        cache_key,
+        ttl_key="db_schedules_ttl_time",
+    )
+    if cached_rows is not None:
+        return cached_rows
+
+    query = (
+        "SELECT DISTINCT "
+        "UPPER(TRIM(en.accountCode)) AS accountCode, "
+        "s.estNum AS estNum, "
+        "UPPER(TRIM(s.stationCode)) AS stationCode "
+        f"FROM {schedules_table} s "
+        f"INNER JOIN {est_nums_table} en ON en.estNum = s.estNum "
+        f"INNER JOIN {tradsphere_accounts_table} ta ON UPPER(ta.accountCode) = UPPER(en.accountCode) "
+        "WHERE s.broadcastYear = %s "
+        "AND s.broadcastMonth = %s "
+        "AND COALESCE(TRIM(en.accountCode), '') <> '' "
+        "AND COALESCE(TRIM(s.stationCode), '') <> '' "
+        "ORDER BY accountCode ASC, s.estNum ASC, stationCode ASC"
+    )
+    rows = fetch_all(query, (normalized_broadcast_year, normalized_broadcast_month))
     _set_cached_value(cache_key, rows)
     return rows
 
@@ -1077,7 +1338,10 @@ def insert_schedules(items: list[dict]) -> int:
         "rtg = VALUES(rtg), "
         "matchKey = VALUES(matchKey)"
     )
-    return execute_many(query, values)
+    inserted = execute_many(query, values)
+    if int(inserted or 0) > 0:
+        _invalidate_schedules_related_cache()
+    return inserted
 
 
 def update_schedules(items: list[dict]) -> int:
@@ -1222,7 +1486,10 @@ def update_schedules(items: list[dict]) -> int:
             updated += int(cursor.rowcount or 0)
         return updated
 
-    return run_transaction(_work)
+    updated = run_transaction(_work)
+    if int(updated or 0) > 0:
+        _invalidate_schedules_related_cache()
+    return updated
 
 
 def get_schedule_weeks(
@@ -1239,13 +1506,15 @@ def get_schedule_weeks(
     where_clauses: list[str] = []
     params: list[object] = []
 
-    normalized_ids = [int(item) for item in (ids or [])]
+    normalized_ids = _normalized_int_cache_values([int(item) for item in (ids or [])])
     if normalized_ids:
         placeholders = _build_in_placeholders(normalized_ids)
         where_clauses.append(f"id IN ({placeholders})")
         params.extend(normalized_ids)
 
-    normalized_schedule_ids = [str(item or "").strip() for item in (schedule_ids or [])]
+    normalized_schedule_ids = _normalized_text_cache_values(
+        [str(item or "").strip() for item in (schedule_ids or [])]
+    )
     normalized_schedule_ids = [item for item in normalized_schedule_ids if item]
     if normalized_schedule_ids:
         placeholders = _build_in_placeholders(normalized_schedule_ids)
@@ -1265,6 +1534,24 @@ def get_schedule_weeks(
         where_clauses.append("weekEnd <= %s")
         params.append(str(week_end_to))
 
+    cache_key = _build_db_read_cache_key(
+        "schedule_weeks",
+        f"schedules_weeks_table={schedules_weeks_table}",
+        "ids=" + (",".join(map(str, normalized_ids)) if normalized_ids else "*"),
+        "schedule_ids="
+        + (",".join(normalized_schedule_ids) if normalized_schedule_ids else "*"),
+        f"week_start_from={str(week_start_from) if week_start_from is not None else '*'}",
+        f"week_start_to={str(week_start_to) if week_start_to is not None else '*'}",
+        f"week_end_from={str(week_end_from) if week_end_from is not None else '*'}",
+        f"week_end_to={str(week_end_to) if week_end_to is not None else '*'}",
+    )
+    cached_rows = _get_cached_list(
+        cache_key,
+        ttl_key="db_schedule_weeks_ttl_time",
+    )
+    if cached_rows is not None:
+        return cached_rows
+
     query = (
         "SELECT id, scheduleId, weekStart, weekEnd, spots "
         f"FROM {schedules_weeks_table}"
@@ -1272,7 +1559,9 @@ def get_schedule_weeks(
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
     query += " ORDER BY weekStart ASC, scheduleId ASC, id ASC"
-    return fetch_all(query, tuple(params))
+    rows = fetch_all(query, tuple(params))
+    _set_cached_value(cache_key, rows)
+    return rows
 
 
 def insert_schedule_weeks(items: list[dict]) -> int:
@@ -1304,7 +1593,10 @@ def insert_schedule_weeks(items: list[dict]) -> int:
         "weekEnd = VALUES(weekEnd), "
         "spots = VALUES(spots)"
     )
-    return execute_many(query, values)
+    inserted = execute_many(query, values)
+    if int(inserted or 0) > 0:
+        _invalidate_schedule_weeks_related_cache()
+    return inserted
 
 
 def update_schedule_weeks(items: list[dict]) -> int:
@@ -1359,7 +1651,10 @@ def update_schedule_weeks(items: list[dict]) -> int:
             updated += int(cursor.rowcount or 0)
         return updated
 
-    return run_transaction(_work)
+    updated = run_transaction(_work)
+    if int(updated or 0) > 0:
+        _invalidate_schedule_weeks_related_cache()
+    return updated
 
 
 def get_delivery_methods(*, ids: list[int] | None = None) -> list[dict]:
@@ -1367,11 +1662,23 @@ def get_delivery_methods(*, ids: list[int] | None = None) -> list[dict]:
     delivery_methods_table = _quote_table_name(tables["DELIVERYMETHODS"])
     where_clauses: list[str] = []
     params: list[object] = []
-    normalized_ids = [int(item) for item in (ids or [])]
+    normalized_ids = _normalized_int_cache_values([int(item) for item in (ids or [])])
     if normalized_ids:
         placeholders = _build_in_placeholders(normalized_ids)
         where_clauses.append(f"id IN ({placeholders})")
         params.extend(normalized_ids)
+
+    cache_key = _build_db_read_cache_key(
+        "delivery_methods",
+        f"delivery_methods_table={delivery_methods_table}",
+        "ids=" + (",".join(map(str, normalized_ids)) if normalized_ids else "*"),
+    )
+    cached_rows = _get_cached_list(
+        cache_key,
+        ttl_key="db_delivery_methods_ttl_time",
+    )
+    if cached_rows is not None:
+        return cached_rows
 
     query = (
         "SELECT id, name, url, username, password, deadline, note "
@@ -1380,7 +1687,9 @@ def get_delivery_methods(*, ids: list[int] | None = None) -> list[dict]:
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
     query += " ORDER BY id ASC"
-    return fetch_all(query, tuple(params))
+    rows = fetch_all(query, tuple(params))
+    _set_cached_value(cache_key, rows)
+    return rows
 
 
 def insert_delivery_methods(items: list[dict]) -> int:
@@ -1413,7 +1722,10 @@ def insert_delivery_methods(items: list[dict]) -> int:
         "password = VALUES(password), "
         "note = VALUES(note)"
     )
-    return execute_many(query, values)
+    inserted = execute_many(query, values)
+    if int(inserted or 0) > 0:
+        _invalidate_delivery_methods_related_cache()
+    return inserted
 
 
 def get_stations(
@@ -1627,16 +1939,18 @@ def get_station_account_codes(
     account_codes: list[str] | None = None,
     est_nums: list[int] | None = None,
 ) -> dict[str, list[str]]:
-    normalized_station_codes = [_normalize_account_code(code) for code in station_codes]
+    normalized_station_codes = _normalized_text_cache_values(
+        [_normalize_account_code(code) for code in station_codes]
+    )
     normalized_station_codes = [code for code in normalized_station_codes if code]
     if not normalized_station_codes:
         return {}
 
-    normalized_account_codes = [
-        _normalize_account_code(item) for item in (account_codes or [])
-    ]
+    normalized_account_codes = _normalized_text_cache_values(
+        [_normalize_account_code(item) for item in (account_codes or [])]
+    )
     normalized_account_codes = [item for item in normalized_account_codes if item]
-    normalized_est_nums = [int(item) for item in (est_nums or [])]
+    normalized_est_nums = _normalized_int_cache_values([int(item) for item in (est_nums or [])])
 
     tables = get_db_tables()
     schedules_table = _quote_table_name(tables["SCHEDULES"])
@@ -1659,6 +1973,33 @@ def get_station_account_codes(
         where_clauses.append(f"UPPER(en.accountCode) IN ({placeholders})")
         params.extend(normalized_account_codes)
 
+    cache_key = _build_db_read_cache_key(
+        "station_account_codes",
+        f"schedules_table={schedules_table}",
+        f"est_nums_table={est_nums_table}",
+        "station_codes=" + ",".join(normalized_station_codes),
+        "account_codes="
+        + (",".join(normalized_account_codes) if normalized_account_codes else "*"),
+        "est_nums=" + (",".join(map(str, normalized_est_nums)) if normalized_est_nums else "*"),
+    )
+    cached_rows = _get_cached_list(
+        cache_key,
+        ttl_key="db_station_account_codes_ttl_time",
+    )
+    if cached_rows is not None:
+        grouped: dict[str, list[str]] = {}
+        for row in cached_rows:
+            if not isinstance(row, dict):
+                continue
+            station_code = str(row.get("stationCode") or "").strip().upper()
+            account_code = str(row.get("accountCode") or "").strip().upper()
+            if not station_code or not account_code:
+                continue
+            grouped.setdefault(station_code, []).append(account_code)
+        for station_code, codes in grouped.items():
+            grouped[station_code] = sorted(set(codes))
+        return grouped
+
     query = (
         "SELECT DISTINCT "
         "UPPER(sc.stationCode) AS stationCode, "
@@ -1669,6 +2010,7 @@ def get_station_account_codes(
         "ORDER BY stationCode ASC, accountCode ASC"
     )
     rows = fetch_all(query, tuple(params))
+    _set_cached_value(cache_key, rows)
 
     grouped: dict[str, list[str]] = {}
     for row in rows:
@@ -1735,7 +2077,10 @@ def insert_stations(items: list[dict]) -> int:
         "deliveryMethodId = VALUES(deliveryMethodId), "
         "note = VALUES(note)"
     )
-    return execute_many(query, values)
+    inserted = execute_many(query, values)
+    if int(inserted or 0) > 0:
+        _invalidate_stations_related_cache()
+    return inserted
 
 
 def update_stations(items: list[dict]) -> int:
@@ -1807,7 +2152,10 @@ def update_stations(items: list[dict]) -> int:
             updated += int(cursor.rowcount or 0)
         return updated
 
-    return run_transaction(_work)
+    updated = run_transaction(_work)
+    if int(updated or 0) > 0:
+        _invalidate_stations_related_cache()
+    return updated
 
 
 def update_delivery_methods(items: list[dict]) -> int:
@@ -1867,7 +2215,10 @@ def update_delivery_methods(items: list[dict]) -> int:
             updated += int(cursor.rowcount or 0)
         return updated
 
-    return run_transaction(_work)
+    updated = run_transaction(_work)
+    if int(updated or 0) > 0:
+        _invalidate_delivery_methods_related_cache()
+    return updated
 
 
 def get_contacts(
@@ -2019,6 +2370,21 @@ def get_contacts_by_station_codes(
     where_clauses.append("sc.active = 1")
     where_clauses.append("c.active = 1")
 
+    cache_key = _build_db_read_cache_key(
+        "contacts_by_station_codes",
+        f"contacts_table={contacts_table}",
+        f"stations_contacts_table={stations_contacts_table}",
+        "station_codes=" + ",".join(normalized_station_codes),
+        "contact_types="
+        + (",".join(normalized_contact_types) if normalized_contact_types else "*"),
+    )
+    cached_rows = _get_cached_list(
+        cache_key,
+        ttl_key="db_contacts_by_station_codes_ttl_time",
+    )
+    if cached_rows is not None:
+        return cached_rows
+
     query = (
         "SELECT "
         "sc.stationCode AS stationCode, "
@@ -2041,7 +2407,9 @@ def get_contacts_by_station_codes(
         + " AND ".join(where_clauses)
         + " ORDER BY sc.stationCode ASC, sc.primaryContact DESC, c.id ASC"
     )
-    return fetch_all(query, tuple(params))
+    rows = fetch_all(query, tuple(params))
+    _set_cached_value(cache_key, rows)
+    return rows
 
 
 def insert_contacts(items: list[dict]) -> int:
@@ -2077,7 +2445,10 @@ def insert_contacts(items: list[dict]) -> int:
         "(firstName, lastName, company, jobTitle, office, cell, email, active, note) "
         "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)"
     )
-    return execute_many(query, values)
+    inserted = execute_many(query, values)
+    if int(inserted or 0) > 0:
+        _invalidate_contacts_related_cache()
+    return inserted
 
 
 def update_contacts(items: list[dict]) -> int:
@@ -2140,7 +2511,10 @@ def update_contacts(items: list[dict]) -> int:
             updated += int(cursor.rowcount or 0)
         return updated
 
-    return run_transaction(_work)
+    updated = run_transaction(_work)
+    if int(updated or 0) > 0:
+        _invalidate_contacts_related_cache()
+    return updated
 
 
 def find_existing_emails(
@@ -2185,7 +2559,7 @@ def get_stations_contacts(
     where_clauses: list[str] = []
     params: list[object] = []
 
-    normalized_ids = [int(item) for item in (ids or [])]
+    normalized_ids = _normalized_int_cache_values([int(item) for item in (ids or [])])
     if normalized_ids:
         placeholders = _build_in_placeholders(normalized_ids)
         where_clauses.append(f"sc.id IN ({placeholders})")
@@ -2200,7 +2574,7 @@ def get_stations_contacts(
         where_clauses.append(f"UPPER(sc.stationCode) IN ({placeholders})")
         params.extend(normalized_station_codes)
 
-    normalized_contact_ids = [int(item) for item in (contact_ids or [])]
+    normalized_contact_ids = _normalized_int_cache_values([int(item) for item in (contact_ids or [])])
     if normalized_contact_ids:
         placeholders = _build_in_placeholders(normalized_contact_ids)
         where_clauses.append(f"sc.contactId IN ({placeholders})")
@@ -2209,6 +2583,24 @@ def get_stations_contacts(
     if active is not None:
         where_clauses.append("sc.active = %s")
         params.append(1 if active else 0)
+
+    cache_key = _build_db_read_cache_key(
+        "stations_contacts",
+        f"stations_contacts_table={stations_contacts_table}",
+        f"stations_table={stations_table}",
+        "ids=" + (",".join(map(str, normalized_ids)) if normalized_ids else "*"),
+        "station_codes="
+        + (",".join(normalized_station_codes) if normalized_station_codes else "*"),
+        "contact_ids="
+        + (",".join(map(str, normalized_contact_ids)) if normalized_contact_ids else "*"),
+        f"active={int(active) if active is not None else '*'}",
+    )
+    cached_rows = _get_cached_list(
+        cache_key,
+        ttl_key="db_stations_contacts_ttl_time",
+    )
+    if cached_rows is not None:
+        return cached_rows
 
     query = (
         "SELECT "
@@ -2230,7 +2622,9 @@ def get_stations_contacts(
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
     query += " ORDER BY sc.id ASC"
-    return fetch_all(query, tuple(params))
+    rows = fetch_all(query, tuple(params))
+    _set_cached_value(cache_key, rows)
+    return rows
 
 
 def get_station_detail_row(*, code: str) -> dict | None:
@@ -2241,6 +2635,22 @@ def get_station_detail_row(*, code: str) -> dict | None:
     tables = get_db_tables()
     stations_table = _quote_table_name(tables["STATIONS"])
     delivery_methods_table = _quote_table_name(tables["DELIVERYMETHODS"])
+    cache_key = _build_db_read_cache_key(
+        "station_detail",
+        f"stations_table={stations_table}",
+        f"delivery_methods_table={delivery_methods_table}",
+        f"code={normalized_code}",
+    )
+    cached_rows = _get_cached_list(
+        cache_key,
+        ttl_key="db_station_detail_ttl_time",
+    )
+    if cached_rows is not None:
+        if not cached_rows:
+            return None
+        first_row = cached_rows[0]
+        if isinstance(first_row, dict):
+            return first_row
 
     query = (
         "SELECT "
@@ -2266,6 +2676,7 @@ def get_station_detail_row(*, code: str) -> dict | None:
         "LIMIT 1"
     )
     rows = fetch_all(query, (normalized_code,))
+    _set_cached_value(cache_key, rows)
     if not rows:
         return None
     return rows[0]
@@ -2283,6 +2694,19 @@ def get_station_contacts_detail_rows(
     tables = get_db_tables()
     stations_contacts_table = _quote_table_name(tables["STATIONSCONTACTS"])
     contacts_table = _quote_table_name(tables["CONTACTS"])
+    cache_key = _build_db_read_cache_key(
+        "station_contacts_detail",
+        f"stations_contacts_table={stations_contacts_table}",
+        f"contacts_table={contacts_table}",
+        f"station_code={normalized_code}",
+        f"active_only={int(bool(active_only))}",
+    )
+    cached_rows = _get_cached_list(
+        cache_key,
+        ttl_key="db_station_contacts_detail_ttl_time",
+    )
+    if cached_rows is not None:
+        return cached_rows
 
     where_clauses = ["UPPER(sc.stationCode) = UPPER(%s)"]
     params: list[object] = [normalized_code]
@@ -2314,7 +2738,9 @@ def get_station_contacts_detail_rows(
         + " AND ".join(where_clauses)
         + " ORDER BY sc.primaryContact DESC, sc.id ASC"
     )
-    return fetch_all(query, tuple(params))
+    rows = fetch_all(query, tuple(params))
+    _set_cached_value(cache_key, rows)
+    return rows
 
 
 def save_station_detail_bundle(
@@ -2920,7 +3346,31 @@ def save_station_detail_bundle(
             "summary": summary,
         }
 
-    return run_transaction(_work, cursor_kwargs={"dictionary": True})
+    result = run_transaction(_work, cursor_kwargs={"dictionary": True})
+    summary = result.get("summary") if isinstance(result, dict) else None
+    if isinstance(summary, dict):
+        has_station_or_delivery_change = bool(
+            summary.get("deliveryMethodCreated")
+            or summary.get("deliveryMethodUpdated")
+            or summary.get("stationCreated")
+            or summary.get("stationUpdated")
+        )
+        has_contact_change = int(summary.get("contactsCreated") or 0) > 0 or int(
+            summary.get("contactsUpdated") or 0
+        ) > 0
+        has_link_change = (
+            int(summary.get("linksCreatedOrReactivated") or 0) > 0
+            or int(summary.get("linksUpdated") or 0) > 0
+            or int(summary.get("linksDeactivated") or 0) > 0
+        )
+        if has_station_or_delivery_change:
+            _invalidate_stations_related_cache()
+            _invalidate_delivery_methods_related_cache()
+        if has_contact_change:
+            _invalidate_contacts_related_cache()
+        if has_link_change:
+            _invalidate_stations_contacts_related_cache()
+    return result
 
 
 def insert_stations_contacts(items: list[dict]) -> int:
@@ -2959,7 +3409,10 @@ def insert_stations_contacts(items: list[dict]) -> int:
         "note = VALUES(note), "
         "active = VALUES(active)"
     )
-    return execute_many(query, values)
+    inserted = execute_many(query, values)
+    if int(inserted or 0) > 0:
+        _invalidate_stations_contacts_related_cache()
+    return inserted
 
 
 def update_stations_contacts(items: list[dict]) -> int:
@@ -3020,7 +3473,10 @@ def update_stations_contacts(items: list[dict]) -> int:
             updated += int(cursor.rowcount or 0)
         return updated
 
-    return run_transaction(_work)
+    updated = run_transaction(_work)
+    if int(updated or 0) > 0:
+        _invalidate_stations_contacts_related_cache()
+    return updated
 
 
 def get_all_tradsphere_account_codes() -> list[str]:
@@ -3155,6 +3611,23 @@ def list_inv_checklists(
         where_clauses.append("c.status = %s")
         params.append(normalized_status)
 
+    cache_key = _build_db_read_cache_key(
+        "inv_checklists",
+        "schema=v1",
+        f"checklist_table={checklist_table}",
+        f"station_table={station_table}",
+        f"account_code={normalized_account_code or '*'}",
+        f"year={int(year) if year is not None else '*'}",
+        f"month={int(month) if month is not None else '*'}",
+        f"status={normalized_status if normalized_status is not None else '*'}",
+    )
+    cached_rows = _get_cached_list(
+        cache_key,
+        ttl_key="db_inv_checklists_ttl_time",
+    )
+    if cached_rows is not None:
+        return cached_rows
+
     query = (
         "SELECT "
         "c.id AS id, "
@@ -3177,7 +3650,9 @@ def list_inv_checklists(
         query += " WHERE " + " AND ".join(where_clauses)
     query += " ORDER BY c.year DESC, c.month DESC, c.accountCode ASC, c.dateUpdated DESC"
 
-    return fetch_all(query, tuple(params))
+    rows = fetch_all(query, tuple(params))
+    _set_cached_value(cache_key, rows)
+    return rows
 
 
 def get_inv_checklist_row(*, checklist_id: str) -> dict | None:
@@ -3186,6 +3661,24 @@ def get_inv_checklist_row(*, checklist_id: str) -> dict | None:
         return None
     tables = get_db_tables()
     checklist_table = _quote_table_name(tables["INVCHECKLISTS"])
+
+    cache_key = _build_db_read_cache_key(
+        "inv_checklist_row",
+        "schema=v1",
+        f"table={checklist_table}",
+        f"checklist_id={checklist_id_text}",
+    )
+    cached_rows = _get_cached_list(
+        cache_key,
+        ttl_key="db_inv_checklist_row_ttl_time",
+    )
+    if cached_rows is not None:
+        if not cached_rows:
+            return None
+        first_row = cached_rows[0]
+        if isinstance(first_row, dict):
+            return first_row
+
     rows = fetch_all(
         (
             "SELECT "
@@ -3196,6 +3689,7 @@ def get_inv_checklist_row(*, checklist_id: str) -> dict | None:
         ),
         (checklist_id_text,),
     )
+    _set_cached_value(cache_key, rows)
     if not rows:
         return None
     return rows[0]
@@ -3264,7 +3758,13 @@ def insert_inv_checklist(item: dict) -> int:
         _normalize_optional_input_text(item.get("status")),
         _normalize_optional_input_text(item.get("note")),
     )
-    return execute_many(query, [values])
+    inserted = execute_many(query, [values])
+    if int(inserted or 0) > 0:
+        _invalidate_inv_checklist_list_cache()
+        _invalidate_inv_checklist_row_cache(
+            checklist_ids=[str(item.get("id") or "").strip()]
+        )
+    return inserted
 
 
 def update_inv_checklist(
@@ -3303,11 +3803,15 @@ def update_inv_checklist(
         "SET " + ", ".join(updates) + " "
         "WHERE id = %s"
     )
-    return run_transaction(
+    updated = run_transaction(
         lambda cursor: (
             cursor.execute(query, tuple(params)) or int(cursor.rowcount or 0)
         )
     )
+    if int(updated or 0) > 0:
+        _invalidate_inv_checklist_list_cache()
+        _invalidate_inv_checklist_row_cache(checklist_ids=[str(checklist_id or "").strip()])
+    return updated
 
 
 def delete_inv_checklist(*, checklist_id: str) -> int:
@@ -3316,7 +3820,7 @@ def delete_inv_checklist(*, checklist_id: str) -> int:
         return 0
     tables = get_db_tables()
     checklist_table = _quote_table_name(tables["INVCHECKLISTS"])
-    return run_transaction(
+    deleted = run_transaction(
         lambda cursor: (
             cursor.execute(
                 f"DELETE FROM {checklist_table} WHERE id = %s",
@@ -3325,6 +3829,10 @@ def delete_inv_checklist(*, checklist_id: str) -> int:
             or int(cursor.rowcount or 0)
         )
     )
+    if int(deleted or 0) > 0:
+        _invalidate_inv_checklist_all_related_scopes()
+        _invalidate_inv_checklist_note_detail_cache()
+    return deleted
 
 
 def get_inv_checklist_station_row(*, station_row_id: int) -> dict | None:
@@ -3382,6 +3890,23 @@ def list_inv_checklist_stations(
         where_clauses.append("status = %s")
         params.append(normalized_status)
 
+    cache_key = _build_db_read_cache_key(
+        "inv_checklist_stations",
+        "schema=v1",
+        f"table={station_table}",
+        f"checklist_id={checklist_id_text or '*'}",
+        f"station_row_id={int(station_row_id) if station_row_id is not None else '*'}",
+        f"est_num={int(est_num) if est_num is not None else '*'}",
+        f"station_code={normalized_station_code or '*'}",
+        f"status={normalized_status if normalized_status is not None else '*'}",
+    )
+    cached_rows = _get_cached_list(
+        cache_key,
+        ttl_key="db_inv_checklist_stations_ttl_time",
+    )
+    if cached_rows is not None:
+        return cached_rows
+
     query = (
         "SELECT "
         "id, checklistId, estNum, stationCode, status, dateCreated, dateUpdated "
@@ -3390,23 +3915,33 @@ def list_inv_checklist_stations(
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
     query += " ORDER BY id ASC"
-    return fetch_all(query, tuple(params))
+    rows = fetch_all(query, tuple(params))
+    _set_cached_value(cache_key, rows)
+    return rows
 
 
 def list_inv_checklist_station_search_rows(*, checklist_ids: list[str]) -> list[dict]:
-    normalized_ids: list[str] = []
-    seen: set[str] = set()
-    for raw in checklist_ids:
-        checklist_id = str(raw or "").strip()
-        if not checklist_id or checklist_id in seen:
-            continue
-        seen.add(checklist_id)
-        normalized_ids.append(checklist_id)
+    normalized_ids = _normalized_text_cache_values(
+        [str(raw or "").strip() for raw in checklist_ids]
+    )
     if not normalized_ids:
         return []
 
     tables = get_db_tables()
     station_table = _quote_table_name(tables["INVCHECKLISTSTATIONS"])
+    cache_key = _build_db_read_cache_key(
+        "inv_checklist_station_search",
+        "schema=v1",
+        f"table={station_table}",
+        "checklist_ids=" + ",".join(normalized_ids),
+    )
+    cached_rows = _get_cached_list(
+        cache_key,
+        ttl_key="db_inv_checklist_station_search_ttl_time",
+    )
+    if cached_rows is not None:
+        return cached_rows
+
     placeholders = ", ".join(["%s"] * len(normalized_ids))
     query = (
         "SELECT "
@@ -3415,7 +3950,44 @@ def list_inv_checklist_station_search_rows(*, checklist_ids: list[str]) -> list[
         f"WHERE checklistId IN ({placeholders}) "
         "ORDER BY checklistId ASC, id ASC"
     )
-    return fetch_all(query, tuple(normalized_ids))
+    rows = fetch_all(query, tuple(normalized_ids))
+    _set_cached_value(cache_key, rows)
+    return rows
+
+
+def list_inv_checklist_station_rows_for_checklists(*, checklist_ids: list[str]) -> list[dict]:
+    normalized_ids = _normalized_text_cache_values(
+        [str(raw or "").strip() for raw in checklist_ids]
+    )
+    if not normalized_ids:
+        return []
+
+    tables = get_db_tables()
+    station_table = _quote_table_name(tables["INVCHECKLISTSTATIONS"])
+    cache_key = _build_db_read_cache_key(
+        "inv_checklist_station_rows",
+        "schema=v1",
+        f"table={station_table}",
+        "checklist_ids=" + ",".join(normalized_ids),
+    )
+    cached_rows = _get_cached_list(
+        cache_key,
+        ttl_key="db_inv_checklist_station_rows_ttl_time",
+    )
+    if cached_rows is not None:
+        return cached_rows
+
+    placeholders = ", ".join(["%s"] * len(normalized_ids))
+    query = (
+        "SELECT "
+        "id, checklistId, estNum, stationCode, status, dateCreated, dateUpdated "
+        f"FROM {station_table} "
+        f"WHERE checklistId IN ({placeholders}) "
+        "ORDER BY checklistId ASC, id ASC"
+    )
+    rows = fetch_all(query, tuple(normalized_ids))
+    _set_cached_value(cache_key, rows)
+    return rows
 
 
 def insert_inv_checklist_station(item: dict) -> int:
@@ -3439,7 +4011,10 @@ def insert_inv_checklist_station(item: dict) -> int:
         )
         return int(cursor.lastrowid or 0)
 
-    return run_transaction(_work)
+    inserted = run_transaction(_work)
+    if int(inserted or 0) > 0:
+        _invalidate_inv_checklist_station_scopes(include_checklists_scope=True)
+    return inserted
 
 
 def update_inv_checklist_station(
@@ -3471,18 +4046,22 @@ def update_inv_checklist_station(
         "SET " + ", ".join(updates) + " "
         "WHERE id = %s"
     )
-    return run_transaction(
+    updated = run_transaction(
         lambda cursor: (
             cursor.execute(query, tuple(params)) or int(cursor.rowcount or 0)
         )
     )
+    if int(updated or 0) > 0:
+        _invalidate_inv_checklist_station_scopes(include_checklists_scope=False)
+        _invalidate_inv_checklist_note_detail_cache()
+    return updated
 
 
 def delete_inv_checklist_station(*, station_row_id: int) -> int:
     station_row_id_int = int(station_row_id)
     tables = get_db_tables()
     station_table = _quote_table_name(tables["INVCHECKLISTSTATIONS"])
-    return run_transaction(
+    deleted = run_transaction(
         lambda cursor: (
             cursor.execute(
                 f"DELETE FROM {station_table} WHERE id = %s",
@@ -3491,6 +4070,10 @@ def delete_inv_checklist_station(*, station_row_id: int) -> int:
             or int(cursor.rowcount or 0)
         )
     )
+    if int(deleted or 0) > 0:
+        _invalidate_inv_checklist_station_scopes(include_checklists_scope=True)
+        _invalidate_inv_checklist_note_detail_cache()
+    return deleted
 
 
 def get_inv_checklist_note_row(*, note_id: int) -> dict | None:
@@ -3541,6 +4124,109 @@ def list_inv_checklist_notes(
     return fetch_all(query, tuple(params))
 
 
+def list_inv_checklist_note_detail_rows(
+    *,
+    checklist_station_id: int | None = None,
+    note_id: int | None = None,
+    est_num: int | None = None,
+    station_code: str | None = None,
+    checklist_id: str | None = None,
+    limit: int | None = None,
+) -> list[dict]:
+    tables = get_db_tables()
+    checklist_table = _quote_table_name(tables["INVCHECKLISTS"])
+    station_table = _quote_table_name(tables["INVCHECKLISTSTATIONS"])
+    note_table = _quote_table_name(tables["INVCHECKLISTNOTES"])
+    attachment_table = _quote_table_name(tables["INVNOTEATTACHMENTS"])
+
+    where_clauses: list[str] = []
+    params: list[object] = []
+
+    if checklist_station_id is not None:
+        where_clauses.append("n.checklistStationId = %s")
+        params.append(int(checklist_station_id))
+
+    if note_id is not None:
+        where_clauses.append("n.id = %s")
+        params.append(int(note_id))
+
+    if est_num is not None:
+        where_clauses.append("s.estNum = %s")
+        params.append(int(est_num))
+
+    normalized_station_code = _normalize_account_code(station_code) if station_code else ""
+    if normalized_station_code:
+        where_clauses.append("UPPER(s.stationCode) = UPPER(%s)")
+        params.append(normalized_station_code)
+
+    checklist_id_text = str(checklist_id or "").strip()
+    if checklist_id_text:
+        where_clauses.append("s.checklistId = %s")
+        params.append(checklist_id_text)
+
+    cacheable_station_match_query = (
+        est_num is not None
+        and bool(normalized_station_code)
+        and note_id is None
+        and checklist_station_id is None
+    )
+    cache_key: str | None = None
+    if cacheable_station_match_query:
+        cache_key = _build_db_read_cache_key(
+            _INV_CHECKLIST_NOTE_DETAIL_CACHE_SCOPE,
+            "schema=v1",
+            f"checklist_table={checklist_table}",
+            f"station_table={station_table}",
+            f"note_table={note_table}",
+            f"attachment_table={attachment_table}",
+            f"est_num={int(est_num)}",
+            f"station_code={normalized_station_code}",
+            f"checklist_id={checklist_id_text or '*'}",
+            f"limit={int(limit) if limit is not None else '*'}",
+        )
+        cached_rows = _get_cached_list(
+            cache_key,
+            ttl_key="db_invoice_checklist_notes_ttl_time",
+        )
+        if cached_rows is not None:
+            return cached_rows
+
+    query = (
+        "SELECT "
+        "n.id AS noteId, "
+        "n.checklistStationId AS checklistStationId, "
+        "n.amount AS amount, "
+        "n.note AS note, "
+        "n.dateCreated AS dateCreated, "
+        "n.dateUpdated AS dateUpdated, "
+        "s.id AS stationRowId, "
+        "s.checklistId AS checklistId, "
+        "s.estNum AS estNum, "
+        "s.stationCode AS stationCode, "
+        "a.id AS attachmentId, "
+        "a.noteId AS attachmentNoteId, "
+        "a.url AS attachmentUrl, "
+        "a.fileName AS attachmentFileName, "
+        "a.fileType AS attachmentFileType, "
+        "a.dateCreated AS attachmentDateCreated, "
+        "a.dateUpdated AS attachmentDateUpdated "
+        f"FROM {note_table} n "
+        f"JOIN {station_table} s ON s.id = n.checklistStationId "
+        f"JOIN {checklist_table} c ON c.id = s.checklistId "
+        f"LEFT JOIN {attachment_table} a ON a.noteId = n.id "
+    )
+    if where_clauses:
+        query += " WHERE " + " AND ".join(where_clauses)
+    query += " ORDER BY COALESCE(n.dateUpdated, n.dateCreated) DESC, n.id DESC, a.id ASC"
+    if limit is not None:
+        query += " LIMIT %s"
+        params.append(int(limit))
+    rows = fetch_all(query, tuple(params))
+    if cache_key:
+        _set_cached_value(cache_key, rows)
+    return rows
+
+
 def insert_inv_checklist_note(item: dict) -> int:
     tables = get_db_tables()
     note_table = _quote_table_name(tables["INVCHECKLISTNOTES"])
@@ -3561,7 +4247,10 @@ def insert_inv_checklist_note(item: dict) -> int:
         )
         return int(cursor.lastrowid or 0)
 
-    return run_transaction(_work)
+    inserted = run_transaction(_work)
+    if int(inserted or 0) > 0:
+        _invalidate_inv_checklist_note_detail_cache()
+    return inserted
 
 
 def update_inv_checklist_note(
@@ -3590,18 +4279,21 @@ def update_inv_checklist_note(
         "SET " + ", ".join(updates) + " "
         "WHERE id = %s"
     )
-    return run_transaction(
+    updated = run_transaction(
         lambda cursor: (
             cursor.execute(query, tuple(params)) or int(cursor.rowcount or 0)
         )
     )
+    if int(updated or 0) > 0:
+        _invalidate_inv_checklist_note_detail_cache()
+    return updated
 
 
 def delete_inv_checklist_note(*, note_id: int) -> int:
     note_id_int = int(note_id)
     tables = get_db_tables()
     note_table = _quote_table_name(tables["INVCHECKLISTNOTES"])
-    return run_transaction(
+    deleted = run_transaction(
         lambda cursor: (
             cursor.execute(
                 f"DELETE FROM {note_table} WHERE id = %s",
@@ -3610,6 +4302,9 @@ def delete_inv_checklist_note(*, note_id: int) -> int:
             or int(cursor.rowcount or 0)
         )
     )
+    if int(deleted or 0) > 0:
+        _invalidate_inv_checklist_note_detail_cache()
+    return deleted
 
 
 def get_inv_note_attachment_row(*, attachment_id: int) -> dict | None:
@@ -3681,7 +4376,10 @@ def insert_inv_note_attachment(item: dict) -> int:
         )
         return int(cursor.lastrowid or 0)
 
-    return run_transaction(_work)
+    inserted = run_transaction(_work)
+    if int(inserted or 0) > 0:
+        _invalidate_inv_checklist_note_detail_cache()
+    return inserted
 
 
 def update_inv_note_attachment(
@@ -3713,18 +4411,21 @@ def update_inv_note_attachment(
         "SET " + ", ".join(updates) + " "
         "WHERE id = %s"
     )
-    return run_transaction(
+    updated = run_transaction(
         lambda cursor: (
             cursor.execute(query, tuple(params)) or int(cursor.rowcount or 0)
         )
     )
+    if int(updated or 0) > 0:
+        _invalidate_inv_checklist_note_detail_cache()
+    return updated
 
 
 def delete_inv_note_attachment(*, attachment_id: int) -> int:
     attachment_id_int = int(attachment_id)
     tables = get_db_tables()
     attachment_table = _quote_table_name(tables["INVNOTEATTACHMENTS"])
-    return run_transaction(
+    deleted = run_transaction(
         lambda cursor: (
             cursor.execute(
                 f"DELETE FROM {attachment_table} WHERE id = %s",
@@ -3733,3 +4434,6 @@ def delete_inv_note_attachment(*, attachment_id: int) -> int:
             or int(cursor.rowcount or 0)
         )
     )
+    if int(deleted or 0) > 0:
+        _invalidate_inv_checklist_note_detail_cache()
+    return deleted

@@ -189,7 +189,9 @@ class SessionEndpointTests(unittest.TestCase):
             "app": {"id": "app-1", "code": "tradsphere", "name": "Tradsphere"},
             "role": "viewer",
         }
-        with patch("apps.auth.api.v1.endpoints.session.authorize_bearer_for_tenant_app", return_value=_auth_result()), patch(
+        with patch("apps.auth.api.v1.endpoints.session.authenticate_bearer", return_value=_auth_result().principal), patch(
+            "apps.auth.api.v1.endpoints.session.authorize_bearer_for_tenant_app", return_value=_auth_result()
+        ), patch(
             "apps.auth.api.v1.endpoints.session.list_user_access_assignments",
             return_value=[assignment],
         ), patch(

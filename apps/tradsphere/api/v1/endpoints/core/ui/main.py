@@ -475,6 +475,9 @@ def get_ui_invoice_checklists_load_route(
                 "quarter": 2,
                 "status": "OPEN",
                 "stationCount": 4,
+                "expectedStationCount": 4,
+                "mismatchStationCount": 1,
+                "hasScheduleMismatch": true,
                 "searchStations": [
                   {"estNum": 2041, "stationCode": "SPEC-AUSTIN"},
                   {"estNum": 2042, "stationCode": "KABC"}
@@ -494,6 +497,9 @@ def get_ui_invoice_checklists_load_route(
                   "id": 12,
                   "stationCode": "KABC",
                   "stationName": "KABC Los Angeles",
+                  "inCurrentSchedule": false,
+                  "scheduleMismatch": true,
+                  "scheduleMismatchReason": "NOT_IN_CURRENT_PERIOD_SCHEDULE",
                   "repContacts": [
                     {
                       "fullName": "Mina Tran",
@@ -503,8 +509,22 @@ def get_ui_invoice_checklists_load_route(
                     }
                   ]
                 }
-              ]
-            }
+              ],
+              "expectedStationCount": 4,
+              "mismatchStationCount": 1,
+              "hasScheduleMismatch": true
+            },
+            "mismatchStations": [
+              {
+                "stationRowId": 12,
+                "checklistId": "f3f4502f-b0c3-4ef7-b315-72f9850e36d2",
+                "accountCode": "TAAA",
+                "estNum": 2042,
+                "stationCode": "KABC",
+                "status": "Matched",
+                "reasonCode": "NOT_IN_CURRENT_PERIOD_SCHEDULE"
+              }
+            ]
           }
         }
 
@@ -516,6 +536,8 @@ def get_ui_invoice_checklists_load_route(
         - month must be between 1 and 12
         - checklistId is optional; when omitted route selects first checklist in selected period
         - Checklist summaries include lightweight station search metadata (`searchStations`) for client-side filtering
+        - Station/checklist schedule-alignment metadata is included for period mismatch highlighting
+        - `mismatchStations` reports checklist station rows that are not in the selected period schedule
         - Provides period options, checklist summaries, and selected checklist detail in one request
         - Mutation actions must still use checklist CRUD endpoints
     """

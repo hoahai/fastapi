@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
 import TradsphereHomePage from "@/TradsphereHomePage";
 import EstimateNumbersPage from "@/pages/EstimateNumbersPage";
@@ -261,7 +261,12 @@ function RequireAdminScope({ children, fallback }: { children: ReactNode; fallba
 
 function App() {
   const [frontendPath, setFrontendPath] = useState(() => getFrontendPath(window.location.pathname));
+  const frontendPathRef = useRef(frontendPath);
   useRouteScrollRestoration(toScrollStorageKey(frontendPath));
+
+  useEffect(() => {
+    frontendPathRef.current = frontendPath;
+  }, [frontendPath]);
 
   useEffect(() => {
     if (frontendPath === "/auth/update-password") {
@@ -278,7 +283,44 @@ function App() {
 
   useEffect(() => {
     const handlePopState = () => {
-      setFrontendPath(getFrontendPath(window.location.pathname));
+      const nextPath = getFrontendPath(window.location.pathname);
+      const currentPath = frontendPathRef.current;
+      if (nextPath === currentPath) {
+        return;
+      }
+
+      let handled = false;
+      const proceed = () => {
+        if (handled) {
+          return;
+        }
+        handled = true;
+        window.history.pushState({}, "", toFrontendHref(nextPath));
+        setFrontendPath(nextPath);
+      };
+      const beforeChangeEvent = new CustomEvent<{
+        from: string;
+        to: string;
+        reason: "pop";
+        proceed: () => void;
+      }>("workspace:before-route-change", {
+        cancelable: true,
+        detail: {
+          from: currentPath,
+          to: nextPath,
+          reason: "pop",
+          proceed,
+        },
+      });
+      window.dispatchEvent(beforeChangeEvent);
+      if (beforeChangeEvent.defaultPrevented && !handled) {
+        window.history.pushState({}, "", toFrontendHref(currentPath));
+        return;
+      }
+      if (!beforeChangeEvent.defaultPrevented) {
+        handled = true;
+        setFrontendPath(nextPath);
+      }
     };
 
     window.addEventListener("popstate", handlePopState);
@@ -320,9 +362,36 @@ function App() {
     if (window.location.pathname === href || frontendPath === route) {
       return;
     }
-
-    window.history.pushState({}, "", href);
-    setFrontendPath(route);
+    let handled = false;
+    const proceed = () => {
+      if (handled) {
+        return;
+      }
+      handled = true;
+      window.history.pushState({}, "", href);
+      setFrontendPath(route);
+    };
+    const beforeChangeEvent = new CustomEvent<{
+      from: string;
+      to: string;
+      reason: "push";
+      proceed: () => void;
+    }>("workspace:before-route-change", {
+      cancelable: true,
+      detail: {
+        from: frontendPath,
+        to: route,
+        reason: "push",
+        proceed,
+      },
+    });
+    window.dispatchEvent(beforeChangeEvent);
+    if (beforeChangeEvent.defaultPrevented && !handled) {
+      return;
+    }
+    if (!beforeChangeEvent.defaultPrevented) {
+      proceed();
+    }
   }
 
   const inviteToken = useMemo(() => {

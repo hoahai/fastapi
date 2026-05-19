@@ -10,6 +10,7 @@ from apps.tradsphere.api.v1.helpers.invoiceChecklists import (
     create_invoice_checklist_data,
     delete_invoice_checklist_data,
     get_invoice_checklists_data,
+    sync_invoice_checklists_for_period_data,
     update_invoice_checklist_data,
 )
 
@@ -184,6 +185,87 @@ def create_invoice_checklist_route(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except SafeDatabaseError:
         raise HTTPException(status_code=500, detail="Failed to create checklist")
+
+
+@router.post("/sync-period")
+def sync_invoice_checklists_period_route(
+    payload: dict = Body(...),
+):
+    """
+    Generate or update checklist account/station rows for one selected invoice period.
+
+    Example request:
+        POST /api/tradsphere/v1/invoice-checklists/sync-period
+        {
+          "year": 2026,
+          "month": 4,
+          "previewOnly": true
+        }
+
+    Example response:
+        {
+          "meta": {"timestamp": "2026-05-19T10:00:00+07:00", "duration_ms": 12},
+          "data": {
+            "action": "update",
+            "period": {"year": 2026, "month": 4, "quarter": 2, "value": "2026-04", "label": "April 2026"},
+            "expectedAccountsCount": 3,
+            "expectedStationRowsCount": 27,
+            "previewOnly": true,
+            "plannedChecklistsCount": 1,
+            "plannedStationsCount": 4,
+            "mismatchStationCount": 2,
+            "plannedChecklists": [
+              {
+                "accountCode": "TAAA",
+                "year": 2026,
+                "month": 4
+              }
+            ],
+            "plannedStations": [
+              {
+                "checklistId": null,
+                "accountCode": "TAAA",
+                "estNum": 2042,
+                "stationCode": "KXYZ"
+              }
+            ],
+            "mismatchStations": [
+              {
+                "stationRowId": 19,
+                "checklistId": "f3f4502f-b0c3-4ef7-b315-72f9850e36d2",
+                "accountCode": "TAAA",
+                "estNum": 2042,
+                "stationCode": "KXYZ",
+                "status": "Matched",
+                "reasonCode": "NOT_IN_CURRENT_PERIOD_SCHEDULE"
+              }
+            ]
+          }
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - year and month are required in request body
+        - previewOnly is optional (default false)
+        - year must be between 1901 and 2155
+        - month must be between 1 and 12
+        - Generates expected rows from schedules where broadcastYear/year and broadcastMonth/month exactly match the selected period
+        - Does not delete checklist rows or overwrite existing checklist/station status, notes, or attachments
+        - Adds only missing checklist accounts/station rows required by the selected period schedule
+    """
+    try:
+        if not isinstance(payload, dict):
+            raise ValueError("Payload must be an object")
+        return sync_invoice_checklists_for_period_data(
+            year=payload.get("year"),
+            month=payload.get("month"),
+            preview_only=bool(payload.get("previewOnly")),
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except SafeDatabaseError:
+        raise HTTPException(status_code=500, detail="Failed to sync checklist rows")
 
 
 @router.put("")
