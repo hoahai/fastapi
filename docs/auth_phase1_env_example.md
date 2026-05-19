@@ -25,6 +25,12 @@ AUTH_INVITE_BASE_URL=http://localhost:8000
 SUPABASE_URL=<PASTE_SUPABASE_URL>
 SUPABASE_ANON_KEY=<PASTE_SUPABASE_ANON_KEY>
 SUPABASE_SERVICE_ROLE_KEY=<PASTE_SUPABASE_SERVICE_ROLE_KEY>
+
+# Global storage provider config (backend-only)
+STORAGE_PROVIDER=cloudinary
+CLOUDINARY_CLOUD_NAME=<PASTE_CLOUDINARY_CLOUD_NAME>
+CLOUDINARY_API_KEY=<PASTE_CLOUDINARY_API_KEY>
+CLOUDINARY_API_SECRET=<PASTE_CLOUDINARY_API_SECRET>
 ```
 
 Where to find values in Supabase dashboard:
@@ -57,6 +63,7 @@ VITE_LEGACY_USER_NAME=local-dev
 ## Security Rules
 
 - `SUPABASE_SERVICE_ROLE_KEY` is backend-only. Never place it in frontend env files.
+- `CLOUDINARY_API_SECRET` is backend-only. Never place it in frontend env files.
 - `sb_secret_*` is not a JWT and must never be used as an Authorization bearer token.
 - `VITE_*` values are bundled into browser code. Only use public/anon Supabase values there.
 - Never commit real keys or tokens.

@@ -321,6 +321,109 @@ class InvoiceChecklistInvalidationTests(unittest.TestCase):
         self.assertEqual(mock_invalidate.call_count, 6)
 
 
+class InvoiceChecklistAttachmentOwnershipTests(unittest.TestCase):
+    def test_get_attachment_row_enforces_tenant_and_ownership_when_columns_exist(self):
+        attachment_columns = [
+            "id",
+            "noteId",
+            "url",
+            "fileName",
+            "fileType",
+            "dateCreated",
+            "dateUpdated",
+            "tenantSlug",
+            "ownerEntityType",
+            "ownerEntityId",
+            "deletedAt",
+        ]
+        with patch.object(dq, "get_db_tables", return_value=dict(_TABLES)), patch.object(
+            dq, "_get_table_columns", return_value=attachment_columns
+        ), patch.object(dq, "fetch_all", return_value=[]) as mock_fetch:
+            row = dq.get_inv_note_attachment_row(
+                attachment_id=21,
+                tenant_slug="demo-tenant",
+            )
+
+        self.assertIsNone(row)
+        query = mock_fetch.call_args.args[0]
+        params = mock_fetch.call_args.args[1]
+        self.assertIn("JOIN `TradSphere_InvChecklistNote` n ON n.id = a.noteId", query)
+        self.assertIn("JOIN `TradSphere_InvChecklistStation` s ON s.id = n.checklistStationId", query)
+        self.assertIn("JOIN `TradSphere_InvChecklist` c ON c.id = s.checklistId", query)
+        self.assertIn("a.deletedAt IS NULL", query)
+        self.assertIn("a.ownerEntityType = 'invoice_checklist_note'", query)
+        self.assertIn("a.ownerEntityId = CAST(n.id AS CHAR)", query)
+        self.assertIn("LOWER(a.tenantSlug) = %s", query)
+        self.assertEqual(params, (21, "demo-tenant"))
+
+    def test_get_attachment_row_keeps_join_guard_without_tenant_column(self):
+        legacy_columns = [
+            "id",
+            "noteId",
+            "url",
+            "fileName",
+            "fileType",
+            "dateCreated",
+            "dateUpdated",
+        ]
+        with patch.object(dq, "get_db_tables", return_value=dict(_TABLES)), patch.object(
+            dq, "_get_table_columns", return_value=legacy_columns
+        ), patch.object(dq, "fetch_all", return_value=[]) as mock_fetch:
+            row = dq.get_inv_note_attachment_row(
+                attachment_id=8,
+                tenant_slug="demo-tenant",
+            )
+
+        self.assertIsNone(row)
+        query = mock_fetch.call_args.args[0]
+        params = mock_fetch.call_args.args[1]
+        self.assertIn("JOIN `TradSphere_InvChecklistNote` n ON n.id = a.noteId", query)
+        self.assertNotIn("tenantSlug", query)
+        self.assertEqual(params, (8,))
+
+    def test_delete_attachment_uses_join_and_tenant_predicate(self):
+        attachment_columns = [
+            "id",
+            "noteId",
+            "url",
+            "fileName",
+            "fileType",
+            "dateCreated",
+            "dateUpdated",
+            "tenantSlug",
+            "ownerEntityType",
+            "ownerEntityId",
+            "deletedAt",
+        ]
+        captured: dict[str, object] = {}
+
+        def _fake_run_transaction(work):
+            class _Cursor:
+                rowcount = 1
+
+                def execute(self, query, params):
+                    captured["query"] = query
+                    captured["params"] = params
+
+            return work(_Cursor())
+
+        with patch.object(dq, "get_db_tables", return_value=dict(_TABLES)), patch.object(
+            dq, "_get_table_columns", return_value=attachment_columns
+        ), patch.object(dq, "run_transaction", side_effect=_fake_run_transaction):
+            deleted = dq.delete_inv_note_attachment(
+                attachment_id=34,
+                tenant_slug="demo-tenant",
+            )
+
+        self.assertEqual(deleted, 1)
+        query = str(captured["query"])
+        params = captured["params"]
+        self.assertIn("UPDATE `TradSphere_InvNoteAttachment` a", query)
+        self.assertIn("JOIN `TradSphere_InvChecklistNote` n ON n.id = a.noteId", query)
+        self.assertIn("LOWER(a.tenantSlug) = %s", query)
+        self.assertEqual(params, (34, "demo-tenant"))
+
+
 class InvoiceChecklistSyncInvalidationTests(unittest.TestCase):
     def test_sync_write_mode_invalidates_after_bulk_creates(self):
         checklist_row = {

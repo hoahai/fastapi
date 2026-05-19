@@ -101,9 +101,21 @@ type AttachmentItem = {
   url: string;
   fileName: string;
   fileType: string;
+  mimeType?: string;
+  fileSize?: number | null;
+  storageProvider?: string;
+  providerAssetId?: string;
+  providerPublicId?: string;
+  providerResourceType?: string;
+  accessUrl?: string;
+  uploadedBy?: string;
+  tenantSlug?: string;
+  ownerEntityType?: string;
+  ownerEntityId?: string;
   dateCreated: string | null;
   dateUpdated: string | null;
   isLocalDraft?: boolean;
+  localFile?: File;
 };
 
 type NoteItem = {
@@ -474,6 +486,29 @@ async function copyTextToClipboard(value: string): Promise<void> {
   }
 }
 
+async function openAttachmentUrlWithHeaders(url: string, headers: HeadersInit): Promise<void> {
+  const targetUrl = asString(url);
+  if (!targetUrl) {
+    throw new Error("Attachment URL is missing");
+  }
+  if (targetUrl.startsWith("blob:") || targetUrl.startsWith("data:")) {
+    window.open(targetUrl, "_blank", "noopener,noreferrer");
+    return;
+  }
+
+  const response = await fetch(targetUrl, {
+    method: "GET",
+    headers,
+  });
+  if (!response.ok) {
+    throw new Error("Unable to open attachment");
+  }
+  const blob = await response.blob();
+  const objectUrl = URL.createObjectURL(blob);
+  window.open(objectUrl, "_blank", "noopener,noreferrer");
+  window.setTimeout(() => URL.revokeObjectURL(objectUrl), 60_000);
+}
+
 function buildStatusOptions(baseValues: string[], currentValue: string, draftValue: string): string[] {
   const values = [""].concat(baseValues);
   if (currentValue && !values.includes(currentValue)) {
@@ -573,6 +608,17 @@ function toAttachment(value: unknown): AttachmentItem | null {
     url: asString(value.url),
     fileName: asString(value.fileName),
     fileType: asString(value.fileType),
+    mimeType: asString(value.mimeType),
+    fileSize: asNumber(value.fileSize),
+    storageProvider: asString(value.storageProvider),
+    providerAssetId: asString(value.providerAssetId),
+    providerPublicId: asString(value.providerPublicId),
+    providerResourceType: asString(value.providerResourceType),
+    accessUrl: asString(value.accessUrl),
+    uploadedBy: asString(value.uploadedBy),
+    tenantSlug: asString(value.tenantSlug),
+    ownerEntityType: asString(value.ownerEntityType),
+    ownerEntityId: asString(value.ownerEntityId),
     dateCreated: asString(value.dateCreated) || null,
     dateUpdated: asString(value.dateUpdated) || null,
   };
@@ -1486,6 +1532,14 @@ export default function InvoiceChecklistPage() {
     }
     return checklists.find((item) => item.id === deletingChecklistId) ?? null;
   }, [checklists, deletingChecklistId]);
+
+  async function handleOpenAttachment(url: string) {
+    try {
+      await openAttachmentUrlWithHeaders(url, requestHeaders);
+    } catch {
+      toast.error("Unable to open attachment", "Please try again.");
+    }
+  }
 
   const attachmentModalNoteContext = useMemo(() => {
     if (attachmentModalNoteId === null) {
@@ -2528,12 +2582,23 @@ export default function InvoiceChecklistPage() {
 
       const currentExistingNotes: Array<{ noteId: number; amount: number; note: string }> = [];
       const currentExistingNoteIds = new Set<number>();
+      const currentAttachmentIdSetByNoteId = new Map<number, Set<number>>();
       for (const station of activeChecklist.stations) {
         for (const note of station.notes) {
           if (note.isLocalDraft) {
             continue;
           }
           currentExistingNoteIds.add(note.id);
+          const attachmentIdSet = new Set<number>();
+          for (const attachment of note.attachments) {
+            if (attachment.isLocalDraft) {
+              continue;
+            }
+            if (attachment.id > 0) {
+              attachmentIdSet.add(attachment.id);
+            }
+          }
+          currentAttachmentIdSetByNoteId.set(note.id, attachmentIdSet);
           currentExistingNotes.push({
             noteId: note.id,
             amount: note.amount,
@@ -2561,10 +2626,36 @@ export default function InvoiceChecklistPage() {
         }
       }
 
+      const attachmentIdsToDelete: number[] = [];
+      for (const [noteId, baselineNote] of baselineNoteById.entries()) {
+        if (noteIdsToDelete.includes(noteId)) {
+          continue;
+        }
+        const currentIds = currentAttachmentIdSetByNoteId.get(noteId) ?? new Set<number>();
+        for (const attachment of baselineNote.attachments) {
+          if (attachment.isLocalDraft) {
+            continue;
+          }
+          if (attachment.id > 0 && !currentIds.has(attachment.id)) {
+            attachmentIdsToDelete.push(attachment.id);
+          }
+        }
+      }
+
       for (const noteId of noteIdsToDelete) {
         const query = new URLSearchParams();
         query.set("noteId", String(noteId));
         await requestJson(`/api/tradsphere/v1/invoice-checklist-notes?${query.toString()}`, {
+          method: "DELETE",
+          headers: requestHeaders,
+          successToast: false,
+        });
+      }
+
+      for (const attachmentId of attachmentIdsToDelete) {
+        const query = new URLSearchParams();
+        query.set("attachmentId", String(attachmentId));
+        await requestJson(`/api/tradsphere/v1/invoice-note-attachments?${query.toString()}`, {
           method: "DELETE",
           headers: requestHeaders,
           successToast: false,
@@ -2610,9 +2701,7 @@ export default function InvoiceChecklistPage() {
         stationId: number;
         tempAttachmentId: number;
         sourceNoteId: number;
-        url: string;
-        fileName: string;
-        fileType: string;
+        file: File;
       }> = [];
 
       for (const station of activeChecklist.stations) {
@@ -2630,13 +2719,14 @@ export default function InvoiceChecklistPage() {
             if (!attachment.isLocalDraft) {
               continue;
             }
+            if (!(attachment.localFile instanceof File)) {
+              continue;
+            }
             attachmentsToCreate.push({
               stationId: resolvedStationId,
               tempAttachmentId: attachment.id,
               sourceNoteId: note.id,
-              url: attachment.url,
-              fileName: attachment.fileName,
-              fileType: attachment.fileType,
+              file: attachment.localFile,
             });
           }
         }
@@ -2680,15 +2770,13 @@ export default function InvoiceChecklistPage() {
         if (resolvedNoteId <= 0) {
           continue;
         }
-        const response = await requestJson("/api/tradsphere/v1/invoice-note-attachments", {
+        const formData = new FormData();
+        formData.set("noteId", String(resolvedNoteId));
+        formData.set("file", localAttachment.file);
+        const response = await requestJson("/api/tradsphere/v1/invoice-note-attachments/upload", {
           method: "POST",
           headers: requestHeaders,
-          body: {
-            noteId: resolvedNoteId,
-            url: localAttachment.url,
-            fileName: localAttachment.fileName || null,
-            fileType: localAttachment.fileType || null,
-          },
+          body: formData,
           successToast: false,
         });
         const created = toAttachment(unwrapData(response));
@@ -3025,9 +3113,12 @@ export default function InvoiceChecklistPage() {
       url: URL.createObjectURL(file),
       fileName: file.name,
       fileType: file.type || "",
+      mimeType: file.type || "",
+      fileSize: file.size,
       dateCreated: null,
       dateUpdated: null,
       isLocalDraft: true,
+      localFile: file,
     }));
 
     updateChecklistInState((current) => ({
@@ -3069,9 +3160,12 @@ export default function InvoiceChecklistPage() {
       url: URL.createObjectURL(file),
       fileName: file.name,
       fileType: file.type || "",
+      mimeType: file.type || "",
+      fileSize: file.size,
       dateCreated: null,
       dateUpdated: null,
       isLocalDraft: true,
+      localFile: file,
     }));
     const removedAttachmentIdSet = new Set(payload.removedAttachmentIds);
     updateChecklistInState((current) => ({
@@ -3948,6 +4042,9 @@ export default function InvoiceChecklistPage() {
         disabled={!canEditTradsphere}
         isBusy={isSavingAllChanges}
         onSubmit={handleAddNoteModalSubmit}
+        onOpenAttachment={(url) => {
+          void handleOpenAttachment(url);
+        }}
       />
 
       <AddChecklistStationDialog
@@ -4019,6 +4116,9 @@ export default function InvoiceChecklistPage() {
         disabled={!canEditTradsphere}
         isBusy={isSavingAllChanges}
         onSubmit={handleEditNoteModalSubmit}
+        onOpenAttachment={(url) => {
+          void handleOpenAttachment(url);
+        }}
       />
 
       <Dialog
@@ -4146,7 +4246,7 @@ export default function InvoiceChecklistPage() {
               <div className="flex flex-wrap justify-center gap-3">
                 {attachmentModalNote.attachments.map((attachment) => {
                   const attachmentName = asString(attachment.fileName) || `Attachment ${attachment.id}`;
-                  const attachmentType = asString(attachment.fileType) || "Unknown type";
+                  const attachmentType = asString(attachment.mimeType) || asString(attachment.fileType) || "Unknown type";
                   const attachmentUrl = asString(attachment.url);
                   const previewSrc = isImageAttachment(attachment) ? attachmentImageSrcById[attachment.id] : null;
                   const canOpen = Boolean(previewSrc || attachmentUrl);
@@ -4161,7 +4261,7 @@ export default function InvoiceChecklistPage() {
                           return;
                         }
                         if (attachmentUrl) {
-                          window.open(attachmentUrl, "_blank", "noopener,noreferrer");
+                          void handleOpenAttachment(attachmentUrl);
                         }
                       }}
                       disabled={!canOpen}
@@ -4338,6 +4438,10 @@ function formatStationNoteLinkLabel(station: StationItem, checklist: ChecklistDe
 }
 
 function isImageAttachment(attachment: AttachmentItem): boolean {
+  const mimeType = asString(attachment.mimeType).toLowerCase();
+  if (mimeType.startsWith("image/")) {
+    return true;
+  }
   const fileType = asString(attachment.fileType).toLowerCase();
   if (fileType.startsWith("image/")) {
     return true;
@@ -4703,6 +4807,7 @@ function EditStationNoteDialog({
   disabled,
   isBusy,
   onSubmit,
+  onOpenAttachment,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -4711,6 +4816,7 @@ function EditStationNoteDialog({
   disabled: boolean;
   isBusy: boolean;
   onSubmit: (payload: EditStationNoteModalSubmitPayload) => void;
+  onOpenAttachment?: (url: string) => void;
 }) {
   return (
     <AddStationNoteDialog
@@ -4722,6 +4828,7 @@ function EditStationNoteDialog({
       disabled={disabled}
       isBusy={isBusy}
       onSubmitEdit={onSubmit}
+      onOpenAttachment={onOpenAttachment}
     />
   );
 }
@@ -4736,6 +4843,7 @@ function AddStationNoteDialog({
   isBusy,
   onSubmit,
   onSubmitEdit,
+  onOpenAttachment,
 }: {
   open: boolean;
   onOpenChange: (open: boolean) => void;
@@ -4746,6 +4854,7 @@ function AddStationNoteDialog({
   isBusy: boolean;
   onSubmit?: (payload: AddStationNoteModalSubmitPayload) => void;
   onSubmitEdit?: (payload: EditStationNoteModalSubmitPayload) => void;
+  onOpenAttachment?: (url: string) => void;
 }) {
   const [amount, setAmount] = useState("");
   const [noteTextDraft, setNoteTextDraft] = useState("");
@@ -4814,12 +4923,15 @@ function AddStationNoteDialog({
   const uploadedAttachmentRows = useMemo(() => {
     const existingRows = visibleExistingAttachments.map((attachment) => {
       const attachmentName = asString(attachment.fileName) || `Attachment ${attachment.id}`;
-      const attachmentType = asString(attachment.fileType) || "Unknown type";
+      const attachmentType = asString(attachment.mimeType) || asString(attachment.fileType) || "Unknown type";
+      const attachmentSizeText = typeof attachment.fileSize === "number" && attachment.fileSize > 0
+        ? ` • ${formatFileSize(attachment.fileSize)}`
+        : "";
       const attachmentUrl = asString(attachment.url);
       return {
         key: `existing:${attachment.id}`,
         label: attachmentName,
-        meta: attachmentType,
+        meta: `${attachmentType}${attachmentSizeText}`,
         openUrl: attachmentUrl || null,
         previewSrc: isImageAttachment(attachment) ? attachmentUrl : null,
         remove: () => removeExistingAttachment(attachment.id),
@@ -5032,15 +5144,19 @@ function AddStationNoteDialog({
                             />
                           </button>
                         ) : row.openUrl ? (
-                          <a
-                            href={row.openUrl}
-                            target="_blank"
-                            rel="noreferrer"
+                          <button
+                            type="button"
                             className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100"
                             aria-label={`Open ${row.label}`}
+                            onClick={() => {
+                              if (row.openUrl) {
+                                onOpenAttachment?.(row.openUrl);
+                              }
+                            }}
+                            disabled={disabled || isBusy}
                           >
                             <Paperclip className="size-4" aria-hidden="true" />
-                          </a>
+                          </button>
                         ) : (
                           <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-500">
                             <Paperclip className="size-4" aria-hidden="true" />

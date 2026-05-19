@@ -73,7 +73,7 @@ def get_invoice_checklists_route(
                       {
                         "id": 21,
                         "noteId": 5,
-                        "url": "https://cdn.example.com/docs/invoice-123.pdf",
+                        "url": "/api/tradsphere/v1/invoice-note-attachments/open?attachmentId=21",
                         "fileName": "invoice-123.pdf",
                         "fileType": "application/pdf",
                         "dateCreated": "2026-05-16T09:03:00",

@@ -37,6 +37,21 @@ _EST_NUMS_CREATED_COLUMN_CANDIDATES = (
     "dateCreated",
     "createdOn",
 )
+_INV_NOTE_ATTACHMENT_OPTIONAL_COLUMNS = (
+    "storageProvider",
+    "providerAssetId",
+    "providerPublicId",
+    "providerResourceType",
+    "accessUrl",
+    "originalFileName",
+    "mimeType",
+    "fileSize",
+    "uploadedBy",
+    "tenantSlug",
+    "ownerEntityType",
+    "ownerEntityId",
+    "deletedAt",
+)
 
 
 def _quote_identifier(name: str) -> str:
@@ -432,6 +447,164 @@ def resolve_est_nums_created_column() -> str | None:
         if resolved:
             return resolved
     return None
+
+
+def _get_inv_note_attachment_columns(
+    *,
+    attachment_table: str,
+) -> set[str]:
+    try:
+        columns = _get_table_columns(table_name_quoted=attachment_table)
+        normalized = {str(column).strip() for column in columns if str(column).strip()}
+        if normalized:
+            return normalized
+    except Exception:
+        pass
+
+    # Safe fallback for local/unit-test contexts without live DB metadata.
+    return {
+        "id",
+        "noteId",
+        "url",
+        "fileName",
+        "fileType",
+        "dateCreated",
+        "dateUpdated",
+    }
+
+
+def _has_column(columns: set[str], column_name: str) -> bool:
+    return str(column_name).strip() in columns
+
+
+def _column_or_null(*, alias: str, column_name: str, output_alias: str, columns: set[str]) -> str:
+    if _has_column(columns, column_name):
+        return f"{alias}.{column_name} AS {output_alias}"
+    return f"NULL AS {output_alias}"
+
+
+def _inv_note_attachment_select_clause(*, alias: str, columns: set[str]) -> list[str]:
+    access_url_expression = (
+        f"COALESCE({alias}.accessUrl, {alias}.url)"
+        if _has_column(columns, "accessUrl")
+        else f"{alias}.url"
+    )
+    original_file_name_expression = (
+        f"COALESCE({alias}.originalFileName, {alias}.fileName)"
+        if _has_column(columns, "originalFileName")
+        else f"{alias}.fileName"
+    )
+    mime_type_expression = (
+        f"COALESCE({alias}.mimeType, {alias}.fileType)"
+        if _has_column(columns, "mimeType")
+        else f"{alias}.fileType"
+    )
+    file_size_expression = (
+        f"{alias}.fileSize"
+        if _has_column(columns, "fileSize")
+        else "NULL"
+    )
+    return [
+        f"{alias}.id AS attachmentId",
+        f"{alias}.noteId AS attachmentNoteId",
+        f"{alias}.url AS attachmentUrl",
+        f"{alias}.fileName AS attachmentFileName",
+        f"{alias}.fileType AS attachmentFileType",
+        f"{access_url_expression} AS attachmentAccessUrl",
+        f"{original_file_name_expression} AS attachmentOriginalFileName",
+        f"{mime_type_expression} AS attachmentMimeType",
+        f"{file_size_expression} AS attachmentFileSize",
+        _column_or_null(
+            alias=alias,
+            column_name="storageProvider",
+            output_alias="attachmentStorageProvider",
+            columns=columns,
+        ),
+        _column_or_null(
+            alias=alias,
+            column_name="providerAssetId",
+            output_alias="attachmentProviderAssetId",
+            columns=columns,
+        ),
+        _column_or_null(
+            alias=alias,
+            column_name="providerPublicId",
+            output_alias="attachmentProviderPublicId",
+            columns=columns,
+        ),
+        _column_or_null(
+            alias=alias,
+            column_name="providerResourceType",
+            output_alias="attachmentProviderResourceType",
+            columns=columns,
+        ),
+        _column_or_null(
+            alias=alias,
+            column_name="uploadedBy",
+            output_alias="attachmentUploadedBy",
+            columns=columns,
+        ),
+        _column_or_null(
+            alias=alias,
+            column_name="tenantSlug",
+            output_alias="attachmentTenantSlug",
+            columns=columns,
+        ),
+        _column_or_null(
+            alias=alias,
+            column_name="ownerEntityType",
+            output_alias="attachmentOwnerEntityType",
+            columns=columns,
+        ),
+        _column_or_null(
+            alias=alias,
+            column_name="ownerEntityId",
+            output_alias="attachmentOwnerEntityId",
+            columns=columns,
+        ),
+        _column_or_null(
+            alias=alias,
+            column_name="deletedAt",
+            output_alias="attachmentDeletedAt",
+            columns=columns,
+        ),
+        f"{alias}.dateCreated AS attachmentDateCreated",
+        f"{alias}.dateUpdated AS attachmentDateUpdated",
+    ]
+
+
+def _append_inv_note_attachment_ownership_clauses(
+    *,
+    where_clauses: list[str],
+    params: list[object],
+    alias: str,
+    note_alias: str,
+    columns: set[str],
+    tenant_slug: str | None,
+) -> None:
+    if _has_column(columns, "deletedAt"):
+        where_clauses.append(f"{alias}.deletedAt IS NULL")
+    if _has_column(columns, "ownerEntityType"):
+        where_clauses.append(
+            "("
+            f"{alias}.ownerEntityType IS NULL "
+            f"OR {alias}.ownerEntityType = '' "
+            f"OR {alias}.ownerEntityType = 'invoice_checklist_note'"
+            ")"
+        )
+    if _has_column(columns, "ownerEntityId"):
+        where_clauses.append(
+            "("
+            f"{alias}.ownerEntityId IS NULL "
+            f"OR {alias}.ownerEntityId = '' "
+            f"OR {alias}.ownerEntityId = CAST({note_alias}.id AS CHAR)"
+            ")"
+        )
+
+    normalized_tenant_slug = str(tenant_slug or "").strip().lower()
+    if _has_column(columns, "tenantSlug") and normalized_tenant_slug:
+        where_clauses.append(f"LOWER({alias}.tenantSlug) = %s")
+        params.append(normalized_tenant_slug)
 
 
 def get_accounts(
@@ -3704,6 +3877,16 @@ def get_inv_checklist_detail_rows(*, checklist_id: str) -> list[dict]:
     station_table = _quote_table_name(tables["INVCHECKLISTSTATIONS"])
     note_table = _quote_table_name(tables["INVCHECKLISTNOTES"])
     attachment_table = _quote_table_name(tables["INVNOTEATTACHMENTS"])
+    attachment_columns = _get_inv_note_attachment_columns(
+        attachment_table=attachment_table,
+    )
+    attachment_select = _inv_note_attachment_select_clause(
+        alias="a",
+        columns=attachment_columns,
+    )
+    attachment_join_condition = "a.noteId = n.id"
+    if _has_column(attachment_columns, "deletedAt"):
+        attachment_join_condition += " AND a.deletedAt IS NULL"
 
     query = (
         "SELECT "
@@ -3726,16 +3909,12 @@ def get_inv_checklist_detail_rows(*, checklist_id: str) -> list[dict]:
         "n.note AS noteText, "
         "n.dateCreated AS noteDateCreated, "
         "n.dateUpdated AS noteDateUpdated, "
-        "a.id AS attachmentId, "
-        "a.url AS attachmentUrl, "
-        "a.fileName AS attachmentFileName, "
-        "a.fileType AS attachmentFileType, "
-        "a.dateCreated AS attachmentDateCreated, "
-        "a.dateUpdated AS attachmentDateUpdated "
+        + ", ".join(attachment_select)
+        + " "
         f"FROM {checklist_table} c "
         f"LEFT JOIN {station_table} s ON s.checklistId = c.id "
         f"LEFT JOIN {note_table} n ON n.checklistStationId = s.id "
-        f"LEFT JOIN {attachment_table} a ON a.noteId = n.id "
+        f"LEFT JOIN {attachment_table} a ON {attachment_join_condition} "
         "WHERE c.id = %s "
         "ORDER BY s.id ASC, n.id ASC, a.id ASC"
     )
@@ -4138,6 +4317,16 @@ def list_inv_checklist_note_detail_rows(
     station_table = _quote_table_name(tables["INVCHECKLISTSTATIONS"])
     note_table = _quote_table_name(tables["INVCHECKLISTNOTES"])
     attachment_table = _quote_table_name(tables["INVNOTEATTACHMENTS"])
+    attachment_columns = _get_inv_note_attachment_columns(
+        attachment_table=attachment_table,
+    )
+    attachment_select = _inv_note_attachment_select_clause(
+        alias="a",
+        columns=attachment_columns,
+    )
+    attachment_join_condition = "a.noteId = n.id"
+    if _has_column(attachment_columns, "deletedAt"):
+        attachment_join_condition += " AND a.deletedAt IS NULL"
 
     where_clauses: list[str] = []
     params: list[object] = []
@@ -4203,17 +4392,12 @@ def list_inv_checklist_note_detail_rows(
         "s.checklistId AS checklistId, "
         "s.estNum AS estNum, "
         "s.stationCode AS stationCode, "
-        "a.id AS attachmentId, "
-        "a.noteId AS attachmentNoteId, "
-        "a.url AS attachmentUrl, "
-        "a.fileName AS attachmentFileName, "
-        "a.fileType AS attachmentFileType, "
-        "a.dateCreated AS attachmentDateCreated, "
-        "a.dateUpdated AS attachmentDateUpdated "
+        + ", ".join(attachment_select)
+        + " "
         f"FROM {note_table} n "
         f"JOIN {station_table} s ON s.id = n.checklistStationId "
         f"JOIN {checklist_table} c ON c.id = s.checklistId "
-        f"LEFT JOIN {attachment_table} a ON a.noteId = n.id "
+        f"LEFT JOIN {attachment_table} a ON {attachment_join_condition} "
     )
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
@@ -4307,19 +4491,44 @@ def delete_inv_checklist_note(*, note_id: int) -> int:
     return deleted
 
 
-def get_inv_note_attachment_row(*, attachment_id: int) -> dict | None:
+def get_inv_note_attachment_row(*, attachment_id: int, tenant_slug: str | None = None) -> dict | None:
     attachment_id_int = int(attachment_id)
     tables = get_db_tables()
+    checklist_table = _quote_table_name(tables["INVCHECKLISTS"])
+    station_table = _quote_table_name(tables["INVCHECKLISTSTATIONS"])
+    note_table = _quote_table_name(tables["INVCHECKLISTNOTES"])
     attachment_table = _quote_table_name(tables["INVNOTEATTACHMENTS"])
+    attachment_columns = _get_inv_note_attachment_columns(
+        attachment_table=attachment_table,
+    )
+    select_clause = _inv_note_attachment_select_clause(
+        alias="a",
+        columns=attachment_columns,
+    )
+    where_clauses = ["a.id = %s"]
+    params: list[object] = [attachment_id_int]
+    _append_inv_note_attachment_ownership_clauses(
+        where_clauses=where_clauses,
+        params=params,
+        alias="a",
+        note_alias="n",
+        columns=attachment_columns,
+        tenant_slug=tenant_slug,
+    )
     rows = fetch_all(
         (
             "SELECT "
-            "id, noteId, url, fileName, fileType, dateCreated, dateUpdated "
-            f"FROM {attachment_table} "
-            "WHERE id = %s "
-            "LIMIT 1"
+            + ", ".join(select_clause)
+            + " "
+            f"FROM {attachment_table} a "
+            f"JOIN {note_table} n ON n.id = a.noteId "
+            f"JOIN {station_table} s ON s.id = n.checklistStationId "
+            f"JOIN {checklist_table} c ON c.id = s.checklistId "
+            "WHERE "
+            + " AND ".join(where_clauses)
+            + " LIMIT 1"
         ),
-        (attachment_id_int,),
+        tuple(params),
     )
     if not rows:
         return None
@@ -4330,50 +4539,87 @@ def list_inv_note_attachments(
     *,
     note_id: int | None = None,
     attachment_id: int | None = None,
+    tenant_slug: str | None = None,
 ) -> list[dict]:
     tables = get_db_tables()
+    checklist_table = _quote_table_name(tables["INVCHECKLISTS"])
+    station_table = _quote_table_name(tables["INVCHECKLISTSTATIONS"])
+    note_table = _quote_table_name(tables["INVCHECKLISTNOTES"])
     attachment_table = _quote_table_name(tables["INVNOTEATTACHMENTS"])
+    attachment_columns = _get_inv_note_attachment_columns(
+        attachment_table=attachment_table,
+    )
+    select_clause = _inv_note_attachment_select_clause(
+        alias="a",
+        columns=attachment_columns,
+    )
     where_clauses: list[str] = []
     params: list[object] = []
 
     if note_id is not None:
-        where_clauses.append("noteId = %s")
+        where_clauses.append("a.noteId = %s")
         params.append(int(note_id))
 
     if attachment_id is not None:
-        where_clauses.append("id = %s")
+        where_clauses.append("a.id = %s")
         params.append(int(attachment_id))
+
+    _append_inv_note_attachment_ownership_clauses(
+        where_clauses=where_clauses,
+        params=params,
+        alias="a",
+        note_alias="n",
+        columns=attachment_columns,
+        tenant_slug=tenant_slug,
+    )
 
     query = (
         "SELECT "
-        "id, noteId, url, fileName, fileType, dateCreated, dateUpdated "
-        f"FROM {attachment_table}"
+        + ", ".join(select_clause)
+        + " "
+        f"FROM {attachment_table} a "
+        f"JOIN {note_table} n ON n.id = a.noteId "
+        f"JOIN {station_table} s ON s.id = n.checklistStationId "
+        f"JOIN {checklist_table} c ON c.id = s.checklistId"
     )
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
-    query += " ORDER BY id ASC"
+    query += " ORDER BY a.id ASC"
     return fetch_all(query, tuple(params))
 
 
 def insert_inv_note_attachment(item: dict) -> int:
     tables = get_db_tables()
     attachment_table = _quote_table_name(tables["INVNOTEATTACHMENTS"])
+    attachment_columns = _get_inv_note_attachment_columns(
+        attachment_table=attachment_table,
+    )
+
+    columns: list[str] = ["noteId", "url", "fileName", "fileType"]
+    values: list[object] = [
+        int(item.get("noteId")),
+        _normalize_input_text(item.get("url")),
+        _normalize_optional_input_text(item.get("fileName")),
+        _normalize_optional_input_text(item.get("fileType")),
+    ]
+    for optional_column in _INV_NOTE_ATTACHMENT_OPTIONAL_COLUMNS:
+        if optional_column == "deletedAt":
+            continue
+        if not _has_column(attachment_columns, optional_column):
+            continue
+        columns.append(optional_column)
+        values.append(item.get(optional_column))
+
+    placeholders = ", ".join(["%s"] * len(columns))
+    column_sql = ", ".join(columns)
     query = (
         f"INSERT INTO {attachment_table} "
-        "(noteId, url, fileName, fileType) "
-        "VALUES (%s, %s, %s, %s)"
+        f"({column_sql}) "
+        f"VALUES ({placeholders})"
     )
 
     def _work(cursor) -> int:
-        cursor.execute(
-            query,
-            (
-                int(item.get("noteId")),
-                _normalize_input_text(item.get("url")),
-                _normalize_optional_input_text(item.get("fileName")),
-                _normalize_optional_input_text(item.get("fileType")),
-            ),
-        )
+        cursor.execute(query, tuple(values))
         return int(cursor.lastrowid or 0)
 
     inserted = run_transaction(_work)
@@ -4391,6 +4637,9 @@ def update_inv_note_attachment(
         return 0
     tables = get_db_tables()
     attachment_table = _quote_table_name(tables["INVNOTEATTACHMENTS"])
+    attachment_columns = _get_inv_note_attachment_columns(
+        attachment_table=attachment_table,
+    )
     updates: list[str] = []
     params: list[object] = []
     if "url" in fields:
@@ -4402,6 +4651,13 @@ def update_inv_note_attachment(
     if "fileType" in fields:
         updates.append("fileType = %s")
         params.append(_normalize_optional_input_text(fields.get("fileType")))
+    for optional_column in _INV_NOTE_ATTACHMENT_OPTIONAL_COLUMNS:
+        if optional_column in {"deletedAt"}:
+            continue
+        if optional_column not in fields or not _has_column(attachment_columns, optional_column):
+            continue
+        updates.append(f"{optional_column} = %s")
+        params.append(fields.get(optional_column))
     if not updates:
         return 0
 
@@ -4421,19 +4677,74 @@ def update_inv_note_attachment(
     return updated
 
 
-def delete_inv_note_attachment(*, attachment_id: int) -> int:
+def delete_inv_note_attachment(*, attachment_id: int, tenant_slug: str | None = None) -> int:
     attachment_id_int = int(attachment_id)
     tables = get_db_tables()
+    checklist_table = _quote_table_name(tables["INVCHECKLISTS"])
+    station_table = _quote_table_name(tables["INVCHECKLISTSTATIONS"])
+    note_table = _quote_table_name(tables["INVCHECKLISTNOTES"])
     attachment_table = _quote_table_name(tables["INVNOTEATTACHMENTS"])
+    attachment_columns = _get_inv_note_attachment_columns(
+        attachment_table=attachment_table,
+    )
+    where_clauses = ["a.id = %s"]
+    params: list[object] = [attachment_id_int]
+    _append_inv_note_attachment_ownership_clauses(
+        where_clauses=where_clauses,
+        params=params,
+        alias="a",
+        note_alias="n",
+        columns=attachment_columns,
+        tenant_slug=tenant_slug,
+    )
+    where_sql = " AND ".join(where_clauses)
+
+    if _has_column(attachment_columns, "deletedAt"):
+        query = (
+            f"UPDATE {attachment_table} a "
+            f"JOIN {note_table} n ON n.id = a.noteId "
+            f"JOIN {station_table} s ON s.id = n.checklistStationId "
+            f"JOIN {checklist_table} c ON c.id = s.checklistId "
+            "SET a.deletedAt = CURRENT_TIMESTAMP "
+            "WHERE "
+            + where_sql
+        )
+    else:
+        query = (
+            f"DELETE a FROM {attachment_table} a "
+            f"JOIN {note_table} n ON n.id = a.noteId "
+            f"JOIN {station_table} s ON s.id = n.checklistStationId "
+            f"JOIN {checklist_table} c ON c.id = s.checklistId "
+            "WHERE "
+            + where_sql
+        )
     deleted = run_transaction(
         lambda cursor: (
-            cursor.execute(
-                f"DELETE FROM {attachment_table} WHERE id = %s",
-                (attachment_id_int,),
-            )
+            cursor.execute(query, tuple(params))
             or int(cursor.rowcount or 0)
         )
     )
     if int(deleted or 0) > 0:
         _invalidate_inv_checklist_note_detail_cache()
     return deleted
+
+
+def count_inv_note_attachments(*, note_id: int, include_deleted: bool = False) -> int:
+    note_id_int = int(note_id)
+    tables = get_db_tables()
+    attachment_table = _quote_table_name(tables["INVNOTEATTACHMENTS"])
+    attachment_columns = _get_inv_note_attachment_columns(
+        attachment_table=attachment_table,
+    )
+    where_clauses = ["noteId = %s"]
+    if _has_column(attachment_columns, "deletedAt") and not include_deleted:
+        where_clauses.append("deletedAt IS NULL")
+    query = (
+        "SELECT COUNT(*) AS total "
+        f"FROM {attachment_table} "
+        "WHERE " + " AND ".join(where_clauses)
+    )
+    rows = fetch_all(query, (note_id_int,))
+    if not rows:
+        return 0
+    return int(rows[0].get("total") or 0)
