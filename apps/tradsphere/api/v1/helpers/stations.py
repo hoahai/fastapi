@@ -135,7 +135,7 @@ def _ensure_payload_list(payload: list[dict] | dict, *, allow_object: bool = Tru
     return payload
 
 
-def _resolve_station_delivery_method_id(
+def _parse_station_delivery_method_id(
     row: dict,
     *,
     required: bool,
@@ -159,7 +159,6 @@ def _resolve_station_delivery_method_id(
         if required:
             raise ValueError("deliveryMethodId is required")
         return None
-    ensure_delivery_method_ids_exist([delivery_method_id])
     return delivery_method_id
 
 
@@ -397,6 +396,7 @@ def list_stations_data(
     languages: list[str] | None = None,
     delivery_method_detail: bool = False,
     contact_detail: bool = False,
+    include_contacts: bool = True,
 ) -> list[dict]:
     normalized_codes = [
         str(code or "").strip().upper()
@@ -463,7 +463,7 @@ def list_stations_data(
         )
         for row in rows
     ]
-    if serialized_rows:
+    if serialized_rows and include_contacts:
         station_contacts = _build_station_contacts_map(
             [
                 str(item.get("code") or "").strip().upper()
@@ -503,6 +503,7 @@ def create_stations_data(payload: list[dict] | dict) -> dict[str, int]:
         return {"inserted": 0}
 
     normalized_rows: list[dict] = []
+    delivery_method_ids_to_validate: list[int] = []
     for row in rows:
         if not isinstance(row, dict):
             raise ValueError("Each stations item must be an object")
@@ -522,6 +523,13 @@ def create_stations_data(payload: list[dict] | dict) -> dict[str, int]:
             syscode=syscode,
             require_syscode_for_ca=True,
         )
+        delivery_method_id = _parse_station_delivery_method_id(
+            row,
+            required=True,
+        )
+        if delivery_method_id is not None:
+            delivery_method_ids_to_validate.append(delivery_method_id)
+
         normalized_rows.append(
             {
                 "code": code,
@@ -539,10 +547,7 @@ def create_stations_data(payload: list[dict] | dict) -> dict[str, int]:
                     field="ownership",
                     max_length=255,
                 ),
-                "deliveryMethodId": _resolve_station_delivery_method_id(
-                    row,
-                    required=True,
-                ),
+                "deliveryMethodId": delivery_method_id,
                 "note": _ensure_optional_text(
                     row.get("note"),
                     field="note",
@@ -551,6 +556,7 @@ def create_stations_data(payload: list[dict] | dict) -> dict[str, int]:
             }
         )
 
+    ensure_delivery_method_ids_exist(delivery_method_ids_to_validate)
     inserted = insert_stations(normalized_rows)
     invalidate_validation_cache()
     return {"inserted": inserted}
@@ -585,6 +591,7 @@ def modify_stations_data(payload: list[dict] | dict) -> dict[str, int]:
     existing_media_types = get_station_media_types(codes=station_codes)
 
     normalized_rows: list[dict] = []
+    delivery_method_ids_to_validate: list[int] = []
     for row, code in prepared_rows:
         item: dict[str, object] = {"code": code}
         media_type: str | None = None
@@ -645,18 +652,21 @@ def modify_stations_data(payload: list[dict] | dict) -> dict[str, int]:
             )
 
         if "deliveryMethodId" in row:
-            delivery_method_id = _resolve_station_delivery_method_id(
+            delivery_method_id = _parse_station_delivery_method_id(
                 row,
                 required=False,
             )
             if delivery_method_id is None:
                 raise ValueError("deliveryMethodId cannot be null")
             item["deliveryMethodId"] = delivery_method_id
+            delivery_method_ids_to_validate.append(delivery_method_id)
 
         if len(item) == 1:
             raise ValueError(f"No updatable fields provided for station '{code}'")
         normalized_rows.append(item)
 
+    if delivery_method_ids_to_validate:
+        ensure_delivery_method_ids_exist(delivery_method_ids_to_validate)
     updated = update_stations(normalized_rows)
     invalidate_validation_cache()
     return {"updated": updated}

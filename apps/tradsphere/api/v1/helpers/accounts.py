@@ -9,6 +9,7 @@ from apps.tradsphere.api.v1.helpers.accountValidation import (
 )
 from apps.tradsphere.api.v1.helpers.dbQueries import (
     get_accounts,
+    get_accounts_directory,
     insert_accounts,
     update_accounts,
 )
@@ -71,6 +72,27 @@ def list_accounts(
     active: bool = True,
 ) -> list[dict]:
     return get_accounts(account_codes=account_codes or [], active_only=bool(active))
+
+
+def list_accounts_directory(
+    *,
+    account_codes: list[str] | None = None,
+    active: bool = True,
+) -> list[dict]:
+    rows = get_accounts_directory(
+        account_codes=account_codes or [],
+        active_only=bool(active),
+    )
+    return [
+        {
+            "accountCode": str(row.get("accountCode") or "").strip().upper(),
+            "accountName": str(row.get("accountName") or "").strip(),
+            "billingType": row.get("billingType"),
+            "active": row.get("active"),
+        }
+        for row in rows
+        if str(row.get("accountCode") or "").strip()
+    ]
 
 
 def create_accounts(payload: list[dict] | dict) -> dict[str, int]:

@@ -21,21 +21,28 @@ from apps.tradsphere.api.v1.helpers.dbQueries import (
     delete_inv_note_attachment,
     invalidate_inv_checklist_related_cache_for_bulk_write,
     list_inv_checklist_note_detail_rows,
+    list_inv_checklist_notes,
+    list_inv_checklist_note_rows_by_ids,
     list_inv_checklist_stations,
+    list_inv_checklist_station_rows_by_ids,
     list_inv_checklist_station_rows_for_checklists,
     list_inv_checklist_station_search_rows,
+    list_inv_checklist_rows_by_ids,
     get_inv_checklist_detail_rows,
     get_inv_checklist_note_row,
     get_inv_checklist_row,
     get_inv_checklist_station_row,
     get_inv_note_attachment_row,
     insert_inv_checklist,
+    insert_inv_checklists_for_sync,
     insert_inv_checklist_note,
     insert_inv_checklist_station,
+    insert_inv_checklist_stations_for_sync,
     insert_inv_note_attachment,
     list_inv_checklists,
     list_inv_note_attachments,
     list_schedule_invoice_checklist_expected_rows,
+    save_inv_checklist_bulk_changes,
     update_inv_checklist,
     update_inv_checklist_note,
     update_inv_checklist_station,
@@ -173,10 +180,10 @@ def _ensure_optional_unsigned_int(value: object, *, field: str) -> int | None:
     return parsed
 
 
-def _ensure_required_amount(value: object) -> Decimal:
+def _ensure_optional_amount(value: object) -> Decimal | None:
     text = str(value or "").strip()
     if not text:
-        raise ValueError("amount is required")
+        return None
     try:
         amount = Decimal(text)
     except (InvalidOperation, ValueError) as exc:
@@ -191,6 +198,13 @@ def _ensure_required_amount(value: object) -> Decimal:
     if quantized != amount:
         raise ValueError("amount must have at most 2 decimal places")
     return quantized
+
+
+def _has_note_or_amount(*, note_value: object, amount_value: object) -> bool:
+    if amount_value is not None:
+        return True
+    note_text = str(note_value or "").strip()
+    return bool(note_text)
 
 
 def _extract_db_error_message(exc: Exception) -> str:
@@ -232,10 +246,93 @@ def _safe_db_call(func, *args, **kwargs):
 def _serialize_datetime_fields(row: dict) -> dict:
     out = dict(row)
     for key in ("dateCreated", "dateUpdated"):
-        value = out.get(key)
-        if hasattr(value, "isoformat"):
-            out[key] = value.isoformat()
+        out[key] = _to_iso_text(out.get(key))
     return out
+
+
+def _to_iso_text(value: object) -> str | None:
+    if value is None:
+        return None
+    if isinstance(value, str):
+        text = value.strip()
+        return text or None
+    if hasattr(value, "isoformat"):
+        try:
+            return value.isoformat()
+        except Exception:
+            pass
+    text = str(value).strip()
+    return text or None
+
+
+def _normalized_text_values(values: list[str]) -> list[str]:
+    seen: set[str] = set()
+    normalized: list[str] = []
+    for value in values:
+        text = str(value or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        normalized.append(text)
+    return sorted(normalized)
+
+
+def _normalized_int_values(values: list[int]) -> list[int]:
+    seen: set[int] = set()
+    normalized: list[int] = []
+    for value in values:
+        parsed = int(value)
+        if parsed in seen:
+            continue
+        seen.add(parsed)
+        normalized.append(parsed)
+    return sorted(normalized)
+
+
+def _sanitize_storage_token(value: object) -> str:
+    text = str(value or "").strip().lower()
+    normalized = re.sub(r"[^a-z0-9]+", "", text)
+    return normalized or "na"
+
+
+def _build_invoice_note_storage_key(
+    *,
+    note_id: int,
+    est_num: int | None,
+    station_code: str | None,
+    counter: int,
+) -> str:
+    station_token = _sanitize_storage_token(station_code)
+    est_num_token = str(int(est_num)) if est_num is not None else "0"
+    return f"{int(note_id)}_{est_num_token}_{station_token}_{int(counter)}"
+
+
+def _build_stored_attachment_file_name(
+    *,
+    provider_public_id: str | None,
+    provider_metadata: dict[str, object] | None,
+    mime_type: str | None,
+    fallback_name: str,
+) -> str:
+    fallback = str(fallback_name or "").strip() or "attachment"
+    public_id = str(provider_public_id or "").strip()
+    base_name = public_id.split("/")[-1] if public_id else ""
+    base_name = base_name.strip()
+    if not base_name:
+        return fallback
+    if "." in base_name:
+        return base_name
+
+    extension = ""
+    if isinstance(provider_metadata, dict):
+        extension = str(provider_metadata.get("format") or "").strip().lower()
+    if not extension:
+        normalized_mime = str(mime_type or "").strip().lower()
+        if normalized_mime.startswith("image/"):
+            extension = normalized_mime.split("/", 1)[1].strip()
+    if extension:
+        return f"{base_name}.{extension}"
+    return base_name
 
 
 def _normalize_checklist_payload(payload: dict) -> dict:
@@ -347,10 +444,15 @@ def _normalize_note_payload(payload: dict) -> dict:
     if station_row is None:
         raise NotFoundError(f"Checklist station not found: {station_row_id}")
 
+    amount_value = _ensure_optional_amount(payload.get("amount"))
+    note_value = _ensure_optional_text(payload.get("note"), field="note", max_length=2048)
+    if not _has_note_or_amount(note_value=note_value, amount_value=amount_value):
+        raise ValueError("At least one of amount or note is required")
+
     return {
         "checklistStationId": int(station_row_id),
-        "amount": _ensure_required_amount(payload.get("amount")),
-        "note": _ensure_required_text(payload.get("note"), field="note", max_length=2048),
+        "amount": amount_value,
+        "note": note_value,
     }
 
 
@@ -359,9 +461,9 @@ def _normalize_note_updates(payload: dict) -> dict[str, object]:
         raise ValueError("Payload must be an object")
     updates: dict[str, object] = {}
     if "amount" in payload:
-        updates["amount"] = _ensure_required_amount(payload.get("amount"))
+        updates["amount"] = _ensure_optional_amount(payload.get("amount"))
     if "note" in payload:
-        updates["note"] = _ensure_required_text(payload.get("note"), field="note", max_length=2048)
+        updates["note"] = _ensure_optional_text(payload.get("note"), field="note", max_length=2048)
     if not updates:
         raise ValueError("At least one updatable field is required")
     return updates
@@ -444,8 +546,7 @@ def _serialize_attachment_row(row: dict) -> dict:
 def _serialize_note_row(row: dict) -> dict:
     out = _serialize_datetime_fields(row)
     amount_value = out.get("amount")
-    if amount_value is not None:
-        out["amount"] = float(amount_value)
+    out["amount"] = float(amount_value) if amount_value is not None else None
     return out
 
 
@@ -471,8 +572,8 @@ def _build_checklist_detail(
         "month": int(first.get("checklistMonth")),
         "status": first.get("checklistStatus"),
         "note": first.get("checklistNote"),
-        "dateCreated": first.get("checklistDateCreated").isoformat() if first.get("checklistDateCreated") else None,
-        "dateUpdated": first.get("checklistDateUpdated").isoformat() if first.get("checklistDateUpdated") else None,
+        "dateCreated": _to_iso_text(first.get("checklistDateCreated")),
+        "dateUpdated": _to_iso_text(first.get("checklistDateUpdated")),
     }
     if not include_stations_value:
         return checklist
@@ -494,8 +595,8 @@ def _build_checklist_detail(
                 "estNum": int(row.get("stationEstNum")),
                 "stationCode": row.get("stationCode"),
                 "status": row.get("stationStatus"),
-                "dateCreated": row.get("stationDateCreated").isoformat() if row.get("stationDateCreated") else None,
-                "dateUpdated": row.get("stationDateUpdated").isoformat() if row.get("stationDateUpdated") else None,
+                "dateCreated": _to_iso_text(row.get("stationDateCreated")),
+                "dateUpdated": _to_iso_text(row.get("stationDateUpdated")),
             }
             if include_notes_value:
                 station_entry["notes"] = []
@@ -515,23 +616,29 @@ def _build_checklist_detail(
             note_entry = {
                 "id": note_id,
                 "checklistStationId": station_id,
-                "amount": float(amount_value) if amount_value is not None else 0.0,
+                "amount": float(amount_value) if amount_value is not None else None,
                 "note": row.get("noteText"),
-                "dateCreated": row.get("noteDateCreated").isoformat() if row.get("noteDateCreated") else None,
-                "dateUpdated": row.get("noteDateUpdated").isoformat() if row.get("noteDateUpdated") else None,
+                "dateCreated": _to_iso_text(row.get("noteDateCreated")),
+                "dateUpdated": _to_iso_text(row.get("noteDateUpdated")),
             }
             if include_attachments_value:
                 note_entry["attachments"] = []
             notes_by_id[note_id] = note_entry
             station_entry["notes"].append(note_entry)
 
-        if not include_attachments_value:
-            continue
-
-        attachment_row_id = row.get("attachmentId")
-        if attachment_row_id is None:
-            continue
-        note_entry["attachments"].append(_serialize_attachment_row(row))
+    if include_attachments_value and notes_by_id:
+        tenant_slug = str(get_tenant_id() or "").strip().lower() or None
+        for note_id, note_entry in notes_by_id.items():
+            attachment_rows = _safe_db_call(
+                list_inv_note_attachments,
+                note_id=int(note_id),
+                tenant_slug=tenant_slug,
+            )
+            note_entry["attachments"] = [
+                _serialize_attachment_row(attachment_row)
+                for attachment_row in attachment_rows
+                if attachment_row.get("attachmentId") is not None
+            ]
 
     return checklist
 
@@ -794,23 +901,32 @@ def list_invoice_checklist_notes_data(
                 "id": parsed_note_id,
                 "checklistStationId": int(row.get("checklistStationId")),
                 "checklistId": str(row.get("checklistId") or "").strip() or None,
+                "checklistYear": int(row.get("checklistYear")) if row.get("checklistYear") is not None else None,
+                "checklistMonth": int(row.get("checklistMonth")) if row.get("checklistMonth") is not None else None,
                 "estNum": int(row.get("estNum")) if row.get("estNum") is not None else None,
                 "stationCode": str(row.get("stationCode") or "").strip().upper() or None,
-                "amount": float(amount_value) if amount_value is not None else 0.0,
+                "amount": float(amount_value) if amount_value is not None else None,
                 "note": row.get("note"),
-                "dateCreated": row.get("dateCreated").isoformat() if row.get("dateCreated") else None,
-                "dateUpdated": row.get("dateUpdated").isoformat() if row.get("dateUpdated") else None,
+                "dateCreated": _to_iso_text(row.get("dateCreated")),
+                "dateUpdated": _to_iso_text(row.get("dateUpdated")),
             }
             if include_attachments:
                 note_entry["attachments"] = []
             notes_by_id[parsed_note_id] = note_entry
 
-        if not include_attachments:
-            continue
-        attachment_row_id = row.get("attachmentId")
-        if attachment_row_id is None:
-            continue
-        note_entry["attachments"].append(_serialize_attachment_row(row))
+    if include_attachments and notes_by_id:
+        tenant_slug = str(get_tenant_id() or "").strip().lower() or None
+        for note_id, note_entry in notes_by_id.items():
+            attachment_rows = _safe_db_call(
+                list_inv_note_attachments,
+                note_id=int(note_id),
+                tenant_slug=tenant_slug,
+            )
+            note_entry["attachments"] = [
+                _serialize_attachment_row(attachment_row)
+                for attachment_row in attachment_rows
+                if attachment_row.get("attachmentId") is not None
+            ]
 
     return [notes_by_id[key] for key in ordered_note_ids]
 
@@ -832,10 +948,16 @@ def update_invoice_checklist_note_data(*, payload: dict) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("Payload must be an object")
     note_id_value = _ensure_required_unsigned_int(payload.get("noteId"), field="noteId")
-    if _safe_db_call(get_inv_checklist_note_row, note_id=note_id_value) is None:
+    existing_row = _safe_db_call(get_inv_checklist_note_row, note_id=note_id_value)
+    if existing_row is None:
         raise NotFoundError(f"Checklist note not found: {note_id_value}")
 
     updates = _normalize_note_updates(payload)
+    next_amount = updates["amount"] if "amount" in updates else existing_row.get("amount")
+    next_note = updates["note"] if "note" in updates else existing_row.get("note")
+    if not _has_note_or_amount(note_value=next_note, amount_value=next_amount):
+        raise ValueError("At least one of amount or note is required")
+
     try:
         update_inv_checklist_note(note_id=note_id_value, fields=updates)
     except Exception as exc:
@@ -1059,6 +1181,378 @@ def delete_invoice_note_attachment_data(*, attachment_id: int) -> dict:
     except Exception as exc:
         raise _map_db_exception(exc) from exc
     return {"deleted": int(deleted > 0), "id": attachment_id_value}
+
+
+def _ensure_object_list(value: object, *, field: str) -> list[dict]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError(f"{field} must be an array")
+    rows: list[dict] = []
+    for index, item in enumerate(value):
+        if not isinstance(item, dict):
+            raise ValueError(f"{field}[{index}] must be an object")
+        rows.append(item)
+    return rows
+
+
+def _resolve_bulk_checklist_id(
+    *,
+    row: dict,
+    checklist_id_map: dict[str, str],
+    field: str,
+) -> str:
+    direct_id = str(row.get("checklistId") or "").strip()
+    if direct_id:
+        if direct_id in checklist_id_map:
+            return checklist_id_map[direct_id]
+        return direct_id
+    client_id = str(row.get("checklistClientId") or "").strip()
+    if client_id and client_id in checklist_id_map:
+        return checklist_id_map[client_id]
+    raise ValueError(f"{field} requires checklistId or checklistClientId")
+
+
+def bulk_save_invoice_checklists_data(*, payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError("Payload must be an object")
+
+    selected_year = _ensure_required_year(payload.get("year"))
+    selected_month = _ensure_required_month(payload.get("month"))
+
+    create_checklists_raw = _ensure_object_list(payload.get("createChecklists"), field="createChecklists")
+    checklist_updates_raw = _ensure_object_list(payload.get("checklistUpdates"), field="checklistUpdates")
+    delete_checklist_ids = [
+        str(item or "").strip()
+        for item in (payload.get("deleteChecklistIds") or [])
+        if str(item or "").strip()
+    ]
+
+    checklist_creates: list[dict] = []
+    checklist_id_map: dict[str, str] = {}
+    create_account_codes: list[str] = []
+    for index, row in enumerate(create_checklists_raw):
+        client_id = str(row.get("clientChecklistId") or "").strip()
+        if not client_id:
+            raise ValueError(f"createChecklists[{index}].clientChecklistId is required")
+        account_code = _ensure_required_text(
+            row.get("accountCode"),
+            field=f"createChecklists[{index}].accountCode",
+            max_length=10,
+            uppercase=True,
+        )
+        row_year = _ensure_required_year(row.get("year"))
+        row_month = _ensure_required_month(row.get("month"))
+        if row_year != selected_year or row_month != selected_month:
+            raise ValueError(
+                f"createChecklists[{index}] period must match payload year/month"
+            )
+        checklist_id = str(uuid.uuid4())
+        checklist_id_map[client_id] = checklist_id
+        create_account_codes.append(account_code)
+        checklist_creates.append(
+            {
+                "clientChecklistId": client_id,
+                "id": checklist_id,
+                "accountCode": account_code,
+                "year": row_year,
+                "month": row_month,
+                "status": _ensure_optional_text(
+                    row.get("status"),
+                    field=f"createChecklists[{index}].status",
+                    max_length=32,
+                ),
+                "note": _ensure_optional_text(
+                    row.get("note"),
+                    field=f"createChecklists[{index}].note",
+                    max_length=2048,
+                ),
+            }
+        )
+
+    if create_account_codes:
+        ensure_master_account_codes_exist(create_account_codes)
+
+    checklist_updates: list[dict] = []
+    checklist_ids_for_lookup: list[str] = []
+    for index, row in enumerate(checklist_updates_raw):
+        checklist_id = _resolve_bulk_checklist_id(
+            row=row,
+            checklist_id_map=checklist_id_map,
+            field=f"checklistUpdates[{index}]",
+        )
+        update_row: dict[str, object] = {"checklistId": checklist_id}
+        if "status" in row:
+            update_row["status"] = _ensure_optional_text(
+                row.get("status"),
+                field=f"checklistUpdates[{index}].status",
+                max_length=32,
+            )
+        if "note" in row:
+            update_row["note"] = _ensure_optional_text(
+                row.get("note"),
+                field=f"checklistUpdates[{index}].note",
+                max_length=2048,
+            )
+        if len(update_row) == 1:
+            raise ValueError(
+                f"No updatable fields provided for checklistUpdates[{index}]"
+            )
+        checklist_updates.append(update_row)
+        checklist_ids_for_lookup.append(checklist_id)
+
+    checklist_ids_to_validate = [
+        checklist_id
+        for checklist_id in _normalized_text_values(delete_checklist_ids + checklist_ids_for_lookup)
+        if checklist_id not in checklist_id_map.values()
+    ]
+    if checklist_ids_to_validate:
+        existing_checklists = _safe_db_call(
+            list_inv_checklist_rows_by_ids,
+            checklist_ids=checklist_ids_to_validate,
+        )
+        existing_checklist_ids = {
+            str((row or {}).get("id") or "").strip()
+            for row in (existing_checklists or [])
+            if str((row or {}).get("id") or "").strip()
+        }
+        for checklist_id in checklist_ids_to_validate:
+            if checklist_id not in existing_checklist_ids:
+                raise NotFoundError(f"Checklist not found: {checklist_id}")
+
+    station_creates_raw = _ensure_object_list(payload.get("createStations"), field="createStations")
+    station_updates_raw = _ensure_object_list(payload.get("stationUpdates"), field="stationUpdates")
+    delete_station_ids = [
+        _ensure_required_unsigned_int(item, field="deleteStationIds[]")
+        for item in (payload.get("deleteStationIds") or [])
+    ]
+
+    station_creates: list[dict] = []
+    est_nums_for_create: list[int] = []
+    station_codes_for_create: list[str] = []
+    for index, row in enumerate(station_creates_raw):
+        client_station_id = str(row.get("clientStationId") or "").strip()
+        if not client_station_id:
+            raise ValueError(f"createStations[{index}].clientStationId is required")
+        checklist_id = _resolve_bulk_checklist_id(
+            row=row,
+            checklist_id_map=checklist_id_map,
+            field=f"createStations[{index}]",
+        )
+        est_num = _ensure_required_unsigned_int(
+            row.get("estNum"),
+            field=f"createStations[{index}].estNum",
+        )
+        station_code = _ensure_required_text(
+            row.get("stationCode"),
+            field=f"createStations[{index}].stationCode",
+            max_length=10,
+            uppercase=True,
+        )
+        est_nums_for_create.append(est_num)
+        station_codes_for_create.append(station_code)
+        station_creates.append(
+            {
+                "clientStationId": client_station_id,
+                "checklistId": checklist_id,
+                "estNum": est_num,
+                "stationCode": station_code,
+                "status": _ensure_optional_text(
+                    row.get("status"),
+                    field=f"createStations[{index}].status",
+                    max_length=32,
+                ),
+            }
+        )
+
+    if est_nums_for_create:
+        ensure_est_nums_exist(est_nums_for_create)
+    if station_codes_for_create:
+        ensure_station_codes_exist(station_codes_for_create)
+
+    station_updates: list[dict] = []
+    station_ids_for_lookup: list[int] = []
+    for index, row in enumerate(station_updates_raw):
+        station_row_id = _ensure_required_unsigned_int(
+            row.get("stationRowId"),
+            field=f"stationUpdates[{index}].stationRowId",
+        )
+        update_row: dict[str, object] = {"stationRowId": station_row_id}
+        if "status" in row:
+            update_row["status"] = _ensure_optional_text(
+                row.get("status"),
+                field=f"stationUpdates[{index}].status",
+                max_length=32,
+            )
+        if len(update_row) == 1:
+            raise ValueError(
+                f"No updatable fields provided for stationUpdates[{index}]"
+            )
+        station_updates.append(update_row)
+        station_ids_for_lookup.append(station_row_id)
+
+    station_ids_to_validate = _normalized_int_values(station_ids_for_lookup + delete_station_ids)
+    if station_ids_to_validate:
+        existing_stations = _safe_db_call(
+            list_inv_checklist_station_rows_by_ids,
+            station_row_ids=station_ids_to_validate,
+        )
+        existing_station_ids = {
+            int((row or {}).get("id"))
+            for row in (existing_stations or [])
+            if (row or {}).get("id") is not None
+        }
+        for station_id in station_ids_to_validate:
+            if station_id not in existing_station_ids:
+                raise NotFoundError(f"Checklist station not found: {station_id}")
+
+    note_creates_raw = _ensure_object_list(payload.get("createNotes"), field="createNotes")
+    note_updates_raw = _ensure_object_list(payload.get("noteUpdates"), field="noteUpdates")
+    delete_note_ids = [
+        _ensure_required_unsigned_int(item, field="deleteNoteIds[]")
+        for item in (payload.get("deleteNoteIds") or [])
+    ]
+
+    note_creates: list[dict] = []
+    for index, row in enumerate(note_creates_raw):
+        client_note_id = str(row.get("clientNoteId") or "").strip()
+        if not client_note_id:
+            raise ValueError(f"createNotes[{index}].clientNoteId is required")
+        direct_station_id = row.get("checklistStationId")
+        client_station_id = str(row.get("checklistStationClientId") or "").strip()
+        if direct_station_id is None and not client_station_id:
+            raise ValueError(
+                f"createNotes[{index}] requires checklistStationId or checklistStationClientId"
+            )
+        checklist_station_id = None
+        if direct_station_id is not None and str(direct_station_id).strip() != "":
+            checklist_station_id = _ensure_required_unsigned_int(
+                direct_station_id,
+                field=f"createNotes[{index}].checklistStationId",
+            )
+        amount_value = _ensure_optional_amount(row.get("amount"))
+        note_value = _ensure_optional_text(
+            row.get("note"),
+            field=f"createNotes[{index}].note",
+            max_length=2048,
+        )
+        if not _has_note_or_amount(note_value=note_value, amount_value=amount_value):
+            raise ValueError("At least one of amount or note is required")
+        note_creates.append(
+            {
+                "clientNoteId": client_note_id,
+                "checklistStationId": checklist_station_id,
+                "checklistStationClientId": client_station_id or None,
+                "amount": amount_value,
+                "note": note_value,
+            }
+        )
+
+    note_updates: list[dict] = []
+    note_ids_for_lookup: list[int] = []
+    for index, row in enumerate(note_updates_raw):
+        note_id = _ensure_required_unsigned_int(
+            row.get("noteId"),
+            field=f"noteUpdates[{index}].noteId",
+        )
+        update_row: dict[str, object] = {"noteId": note_id}
+        if "amount" in row:
+            update_row["amount"] = _ensure_optional_amount(row.get("amount"))
+        if "note" in row:
+            update_row["note"] = _ensure_optional_text(
+                row.get("note"),
+                field=f"noteUpdates[{index}].note",
+                max_length=2048,
+            )
+        next_amount = update_row.get("amount")
+        next_note = update_row.get("note")
+        if not _has_note_or_amount(note_value=next_note, amount_value=next_amount):
+            raise ValueError("At least one of amount or note is required")
+        note_updates.append(update_row)
+        note_ids_for_lookup.append(note_id)
+
+    note_ids_to_validate = _normalized_int_values(note_ids_for_lookup + delete_note_ids)
+    if note_ids_to_validate:
+        existing_notes = _safe_db_call(
+            list_inv_checklist_note_rows_by_ids,
+            note_ids=note_ids_to_validate,
+        )
+        existing_note_ids = {
+            int((row or {}).get("id"))
+            for row in (existing_notes or [])
+            if (row or {}).get("id") is not None
+        }
+        for note_id in note_ids_to_validate:
+            if note_id not in existing_note_ids:
+                raise NotFoundError(f"Checklist note not found: {note_id}")
+
+    tenant_slug = str(get_tenant_id() or "").strip().lower() or None
+    result = _safe_db_call(
+        save_inv_checklist_bulk_changes,
+        checklist_creates=checklist_creates,
+        checklist_updates=checklist_updates,
+        checklist_deletes=_normalized_text_values(delete_checklist_ids),
+        station_creates=station_creates,
+        station_updates=station_updates,
+        station_deletes=_normalized_int_values(delete_station_ids),
+        note_creates=note_creates,
+        note_updates=note_updates,
+        note_deletes=_normalized_int_values(delete_note_ids),
+        tenant_slug=tenant_slug,
+    )
+
+    selected_checklist_id_raw = str(payload.get("selectedChecklistId") or "").strip()
+    selected_checklist_id = checklist_id_map.get(selected_checklist_id_raw, selected_checklist_id_raw)
+    deleted_checklist_ids_set = set(_normalized_text_values(delete_checklist_ids))
+    if selected_checklist_id in deleted_checklist_ids_set:
+        selected_checklist_id = None
+
+    selected_checklist = None
+    if selected_checklist_id:
+        try:
+            selected_checklist = get_invoice_checklists_data(
+                checklist_id=selected_checklist_id,
+                include_stations=True,
+                include_notes=True,
+                include_attachments=True,
+            )
+        except NotFoundError:
+            selected_checklist = None
+            selected_checklist_id = None
+
+    checklist_rows = list_invoice_checklists_data(
+        year=selected_year,
+        month=selected_month,
+    )
+
+    return {
+        "year": selected_year,
+        "month": selected_month,
+        "checklists": checklist_rows,
+        "selectedChecklistId": selected_checklist_id,
+        "selectedChecklist": selected_checklist,
+        "mappings": {
+            "checklistIds": dict(result.get("checklistIds") or {}),
+            "stationIds": dict(result.get("stationIds") or {}),
+            "noteIds": dict(result.get("noteIds") or {}),
+        },
+        "deleted": {
+            "checklistIds": _normalized_text_values(delete_checklist_ids),
+            "stationIds": _normalized_int_values(delete_station_ids),
+            "noteIds": _normalized_int_values(delete_note_ids),
+        },
+        "summary": {
+            "createdChecklistsCount": len(checklist_creates),
+            "updatedChecklistsCount": len(checklist_updates),
+            "deletedChecklistsCount": len(delete_checklist_ids),
+            "createdStationsCount": len(station_creates),
+            "updatedStationsCount": len(station_updates),
+            "deletedStationsCount": len(delete_station_ids),
+            "createdNotesCount": len(note_creates),
+            "updatedNotesCount": len(note_updates),
+            "deletedNotesCount": len(delete_note_ids),
+        },
+    }
 
 
 def get_invoice_note_attachment_open_data(*, attachment_id: int) -> dict:
@@ -1406,33 +1900,26 @@ def sync_invoice_checklists_for_period_data(
             "mismatchStations": mismatch_rows_preview,
         }
 
+    batch_checklists_to_insert: list[dict] = []
+    expected_new_checklist_ids: set[str] = set()
     for account_code in sorted(expected_pairs_by_account.keys()):
         if account_code in checklist_by_account:
             continue
-        was_created = False
-        try:
-            created = create_invoice_checklist_data(
-                {
-                    "accountCode": account_code,
-                    "year": selected_year,
-                    "month": selected_month,
-                    "status": None,
-                    "note": None,
-                }
-            )
-            was_created = True
-        except ConflictError:
-            rows = list_invoice_checklists_data(
-                account_code=account_code,
-                year=selected_year,
-                month=selected_month,
-            )
-            created = rows[0] if rows else None
-        if not created:
-            continue
-        if was_created:
-            created_checklists.append(created)
-        checklist_by_account[account_code] = created
+        checklist_id = str(uuid.uuid4())
+        expected_new_checklist_ids.add(checklist_id)
+        batch_checklists_to_insert.append(
+            {
+                "id": checklist_id,
+                "accountCode": account_code,
+                "year": selected_year,
+                "month": selected_month,
+                "status": None,
+                "note": None,
+            }
+        )
+
+    if batch_checklists_to_insert:
+        _safe_db_call(insert_inv_checklists_for_sync, batch_checklists_to_insert)
 
     checklist_rows = list_invoice_checklists_data(
         year=selected_year,
@@ -1444,12 +1931,12 @@ def sync_invoice_checklists_for_period_data(
         if str(row.get("id") or "").strip()
     }
 
-    station_rows = _safe_db_call(
+    station_rows_before_insert = _safe_db_call(
         list_inv_checklist_station_rows_for_checklists,
         checklist_ids=list(checklist_id_to_row.keys()),
     )
     existing_station_pairs_by_checklist: dict[str, set[tuple[int, str]]] = {}
-    for station_row in station_rows:
+    for station_row in station_rows_before_insert:
         checklist_id = str(station_row.get("checklistId") or "").strip()
         est_num = _ensure_optional_unsigned_int(station_row.get("estNum"), field="estNum")
         station_code = str(station_row.get("stationCode") or "").strip().upper()
@@ -1457,6 +1944,8 @@ def sync_invoice_checklists_for_period_data(
             continue
         existing_station_pairs_by_checklist.setdefault(checklist_id, set()).add((int(est_num), station_code))
 
+    stations_to_insert: list[dict] = []
+    station_insert_keys: list[tuple[str, int, str]] = []
     created_station_rows: list[dict] = []
     for checklist_id, checklist in checklist_id_to_row.items():
         account_code = str(checklist.get("accountCode") or "").strip().upper()
@@ -1467,31 +1956,54 @@ def sync_invoice_checklists_for_period_data(
         for est_num, station_code in sorted(expected_pairs, key=lambda item: (item[0], item[1])):
             if (est_num, station_code) in existing_pairs:
                 continue
-            try:
-                station_id = insert_inv_checklist_station(
-                    {
-                        "checklistId": checklist_id,
-                        "estNum": est_num,
-                        "stationCode": station_code,
-                        "status": None,
-                    }
-                )
-            except Exception as exc:
-                mapped = _map_db_exception(exc)
-                if isinstance(mapped, ConflictError):
-                    existing_pairs.add((est_num, station_code))
-                    continue
-                raise mapped from exc
-            created_station_rows.append(
+            stations_to_insert.append(
                 {
-                    "id": int(station_id),
                     "checklistId": checklist_id,
-                    "accountCode": account_code,
                     "estNum": est_num,
                     "stationCode": station_code,
+                    "status": None,
                 }
             )
+            station_insert_keys.append((checklist_id, int(est_num), station_code))
             existing_pairs.add((est_num, station_code))
+
+    if stations_to_insert:
+        _safe_db_call(insert_inv_checklist_stations_for_sync, stations_to_insert)
+
+    station_rows_after_insert = _safe_db_call(
+        list_inv_checklist_station_rows_for_checklists,
+        checklist_ids=list(checklist_id_to_row.keys()),
+    )
+    station_row_by_key: dict[tuple[str, int, str], dict] = {}
+    for station_row in station_rows_after_insert:
+        checklist_id = str(station_row.get("checklistId") or "").strip()
+        est_num = _ensure_optional_unsigned_int(station_row.get("estNum"), field="estNum")
+        station_code = str(station_row.get("stationCode") or "").strip().upper()
+        if not checklist_id or est_num is None or not station_code:
+            continue
+        station_row_by_key[(checklist_id, int(est_num), station_code)] = station_row
+
+    for checklist_id, est_num, station_code in station_insert_keys:
+        row = station_row_by_key.get((checklist_id, est_num, station_code))
+        if not row:
+            continue
+        checklist = checklist_id_to_row.get(checklist_id)
+        if not checklist:
+            continue
+        created_station_rows.append(
+            {
+                "id": int(row.get("id")),
+                "checklistId": checklist_id,
+                "accountCode": str(checklist.get("accountCode") or "").strip().upper(),
+                "estNum": int(est_num),
+                "stationCode": station_code,
+            }
+        )
+
+    for row in checklist_rows:
+        checklist_id = str(row.get("id") or "").strip()
+        if checklist_id in expected_new_checklist_ids:
+            created_checklists.append(row)
 
     if created_checklists or created_station_rows:
         _safe_db_call(invalidate_inv_checklist_related_cache_for_bulk_write)
@@ -1535,6 +2047,7 @@ def get_invoice_checklists_ui_load_data(
     year: int | None = None,
     month: int | None = None,
     checklist_id: str | None = None,
+    include_selected_detail: bool = True,
 ) -> dict:
     if (year is None) != (month is None):
         raise ValueError("year and month must be provided together")
@@ -1647,7 +2160,7 @@ def get_invoice_checklists_ui_load_data(
         selected_checklist_id = first_id or None
 
     selected_checklist: dict | None = None
-    if selected_checklist_id:
+    if selected_checklist_id and include_selected_detail:
         detail = get_invoice_checklists_data(
             checklist_id=selected_checklist_id,
             include_stations=True,

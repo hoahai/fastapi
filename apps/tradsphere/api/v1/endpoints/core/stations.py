@@ -29,6 +29,7 @@ def get_stations_route(
     language: list[str] | None = Query(None, alias="language"),
     delivery_method_detail: bool = Query(False, alias="deliveryMethodDetail"),
     contact_detail: bool = Query(False, alias="contactDetail"),
+    include_contacts: bool = Query(True, alias="includeContacts"),
 ):
     """
     Return station rows with optional filters.
@@ -41,6 +42,9 @@ def get_stations_route(
 
     Example request (summary details):
         GET /api/tradsphere/v1/stations?estNum=1957&deliveryMethodDetail=false&contactDetail=false
+
+    Example request (omit contacts payload):
+        GET /api/tradsphere/v1/stations?codes=KABC&includeContacts=false
 
     Example request (station name filter):
         GET /api/tradsphere/v1/stations?name=los%20angeles
@@ -125,6 +129,8 @@ def get_stations_route(
         - language/languages accepts comma-separated values and supports English/Spanish (aliases EN/ES)
         - deliveryMethodDetail controls deliveryMethod object detail (default false)
         - when deliveryMethodDetail=false, deliveryMethod returns id and name only
+        - includeContacts controls contact/repContacts payload assembly (default true)
+        - includeContacts=false omits contacts and repContacts fields from each station row
         - contactDetail controls REP contact detail (default false)
         - contacts are grouped by contactType
         - REP returns contact objects; non-REP returns email lists
@@ -157,6 +163,7 @@ def get_stations_route(
             languages=normalized_languages,
             delivery_method_detail=delivery_method_detail,
             contact_detail=contact_detail,
+            include_contacts=include_contacts,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

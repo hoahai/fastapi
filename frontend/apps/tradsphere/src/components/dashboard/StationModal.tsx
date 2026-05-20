@@ -38,7 +38,7 @@ const STATION_DETAIL_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.STATION_DETAIL;
 const STATION_DETAIL_BASE_URL = "/api/tradsphere/v1/stations";
 const STATION_DETAIL_CREATE_URL = "/api/tradsphere/v1/stations/detail";
 const DELIVERY_METHODS_URL = "/api/tradsphere/v1/stations/deliveryMethods";
-const CONTACTS_URL = "/api/tradsphere/v1/contacts";
+const CONTACTS_SELECTOR_URL = "/api/tradsphere/v1/contacts/selector";
 const DEFAULT_MEDIA_TYPE = "TV";
 const DEFAULT_LANGUAGE = "English";
 const DEFAULT_DEADLINE = "10 AM";
@@ -74,12 +74,45 @@ export type StationModalDraft = {
 
 export type StationModalSaveResult = {
   mode: StationModalMode;
+  previousStationCode?: string | null;
   stationCode: string;
   stationName: string;
   repContacts?: Array<{
     fullName?: string | null;
     email?: string | null;
   }>;
+  station?: {
+    code: string;
+    name: string;
+    mediaType: string;
+    syscode: string;
+    language: string;
+    affiliation: string;
+    deliveryMethodId: number | null;
+    deliveryMethod: {
+      id: number | null;
+      name: string;
+      url: string;
+      username: string;
+      deadline: string;
+      note: string;
+    } | null;
+    contacts: Array<{
+      id: number | null;
+      contactType: string;
+      fullName: string;
+      email: string;
+      primaryContact: boolean;
+    }>;
+    repContacts: Array<{
+      id: number | null;
+      contactType: string;
+      fullName: string;
+      email: string;
+      primaryContact: boolean;
+    }>;
+    note: string;
+  };
 };
 
 type DeliveryMethodEditorForm = {
@@ -1190,20 +1223,20 @@ function parseExistingContacts(payload: unknown): ExistingContactOption[] {
     if (!isRecord(item)) {
       continue;
     }
-    const id = asNumber(item.id);
+    const id = asNumber(item.contactId ?? item.id);
     if (id === null) {
       continue;
     }
     const firstName = asString(item.firstName);
     const lastName = asString(item.lastName);
-    const fullName = [firstName, lastName].filter(Boolean).join(" ").trim() || asString(item.name);
+    const fullName = [firstName, lastName].filter(Boolean).join(" ").trim() || asString(item.contactName ?? item.name);
 
     parsed.push({
       id,
       firstName,
       lastName,
       fullName,
-      email: asString(item.email),
+      email: asString(item.contactEmail ?? item.email),
       office: asString(item.office),
       cell: asString(item.cell),
       company: asString(item.company),
@@ -1280,6 +1313,27 @@ function buildRepContactSummaries(contacts: StationDraftContact[]): Array<{ full
     .filter((contact) => contact.fullName || contact.email);
 
   return repContacts.length ? repContacts : [];
+}
+
+function buildStationSaveContacts(contacts: StationDraftContact[]): Array<{
+  id: number | null;
+  contactType: string;
+  fullName: string;
+  email: string;
+  primaryContact: boolean;
+}> {
+  return contacts
+    .map((contact) => {
+      const parsedId = asNumber(contact.contactId);
+      return {
+        id: parsedId !== null ? Math.trunc(parsedId) : null,
+        contactType: normalizeContactType(contact.contactType),
+        fullName: asString(contact.fullName) || composeFullName(asString(contact.firstName), asString(contact.lastName)),
+        email: asString(contact.email).toLowerCase(),
+        primaryContact: Boolean(contact.primaryContact),
+      };
+    })
+    .filter((contact) => contact.fullName || contact.email);
 }
 
 async function copyContactToClipboard(value: string): Promise<void> {
@@ -1832,7 +1886,7 @@ export function StationModal({
     setIsLoadingExistingContacts(true);
     setExistingContactsError(null);
     try {
-      const payload = await requestJson(`${CONTACTS_URL}?active=true`, {
+      const payload = await requestJson(`${CONTACTS_SELECTOR_URL}?active=true`, {
         headers,
         errorToast: false,
       });
@@ -1960,7 +2014,7 @@ export function StationModal({
     setIsLoadingDeliveryMethodUsage(true);
     try {
       const payload = await requestJson(
-        `${STATION_DETAIL_BASE_URL}?codes=${encodeURIComponent(uniqueStationCodes.join(","))}&deliveryMethodDetail=false&contactDetail=false`,
+        `${STATION_DETAIL_BASE_URL}?codes=${encodeURIComponent(uniqueStationCodes.join(","))}&deliveryMethodDetail=false&contactDetail=false&includeContacts=false`,
         {
           headers,
           errorToast: false,
@@ -2478,6 +2532,7 @@ export function StationModal({
 
     try {
       const normalizedStationCode = draft.station.code.trim().toUpperCase();
+      const previousStationCode = isEditMode ? asString(stationCode).toUpperCase() || null : null;
       const bundledPayload = buildBundledPayload(draft);
       const saveUrl =
         mode === "create"
@@ -2559,11 +2614,41 @@ export function StationModal({
         `${normalizedStationCode} ${mode === "create" ? "was created" : "was updated"} successfully.`,
       );
 
+      const savedContacts = buildStationSaveContacts(nextDraft.contacts);
       await onSuccess?.({
         mode,
+        previousStationCode,
         stationCode: normalizedStationCode,
         stationName: nextDraft.station.name.trim(),
         repContacts: buildRepContactSummaries(nextDraft.contacts),
+        station: {
+          code: normalizedStationCode,
+          name: nextDraft.station.name.trim(),
+          mediaType: asString(nextDraft.station.mediaType).toUpperCase(),
+          syscode: asString(nextDraft.station.syscode),
+          language: asString(nextDraft.station.language),
+          affiliation: asString(nextDraft.station.affiliation),
+          deliveryMethodId:
+            nextDraft.station.deliveryMethodId !== null && nextDraft.station.deliveryMethodId !== undefined
+              ? Math.trunc(nextDraft.station.deliveryMethodId)
+              : null,
+          deliveryMethod:
+            nextDraft.station.deliveryMethodId !== null && nextDraft.station.deliveryMethodId !== undefined
+              ? {
+                  id: nextDraft.deliveryMethod.id !== null && nextDraft.deliveryMethod.id !== undefined
+                    ? Math.trunc(nextDraft.deliveryMethod.id)
+                    : null,
+                  name: asString(nextDraft.deliveryMethod.name),
+                  url: asString(nextDraft.deliveryMethod.url),
+                  username: asString(nextDraft.deliveryMethod.username),
+                  deadline: asString(nextDraft.deliveryMethod.deadline),
+                  note: asString(nextDraft.deliveryMethod.note),
+                }
+              : null,
+          contacts: savedContacts,
+          repContacts: savedContacts.filter((contact) => contact.contactType === "REP"),
+          note: asString(nextDraft.station.note),
+        },
       });
       onOpenChange(false);
     } catch (error) {

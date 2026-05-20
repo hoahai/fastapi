@@ -354,7 +354,7 @@ function parseAccountDirectory(payload: unknown): AccountDirectoryItem[] {
     seen.add(accountCode);
     output.push({
       accountCode,
-      name: asString(row.name),
+      name: asString(row.accountName ?? row.name),
       billingType: asNullableString(row.billingType),
     });
   }
@@ -1505,7 +1505,7 @@ export default function EstimateNumbersPage() {
         setIsLoadingBillingDirectory(true);
       }
       try {
-        const accountPayload = await requestJson("/api/tradsphere/v1/accounts?active=false", {
+        const accountPayload = await requestJson("/api/tradsphere/v1/accounts/directory?active=false", {
           headers: requestHeaders,
           errorToast: false,
         });

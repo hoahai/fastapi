@@ -8,6 +8,7 @@ from apps.tradsphere.api.v1.helpers.invoiceChecklists import (
     NotFoundError,
     SafeDatabaseError,
     create_invoice_checklist_data,
+    bulk_save_invoice_checklists_data,
     delete_invoice_checklist_data,
     get_invoice_checklists_data,
     sync_invoice_checklists_for_period_data,
@@ -266,6 +267,92 @@ def sync_invoice_checklists_period_route(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except SafeDatabaseError:
         raise HTTPException(status_code=500, detail="Failed to sync checklist rows")
+
+
+@router.post("/bulk-save")
+def bulk_save_invoice_checklists_route(
+    payload: dict = Body(...),
+):
+    """
+    Save checklist/station/note mutations in one bulk request to reduce Save All request fan-out.
+
+    Example request:
+        POST /api/tradsphere/v1/invoice-checklists/bulk-save
+        {
+          "year": 2026,
+          "month": 4,
+          "selectedChecklistId": "local-checklist-12",
+          "createChecklists": [
+            {
+              "clientChecklistId": "local-checklist-12",
+              "accountCode": "TAAA",
+              "year": 2026,
+              "month": 4,
+              "status": "OPEN",
+              "note": "April review"
+            }
+          ],
+          "checklistUpdates": [],
+          "deleteChecklistIds": [],
+          "createStations": [],
+          "stationUpdates": [],
+          "deleteStationIds": [],
+          "createNotes": [],
+          "noteUpdates": [],
+          "deleteNoteIds": []
+        }
+
+    Example response:
+        {
+          "meta": {"timestamp": "2026-05-20T10:00:00+07:00", "duration_ms": 15},
+          "data": {
+            "year": 2026,
+            "month": 4,
+            "checklists": [],
+            "selectedChecklistId": "f3f4502f-b0c3-4ef7-b315-72f9850e36d2",
+            "selectedChecklist": {},
+            "mappings": {
+              "checklistIds": {"local-checklist-12": "f3f4502f-b0c3-4ef7-b315-72f9850e36d2"},
+              "stationIds": {},
+              "noteIds": {}
+            },
+            "deleted": {
+              "checklistIds": [],
+              "stationIds": [],
+              "noteIds": []
+            },
+            "summary": {
+              "createdChecklistsCount": 1,
+              "updatedChecklistsCount": 0,
+              "deletedChecklistsCount": 0,
+              "createdStationsCount": 0,
+              "updatedStationsCount": 0,
+              "deletedStationsCount": 0,
+              "createdNotesCount": 0,
+              "updatedNotesCount": 0,
+              "deletedNotesCount": 0
+            }
+          }
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - year/month are required and scoped to the Save All period
+        - DB-only checklist/station/note changes are applied atomically in one transaction
+        - Existing single-item checklist/station/note endpoints remain supported
+        - File upload/delete provider operations are intentionally handled by attachment endpoints
+    """
+    try:
+        return bulk_save_invoice_checklists_data(payload=payload)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (InvalidReferenceError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except SafeDatabaseError:
+        raise HTTPException(status_code=500, detail="Failed to bulk save checklist changes")
 
 
 @router.put("")

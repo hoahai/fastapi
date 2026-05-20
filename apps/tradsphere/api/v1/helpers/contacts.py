@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import re
 
+from apps.tradsphere.api.v1.helpers.accounts import list_accounts
 from apps.tradsphere.api.v1.helpers.accountValidation import (
     ensure_contact_ids_exist,
     ensure_station_codes_exist,
@@ -12,6 +13,7 @@ from apps.tradsphere.api.v1.helpers.config import get_contact_types, get_default
 from apps.tradsphere.api.v1.helpers.dbQueries import (
     find_existing_emails,
     get_contacts,
+    get_contacts_selector,
     get_contacts_by_station_codes,
     get_stations_contacts,
     insert_contacts,
@@ -19,6 +21,8 @@ from apps.tradsphere.api.v1.helpers.dbQueries import (
     update_contacts,
     update_stations_contacts,
 )
+from apps.tradsphere.api.v1.helpers.estNums import list_est_nums_data
+from apps.tradsphere.api.v1.helpers.schedules import list_schedules_data
 
 _DUPLICATE_IN_PAYLOAD = "duplicate_in_payload"
 _EMAIL_ALREADY_EXISTS = "email_already_exists"
@@ -323,6 +327,41 @@ def list_contacts_data(
     return rows
 
 
+def list_contacts_selector_data(
+    *,
+    active: bool = True,
+) -> list[dict]:
+    rows = get_contacts_selector(active_only=bool(active))
+    normalized: list[dict] = []
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+        contact_id = row.get("contactId")
+        try:
+            parsed_contact_id = int(contact_id)
+        except (TypeError, ValueError):
+            continue
+        first_name = str(row.get("firstName") or "").strip()
+        last_name = str(row.get("lastName") or "").strip()
+        contact_name = " ".join(part for part in [first_name, last_name] if part).strip()
+        normalized.append(
+            {
+                "contactId": parsed_contact_id,
+                "firstName": first_name,
+                "lastName": last_name,
+                "contactName": contact_name,
+                "contactEmail": str(row.get("contactEmail") or "").strip(),
+                "office": str(row.get("office") or "").strip(),
+                "cell": str(row.get("cell") or "").strip(),
+                "company": str(row.get("company") or "").strip(),
+                "jobTitle": str(row.get("jobTitle") or "").strip(),
+                "note": str(row.get("note") or "").strip(),
+                "active": row.get("active"),
+            }
+        )
+    return normalized
+
+
 def list_contacts_by_station_codes_data(
     *,
     station_codes: list[str],
@@ -528,6 +567,200 @@ def list_stations_contacts_data(
         contact_ids=contact_ids or [],
         active=active,
     )
+
+
+def get_contact_usage_bundle_data(
+    *,
+    contact_id: int,
+    active: bool = True,
+) -> dict[str, object]:
+    normalized_contact_id = int(contact_id)
+    if normalized_contact_id <= 0:
+        raise ValueError("contactId must be a positive integer")
+    ensure_contact_ids_exist([normalized_contact_id])
+
+    usage_rows_raw = list_stations_contacts_data(
+        contact_ids=[normalized_contact_id],
+        active=active,
+    )
+    usage_rows: list[dict[str, object]] = []
+    station_codes: list[str] = []
+    station_code_seen: set[str] = set()
+    for row in usage_rows_raw:
+        if not isinstance(row, dict):
+            continue
+        station_code = str(row.get("stationCode") or "").strip().upper()
+        if not station_code:
+            continue
+        if station_code not in station_code_seen:
+            station_code_seen.add(station_code)
+            station_codes.append(station_code)
+        usage_rows.append(
+            {
+                "id": row.get("id"),
+                "contactId": normalized_contact_id,
+                "stationCode": station_code,
+                "stationName": row.get("stationName"),
+                "mediaType": str(row.get("mediaType") or "").strip().upper(),
+                "language": row.get("language"),
+                "syscode": row.get("syscode"),
+                "affiliation": row.get("affiliation"),
+                "market": None,
+                "contactType": str(row.get("contactType") or "").strip().upper(),
+                "primaryContact": row.get("primaryContact"),
+                "active": row.get("active"),
+            }
+        )
+    usage_rows.sort(
+        key=lambda item: (
+            str(item.get("stationCode") or ""),
+            str(item.get("contactType") or ""),
+            int(item.get("id") or 0),
+        )
+    )
+
+    if not station_codes:
+        return {
+            "contactId": normalized_contact_id,
+            "usageRows": usage_rows,
+            "stationScheduleRows": [],
+            "estNumUsageMetaRows": [],
+            "accountRows": [],
+        }
+
+    schedule_rows_raw = list_schedules_data(station_codes=station_codes)
+    station_est_pairs: set[tuple[str, int]] = set()
+    for row in schedule_rows_raw:
+        if not isinstance(row, dict):
+            continue
+        station_code = str(row.get("stationCode") or "").strip().upper()
+        if not station_code:
+            continue
+        try:
+            est_num = int(row.get("estNum"))
+        except (TypeError, ValueError):
+            continue
+        station_est_pairs.add((station_code, est_num))
+    station_schedule_rows = [
+        {"stationCode": station_code, "estNum": est_num}
+        for station_code, est_num in sorted(station_est_pairs, key=lambda item: (item[0], -item[1]))
+    ]
+
+    est_nums = sorted({est_num for _, est_num in station_est_pairs})
+    est_num_usage_meta_rows: list[dict[str, object]] = []
+    account_rows: list[dict[str, object]] = []
+    if est_nums:
+        est_num_rows = list_est_nums_data(est_nums=est_nums)
+        account_codes: list[str] = []
+        account_codes_seen: set[str] = set()
+        for row in est_num_rows:
+            if not isinstance(row, dict):
+                continue
+            try:
+                est_num = int(row.get("estNum"))
+            except (TypeError, ValueError):
+                continue
+            account_code = str(row.get("accountCode") or "").strip().upper()
+            if not account_code:
+                continue
+            if account_code not in account_codes_seen:
+                account_codes_seen.add(account_code)
+                account_codes.append(account_code)
+            broadcast_months = row.get("broadcastMonths")
+            broadcast_years = row.get("broadcastYears")
+            est_num_usage_meta_rows.append(
+                {
+                    "estNum": est_num,
+                    "accountCode": account_code,
+                    "month": row.get("month"),
+                    "quarter": row.get("quarter"),
+                    "year": row.get("year"),
+                    "periodLabel": row.get("periodLabel"),
+                    "mediaType": str(row.get("mediaType") or "").strip().upper(),
+                    "broadcastMonths": broadcast_months if isinstance(broadcast_months, list) else [],
+                    "broadcastYears": broadcast_years if isinstance(broadcast_years, list) else [],
+                }
+            )
+
+        if account_codes:
+            account_rows_raw = list_accounts(account_codes=account_codes, active=False)
+            normalized_account_rows: list[dict[str, object]] = []
+            for row in account_rows_raw:
+                if not isinstance(row, dict):
+                    continue
+                account_code = str(row.get("accountCode") or "").strip().upper()
+                if not account_code:
+                    continue
+                normalized_account_rows.append(
+                    {
+                        "accountCode": account_code,
+                        "name": row.get("name"),
+                    }
+                )
+            account_rows = sorted(
+                normalized_account_rows,
+                key=lambda item: str(item.get("accountCode") or ""),
+            )
+
+    return {
+        "contactId": normalized_contact_id,
+        "usageRows": usage_rows,
+        "stationScheduleRows": station_schedule_rows,
+        "estNumUsageMetaRows": est_num_usage_meta_rows,
+        "accountRows": account_rows,
+    }
+
+
+def search_contact_station_codes_data(
+    *,
+    query: str,
+    active: bool = True,
+) -> list[str]:
+    normalized_query = str(query or "").strip()
+    if not normalized_query:
+        raise ValueError("q is required")
+
+    contact_ids: set[int] = set()
+
+    contact_rows_by_name = list_contacts_data(
+        name=normalized_query,
+        active=active,
+    )
+    for row in contact_rows_by_name:
+        try:
+            contact_ids.add(int(row.get("id")))
+        except (TypeError, ValueError):
+            continue
+
+    if "@" in normalized_query:
+        contact_rows_by_email = list_contacts_data(
+            emails=[normalized_query.lower()],
+            active=active,
+        )
+        for row in contact_rows_by_email:
+            try:
+                contact_ids.add(int(row.get("id")))
+            except (TypeError, ValueError):
+                continue
+
+    if not contact_ids:
+        return []
+
+    station_codes: set[str] = set()
+    normalized_contact_ids = sorted(contact_ids)
+    chunk_size = 500
+    for start in range(0, len(normalized_contact_ids), chunk_size):
+        chunk_ids = normalized_contact_ids[start : start + chunk_size]
+        usage_rows = list_stations_contacts_data(
+            contact_ids=chunk_ids,
+            active=active,
+        )
+        for row in usage_rows:
+            station_code = str(row.get("stationCode") or "").strip().upper()
+            if station_code:
+                station_codes.add(station_code)
+
+    return sorted(station_codes)
 
 
 def create_stations_contacts_data(payload: list[dict] | dict) -> dict[str, int]:

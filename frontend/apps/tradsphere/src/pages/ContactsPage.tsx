@@ -806,6 +806,38 @@ function parseAccountNameMap(payload: unknown): Record<string, string> {
   return map;
 }
 
+function parseContactUsageBundle(payload: unknown): {
+  usageRows: ContactUsageJoinRow[];
+  stationScheduleRows: Array<{ stationCode: string; estNum: number }>;
+  estNumMetaMap: Map<number, EstNumUsageMeta>;
+  accountNameMap: Record<string, string>;
+} {
+  const data = unwrapData(payload);
+  if (!isRecord(data)) {
+    return {
+      usageRows: [],
+      stationScheduleRows: [],
+      estNumMetaMap: new Map<number, EstNumUsageMeta>(),
+      accountNameMap: {},
+    };
+  }
+
+  return {
+    usageRows: parseUsageRows({
+      data: Array.isArray(data.usageRows) ? data.usageRows : [],
+    }),
+    stationScheduleRows: parseStationScheduleRows({
+      data: Array.isArray(data.stationScheduleRows) ? data.stationScheduleRows : [],
+    }),
+    estNumMetaMap: parseEstNumUsageMetaRows({
+      data: Array.isArray(data.estNumUsageMetaRows) ? data.estNumUsageMetaRows : [],
+    }),
+    accountNameMap: parseAccountNameMap({
+      data: Array.isArray(data.accountRows) ? data.accountRows : [],
+    }),
+  };
+}
+
 function buildStationAccountUsageMap(
   scheduleRows: Array<{ stationCode: string; estNum: number }>,
   estNumMetaMap: Map<number, EstNumUsageMeta>,
@@ -1020,6 +1052,62 @@ function buildContactPayload(form: ContactModalSubmitPayload["form"]): Record<st
   return payload;
 }
 
+function applyUpdatedContactToResults(
+  currentContacts: ContactRecord[],
+  submitted: SubmittedSearch,
+  payload: ContactModalSubmitPayload,
+): ContactRecord[] {
+  if (payload.id === null) {
+    return currentContacts;
+  }
+
+  const targetId = Math.trunc(payload.id);
+  const existing = currentContacts.find((item) => item.id === targetId);
+  if (!existing) {
+    return currentContacts;
+  }
+
+  const normalizedEmail = asString(payload.form.email).toLowerCase();
+  const normalizedFirstName = asString(payload.form.firstName);
+  const normalizedLastName = asString(payload.form.lastName);
+  const normalizedFullName =
+    asString(payload.form.fullName) ||
+    [normalizedFirstName, normalizedLastName].filter(Boolean).join(" ").trim();
+
+  const nextContact: ContactRecord = {
+    ...existing,
+    email: normalizedEmail,
+    firstName: normalizedFirstName,
+    lastName: normalizedLastName,
+    fullName: normalizedFullName,
+    company: asString(payload.form.company),
+    jobTitle: asString(payload.form.jobTitle),
+    office: asString(payload.form.office),
+    cell: asString(payload.form.cell),
+    note: asString(payload.form.note),
+    active: Boolean(payload.form.active),
+  };
+
+  const withoutCurrent = currentContacts.filter((item) => item.id !== targetId);
+  if (!isContactMatchSubmittedSearch(nextContact, submitted)) {
+    return sortContactRecords(withoutCurrent);
+  }
+
+  return sortContactRecords([...withoutCurrent, nextContact]);
+}
+
+function applyCreatedContactToResults(
+  currentContacts: ContactRecord[],
+  submitted: SubmittedSearch,
+  createdContact: ContactRecord,
+): ContactRecord[] {
+  const deduped = currentContacts.filter((item) => item.id !== createdContact.id);
+  if (!isContactMatchSubmittedSearch(createdContact, submitted)) {
+    return sortContactRecords(deduped);
+  }
+  return sortContactRecords([...deduped, createdContact]);
+}
+
 export default function ContactsPage() {
   const toast = useToast();
   const { requestJson } = useApiRequest();
@@ -1152,20 +1240,15 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
   }
 
   async function fetchContactDetailUsage(baseContact: ContactRecord): Promise<ContactRecord> {
-    const usagePayload = await requestJson(
-      `/api/tradsphere/v1/contacts/stationsContacts?contactIds=${encodeURIComponent(String(baseContact.id))}&active=true`,
+    const bundlePayload = await requestJson(
+      `/api/tradsphere/v1/contacts/${encodeURIComponent(String(baseContact.id))}/usage`,
       {
         headers: requestHeaders,
         errorToast: false,
       },
     );
-    const usageRows = parseUsageRows(usagePayload);
-    const stationCodes = uniqStrings(
-      usageRows
-        .map((item) => asString(item.stationCode).toUpperCase())
-        .filter(Boolean),
-    );
-    if (!stationCodes.length) {
+    const usageBundle = parseContactUsageBundle(bundlePayload);
+    if (!usageBundle.usageRows.length) {
       return {
         ...baseContact,
         usage: [],
@@ -1176,56 +1259,20 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
         usedByEstNumCount: 0,
       };
     }
-
-    const schedulesPayload = await requestJson(
-      `/api/tradsphere/v1/schedules?stationCodes=${encodeURIComponent(stationCodes.join(","))}`,
-      {
-        headers: requestHeaders,
-        errorToast: false,
-      },
+    const stationAccountUsageMap = buildStationAccountUsageMap(
+      usageBundle.stationScheduleRows,
+      usageBundle.estNumMetaMap,
+      usageBundle.accountNameMap,
     );
-    const stationScheduleRows = parseStationScheduleRows(schedulesPayload);
-    const scheduleEstNums = uniqStrings(stationScheduleRows.map((row) => String(row.estNum)));
-    let stationAccountUsageMap: StationAccountUsageMap = {};
-    let stationEstNumUsageMap: StationEstNumUsageMap = {};
-    if (scheduleEstNums.length > 0) {
-      const estNumsPayload = await requestJson(
-        `/api/tradsphere/v1/estNums?estNums=${encodeURIComponent(scheduleEstNums.join(","))}`,
-        {
-          headers: requestHeaders,
-          errorToast: false,
-        },
-      );
-      const estNumMetaMap = parseEstNumUsageMetaRows(estNumsPayload);
-      const accountCodes = uniqStrings([...estNumMetaMap.values()].map((item) => item.accountCode));
-
-      let accountNameMap: Record<string, string> = {};
-      if (accountCodes.length > 0) {
-        const accountsPayload = await requestJson(
-          `/api/tradsphere/v1/accounts?accountCodes=${encodeURIComponent(accountCodes.join(","))}&active=false`,
-          {
-            headers: requestHeaders,
-            errorToast: false,
-          },
-        );
-        accountNameMap = parseAccountNameMap(accountsPayload);
-      }
-
-      stationAccountUsageMap = buildStationAccountUsageMap(
-        stationScheduleRows,
-        estNumMetaMap,
-        accountNameMap,
-      );
-      stationEstNumUsageMap = buildStationEstNumUsageMap(
-        stationScheduleRows,
-        estNumMetaMap,
-        accountNameMap,
-      );
-    }
+    const stationEstNumUsageMap = buildStationEstNumUsageMap(
+      usageBundle.stationScheduleRows,
+      usageBundle.estNumMetaMap,
+      usageBundle.accountNameMap,
+    );
 
     const merged = mergeContactUsage(
       [baseContact],
-      usageRows,
+      usageBundle.usageRows,
       stationAccountUsageMap,
       stationEstNumUsageMap,
     );
@@ -1542,6 +1589,25 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
     void loadModalContactDetail(modalContact, { policy: "network-only" });
   }
 
+  function applyLocalContactsSearchPatch(nextContacts: ContactRecord[]) {
+    if (!submittedSearch) {
+      return;
+    }
+    const fetchedAt = Date.now();
+    setContacts(nextContacts);
+    setState(nextContacts.length ? "ready" : "empty");
+    setError(null);
+    setRefreshMessage(null);
+    setCacheStatus({
+      source: "cache",
+      fetchedAt,
+    });
+    writeBrowserCache(submittedSearch.cacheKey, nextContacts, CONTACTS_SEARCH_CACHE_TTL_MS, {
+      source: "cache",
+      fetchedAt,
+    });
+  }
+
   async function handleModalSubmit(payload: ContactModalSubmitPayload): Promise<void> {
     const body = buildContactPayload(payload.form);
 
@@ -1552,6 +1618,37 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
         body,
         successToast: "Contact created",
       });
+
+      if (!submittedSearch) {
+        return;
+      }
+
+      const createdEmail = asString(body.email).toLowerCase();
+      if (!createdEmail) {
+        await loadSearchData({ policy: "network-only" }, submittedSearch);
+        return;
+      }
+
+      try {
+        const params = new URLSearchParams();
+        params.set("emails", createdEmail);
+        const createdPayload = await requestJson(`/api/tradsphere/v1/contacts?${params.toString()}`, {
+          headers: requestHeaders,
+          errorToast: false,
+        });
+        const createdContacts = parseContacts(createdPayload);
+        const createdContact = createdContacts.find(
+          (item) => asString(item.email).toLowerCase() === createdEmail,
+        );
+        if (!createdContact) {
+          await loadSearchData({ policy: "network-only" }, submittedSearch);
+          return;
+        }
+        const nextContacts = applyCreatedContactToResults(contacts, submittedSearch, createdContact);
+        applyLocalContactsSearchPatch(nextContacts);
+      } catch {
+        await loadSearchData({ policy: "network-only" }, submittedSearch);
+      }
     } else {
       await requestJson("/api/tradsphere/v1/contacts", {
         method: "PUT",
@@ -1562,10 +1659,11 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
         },
         successToast: "Contact updated",
       });
-    }
-
-    if (submittedSearch) {
-      await loadSearchData({ policy: "network-only" }, submittedSearch);
+      if (!submittedSearch) {
+        return;
+      }
+      const nextContacts = applyUpdatedContactToResults(contacts, submittedSearch, payload);
+      applyLocalContactsSearchPatch(nextContacts);
     }
   }
 

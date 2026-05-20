@@ -257,6 +257,7 @@ def _invalidate_pdf_schedule_cache() -> int:
 def _invalidate_accounts_related_cache() -> None:
     _invalidate_db_read_cache_scopes(
         "accounts",
+        "accounts_directory",
         "invoice_checklist_expected_rows",
     )
 
@@ -318,6 +319,7 @@ def _invalidate_stations_related_cache() -> None:
 def _invalidate_contacts_related_cache() -> None:
     _invalidate_db_read_cache_scopes(
         "contacts",
+        "contacts_selector",
         "contacts_by_station_codes",
         "station_contacts_detail",
     )
@@ -653,6 +655,62 @@ def get_accounts(
         "t.note AS note, "
         "m.name AS name, "
         "m.logoUrl AS logoUrl, "
+        "COALESCE(m.active, 0) AS active "
+        f"FROM {accounts_table} t "
+        f"LEFT JOIN {master_accounts_table} m "
+        "ON UPPER(m.code) = UPPER(t.accountCode)"
+    )
+    if where_clauses:
+        query += " WHERE " + " AND ".join(where_clauses)
+    query += " ORDER BY t.accountCode ASC"
+    rows = fetch_all(query, tuple(params))
+    _set_cached_value(cache_key, rows)
+    return rows
+
+
+def get_accounts_directory(
+    *,
+    account_codes: list[str] | None = None,
+    active_only: bool = False,
+) -> list[dict]:
+    tables = get_db_tables()
+    accounts_table = _quote_table_name(tables["ACCOUNTS"])
+    master_accounts_table = _quote_table_name(tables["MASTERACCOUNTS"])
+
+    where_clauses: list[str] = []
+    params: list[object] = []
+
+    normalized_codes = [_normalize_account_code(code) for code in (account_codes or [])]
+    normalized_codes = _normalized_text_cache_values(
+        [code for code in normalized_codes if code]
+    )
+    if normalized_codes:
+        placeholders = _build_in_placeholders(normalized_codes)
+        where_clauses.append(f"UPPER(t.accountCode) IN ({placeholders})")
+        params.extend(normalized_codes)
+
+    if active_only:
+        where_clauses.append("COALESCE(m.active, 0) = 1")
+
+    cache_key = _build_db_read_cache_key(
+        "accounts_directory",
+        f"accounts_table={accounts_table}",
+        f"master_accounts_table={master_accounts_table}",
+        f"active_only={int(bool(active_only))}",
+        "account_codes=" + (",".join(normalized_codes) if normalized_codes else "*"),
+    )
+    cached_rows = _get_cached_list(
+        cache_key,
+        ttl_key="db_accounts_directory_ttl_time",
+    )
+    if cached_rows is not None:
+        return cached_rows
+
+    query = (
+        "SELECT DISTINCT "
+        "t.accountCode AS accountCode, "
+        "m.name AS accountName, "
+        "t.billingType AS billingType, "
         "COALESCE(m.active, 0) AS active "
         f"FROM {accounts_table} t "
         f"LEFT JOIN {master_accounts_table} m "
@@ -2585,6 +2643,58 @@ def get_contacts_by_station_codes(
     return rows
 
 
+def get_contacts_selector(
+    *,
+    active_only: bool = True,
+) -> list[dict]:
+    tables = get_db_tables()
+    contacts_table = _quote_table_name(tables["CONTACTS"])
+    where_clauses: list[str] = []
+    params: list[object] = []
+
+    if active_only:
+        where_clauses.append("c.active = 1")
+
+    cache_key = _build_db_read_cache_key(
+        "contacts_selector",
+        f"contacts_table={contacts_table}",
+        f"active_only={int(bool(active_only))}",
+    )
+    cached_rows = _get_cached_list(
+        cache_key,
+        ttl_key="db_contacts_selector_ttl_time",
+    )
+    if cached_rows is not None:
+        return cached_rows
+
+    query = (
+        "SELECT "
+        "c.id AS contactId, "
+        "c.email AS contactEmail, "
+        "c.firstName AS firstName, "
+        "c.lastName AS lastName, "
+        "c.company AS company, "
+        "c.jobTitle AS jobTitle, "
+        "c.office AS office, "
+        "c.cell AS cell, "
+        "c.note AS note, "
+        "c.active AS active "
+        f"FROM {contacts_table} c"
+    )
+    if where_clauses:
+        query += " WHERE " + " AND ".join(where_clauses)
+    query += (
+        " ORDER BY "
+        "COALESCE(c.firstName, '') ASC, "
+        "COALESCE(c.lastName, '') ASC, "
+        "COALESCE(c.email, '') ASC, "
+        "c.id ASC"
+    )
+    rows = fetch_all(query, tuple(params))
+    _set_cached_value(cache_key, rows)
+    return rows
+
+
 def insert_contacts(items: list[dict]) -> int:
     if not items:
         return 0
@@ -3217,6 +3327,40 @@ def save_station_detail_bundle(
         update_contacts_rows: list[dict] = []
         resolved_contact_ids_by_client_key: dict[str, int] = {}
         resolved_contact_ids_from_payload: set[int] = set()
+        explicit_contact_ids: set[int] = set()
+
+        for row in contact_rows:
+            row_id = row.get("id")
+            if row_id is None:
+                continue
+            explicit_contact_ids.add(int(row_id))
+
+        existing_explicit_contact_ids: set[int] = set()
+        if explicit_contact_ids:
+            explicit_contact_id_values = sorted(explicit_contact_ids)
+            placeholders = _build_in_placeholders(explicit_contact_id_values)
+            cursor.execute(
+                (
+                    "SELECT id "
+                    f"FROM {contacts_table} "
+                    f"WHERE id IN ({placeholders}) "
+                    "FOR UPDATE"
+                ),
+                tuple(explicit_contact_id_values),
+            )
+            existing_explicit_contact_ids = {
+                int(item.get("id"))
+                for item in (cursor.fetchall() or [])
+                if item.get("id") is not None
+            }
+            missing_explicit_contact_ids = sorted(
+                explicit_contact_ids - existing_explicit_contact_ids
+            )
+            if missing_explicit_contact_ids:
+                raise ValueError(
+                    "Unknown contactId values: "
+                    + ", ".join(map(str, missing_explicit_contact_ids))
+                )
 
         for index, row in enumerate(contact_rows):
             row_id = row.get("id")
@@ -3255,16 +3399,7 @@ def save_station_detail_bundle(
                 continue
 
             parsed_id = int(row_id)
-            existing_contact = _fetch_one(
-                cursor,
-                (
-                    "SELECT id "
-                    f"FROM {contacts_table} "
-                    "WHERE id = %s LIMIT 1 FOR UPDATE"
-                ),
-                (parsed_id,),
-            )
-            if not existing_contact:
+            if parsed_id not in existing_explicit_contact_ids:
                 raise ValueError(f"Unknown contactId values: {parsed_id}")
 
             resolved_contact_ids_from_payload.add(parsed_id)
@@ -3868,6 +4003,26 @@ def get_inv_checklist_row(*, checklist_id: str) -> dict | None:
     return rows[0]
 
 
+def list_inv_checklist_rows_by_ids(*, checklist_ids: list[str]) -> list[dict]:
+    normalized_ids = _normalized_text_cache_values(
+        [str(item or "").strip() for item in (checklist_ids or [])]
+    )
+    if not normalized_ids:
+        return []
+
+    tables = get_db_tables()
+    checklist_table = _quote_table_name(tables["INVCHECKLISTS"])
+    placeholders = _build_in_placeholders(normalized_ids)
+    query = (
+        "SELECT "
+        "id, accountCode, year, month, status, note, dateCreated, dateUpdated "
+        f"FROM {checklist_table} "
+        f"WHERE id IN ({placeholders}) "
+        "ORDER BY id ASC"
+    )
+    return fetch_all(query, tuple(normalized_ids))
+
+
 def get_inv_checklist_detail_rows(*, checklist_id: str) -> list[dict]:
     checklist_id_text = str(checklist_id or "").strip()
     if not checklist_id_text:
@@ -3943,6 +4098,40 @@ def insert_inv_checklist(item: dict) -> int:
         _invalidate_inv_checklist_row_cache(
             checklist_ids=[str(item.get("id") or "").strip()]
         )
+    return inserted
+
+
+def insert_inv_checklists_for_sync(items: list[dict]) -> int:
+    if not items:
+        return 0
+    tables = get_db_tables()
+    checklist_table = _quote_table_name(tables["INVCHECKLISTS"])
+    query = (
+        f"INSERT INTO {checklist_table} "
+        "(id, accountCode, year, month, status, note) "
+        "VALUES (%s, %s, %s, %s, %s, %s) "
+        "ON DUPLICATE KEY UPDATE id = id"
+    )
+    values: list[tuple[object, ...]] = []
+    checklist_ids: list[str] = []
+    for item in items:
+        checklist_id = str(item.get("id") or "").strip()
+        checklist_ids.append(checklist_id)
+        values.append(
+            (
+                checklist_id,
+                _normalize_account_code(item.get("accountCode")),
+                int(item.get("year")),
+                int(item.get("month")),
+                _normalize_optional_input_text(item.get("status")),
+                _normalize_optional_input_text(item.get("note")),
+            )
+        )
+
+    inserted = execute_many(query, values)
+    if int(inserted or 0) > 0:
+        _invalidate_inv_checklist_list_cache()
+        _invalidate_inv_checklist_row_cache(checklist_ids=checklist_ids)
     return inserted
 
 
@@ -4031,6 +4220,24 @@ def get_inv_checklist_station_row(*, station_row_id: int) -> dict | None:
     if not rows:
         return None
     return rows[0]
+
+
+def list_inv_checklist_station_rows_by_ids(*, station_row_ids: list[int]) -> list[dict]:
+    normalized_ids = _normalized_int_cache_values([int(item) for item in (station_row_ids or [])])
+    if not normalized_ids:
+        return []
+
+    tables = get_db_tables()
+    station_table = _quote_table_name(tables["INVCHECKLISTSTATIONS"])
+    placeholders = _build_in_placeholders(normalized_ids)
+    query = (
+        "SELECT "
+        "id, checklistId, estNum, stationCode, status, dateCreated, dateUpdated "
+        f"FROM {station_table} "
+        f"WHERE id IN ({placeholders}) "
+        "ORDER BY id ASC"
+    )
+    return fetch_all(query, tuple(normalized_ids))
 
 
 def list_inv_checklist_stations(
@@ -4196,6 +4403,245 @@ def insert_inv_checklist_station(item: dict) -> int:
     return inserted
 
 
+def insert_inv_checklist_stations_for_sync(items: list[dict]) -> int:
+    if not items:
+        return 0
+    tables = get_db_tables()
+    station_table = _quote_table_name(tables["INVCHECKLISTSTATIONS"])
+    query = (
+        f"INSERT INTO {station_table} "
+        "(checklistId, estNum, stationCode, status) "
+        "VALUES (%s, %s, %s, %s) "
+        "ON DUPLICATE KEY UPDATE status = status"
+    )
+    values: list[tuple[object, ...]] = []
+    for item in items:
+        values.append(
+            (
+                str(item.get("checklistId") or "").strip(),
+                int(item.get("estNum")),
+                _normalize_account_code(item.get("stationCode")),
+                _normalize_optional_input_text(item.get("status")),
+            )
+        )
+
+    inserted = execute_many(query, values)
+    if int(inserted or 0) > 0:
+        _invalidate_inv_checklist_station_scopes(include_checklists_scope=True)
+    return inserted
+
+
+def save_inv_checklist_bulk_changes(
+    *,
+    checklist_creates: list[dict],
+    checklist_updates: list[dict],
+    checklist_deletes: list[str],
+    station_creates: list[dict],
+    station_updates: list[dict],
+    station_deletes: list[int],
+    note_creates: list[dict],
+    note_updates: list[dict],
+    note_deletes: list[int],
+    tenant_slug: str | None = None,
+) -> dict:
+    tables = get_db_tables()
+    checklist_table = _quote_table_name(tables["INVCHECKLISTS"])
+    station_table = _quote_table_name(tables["INVCHECKLISTSTATIONS"])
+    note_table = _quote_table_name(tables["INVCHECKLISTNOTES"])
+    legacy_attachment_table = _quote_table_name(tables["INVNOTEATTACHMENTS"])
+    legacy_attachment_columns = _get_inv_note_attachment_columns(
+        attachment_table=legacy_attachment_table,
+    )
+
+    checklist_ids_created: dict[str, str] = {}
+    station_ids_created: dict[str, int] = {}
+    note_ids_created: dict[str, int] = {}
+
+    def _work(cursor) -> dict:
+        if checklist_creates:
+            values: list[tuple[object, ...]] = []
+            for row in checklist_creates:
+                values.append(
+                    (
+                        str(row["id"]),
+                        _normalize_account_code(row["accountCode"]),
+                        int(row["year"]),
+                        int(row["month"]),
+                        _normalize_optional_input_text(row.get("status")),
+                        _normalize_optional_input_text(row.get("note")),
+                    )
+                )
+                checklist_ids_created[str(row["clientChecklistId"])] = str(row["id"])
+            cursor.executemany(
+                (
+                    f"INSERT INTO {checklist_table} "
+                    "(id, accountCode, year, month, status, note) "
+                    "VALUES (%s, %s, %s, %s, %s, %s)"
+                ),
+                values,
+            )
+
+        for row in checklist_updates:
+            fields: list[str] = []
+            params: list[object] = []
+            if "status" in row:
+                fields.append("status = %s")
+                params.append(_normalize_optional_input_text(row.get("status")))
+            if "note" in row:
+                fields.append("note = %s")
+                params.append(_normalize_optional_input_text(row.get("note")))
+            if not fields:
+                continue
+            params.append(str(row["checklistId"]))
+            cursor.execute(
+                f"UPDATE {checklist_table} SET " + ", ".join(fields) + " WHERE id = %s",
+                tuple(params),
+            )
+
+        for row in station_creates:
+            cursor.execute(
+                (
+                    f"INSERT INTO {station_table} "
+                    "(checklistId, estNum, stationCode, status) "
+                    "VALUES (%s, %s, %s, %s)"
+                ),
+                (
+                    str(row["checklistId"]),
+                    int(row["estNum"]),
+                    _normalize_account_code(row["stationCode"]),
+                    _normalize_optional_input_text(row.get("status")),
+                ),
+            )
+            station_ids_created[str(row["clientStationId"])] = int(cursor.lastrowid or 0)
+
+        for row in station_updates:
+            fields: list[str] = []
+            params: list[object] = []
+            if "status" in row:
+                fields.append("status = %s")
+                params.append(_normalize_optional_input_text(row.get("status")))
+            if "estNum" in row:
+                fields.append("estNum = %s")
+                params.append(int(row["estNum"]))
+            if "stationCode" in row:
+                fields.append("stationCode = %s")
+                params.append(_normalize_account_code(row["stationCode"]))
+            if not fields:
+                continue
+            params.append(int(row["stationRowId"]))
+            cursor.execute(
+                f"UPDATE {station_table} SET " + ", ".join(fields) + " WHERE id = %s",
+                tuple(params),
+            )
+
+        for row in note_creates:
+            station_id_value = row.get("checklistStationId")
+            if station_id_value is None:
+                client_station_id = str(row.get("checklistStationClientId") or "").strip()
+                station_id_value = station_ids_created.get(client_station_id)
+            if station_id_value is None:
+                raise ValueError("Unknown checklist station reference for note create")
+            columns = ["checklistStationId"]
+            values: list[object] = [int(station_id_value)]
+            if "amount" in row:
+                columns.append("amount")
+                values.append(row.get("amount"))
+            if "note" in row:
+                columns.append("note")
+                values.append(_normalize_input_text(row.get("note")))
+            cursor.execute(
+                (
+                    f"INSERT INTO {note_table} "
+                    f"({', '.join(columns)}) "
+                    f"VALUES ({', '.join(['%s'] * len(values))})"
+                ),
+                tuple(values),
+            )
+            note_ids_created[str(row["clientNoteId"])] = int(cursor.lastrowid or 0)
+
+        for row in note_updates:
+            fields: list[str] = []
+            params: list[object] = []
+            if "amount" in row:
+                fields.append("amount = %s")
+                params.append(row.get("amount"))
+            if "note" in row:
+                fields.append("note = %s")
+                params.append(_normalize_input_text(row.get("note")))
+            if not fields:
+                continue
+            params.append(int(row["noteId"]))
+            cursor.execute(
+                f"UPDATE {note_table} SET " + ", ".join(fields) + " WHERE id = %s",
+                tuple(params),
+            )
+
+        if note_deletes:
+            normalized_note_ids = _normalized_int_cache_values([int(item) for item in note_deletes])
+            placeholders = _build_in_placeholders([int(item) for item in normalized_note_ids])
+
+            if legacy_attachment_columns:
+                if _has_column(legacy_attachment_columns, "deletedAt"):
+                    cursor.execute(
+                        (
+                            f"UPDATE {legacy_attachment_table} "
+                            "SET deletedAt = CURRENT_TIMESTAMP "
+                            f"WHERE noteId IN ({placeholders}) AND deletedAt IS NULL"
+                        ),
+                        tuple(normalized_note_ids),
+                    )
+                else:
+                    cursor.execute(
+                        f"DELETE FROM {legacy_attachment_table} WHERE noteId IN ({placeholders})",
+                        tuple(normalized_note_ids),
+                    )
+
+            cursor.execute(
+                f"DELETE FROM {note_table} WHERE id IN ({placeholders})",
+                tuple(normalized_note_ids),
+            )
+
+        if station_deletes:
+            normalized_station_ids = _normalized_int_cache_values([int(item) for item in station_deletes])
+            placeholders = _build_in_placeholders([int(item) for item in normalized_station_ids])
+            cursor.execute(
+                f"DELETE FROM {station_table} WHERE id IN ({placeholders})",
+                tuple(normalized_station_ids),
+            )
+
+        if checklist_deletes:
+            normalized_checklist_ids = _normalized_text_cache_values(checklist_deletes)
+            placeholders = _build_in_placeholders(normalized_checklist_ids)
+            cursor.execute(
+                f"DELETE FROM {checklist_table} WHERE id IN ({placeholders})",
+                tuple(normalized_checklist_ids),
+            )
+
+        return {
+            "checklistIds": checklist_ids_created,
+            "stationIds": station_ids_created,
+            "noteIds": note_ids_created,
+        }
+
+    result = run_transaction(_work)
+
+    if (
+        checklist_creates
+        or checklist_updates
+        or checklist_deletes
+        or station_creates
+        or station_updates
+        or station_deletes
+        or note_creates
+        or note_updates
+        or note_deletes
+    ):
+        _invalidate_inv_checklist_all_related_scopes()
+        _invalidate_inv_checklist_note_detail_cache()
+
+    return result
+
+
 def update_inv_checklist_station(
     *,
     station_row_id: int,
@@ -4272,6 +4718,24 @@ def get_inv_checklist_note_row(*, note_id: int) -> dict | None:
     if not rows:
         return None
     return rows[0]
+
+
+def list_inv_checklist_note_rows_by_ids(*, note_ids: list[int]) -> list[dict]:
+    normalized_ids = _normalized_int_cache_values([int(item) for item in (note_ids or [])])
+    if not normalized_ids:
+        return []
+
+    tables = get_db_tables()
+    note_table = _quote_table_name(tables["INVCHECKLISTNOTES"])
+    placeholders = _build_in_placeholders(normalized_ids)
+    query = (
+        "SELECT "
+        "id, checklistStationId, amount, note, dateCreated, dateUpdated "
+        f"FROM {note_table} "
+        f"WHERE id IN ({placeholders}) "
+        "ORDER BY id ASC"
+    )
+    return fetch_all(query, tuple(normalized_ids))
 
 
 def list_inv_checklist_notes(
@@ -4390,6 +4854,8 @@ def list_inv_checklist_note_detail_rows(
         "n.dateUpdated AS dateUpdated, "
         "s.id AS stationRowId, "
         "s.checklistId AS checklistId, "
+        "c.year AS checklistYear, "
+        "c.month AS checklistMonth, "
         "s.estNum AS estNum, "
         "s.stationCode AS stationCode, "
         + ", ".join(attachment_select)
@@ -4414,21 +4880,26 @@ def list_inv_checklist_note_detail_rows(
 def insert_inv_checklist_note(item: dict) -> int:
     tables = get_db_tables()
     note_table = _quote_table_name(tables["INVCHECKLISTNOTES"])
+    columns = ["checklistStationId"]
+    values: list[object] = [int(item.get("checklistStationId"))]
+    amount_value = item.get("amount")
+    note_value = _normalize_input_text(item.get("note"))
+    if amount_value is not None:
+        columns.append("amount")
+        values.append(amount_value)
+    if note_value is not None:
+        columns.append("note")
+        values.append(note_value)
+    if len(columns) == 1:
+        raise ValueError("At least one of amount or note is required")
     query = (
         f"INSERT INTO {note_table} "
-        "(checklistStationId, amount, note) "
-        "VALUES (%s, %s, %s)"
+        f"({', '.join(columns)}) "
+        f"VALUES ({', '.join(['%s'] * len(values))})"
     )
 
     def _work(cursor) -> int:
-        cursor.execute(
-            query,
-            (
-                int(item.get("checklistStationId")),
-                item.get("amount"),
-                _normalize_input_text(item.get("note")),
-            ),
-        )
+        cursor.execute(query, tuple(values))
         return int(cursor.lastrowid or 0)
 
     inserted = run_transaction(_work)

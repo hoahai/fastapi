@@ -148,19 +148,6 @@ function uniqStrings(values: string[]): string[] {
   return output;
 }
 
-function uniqNumbers(values: number[]): number[] {
-  const seen = new Set<number>();
-  const output: number[] = [];
-  for (const value of values) {
-    if (!Number.isFinite(value) || seen.has(value)) {
-      continue;
-    }
-    seen.add(value);
-    output.push(value);
-  }
-  return output;
-}
-
 function splitCodeTokens(value: string): string[] {
   return uniqStrings(
     value
@@ -606,18 +593,6 @@ function readSidebarCollapsedState(): boolean {
   }
 }
 
-function chunkNumbers(values: number[], size: number): number[][] {
-  if (values.length === 0 || size <= 0) {
-    return [];
-  }
-
-  const output: number[][] = [];
-  for (let index = 0; index < values.length; index += size) {
-    output.push(values.slice(index, index + size));
-  }
-  return output;
-}
-
 function chunkStrings(values: string[], size: number): string[][] {
   if (values.length === 0 || size <= 0) {
     return [];
@@ -642,6 +617,107 @@ function stationToCatalogItem(station: StationRecord): {
     mediaType: station.mediaType || null,
     deliveryMethodId: station.deliveryMethodId,
   };
+}
+
+function toStationRecordFromSaveResult(result: StationModalSaveResult): StationRecord | null {
+  const savedStation = isRecord(result.station) ? result.station : null;
+  if (!savedStation) {
+    return null;
+  }
+  const code = asString(savedStation.code).toUpperCase() || asString(result.stationCode).toUpperCase();
+  if (!code) {
+    return null;
+  }
+
+  const savedContacts = Array.isArray(savedStation.contacts) ? savedStation.contacts : [];
+  const contacts: StationContactSummary[] = [];
+  for (const rawContact of savedContacts) {
+    if (!isRecord(rawContact)) {
+      continue;
+    }
+    const id = asNumber(rawContact.id);
+    contacts.push({
+      id: id !== null ? Math.trunc(id) : null,
+      contactType: asString(rawContact.contactType).toUpperCase() || "UNKNOWN",
+      fullName: asString(rawContact.fullName),
+      email: asString(rawContact.email).toLowerCase(),
+      primaryContact: asBoolean(rawContact.primaryContact),
+    });
+  }
+
+  const savedRepContacts = Array.isArray(savedStation.repContacts) ? savedStation.repContacts : [];
+  const repContacts: StationContactSummary[] = [];
+  for (const rawContact of savedRepContacts) {
+    if (!isRecord(rawContact)) {
+      continue;
+    }
+    const id = asNumber(rawContact.id);
+    repContacts.push({
+      id: id !== null ? Math.trunc(id) : null,
+      contactType: "REP",
+      fullName: asString(rawContact.fullName),
+      email: asString(rawContact.email).toLowerCase(),
+      primaryContact: asBoolean(rawContact.primaryContact),
+    });
+  }
+
+  const deliveryMethodRaw = isRecord(savedStation.deliveryMethod) ? savedStation.deliveryMethod : null;
+  const deliveryMethodId = asNumber(savedStation.deliveryMethodId);
+
+  return {
+    code,
+    name: asString(savedStation.name),
+    mediaType: asString(savedStation.mediaType).toUpperCase(),
+    syscode: asString(savedStation.syscode),
+    language: asString(savedStation.language),
+    affiliation: asString(savedStation.affiliation),
+    deliveryMethodId: deliveryMethodId !== null ? Math.trunc(deliveryMethodId) : null,
+    deliveryMethod: deliveryMethodRaw
+      ? {
+          id: asNumber(deliveryMethodRaw.id),
+          name: asString(deliveryMethodRaw.name),
+          url: asString(deliveryMethodRaw.url),
+          username: asString(deliveryMethodRaw.username),
+          deadline: asString(deliveryMethodRaw.deadline),
+          note: asString(deliveryMethodRaw.note),
+        }
+      : null,
+    contacts,
+    repContacts,
+    note: asString(savedStation.note),
+  };
+}
+
+function applySavedStationToResults(
+  current: StationRecord[],
+  submitted: SubmittedSearch,
+  result: StationModalSaveResult,
+): StationRecord[] {
+  const savedStation = toStationRecordFromSaveResult(result);
+  const previousStationCode = asString(result.previousStationCode).toUpperCase();
+  const normalizedStationCode = asString(result.stationCode).toUpperCase();
+  const targetCode = savedStation?.code || normalizedStationCode || previousStationCode;
+
+  const filteredCurrent = current.filter((station) => {
+    const stationCode = asString(station.code).toUpperCase();
+    if (previousStationCode && stationCode === previousStationCode) {
+      return false;
+    }
+    if (stationCode === targetCode) {
+      return false;
+    }
+    return true;
+  });
+
+  if (!savedStation) {
+    return filteredCurrent.sort((a, b) => a.code.localeCompare(b.code));
+  }
+
+  if (!stationMatchesSearch(savedStation, submitted)) {
+    return filteredCurrent.sort((a, b) => a.code.localeCompare(b.code));
+  }
+
+  return [...filteredCurrent, savedStation].sort((a, b) => a.code.localeCompare(b.code));
 }
 
 export default function StationsPage() {
@@ -768,70 +844,20 @@ export default function StationsPage() {
     if (!normalizedQuery) {
       return [];
     }
-
-    const queryVariants = uniqStrings([
-      "name",
-      normalizedQuery.includes("@") ? "emails" : "",
-    ]).filter(Boolean);
-
-    const contactIds: number[] = [];
-    for (const variant of queryVariants) {
-      const params = new URLSearchParams();
-      params.set(variant, normalizedQuery);
-      params.set("active", "true");
-
-      const contactsPayload = await requestJson(`/api/tradsphere/v1/contacts?${params.toString()}`, {
-        headers: requestHeaders,
-        errorToast: false,
-      });
-      const contactsData = unwrapData(contactsPayload);
-      if (!Array.isArray(contactsData)) {
-        continue;
-      }
-
-      for (const row of contactsData) {
-        if (!isRecord(row)) {
-          continue;
-        }
-        const contactId = asNumber(row.id);
-        if (contactId === null) {
-          continue;
-        }
-        contactIds.push(Math.trunc(contactId));
-      }
-    }
-
-    const dedupedContactIds = uniqNumbers(contactIds);
-    if (!dedupedContactIds.length) {
+    const params = new URLSearchParams();
+    params.set("q", normalizedQuery);
+    params.set("active", "true");
+    const payload = await requestJson(`/api/tradsphere/v1/contacts/station-codes?${params.toString()}`, {
+      headers: requestHeaders,
+      errorToast: false,
+    });
+    const data = unwrapData(payload);
+    if (!isRecord(data)) {
       return [];
     }
-
-    const stationCodes: string[] = [];
-    for (const chunk of chunkNumbers(dedupedContactIds, 80)) {
-      const usagePayload = await requestJson(
-        `/api/tradsphere/v1/contacts/stationsContacts?contactIds=${encodeURIComponent(chunk.join(","))}&active=true`,
-        {
-          headers: requestHeaders,
-          errorToast: false,
-        },
-      );
-      const usageData = unwrapData(usagePayload);
-      if (!Array.isArray(usageData)) {
-        continue;
-      }
-
-      for (const row of usageData) {
-        if (!isRecord(row)) {
-          continue;
-        }
-        const stationCode = asString(row.stationCode).toUpperCase();
-        if (!stationCode) {
-          continue;
-        }
-        stationCodes.push(stationCode);
-      }
-    }
-
+    const stationCodes = Array.isArray(data.stationCodes)
+      ? data.stationCodes.map((value) => asString(value).toUpperCase()).filter(Boolean)
+      : [];
     return uniqStrings(stationCodes);
   }
 
@@ -1194,10 +1220,24 @@ export default function StationsPage() {
     setIsStationModalOpen(true);
   }
 
-  async function handleStationSaved(_result: StationModalSaveResult): Promise<void> {
-    if (submittedSearch) {
-      await loadSearchData({ policy: "network-only" }, submittedSearch);
+  async function handleStationSaved(result: StationModalSaveResult): Promise<void> {
+    if (!submittedSearch) {
+      return;
     }
+    const nextStations = applySavedStationToResults(stations, submittedSearch, result);
+    const fetchedAt = Date.now();
+    setStations(nextStations);
+    setState(nextStations.length ? "ready" : "empty");
+    setError(null);
+    setRefreshMessage(null);
+    setCacheStatus({
+      source: "cache",
+      fetchedAt,
+    });
+    writeBrowserCache(submittedSearch.cacheKey, nextStations, STATIONS_SEARCH_CACHE_TTL_MS, {
+      source: "cache",
+      fetchedAt,
+    });
   }
 
   const stationCatalog = useMemo(

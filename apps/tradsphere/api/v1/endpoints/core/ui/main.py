@@ -447,6 +447,7 @@ def get_ui_invoice_checklists_load_route(
     year: int | None = Query(None),
     month: int | None = Query(None),
     checklist_id: str | None = Query(None, alias="checklistId"),
+    include_selected_detail: bool = Query(True, alias="includeSelectedDetail"),
 ):
     """
     Return Invoice Reconciliation Checklist UI payload for a selected period.
@@ -456,6 +457,9 @@ def get_ui_invoice_checklists_load_route(
 
     Example request (with selected checklist):
         GET /api/tradsphere/v1/ui/invoice-checklists/load?year=2026&month=4&checklistId=f3f4502f-b0c3-4ef7-b315-72f9850e36d2
+
+    Example request (summary-only):
+        GET /api/tradsphere/v1/ui/invoice-checklists/load?year=2026&month=4&includeSelectedDetail=false
 
     Example response:
         {
@@ -535,6 +539,8 @@ def get_ui_invoice_checklists_load_route(
         - year must be between 1901 and 2155
         - month must be between 1 and 12
         - checklistId is optional; when omitted route selects first checklist in selected period
+        - includeSelectedDetail defaults to true to preserve existing behavior
+        - includeSelectedDetail=false skips selected checklist detail assembly and returns selectedChecklist as null
         - Checklist summaries include lightweight station search metadata (`searchStations`) for client-side filtering
         - Station/checklist schedule-alignment metadata is included for period mismatch highlighting
         - `mismatchStations` reports checklist station rows that are not in the selected period schedule
@@ -546,6 +552,7 @@ def get_ui_invoice_checklists_load_route(
             year=year,
             month=month,
             checklist_id=checklist_id,
+            include_selected_detail=include_selected_detail,
         )
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc

@@ -45,6 +45,8 @@ def get_invoice_checklist_notes_route(
               "id": 5,
               "checklistStationId": 12,
               "checklistId": "f3f4502f-b0c3-4ef7-b315-72f9850e36d2",
+              "checklistYear": 2026,
+              "checklistMonth": 4,
               "estNum": 26001,
               "stationCode": "KABC",
               "amount": -125.5,
@@ -68,6 +70,7 @@ def get_invoice_checklist_notes_route(
         - checklistStationId, noteId, estNum, and limit must be unsigned integers when provided
         - stationCode max length is 10 when provided
         - estNum and stationCode must be provided together
+        - checklistYear/checklistMonth are included when the note query joins checklist context
         - includeAttachments=true includes attachment arrays per note
         - Unknown query params are rejected (400)
     """
@@ -98,8 +101,14 @@ def create_invoice_checklist_note_route(
         POST /api/tradsphere/v1/invoice-checklist-notes
         {
           "checklistStationId": 12,
-          "amount": -125.50,
           "note": "Credit memo expected"
+        }
+
+    Example request (amount only):
+        POST /api/tradsphere/v1/invoice-checklist-notes
+        {
+          "checklistStationId": 12,
+          "amount": -125.50
         }
 
     Example response:
@@ -108,7 +117,7 @@ def create_invoice_checklist_note_route(
           "data": {
             "id": 5,
             "checklistStationId": 12,
-            "amount": -125.5,
+            "amount": null,
             "note": "Credit memo expected"
           }
         }
@@ -117,9 +126,10 @@ def create_invoice_checklist_note_route(
         - Requires X-Tenant-Id header
         - Requires valid API key
         - checklistStationId must exist
-        - amount is required and must fit DECIMAL(12,2)
+        - At least one of amount or note is required
+        - amount is optional and must fit DECIMAL(12,2) when provided
         - amount supports positive and negative values
-        - note is required, max length 2048
+        - note is optional and max length is 2048 when provided
     """
     try:
         return create_invoice_checklist_note_data(payload=payload)
@@ -142,14 +152,13 @@ def update_invoice_checklist_note_route(
         PUT /api/tradsphere/v1/invoice-checklist-notes
         {
           "noteId": 5,
-          "amount": 0,
           "note": "Issue resolved"
         }
 
     Example response:
         {
           "meta": {"timestamp": "2026-05-16T10:00:00+07:00", "duration_ms": 2},
-          "data": {"id": 5, "amount": 0.0, "note": "Issue resolved"}
+          "data": {"id": 5, "amount": null, "note": "Issue resolved"}
         }
 
     Requirements:
@@ -157,8 +166,9 @@ def update_invoice_checklist_note_route(
         - Requires valid API key
         - noteId is required and must exist
         - At least one updatable field is required
-        - amount validation uses DECIMAL(12,2) rules
-        - note max length is 2048
+        - After update, at least one of amount or note must remain populated
+        - amount validation uses DECIMAL(12,2) rules when provided
+        - note max length is 2048 when provided
     """
     try:
         return update_invoice_checklist_note_data(payload=payload)

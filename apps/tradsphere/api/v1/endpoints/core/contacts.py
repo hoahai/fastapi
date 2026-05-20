@@ -1,12 +1,15 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Path, Query
 
 from apps.tradsphere.api.v1.helpers.contacts import (
     DuplicateContactsError,
     create_contacts_data,
+    get_contact_usage_bundle_data,
+    list_contacts_selector_data,
     list_contacts_data,
     modify_contacts_data,
+    search_contact_station_codes_data,
 )
 from apps.tradsphere.api.v1.helpers.queryParsing import parse_csv_values
 
@@ -122,6 +125,170 @@ def get_contacts_route(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except HTTPException:
         raise
+
+
+@router.get("/selector")
+def get_contacts_selector_route(
+    active: bool = Query(True),
+):
+    """
+    Return lightweight contacts selector rows for station/contact selector UIs.
+
+    Example request:
+        GET /api/tradsphere/v1/contacts/selector
+
+    Example request (include inactive contacts):
+        GET /api/tradsphere/v1/contacts/selector?active=false
+
+    Example response:
+        {
+          "meta": {"timestamp": "2026-05-21T10:00:00+07:00", "duration_ms": 2},
+          "data": [
+            {
+              "contactId": 12,
+              "firstName": "Mina",
+              "lastName": "Tran",
+              "contactName": "Mina Tran",
+              "contactEmail": "rep@kabc.com",
+              "office": "213-555-0100",
+              "cell": "213-555-0101",
+              "company": "KABC",
+              "jobTitle": "Sales Rep",
+              "note": "",
+              "active": 1
+            }
+          ]
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - active defaults to true
+        - active=true returns active contacts only
+        - active=false includes inactive contacts
+        - Lightweight selector payload; full filtered contact search remains on `/contacts`
+    """
+    try:
+        return list_contacts_selector_data(active=active)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/{contact_id}/usage")
+def get_contact_usage_route(
+    contact_id: int = Path(..., ge=1),
+    active: bool = Query(True),
+):
+    """
+    Return bundled usage/detail datasets for one contact to avoid frontend request fan-out.
+
+    Example request:
+        GET /api/tradsphere/v1/contacts/12/usage
+
+    Example request (include inactive station-contact links):
+        GET /api/tradsphere/v1/contacts/12/usage?active=false
+
+    Example response:
+        {
+          "meta": {"timestamp": "2026-05-20T19:00:00+07:00", "duration_ms": 6},
+          "data": {
+            "contactId": 12,
+            "usageRows": [
+              {
+                "id": 44,
+                "contactId": 12,
+                "stationCode": "KABC",
+                "stationName": "KABC Los Angeles",
+                "mediaType": "CA",
+                "language": "English",
+                "syscode": 1001,
+                "affiliation": "ABC",
+                "market": null,
+                "contactType": "REP",
+                "primaryContact": 1,
+                "active": 1
+              }
+            ],
+            "stationScheduleRows": [
+              {"stationCode": "KABC", "estNum": 26001}
+            ],
+            "estNumUsageMetaRows": [
+              {
+                "estNum": 26001,
+                "accountCode": "TAAA",
+                "month": null,
+                "quarter": 2,
+                "year": 2026,
+                "periodLabel": "APR,MAY'26",
+                "mediaType": "TV",
+                "broadcastMonths": [4, 5],
+                "broadcastYears": [2026]
+              }
+            ],
+            "accountRows": [
+              {"accountCode": "TAAA", "name": "Alpha Motors"}
+            ]
+          }
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - contactId path value is required
+        - contactId must exist in contacts table
+        - active=true (default) returns only active station-contact links
+        - Existing /contacts, /contacts/stationsContacts, /schedules, /estNums, and /accounts routes remain unchanged
+    """
+    try:
+        return get_contact_usage_bundle_data(contact_id=contact_id, active=active)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/station-codes")
+def get_contact_station_codes_route(
+    q: str = Query(..., min_length=1),
+    active: bool = Query(True),
+):
+    """
+    Return unique station codes linked to contacts matched by a contact query.
+
+    Example request:
+        GET /api/tradsphere/v1/contacts/station-codes?q=mina
+
+    Example request (email-style query):
+        GET /api/tradsphere/v1/contacts/station-codes?q=rep@kabc.com
+
+    Example response:
+        {
+          "meta": {"timestamp": "2026-05-20T20:00:00+07:00", "duration_ms": 4},
+          "data": {
+            "query": "mina",
+            "active": true,
+            "stationCodes": ["KABC", "WXYZ"]
+          }
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - q is required and must be non-empty
+        - Uses name query matching, and email partial matching when q contains '@'
+        - active=true (default) limits linked station-contact rows to active links
+        - Returned stationCodes are uppercase and deduplicated
+    """
+    try:
+        station_codes = search_contact_station_codes_data(
+            query=q,
+            active=active,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    return {
+        "query": str(q or "").strip(),
+        "active": bool(active),
+        "stationCodes": station_codes,
+    }
 
 
 @router.post("")

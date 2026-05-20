@@ -4,6 +4,7 @@ from fastapi import APIRouter, Body, HTTPException, Query
 
 from apps.tradsphere.api.v1.helpers.accounts import (
     create_accounts,
+    list_accounts_directory,
     list_accounts,
     modify_accounts,
 )
@@ -61,6 +62,50 @@ def get_accounts_route(
     normalized_codes = parse_csv_values(account_codes, account_code, uppercase=True)
     try:
         return list_accounts(account_codes=normalized_codes, active=active)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/directory")
+def get_accounts_directory_route(
+    account_codes: list[str] | None = Query(None, alias="accountCodes"),
+    account_code: list[str] | None = Query(None, alias="accountCode"),
+    active: bool = Query(True),
+):
+    """
+    Return lightweight account directory rows for selector/directory UI usage.
+
+    Example request:
+        GET /api/tradsphere/v1/accounts/directory
+
+    Example request (include inactive TradSphere accounts):
+        GET /api/tradsphere/v1/accounts/directory?active=false
+
+    Example response:
+        {
+          "meta": {"timestamp": "2026-05-21T10:00:00+07:00", "duration_ms": 2},
+          "data": [
+            {
+              "accountCode": "TAAA",
+              "accountName": "Alpha Motors",
+              "billingType": "Calendar",
+              "active": 1
+            }
+          ]
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - accountCodes/accountCode accept comma-separated values
+        - active defaults to true
+        - active=true filters by master Accounts.active = 1
+        - active=false disables active filter and returns all TradSphere accounts
+        - Lightweight directory payload; full account metadata remains on `/accounts`
+    """
+    normalized_codes = parse_csv_values(account_codes, account_code, uppercase=True)
+    try:
+        return list_accounts_directory(account_codes=normalized_codes, active=active)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
