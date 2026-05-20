@@ -170,7 +170,7 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
   const enabledSections = useMemo(() => resolveAppScopedAdminSections(normalizedAppCode), [normalizedAppCode]);
   const showUserAccessSection = enabledSections.includes("user_access");
   const showTradspherePermissionDetails = enabledSections.includes("tradsphere_permission_details");
-  const needsUserDirectory = showUserAccessSection || showTradspherePermissionDetails;
+  const needsUserDirectory = showUserAccessSection;
   const appLabel = String(appName || normalizedAppCode || "App").trim() || "App";
   const currentTenantSlug = String(auth.accessProfile?.tenant?.slug || auth.tenantSlug || "-").trim() || "-";
   const scopedAdminCacheKey = useMemo(
@@ -634,8 +634,7 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
 
       {showTradspherePermissionDetails ? (
         <TradspherePermissionDetailsSection
-          users={users}
-          loadingUsers={loadingUsers}
+          appCode={normalizedAppCode}
           appLabel={appLabel}
         />
       ) : null}

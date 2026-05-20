@@ -5,6 +5,7 @@ from fastapi import APIRouter, Body, HTTPException, Request
 from shared.auth.admin_repo import is_user_super_admin, list_active_apps, list_active_tenants, list_user_access_assignments
 from shared.auth.config import is_debug_endpoint_enabled
 from shared.auth.dependencies import authenticate_bearer, authorize_bearer_for_tenant_app
+from shared.auth.page_permissions_repo import list_page_permissions_for_user
 from shared.auth.permissions_repo import TenantAccessError, validate_active_tenant_membership
 from shared.auth.profile_repo import compose_full_name, select_profile_for_user, split_full_name, upsert_profile_basic_info
 from shared.auth.providers import get_auth_provider
@@ -260,6 +261,7 @@ def _build_validate_payload(
     preferred_app_code: str | None = None,
     include_selected_assignment: bool = True,
     resolved_permissions: set[str] | None = None,
+    page_permissions: list[dict[str, object]] | None = None,
 ) -> dict[str, object]:
     selected_assignment: dict[str, object] | None = None
     if include_selected_assignment:
@@ -328,6 +330,7 @@ def _build_validate_payload(
         "appAccess": _build_app_access_payload(assignments),
         "scope": scope,
         "permissions": sorted(permission_set),
+        "pagePermissions": page_permissions or [],
     }
 
 
@@ -398,6 +401,15 @@ def get_session_me(request: Request):
             "isSuperAdmin": false,
             "hasAnyAdminScope": true
           },
+          "pagePermissions": [
+            {
+              "tenantId": "a4f4fd7d-2c0d-4bb2-bf73-26e5f7f918bf",
+              "tenantSlug": "taaa",
+              "appId": "f57fc74c-b429-4ce2-8bd0-c6f154a2cb18",
+              "appCode": "tradsphere",
+              "pageKey": "tradsphere_home"
+            }
+          ],
           "permissions": [
             "tradsphere.viewer"
           ]
@@ -441,6 +453,10 @@ def get_session_me(request: Request):
         "role": result.access.role,
         "assignments": assignments,
         "scope": scope,
+        "pagePermissions": list_page_permissions_for_user(
+            user_id=result.principal.user_id,
+            tenant_id=result.access.tenant_id,
+        ),
         "permissions": sorted(result.access.permissions),
     }
 
@@ -551,6 +567,15 @@ def get_session_validate(request: Request):
             "isSuperAdmin": false,
             "hasAnyAdminScope": false
           },
+          "pagePermissions": [
+            {
+              "tenantId": "a4f4fd7d-2c0d-4bb2-bf73-26e5f7f918bf",
+              "tenantSlug": "taaa",
+              "appId": "f57fc74c-b429-4ce2-8bd0-c6f154a2cb18",
+              "appCode": "tradsphere",
+              "pageKey": "tradsphere_home"
+            }
+          ],
           "permissions": ["tradsphere.viewer"]
         }
 
@@ -644,6 +669,10 @@ def get_session_validate(request: Request):
         preferred_app_code=preferred_app_code or None,
         include_selected_assignment=include_selected_assignment,
         resolved_permissions=response_permissions,
+        page_permissions=list_page_permissions_for_user(
+            user_id=principal.user_id,
+            tenant_id=tenant_id,
+        ),
     )
 
 

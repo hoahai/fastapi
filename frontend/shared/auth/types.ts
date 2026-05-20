@@ -51,6 +51,14 @@ export type AccessProfile = {
     isSuperAdmin?: boolean;
     hasAnyAdminScope?: boolean;
   };
+  pagePermissions?: Array<{
+    tenantId: string;
+    tenantSlug?: string | null;
+    appId: string;
+    appCode: string;
+    pageKey: string;
+    updatedAt?: string | null;
+  }>;
 };
 
 export type AuthStatus = "idle" | "loading" | "authenticated" | "unauthenticated";

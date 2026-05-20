@@ -18,6 +18,7 @@ import { ToastProvider } from "@/components/ui/toast";
 import { useRouteScrollRestoration } from "@/hooks/useRouteScrollRestoration";
 import { AuthProvider } from "@shared/auth/AuthProvider";
 import { AuthLoadingFallback, RequirePermission, RequireTenantAccess, shouldProtectTradsphereFrontend } from "@shared/auth/guards";
+import { canAccessAppRoute } from "@shared/auth/pagePermissions";
 import { hasAppViewAccess, hasSuperAdminAccess } from "@shared/auth/permissions";
 import { AuthCallbackPage, InviteAcceptPage, LoginPage, PendingInvitePage, UnauthorizedPage, UpdatePasswordPage } from "@shared/auth/pages";
 import { useAuth } from "@shared/auth/useAuth";
@@ -236,6 +237,45 @@ function RequireAppView({
   return <>{children}</>;
 }
 
+function RequireAppPageRoute({
+  appCode,
+  route,
+  children,
+  fallback,
+}: {
+  appCode: string;
+  route: string;
+  children: ReactNode;
+  fallback: ReactNode;
+}) {
+  const auth = useAuth();
+  if (!shouldProtectTradsphereFrontend()) {
+    return <>{children}</>;
+  }
+  if (auth.status === "loading") {
+    return <AuthLoadingFallback />;
+  }
+  if (auth.status !== "authenticated") {
+    return <>{fallback}</>;
+  }
+  if (isAccessResolutionPending(auth.status, auth.accessLoading, auth.accessProfile, auth.accessError)) {
+    return <AuthLoadingFallback />;
+  }
+  if (!auth.accessProfile) {
+    return <>{fallback}</>;
+  }
+  const hasAccess = canAccessAppRoute({
+    accessProfile: auth.accessProfile,
+    appCode,
+    tenantSlug: auth.tenantSlug,
+    route,
+  });
+  if (!hasAccess) {
+    return <>{fallback}</>;
+  }
+  return <>{children}</>;
+}
+
 function RequireAdminScope({ children, fallback }: { children: ReactNode; fallback: ReactNode }) {
   const auth = useAuth();
   if (!shouldProtectTradsphereFrontend()) {
@@ -407,11 +447,31 @@ function App() {
       <RequireSignedIn>
         <RequireTenantAccess fallback={<RedirectToHome />}>
           <RequirePermission permission="tradsphere.viewer" fallback={<RedirectToHome />}>
-            {frontendPath === "/tradsphere/home" ? <TradsphereHomePage /> : null}
-            {frontendPath === "/tradsphere/estnums" ? <EstimateNumbersPage /> : null}
-            {frontendPath === "/tradsphere/contacts" ? <ContactsPage /> : null}
-            {frontendPath === "/tradsphere/stations" ? <StationsPage /> : null}
-            {frontendPath === "/tradsphere/invoice-checklists" ? <InvoiceChecklistPage /> : null}
+            {frontendPath === "/tradsphere/home" ? (
+              <RequireAppPageRoute appCode="tradsphere" route="/tradsphere/home" fallback={<RedirectToHome />}>
+                <TradsphereHomePage />
+              </RequireAppPageRoute>
+            ) : null}
+            {frontendPath === "/tradsphere/estnums" ? (
+              <RequireAppPageRoute appCode="tradsphere" route="/tradsphere/estnums" fallback={<RedirectToHome />}>
+                <EstimateNumbersPage />
+              </RequireAppPageRoute>
+            ) : null}
+            {frontendPath === "/tradsphere/contacts" ? (
+              <RequireAppPageRoute appCode="tradsphere" route="/tradsphere/contacts" fallback={<RedirectToHome />}>
+                <ContactsPage />
+              </RequireAppPageRoute>
+            ) : null}
+            {frontendPath === "/tradsphere/stations" ? (
+              <RequireAppPageRoute appCode="tradsphere" route="/tradsphere/stations" fallback={<RedirectToHome />}>
+                <StationsPage />
+              </RequireAppPageRoute>
+            ) : null}
+            {frontendPath === "/tradsphere/invoice-checklists" ? (
+              <RequireAppPageRoute appCode="tradsphere" route="/tradsphere/invoice-checklists" fallback={<RedirectToHome />}>
+                <InvoiceChecklistPage />
+              </RequireAppPageRoute>
+            ) : null}
           </RequirePermission>
         </RequireTenantAccess>
       </RequireSignedIn>
@@ -423,8 +483,16 @@ function App() {
       <RequireSignedIn>
         <RequireTenantAccess fallback={<RedirectToHome />}>
           <RequireAppView appCode="shiftzy" fallback={<RedirectToHome />}>
-            {frontendPath === "/shiftzy/home" ? <ShiftzySchedulePage /> : null}
-            {frontendPath === "/shiftzy/employees" ? <ShiftzyEmployeesPage /> : null}
+            {frontendPath === "/shiftzy/home" ? (
+              <RequireAppPageRoute appCode="shiftzy" route="/shiftzy/home" fallback={<RedirectToHome />}>
+                <ShiftzySchedulePage />
+              </RequireAppPageRoute>
+            ) : null}
+            {frontendPath === "/shiftzy/employees" ? (
+              <RequireAppPageRoute appCode="shiftzy" route="/shiftzy/employees" fallback={<RedirectToHome />}>
+                <ShiftzyEmployeesPage />
+              </RequireAppPageRoute>
+            ) : null}
           </RequireAppView>
         </RequireTenantAccess>
       </RequireSignedIn>
@@ -442,7 +510,9 @@ function App() {
         <RequireTenantAccess fallback={<UnauthorizedPage />}>
           <RequireAppView appCode={normalizedAppCode} fallback={<UnauthorizedPage />}>
             <RequireAnyPermission permissions={["workspace.super_admin", `${normalizedAppCode}.admin`]} fallback={<UnauthorizedPage />}>
-              <AppScopedAdminPage appCode={normalizedAppCode} appName={appLabel} />
+              <RequireAppPageRoute appCode={normalizedAppCode} route={`/${normalizedAppCode}/admin`} fallback={<UnauthorizedPage />}>
+                <AppScopedAdminPage appCode={normalizedAppCode} appName={appLabel} />
+              </RequireAppPageRoute>
             </RequireAnyPermission>
           </RequireAppView>
         </RequireTenantAccess>

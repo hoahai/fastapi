@@ -20,6 +20,8 @@ from shared.auth.invitations_repo import (
     upsert_tenant_app_role,
     upsert_profile_for_invited_user,
 )
+from shared.auth.page_permissions_catalog import list_page_catalog_for_app, normalize_page_keys
+from shared.auth.page_permissions_repo import list_page_permissions_for_scope, replace_page_permissions_for_user
 from shared.auth.permissions_cache import permission_cache
 from shared.auth.profile_repo import compose_full_name, select_profile_for_user, split_full_name
 from shared.auth.providers import get_auth_provider
@@ -127,6 +129,25 @@ def _serialize_scoped_user_row(
         "role": role,
         "assignedInScope": True,
     }
+
+
+def _scoped_users_by_user_id(
+    *,
+    tenant_id: str,
+    app_id: str,
+) -> dict[str, dict[str, object]]:
+    scoped_rows = list_tenant_users_with_app_role(tenant_id=tenant_id, app_id=app_id)
+    users_by_id: dict[str, dict[str, object]] = {}
+    for row in scoped_rows:
+        if not isinstance(row, dict):
+            continue
+        serialized = _serialize_scoped_user_row(row=row, tenant_id=tenant_id, app_id=app_id)
+        if not serialized:
+            continue
+        user_id = str(serialized.get("userId") or "").strip()
+        if user_id:
+            users_by_id[user_id] = serialized
+    return users_by_id
 
 
 @router.post("")
@@ -371,6 +392,160 @@ def lookup_active_existing_user_route(
             "tenantId": tenant_id,
             "appCode": app_code,
         },
+    }
+
+
+@router.get("/users/page-permissions")
+def list_scoped_user_page_permissions_route(request: Request):
+    """
+    List app-page permissions for users in the active tenant+app scope.
+
+    Example request:
+        GET /api/auth/v1/invitations/users/page-permissions
+
+    Example response:
+        {
+          "scope": {
+            "tenantId": "a4f4fd7d-2c0d-4bb2-bf73-26e5f7f918bf",
+            "appId": "f57fc74c-b429-4ce2-8bd0-c6f154a2cb18",
+            "appCode": "tradsphere"
+          },
+          "availablePages": [
+            {"key": "tradsphere_home", "label": "Accounts", "route": "/tradsphere/home"}
+          ],
+          "items": [
+            {
+              "userId": "762fec4b-1da3-4ba7-80e2-dd21622b6e0d",
+              "email": "alex@example.com",
+              "fullName": "Alex Johnson",
+              "status": "active",
+              "role": "admin",
+              "pageKeys": ["tradsphere_home"],
+              "hasRestrictions": true
+            }
+          ]
+        }
+
+    Requirements:
+        - Requires Authorization: Bearer <Supabase JWT>
+        - Requires X-Tenant-Id
+        - Requires current app admin permission or workspace.super_admin
+        - If a user has zero page keys, they keep full page access for that app
+    """
+    _, tenant_id, _, app_id, app_code, _ = _require_admin(request)
+    available_pages = list_page_catalog_for_app(app_code=app_code)
+    users_by_user_id = _scoped_users_by_user_id(tenant_id=tenant_id, app_id=app_id)
+    scoped_user_ids = set(users_by_user_id.keys())
+    permission_rows = list_page_permissions_for_scope(
+        tenant_id=tenant_id,
+        app_id=app_id,
+        user_ids=scoped_user_ids if scoped_user_ids else None,
+    )
+
+    page_keys_by_user_id: dict[str, set[str]] = {}
+    for row in permission_rows:
+        user_id = str(row.get("user_id") or "").strip()
+        page_key = str(row.get("page_key") or "").strip().lower()
+        if not user_id or not page_key:
+            continue
+        page_keys_by_user_id.setdefault(user_id, set()).add(page_key)
+
+    items: list[dict[str, object]] = []
+    for user_id, user_payload in users_by_user_id.items():
+        user_page_keys = sorted(page_keys_by_user_id.get(user_id, set()))
+        items.append(
+            {
+                "userId": user_id,
+                "email": user_payload.get("email"),
+                "fullName": user_payload.get("fullName"),
+                "status": user_payload.get("status"),
+                "role": user_payload.get("role"),
+                "pageKeys": user_page_keys,
+                "hasRestrictions": len(user_page_keys) > 0,
+            }
+        )
+
+    items.sort(key=lambda item: (str(item.get("email") or "~").lower(), str(item.get("userId") or "")))
+    return {
+        "scope": {
+            "tenantId": tenant_id,
+            "appId": app_id,
+            "appCode": app_code,
+        },
+        "availablePages": available_pages,
+        "items": items,
+    }
+
+
+@router.put("/users/{user_id}/page-permissions")
+def replace_scoped_user_page_permissions_route(
+    request: Request,
+    user_id: str,
+    payload: dict = Body(...),
+):
+    """
+    Replace page-level access restrictions for one scoped tenant+app user.
+
+    Example request:
+        PUT /api/auth/v1/invitations/users/762fec4b-1da3-4ba7-80e2-dd21622b6e0d/page-permissions
+
+    Example request body:
+        {
+          "pageKeys": ["tradsphere_home", "tradsphere_contacts"]
+        }
+
+    Example response:
+        {
+          "userId": "762fec4b-1da3-4ba7-80e2-dd21622b6e0d",
+          "pageKeys": ["tradsphere_contacts", "tradsphere_home"],
+          "hasRestrictions": true
+        }
+
+    Requirements:
+        - Requires Authorization: Bearer <Supabase JWT>
+        - Requires X-Tenant-Id
+        - Requires current app admin permission or workspace.super_admin
+        - Target user must already be assigned in the current tenant+app scope
+        - Empty pageKeys clears restrictions and restores full page access
+    """
+    _, tenant_id, _, app_id, app_code, _ = _require_admin(request)
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+
+    users_by_user_id = _scoped_users_by_user_id(tenant_id=tenant_id, app_id=app_id)
+    if normalized_user_id not in users_by_user_id:
+        raise HTTPException(status_code=404, detail="Target user is not assigned in the current app scope")
+
+    raw_page_keys = payload.get("pageKeys")
+    if not isinstance(raw_page_keys, list):
+        raise HTTPException(status_code=400, detail="pageKeys must be an array")
+    page_key_values = raw_page_keys
+    normalized_page_keys = normalize_page_keys(app_code=app_code, page_keys=page_key_values)
+    provided_non_empty = {
+        str(value or "").strip().lower()
+        for value in raw_page_keys
+        if str(value or "").strip()
+    }
+    if provided_non_empty and not normalized_page_keys:
+        raise HTTPException(status_code=400, detail="No valid page keys were provided for this app")
+
+    try:
+        saved_page_keys = replace_page_permissions_for_user(
+            tenant_id=tenant_id,
+            app_id=app_id,
+            app_code=app_code,
+            user_id=normalized_user_id,
+            page_keys=normalized_page_keys,
+        )
+    except SupabaseClientError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    permission_cache.invalidate(user_id=normalized_user_id)
+    return {
+        "userId": normalized_user_id,
+        "pageKeys": saved_page_keys,
+        "hasRestrictions": len(saved_page_keys) > 0,
     }
 
 

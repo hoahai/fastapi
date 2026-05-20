@@ -34,7 +34,9 @@ import {
   type NormalizedAccessAssignment,
 } from "@shared/auth/accessAssignments";
 import { shouldProtectTradsphereFrontend } from "@shared/auth/guards";
+import { canAccessAppRoute } from "@shared/auth/pagePermissions";
 import { hasAppAdminAccess, hasSuperAdminAccess } from "@shared/auth/permissions";
+import type { AccessProfile } from "@shared/auth/types";
 import { useAuth } from "@shared/auth/useAuth";
 
 type SidebarProps = {
@@ -405,6 +407,7 @@ export function Sidebar({
                                 currentPath={currentPath}
                                 tenantSlug={tenantAssignment.tenantSlug}
                                 activeTenantSlug={auth.tenantSlug}
+                                accessProfile={auth.accessProfile}
                                 onNavigate={handleSelectTenantRoute}
                               />
                             ))}
@@ -418,6 +421,7 @@ export function Sidebar({
                                 currentPath={currentPath}
                                 tenantSlug={tenantAssignment.tenantSlug}
                                 activeTenantSlug={auth.tenantSlug}
+                                accessProfile={auth.accessProfile}
                                 onNavigate={handleSelectTenantRoute}
                               />
                             ))}
@@ -434,6 +438,7 @@ export function Sidebar({
                           currentPath={currentPath}
                           tenantSlug={defaultTenantSlug}
                           activeTenantSlug={auth.tenantSlug}
+                          accessProfile={auth.accessProfile}
                           onNavigate={handleSelectTenantRoute}
                         />
                       ))}
@@ -447,6 +452,7 @@ export function Sidebar({
                           currentPath={currentPath}
                           tenantSlug={defaultTenantSlug}
                           activeTenantSlug={auth.tenantSlug}
+                          accessProfile={auth.accessProfile}
                           onNavigate={handleSelectTenantRoute}
                         />
                       ))}
@@ -688,11 +694,29 @@ type SidebarChildItemProps = {
   currentPath: string;
   tenantSlug: string | null;
   activeTenantSlug: string;
+  accessProfile: AccessProfile | null;
   onNavigate: (tenantSlug: string | null, route: string) => void;
 };
 
-function SidebarChildItem({ child, currentPath, tenantSlug, activeTenantSlug, onNavigate }: SidebarChildItemProps) {
+function appCodeFromRoute(route: string): string {
+  const match = String(route || "").match(/^\/([a-z0-9-_]+)\//i);
+  return String(match?.[1] || "").trim().toLowerCase();
+}
+
+function SidebarChildItem({ child, currentPath, tenantSlug, activeTenantSlug, accessProfile, onNavigate }: SidebarChildItemProps) {
   const normalizedTenantSlug = String(tenantSlug || "").trim().toLowerCase();
+  const appCode = appCodeFromRoute(child.route);
+  const hasPageAccess = !normalizedTenantSlug || !appCode
+    ? true
+    : canAccessAppRoute({
+      accessProfile,
+      appCode,
+      tenantSlug: normalizedTenantSlug,
+      route: child.route,
+    });
+  if (!hasPageAccess) {
+    return null;
+  }
   const active = child.available && currentPath === child.route && (!normalizedTenantSlug || activeTenantSlug === normalizedTenantSlug);
   const ChildIcon =
     child.route === "/tradsphere/estnums"
