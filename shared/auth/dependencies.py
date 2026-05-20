@@ -7,8 +7,11 @@ from shared.auth.config import (
     is_legacy_api_key_fallback_enabled,
 )
 from shared.auth.jwt_verify import JwtVerificationError, verify_supabase_jwt
+from shared.auth.page_permissions_catalog import resolve_page_keys_for_api_path
+from shared.auth.page_permissions_repo import list_page_keys_for_user_scope
 from shared.auth.permission_registry import resolve_required_permissions
 from shared.auth.permissions_repo import TenantAccessError, get_tenant_access_cached
+from shared.auth.supabase_client import SupabaseClientError
 from shared.auth.types import AuthorizationResult, AuthPrincipal, TenantAccessProfile
 from shared.auth.user_status import is_auth_user_disabled
 
@@ -155,8 +158,63 @@ def _enforce_route_permission_for_app(request: Request, *, app_code: str) -> Non
         raise HTTPException(status_code=403, detail="Forbidden")
 
 
+def _enforce_page_permission_for_app(request: Request, *, app_code: str) -> None:
+    normalized_app_code = str(app_code or "").strip().lower()
+    if not normalized_app_code:
+        return
+
+    auth_mode = str(getattr(request.state, "auth_mode", "")).strip().lower()
+    if (
+        auth_mode == "legacy_api_key"
+        and get_auth_mode() == "compat"
+        and is_legacy_api_key_fallback_enabled()
+    ):
+        return
+
+    access = get_tenant_access(request)
+    if access is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+    principal = get_auth_principal(request)
+    if principal is None:
+        raise HTTPException(status_code=401, detail="Authentication required")
+
+    try:
+        allowed_page_keys = list_page_keys_for_user_scope(
+            user_id=principal.user_id,
+            tenant_id=access.tenant_id,
+            app_id=access.app_id,
+        )
+    except SupabaseClientError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "message": "Unable to verify page permissions",
+                "code": "page_permissions_unavailable",
+                "detail": str(exc),
+            },
+        ) from exc
+
+    # No explicit rows means unrestricted access for this app scope.
+    if not allowed_page_keys:
+        return
+
+    route_page_keys = resolve_page_keys_for_api_path(
+        app_code=normalized_app_code,
+        path=str(request.url.path or ""),
+    )
+    if not route_page_keys or allowed_page_keys.isdisjoint(route_page_keys):
+        raise HTTPException(
+            status_code=403,
+            detail={
+                "message": "Forbidden by page permissions",
+                "code": "page_permission_denied",
+            },
+        )
+
+
 def enforce_tradsphere_permission(request: Request) -> None:
     _enforce_route_permission_for_app(request, app_code="tradsphere")
+    _enforce_page_permission_for_app(request, app_code="tradsphere")
 
 
 def enforce_spendsphere_permission(request: Request) -> None:

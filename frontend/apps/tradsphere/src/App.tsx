@@ -510,9 +510,7 @@ function App() {
         <RequireTenantAccess fallback={<UnauthorizedPage />}>
           <RequireAppView appCode={normalizedAppCode} fallback={<UnauthorizedPage />}>
             <RequireAnyPermission permissions={["workspace.super_admin", `${normalizedAppCode}.admin`]} fallback={<UnauthorizedPage />}>
-              <RequireAppPageRoute appCode={normalizedAppCode} route={`/${normalizedAppCode}/admin`} fallback={<UnauthorizedPage />}>
-                <AppScopedAdminPage appCode={normalizedAppCode} appName={appLabel} />
-              </RequireAppPageRoute>
+              <AppScopedAdminPage appCode={normalizedAppCode} appName={appLabel} />
             </RequireAnyPermission>
           </RequireAppView>
         </RequireTenantAccess>

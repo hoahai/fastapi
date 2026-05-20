@@ -212,6 +212,7 @@ export default function ProfilePage() {
       setDraft(next);
       setBaseline(next);
       setProfileNotice("Profile details were updated successfully.");
+      auth.refreshAccessProfile({ force: true });
     } catch (error) {
       const message = String(error instanceof Error ? error.message : "").trim();
       setProfileError(message || "Unable to update profile right now. Please try again.");

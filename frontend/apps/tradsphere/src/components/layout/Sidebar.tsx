@@ -706,7 +706,9 @@ function appCodeFromRoute(route: string): string {
 function SidebarChildItem({ child, currentPath, tenantSlug, activeTenantSlug, accessProfile, onNavigate }: SidebarChildItemProps) {
   const normalizedTenantSlug = String(tenantSlug || "").trim().toLowerCase();
   const appCode = appCodeFromRoute(child.route);
-  const hasPageAccess = !normalizedTenantSlug || !appCode
+  const hasPageAccess = child.route.endsWith("/admin")
+    ? true
+    : !normalizedTenantSlug || !appCode
     ? true
     : canAccessAppRoute({
       accessProfile,

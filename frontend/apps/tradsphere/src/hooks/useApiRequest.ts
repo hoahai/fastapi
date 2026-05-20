@@ -109,6 +109,20 @@ function getToastContent(
   };
 }
 
+function shouldRefreshAccessProfileAfterSuccess(url: string): boolean {
+  const normalized = String(url || "").trim().toLowerCase();
+  if (!normalized) {
+    return false;
+  }
+  return (
+    normalized.startsWith("/api/tradsphere/")
+    || normalized.startsWith("/api/shiftzy/")
+    || normalized.startsWith("/api/spendsphere/")
+    || normalized.startsWith("/api/fundsphere/")
+    || normalized.startsWith("/api/opssphere/")
+  );
+}
+
 async function parseResponsePayload(response: Response): Promise<unknown> {
   const contentType = response.headers.get("content-type") ?? "";
   if (contentType.includes("application/json")) {
@@ -208,6 +222,10 @@ export function useApiRequest() {
       });
       if (successToast) {
         toast.success(successToast.title, successToast.message);
+      }
+
+      if (shouldRefreshAccessProfileAfterSuccess(url)) {
+        authRef.current.refreshAccessProfile();
       }
 
       return payload;

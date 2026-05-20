@@ -4,7 +4,12 @@ from datetime import datetime, timezone
 
 from fastapi import APIRouter, Body, HTTPException, Query, Request
 
-from shared.auth.admin_repo import find_user_id_by_email, is_auth_user_active, list_tenant_users_with_app_role
+from shared.auth.admin_repo import (
+    find_user_id_by_email,
+    is_auth_user_active,
+    list_tenant_users_with_app_role,
+    remove_tenant_app_role,
+)
 from shared.auth.config import get_invite_base_url
 from shared.auth.dependencies import authenticate_bearer, authorize_bearer_for_tenant_app
 from shared.auth.invite_url import build_invite_url
@@ -25,11 +30,17 @@ from shared.auth.page_permissions_repo import list_page_permissions_for_scope, r
 from shared.auth.permissions_cache import permission_cache
 from shared.auth.profile_repo import compose_full_name, select_profile_for_user, split_full_name
 from shared.auth.providers import get_auth_provider
-from shared.auth.roles import ROLE_ADMIN, ROLE_EDITOR, ROLE_VIEWER, normalize_role_key
+from shared.auth.roles import ROLE_ADMIN, ROLE_EDITOR, ROLE_SUPER_ADMIN, ROLE_VIEWER, normalize_role_key
 from shared.auth.supabase_client import SupabaseClientError
 
 router = APIRouter(prefix="/invitations")
 VALID_SCOPED_ROLE_KEYS = {ROLE_VIEWER, ROLE_EDITOR, ROLE_ADMIN}
+ROLE_RANKS = {
+    ROLE_SUPER_ADMIN: 0,
+    ROLE_ADMIN: 1,
+    ROLE_EDITOR: 2,
+    ROLE_VIEWER: 3,
+}
 
 
 def _normalize_app_code(value: object) -> str:
@@ -61,7 +72,7 @@ def _require_admin(
     request: Request,
     *,
     app_code: str | None = None,
-) -> tuple[str, str, str, str, str, bool]:
+) -> tuple[str, str, str, str, str, bool, str]:
     target_app_code = _resolve_target_app_code(request=request, override_app_code=app_code)
     result = authorize_bearer_for_tenant_app(request=request, app_code=target_app_code)
     permissions = set(result.access.permissions)
@@ -75,6 +86,7 @@ def _require_admin(
         result.access.app_id,
         result.access.app_code,
         is_super_admin,
+        normalize_role_key(str(result.access.role or "").strip()) or "",
     )
 
 
@@ -119,6 +131,7 @@ def _serialize_scoped_user_row(
         return None
 
     role = normalize_role_key(str(current_assignment.get("role") or "").strip()) or None
+    is_super_admin = bool(row.get("isSuperAdmin"))
     return {
         "userId": user_id,
         "email": email,
@@ -127,6 +140,7 @@ def _serialize_scoped_user_row(
         "lastName": last_name,
         "status": status,
         "role": role,
+        "isSuperAdmin": is_super_admin,
         "assignedInScope": True,
     }
 
@@ -148,6 +162,33 @@ def _scoped_users_by_user_id(
         if user_id:
             users_by_id[user_id] = serialized
     return users_by_id
+
+
+def _role_rank(role_key: str | None) -> int:
+    normalized = normalize_role_key(role_key)
+    return ROLE_RANKS.get(normalized, 99)
+
+
+def _assert_actor_can_manage_target(
+    *,
+    actor_user_id: str,
+    actor_role: str | None,
+    actor_is_super_admin: bool,
+    target_user: dict[str, object],
+    action_label: str,
+) -> None:
+    target_user_id = str(target_user.get("userId") or "").strip()
+    target_role = normalize_role_key(str(target_user.get("role") or "").strip()) or None
+    target_is_super_admin = bool(target_user.get("isSuperAdmin"))
+
+    if target_user_id and target_user_id == actor_user_id:
+        raise HTTPException(status_code=403, detail=f"You cannot {action_label} your own access.")
+
+    if target_is_super_admin and not actor_is_super_admin:
+        raise HTTPException(status_code=403, detail=f"You cannot {action_label} a Super Admin.")
+
+    if not actor_is_super_admin and _role_rank(target_role) < _role_rank(actor_role):
+        raise HTTPException(status_code=403, detail=f"You cannot {action_label} a higher-role user.")
 
 
 @router.post("")
@@ -181,7 +222,7 @@ def create_invitation_route(
         - super_admin cannot be assigned from this endpoint
     """
     payload_app_code = _normalize_app_code(payload.get("appCode"))
-    invited_by_user_id, tenant_id, _, _, app_code, is_super_admin = _require_admin(
+    invited_by_user_id, tenant_id, _, _, app_code, is_super_admin, _ = _require_admin(
         request,
         app_code=payload_app_code or None,
     )
@@ -257,6 +298,7 @@ def list_scoped_invitation_users_route(
               "lastName": "Johnson",
               "status": "active",
               "role": "editor",
+              "isSuperAdmin": false,
               "assignedInScope": true
             }
           ],
@@ -271,7 +313,7 @@ def list_scoped_invitation_users_route(
         - Requires X-Tenant-Id
         - Requires current app admin permission or workspace.super_admin
     """
-    _, tenant_id, _, app_id, app_code, _ = _require_admin(request)
+    _, tenant_id, _, app_id, app_code, _, _ = _require_admin(request)
     app_rows = list_tenant_users_with_app_role(tenant_id=tenant_id, app_id=app_id)
     search_text = str(query or "").strip().lower()
 
@@ -327,6 +369,7 @@ def lookup_active_existing_user_route(
               "lastName": "Johnson",
               "status": "active",
               "role": null,
+              "isSuperAdmin": false,
               "assignedInScope": false
             }
           ],
@@ -342,7 +385,7 @@ def lookup_active_existing_user_route(
         - Requires current app admin permission or workspace.super_admin
         - Returns only active existing users
     """
-    _, tenant_id, _, app_id, app_code, _ = _require_admin(request)
+    _, tenant_id, _, app_id, app_code, _, _ = _require_admin(request)
     normalized_email = str(email or "").strip().lower()
     if not normalized_email or "@" not in normalized_email:
         raise HTTPException(status_code=400, detail="Valid email is required")
@@ -385,6 +428,7 @@ def lookup_active_existing_user_route(
                 "lastName": last_name,
                 "status": "active",
                 "role": None,
+                "isSuperAdmin": False,
                 "assignedInScope": False,
             }
         ],
@@ -420,6 +464,7 @@ def list_scoped_user_page_permissions_route(request: Request):
               "fullName": "Alex Johnson",
               "status": "active",
               "role": "admin",
+              "isSuperAdmin": false,
               "pageKeys": ["tradsphere_home"],
               "hasRestrictions": true
             }
@@ -432,8 +477,13 @@ def list_scoped_user_page_permissions_route(request: Request):
         - Requires current app admin permission or workspace.super_admin
         - If a user has zero page keys, they keep full page access for that app
     """
-    _, tenant_id, _, app_id, app_code, _ = _require_admin(request)
+    _, tenant_id, _, app_id, app_code, _, _ = _require_admin(request)
     available_pages = list_page_catalog_for_app(app_code=app_code)
+    valid_page_keys = {
+        str(item.get("key") or "").strip().lower()
+        for item in available_pages
+        if str(item.get("key") or "").strip()
+    }
     users_by_user_id = _scoped_users_by_user_id(tenant_id=tenant_id, app_id=app_id)
     scoped_user_ids = set(users_by_user_id.keys())
     permission_rows = list_page_permissions_for_scope(
@@ -448,6 +498,8 @@ def list_scoped_user_page_permissions_route(request: Request):
         page_key = str(row.get("page_key") or "").strip().lower()
         if not user_id or not page_key:
             continue
+        if valid_page_keys and page_key not in valid_page_keys:
+            continue
         page_keys_by_user_id.setdefault(user_id, set()).add(page_key)
 
     items: list[dict[str, object]] = []
@@ -460,6 +512,7 @@ def list_scoped_user_page_permissions_route(request: Request):
                 "fullName": user_payload.get("fullName"),
                 "status": user_payload.get("status"),
                 "role": user_payload.get("role"),
+                "isSuperAdmin": bool(user_payload.get("isSuperAdmin")),
                 "pageKeys": user_page_keys,
                 "hasRestrictions": len(user_page_keys) > 0,
             }
@@ -508,7 +561,7 @@ def replace_scoped_user_page_permissions_route(
         - Target user must already be assigned in the current tenant+app scope
         - Empty pageKeys clears restrictions and restores full page access
     """
-    _, tenant_id, _, app_id, app_code, _ = _require_admin(request)
+    actor_user_id, tenant_id, _, app_id, app_code, actor_is_super_admin, actor_role = _require_admin(request)
     normalized_user_id = str(user_id or "").strip()
     if not normalized_user_id:
         raise HTTPException(status_code=400, detail="user_id is required")
@@ -516,6 +569,14 @@ def replace_scoped_user_page_permissions_route(
     users_by_user_id = _scoped_users_by_user_id(tenant_id=tenant_id, app_id=app_id)
     if normalized_user_id not in users_by_user_id:
         raise HTTPException(status_code=404, detail="Target user is not assigned in the current app scope")
+    target_user = users_by_user_id[normalized_user_id]
+    _assert_actor_can_manage_target(
+        actor_user_id=actor_user_id,
+        actor_role=actor_role,
+        actor_is_super_admin=actor_is_super_admin,
+        target_user=target_user,
+        action_label="set page permissions for",
+    )
 
     raw_page_keys = payload.get("pageKeys")
     if not isinstance(raw_page_keys, list):
@@ -546,6 +607,65 @@ def replace_scoped_user_page_permissions_route(
         "userId": normalized_user_id,
         "pageKeys": saved_page_keys,
         "hasRestrictions": len(saved_page_keys) > 0,
+    }
+
+
+@router.delete("/users/{user_id}/access")
+def remove_scoped_user_access_route(
+    request: Request,
+    user_id: str,
+):
+    """
+    Remove app access for one user in the active tenant+app scope.
+
+    Example request:
+        DELETE /api/auth/v1/invitations/users/762fec4b-1da3-4ba7-80e2-dd21622b6e0d/access
+
+    Example response:
+        {
+          "status": "removed",
+          "userId": "762fec4b-1da3-4ba7-80e2-dd21622b6e0d"
+        }
+
+    Requirements:
+        - Requires Authorization: Bearer <Supabase JWT>
+        - Requires X-Tenant-Id
+        - Requires current app admin permission or workspace.super_admin
+        - Actor cannot remove their own app access
+        - Non-super-admin actor cannot remove super-admin access
+        - Non-super-admin actor cannot remove higher-role user access
+    """
+    actor_user_id, tenant_id, _, app_id, app_code, actor_is_super_admin, actor_role = _require_admin(request)
+    normalized_user_id = str(user_id or "").strip()
+    if not normalized_user_id:
+        raise HTTPException(status_code=400, detail="user_id is required")
+
+    users_by_user_id = _scoped_users_by_user_id(tenant_id=tenant_id, app_id=app_id)
+    target_user = users_by_user_id.get(normalized_user_id)
+    if not target_user:
+        raise HTTPException(status_code=404, detail="Target user is not assigned in the current app scope")
+
+    _assert_actor_can_manage_target(
+        actor_user_id=actor_user_id,
+        actor_role=actor_role,
+        actor_is_super_admin=actor_is_super_admin,
+        target_user=target_user,
+        action_label="remove access for",
+    )
+
+    try:
+        remove_tenant_app_role(
+            tenant_id=tenant_id,
+            user_id=normalized_user_id,
+            app_id=app_id,
+        )
+    except SupabaseClientError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    permission_cache.invalidate(user_id=normalized_user_id)
+    return {
+        "status": "removed",
+        "userId": normalized_user_id,
     }
 
 
@@ -755,7 +875,7 @@ def revoke_invitation_route(request: Request, invitation_id: str):
         - Requires X-Tenant-Id
         - Requires current app admin permission
     """
-    _, tenant_id, _, _, _, _ = _require_admin(request)
+    _, tenant_id, _, _, _, _, _ = _require_admin(request)
 
     row = get_invitation_by_id(invitation_id=invitation_id, tenant_id=tenant_id)
     if not row:

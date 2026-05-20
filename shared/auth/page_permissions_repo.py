@@ -120,6 +120,43 @@ def list_page_permissions_for_user(
     return payload
 
 
+def list_page_keys_for_user_scope(
+    *,
+    user_id: str,
+    tenant_id: str,
+    app_id: str,
+) -> set[str]:
+    normalized_user_id = str(user_id or "").strip()
+    normalized_tenant_id = str(tenant_id or "").strip()
+    normalized_app_id = str(app_id or "").strip()
+    if not normalized_user_id or not normalized_tenant_id or not normalized_app_id:
+        return set()
+
+    provider = _provider()
+    try:
+        rows = provider.select_many(
+            table=_TABLE_NAME,
+            filters={
+                "user_id": normalized_user_id,
+                "tenant_id": normalized_tenant_id,
+                "app_id": normalized_app_id,
+                "active": "true",
+            },
+            select="page_key",
+        )
+    except SupabaseClientError as exc:
+        if _is_missing_table_error(exc):
+            return set()
+        raise
+
+    page_keys: set[str] = set()
+    for row in rows:
+        key = str((row or {}).get("page_key") or "").strip().lower()
+        if key:
+            page_keys.add(key)
+    return page_keys
+
+
 def replace_page_permissions_for_user(
     *,
     tenant_id: str,

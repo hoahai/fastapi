@@ -1309,11 +1309,11 @@ Requirements:
 - Do not push.
 
 Baseline:
-- Create a safety branch named `base/current-good-version-2026-05-20`.
+- Create a safety branch named `base/current-good-version-yyyy-mm-dd.
 - If there are uncommitted intended changes, review them, add them, and commit with:
   `baseline: current good version`
 - If the tree is already clean, tag current HEAD as:
-  `baseline/current-good-version-2026-05-20`
+  `baseline/current-good-version-yyyy-mm-dd`
 
 Cleanup:
 - List old checkpoint/stash/branch/tag candidates before deleting.

@@ -13,12 +13,10 @@ const APP_PAGE_CATALOG: Record<string, AppPageDefinition[]> = {
     { key: "tradsphere_contacts", label: "Contacts", route: "/tradsphere/contacts" },
     { key: "tradsphere_stations", label: "Stations", route: "/tradsphere/stations" },
     { key: "tradsphere_invoice_checklists", label: "Invoice Checklists", route: "/tradsphere/invoice-checklists" },
-    { key: "tradsphere_admin", label: "Admin", route: "/tradsphere/admin" },
   ],
   shiftzy: [
     { key: "shiftzy_home", label: "Schedules", route: "/shiftzy/home" },
     { key: "shiftzy_employees", label: "Employees", route: "/shiftzy/employees" },
-    { key: "shiftzy_admin", label: "Admin", route: "/shiftzy/admin" },
   ],
 };
 

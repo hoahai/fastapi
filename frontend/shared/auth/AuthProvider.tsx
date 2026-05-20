@@ -67,7 +67,7 @@ type AuthContextValue = {
   signOut: (options?: { notice?: string | null }) => Promise<void>;
   ensureFreshSession: () => Promise<SupabaseSession | null>;
   getAccessToken: () => string | null;
-  refreshAccessProfile: () => void;
+  refreshAccessProfile: (options?: { force?: boolean }) => void;
   // Backward-compatible aliases for existing callers.
   signInPassword: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
@@ -433,9 +433,10 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   }, [provider, session, signOut]);
 
-  const refreshAccessProfile = useCallback(() => {
+  const refreshAccessProfile = useCallback((options?: { force?: boolean }) => {
+    const force = Boolean(options?.force);
     const now = Date.now();
-    if (now - lastManualRefreshAtRef.current < ACCESS_PROFILE_MANUAL_REFRESH_MIN_INTERVAL_MS) {
+    if (!force && now - lastManualRefreshAtRef.current < ACCESS_PROFILE_MANUAL_REFRESH_MIN_INTERVAL_MS) {
       return;
     }
     lastManualRefreshAtRef.current = now;

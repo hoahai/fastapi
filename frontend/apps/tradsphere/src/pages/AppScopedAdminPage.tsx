@@ -1,4 +1,4 @@
-import { RefreshCw, Search, UserPlus } from "lucide-react";
+import { RefreshCw, Search, UserMinus, UserPlus } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { PageBanner } from "@/components/layout/PageBanner";
@@ -24,6 +24,7 @@ type ScopedUser = {
   lastName: string | null;
   status: string;
   role: string | null;
+  isSuperAdmin?: boolean;
   assignedInScope: boolean;
 };
 
@@ -119,6 +120,27 @@ function formatRelativeTime(timestamp: number): string {
   return `${days} day${days > 1 ? "s" : ""} ago`;
 }
 
+function normalizeRoleKey(role: string | null | undefined): string {
+  return String(role || "").trim().toLowerCase();
+}
+
+function roleRank(role: string | null | undefined): number {
+  const normalized = normalizeRoleKey(role);
+  if (normalized === "super_admin") {
+    return 0;
+  }
+  if (normalized === "admin") {
+    return 1;
+  }
+  if (normalized === "editor") {
+    return 2;
+  }
+  if (normalized === "viewer") {
+    return 3;
+  }
+  return 99;
+}
+
 function readSidebarCollapsedState(): boolean {
   if (typeof window === "undefined") {
     return false;
@@ -165,6 +187,7 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
   const [memberSearch, setMemberSearch] = useState("");
   const [memberRoleFilter, setMemberRoleFilter] = useState<string>("all");
   const [memberStatusFilter, setMemberStatusFilter] = useState<string>("all");
+  const [removingUserId, setRemovingUserId] = useState<string | null>(null);
 
   const normalizedAppCode = String(appCode || "").trim().toLowerCase();
   const enabledSections = useMemo(() => resolveAppScopedAdminSections(normalizedAppCode), [normalizedAppCode]);
@@ -173,6 +196,10 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
   const needsUserDirectory = showUserAccessSection;
   const appLabel = String(appName || normalizedAppCode || "App").trim() || "App";
   const currentTenantSlug = String(auth.accessProfile?.tenant?.slug || auth.tenantSlug || "-").trim() || "-";
+  const actorUserId = String(auth.user?.id || "").trim();
+  const actorPermissions = useMemo(() => new Set(auth.accessProfile?.permissions ?? []), [auth.accessProfile?.permissions]);
+  const actorRole = normalizeRoleKey(auth.accessProfile?.role || "");
+  const actorIsSuperAdmin = actorPermissions.has("workspace.super_admin") || actorRole === "super_admin";
   const scopedAdminCacheKey = useMemo(
     () => buildScopedAdminCacheKey({
       userId: String(auth.user?.id || "").trim(),
@@ -181,6 +208,18 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
     }),
     [auth.user?.id, currentTenantSlug, normalizedAppCode],
   );
+
+  const persistScopedUsersCache = useCallback((nextItems: ScopedUser[]) => {
+    const fetchedAt = Date.now();
+    setUsers(nextItems);
+    setCacheStatus({ source: "network", fetchedAt });
+    writeBrowserCache(
+      scopedAdminCacheKey,
+      { items: nextItems },
+      APP_SCOPED_ADMIN_CACHE_TTL_MS,
+      { source: "network", fetchedAt },
+    );
+  }, [scopedAdminCacheKey]);
 
   const loadScopedUsers = useCallback(async (showRefreshing: boolean) => {
     const loadInvocationId = loadInvocationRef.current + 1;
@@ -239,15 +278,7 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
       if (loadInvocationRef.current !== loadInvocationId) {
         return;
       }
-      setUsers(nextItems);
-      const fetchedAt = Date.now();
-      setCacheStatus({ source: "network", fetchedAt });
-      writeBrowserCache(
-        scopedAdminCacheKey,
-        { items: nextItems },
-        APP_SCOPED_ADMIN_CACHE_TTL_MS,
-        { source: "network", fetchedAt },
-      );
+      persistScopedUsersCache(nextItems);
     } catch (error) {
       const message = error instanceof Error ? error.message : `Unable to load current ${appLabel} users.`;
       if (!canUseCachedData) {
@@ -265,7 +296,7 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
       setRefreshingUsers(false);
       setBackgroundRefreshingUsers(false);
     }
-  }, [appLabel, isOnline, normalizedAppCode, requestJson, scopedAdminCacheKey]);
+  }, [appLabel, isOnline, normalizedAppCode, persistScopedUsersCache, requestJson, scopedAdminCacheKey]);
 
   useEffect(() => {
     if (!needsUserDirectory) {
@@ -433,9 +464,75 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
       setSelectedRole("viewer");
       setLookupResult(null);
       setLookupMessage(`${appLabel} access added successfully.`);
+      const normalizedLookupUserId = String(lookupResult.userId || "").trim();
+      if (normalizedLookupUserId) {
+        const optimisticUser: ScopedUser = {
+          ...lookupResult,
+          role: selectedRole,
+          assignedInScope: true,
+        };
+        const nextUsers = users.some((item) => String(item.userId || "").trim() === normalizedLookupUserId)
+          ? users.map((item) => (String(item.userId || "").trim() === normalizedLookupUserId
+            ? {
+              ...item,
+              ...optimisticUser,
+            }
+            : item))
+          : [optimisticUser, ...users];
+        persistScopedUsersCache(nextUsers);
+      }
       await loadScopedUsers(true);
     } finally {
       setAddingAccess(false);
+    }
+  }
+
+  function canManageUserAccess(user: ScopedUser): boolean {
+    const targetUserId = String(user.userId || "").trim();
+    if (!targetUserId) {
+      return false;
+    }
+    if (targetUserId === actorUserId) {
+      return false;
+    }
+    if (Boolean(user.isSuperAdmin) && !actorIsSuperAdmin) {
+      return false;
+    }
+    if (!actorIsSuperAdmin && roleRank(user.role) < roleRank(actorRole)) {
+      return false;
+    }
+    return true;
+  }
+
+  async function handleRemoveAccess(user: ScopedUser) {
+    if (!canManageUserAccess(user)) {
+      return;
+    }
+    const targetLabel = user.fullName || user.email || user.userId;
+    const approved = window.confirm(`Remove ${appLabel} access for ${targetLabel}?`);
+    if (!approved) {
+      return;
+    }
+    setRemovingUserId(user.userId);
+    try {
+      await requestJson(`/api/auth/v1/invitations/users/${encodeURIComponent(user.userId)}/access`, {
+        method: "DELETE",
+        headers: {
+          "X-App-Code": normalizedAppCode,
+        },
+        successToast: {
+          title: "Access removed",
+          message: `${appLabel} access was removed from this user.`,
+        },
+      });
+      const normalizedTargetUserId = String(user.userId || "").trim();
+      if (normalizedTargetUserId) {
+        const nextUsers = users.filter((item) => String(item.userId || "").trim() !== normalizedTargetUserId);
+        persistScopedUsersCache(nextUsers);
+      }
+      await loadScopedUsers(true);
+    } finally {
+      setRemovingUserId(null);
     }
   }
 
@@ -623,6 +720,24 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
                           {currentTenantSlug}: {appLabel} ({roleLabel(user.role || "viewer")})
                         </span>
                       </div>
+                    </div>
+                    <div className="flex items-center justify-end gap-2">
+                      {canManageUserAccess(user) ? (
+                        <Button
+                          type="button"
+                          variant="outline"
+                          disabled={removingUserId === user.userId}
+                          onClick={() => void handleRemoveAccess(user)}
+                          className="h-8 px-2.5 text-xs text-rose-700 hover:text-rose-800"
+                        >
+                          {removingUserId === user.userId ? <Spinner className="size-3.5" /> : <UserMinus className="size-3.5" />}
+                          Remove access
+                        </Button>
+                      ) : (
+                        <span className="text-[11px] text-slate-500">
+                          Protected user access
+                        </span>
+                      )}
                     </div>
                   </div>
                 </article>

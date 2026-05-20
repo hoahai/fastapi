@@ -11,12 +11,10 @@ _APP_PAGE_CATALOG: dict[str, list[PageDefinition]] = {
         {"key": "tradsphere_contacts", "label": "Contacts", "route": "/tradsphere/contacts"},
         {"key": "tradsphere_stations", "label": "Stations", "route": "/tradsphere/stations"},
         {"key": "tradsphere_invoice_checklists", "label": "Invoice Checklists", "route": "/tradsphere/invoice-checklists"},
-        {"key": "tradsphere_admin", "label": "Admin", "route": "/tradsphere/admin"},
     ],
     "shiftzy": [
         {"key": "shiftzy_home", "label": "Schedules", "route": "/shiftzy/home"},
         {"key": "shiftzy_employees", "label": "Employees", "route": "/shiftzy/employees"},
-        {"key": "shiftzy_admin", "label": "Admin", "route": "/shiftzy/admin"},
     ],
 }
 
@@ -48,3 +46,62 @@ def normalize_page_keys(*, app_code: str, page_keys: Iterable[object]) -> list[s
         if key and key in allowed_keys:
             normalized_keys.add(key)
     return sorted(normalized_keys)
+
+
+def _normalize_path(path: object) -> str:
+    value = str(path or "").strip().lower()
+    if not value:
+        return ""
+    if "?" in value:
+        value = value.split("?", 1)[0]
+    return value.rstrip("/") or "/"
+
+
+_APP_API_PAGE_KEY_RULES: dict[str, tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]] = {
+    "tradsphere": (
+        # Shared account selector/load helpers used by multiple pages.
+        (
+            ("/ui/main/selections",),
+            (
+                "tradsphere_home",
+                "tradsphere_estnums",
+                "tradsphere_contacts",
+                "tradsphere_stations",
+                "tradsphere_invoice_checklists",
+            ),
+        ),
+        (("/ui/accounts/load", "/ui/main/load", "/accounts", "/schedules", "/broadcastcalendar"), ("tradsphere_home",)),
+        (("/estnums",), ("tradsphere_estnums",)),
+        (("/contacts/station-codes", "/contacts/selector"), ("tradsphere_stations", "tradsphere_contacts")),
+        (("/contacts/stationscontacts", "/contacts"), ("tradsphere_contacts",)),
+        (("/stations/deliverymethods", "/stations"), ("tradsphere_stations",)),
+        (
+            (
+                "/ui/invoice-checklists/load",
+                "/invoice-checklists",
+                "/invoice-checklist-stations",
+                "/invoice-checklist-notes",
+                "/invoice-note-attachments",
+            ),
+            ("tradsphere_invoice_checklists",),
+        ),
+    ),
+    "shiftzy": (
+        (("/home",), ("shiftzy_home",)),
+        (("/employees",), ("shiftzy_employees",)),
+    ),
+}
+
+
+def resolve_page_keys_for_api_path(*, app_code: str, path: object) -> set[str]:
+    normalized_app_code = normalize_app_code(app_code)
+    normalized_path = _normalize_path(path)
+    if not normalized_app_code or not normalized_path:
+        return set()
+
+    rules = _APP_API_PAGE_KEY_RULES.get(normalized_app_code, tuple())
+    matched: set[str] = set()
+    for fragments, page_keys in rules:
+        if any(fragment in normalized_path for fragment in fragments):
+            matched.update(page_keys)
+    return matched
