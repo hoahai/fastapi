@@ -63,3 +63,9 @@ node_modules/
 *.tsbuildinfo
 static/assets/
 apps/tradsphere/ui_dist/
+
+# ------------------
+# Local Artifacts
+# ------------------
+checkpoints/
+docs/
