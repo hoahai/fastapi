@@ -751,6 +751,227 @@ class InvoiceChecklistNoteDateSerializationTests(unittest.TestCase):
         self.assertEqual(data[0]["dateCreated"], "2026-05-20T10:00:00+07:00")
         self.assertEqual(data[0]["dateUpdated"], "2026-05-20T10:01:00+07:00")
 
+    def test_list_notes_with_attachments_uses_single_batched_attachment_lookup(self):
+        note_rows = [
+            {
+                "noteId": 5,
+                "checklistStationId": 12,
+                "checklistId": "cid-1",
+                "checklistYear": 2026,
+                "checklistMonth": 5,
+                "estNum": 26001,
+                "stationCode": "KABC",
+                "amount": 10.0,
+                "note": "first",
+                "dateCreated": "2026-05-20T10:00:00+07:00",
+                "dateUpdated": "2026-05-20T10:01:00+07:00",
+            },
+            {
+                "noteId": 6,
+                "checklistStationId": 12,
+                "checklistId": "cid-1",
+                "checklistYear": 2026,
+                "checklistMonth": 5,
+                "estNum": 26001,
+                "stationCode": "KABC",
+                "amount": 12.5,
+                "note": "second",
+                "dateCreated": "2026-05-20T10:02:00+07:00",
+                "dateUpdated": "2026-05-20T10:03:00+07:00",
+            },
+        ]
+        attachment_rows = [
+            {
+                "attachmentId": 21,
+                "attachmentNoteId": 5,
+                "attachmentOriginalFileName": "invoice-21.pdf",
+                "attachmentMimeType": "application/pdf",
+                "attachmentSource": "app_attachment",
+            },
+            {
+                "attachmentId": 22,
+                "attachmentNoteId": 6,
+                "attachmentFileName": "legacy-22.jpg",
+                "attachmentFileType": "image/jpeg",
+                "attachmentSource": "legacy_inv_note_attachment",
+            },
+            {
+                "attachmentId": 23,
+                "attachmentNoteId": 5,
+                "attachmentOriginalFileName": "invoice-23.pdf",
+                "attachmentMimeType": "application/pdf",
+                "attachmentSource": "legacy_inv_note_attachment",
+            },
+        ]
+        db_calls: list[object] = []
+
+        def _safe_db_side_effect(func, *args, **kwargs):
+            db_calls.append(func)
+            if func is inv.list_inv_checklist_note_detail_rows:
+                return note_rows
+            if func is inv.list_inv_note_attachments:
+                self.assertEqual(kwargs.get("note_ids"), [5, 6])
+                self.assertEqual(kwargs.get("tenant_slug"), "demo-tenant")
+                self.assertIsNone(kwargs.get("note_id"))
+                return attachment_rows
+            raise AssertionError(f"Unexpected db helper call: {getattr(func, '__name__', func)}")
+
+        with patch.object(inv, "get_tenant_id", return_value="Demo-Tenant"), patch.object(
+            inv, "_safe_db_call", side_effect=_safe_db_side_effect
+        ):
+            data = inv.list_invoice_checklist_notes_data(
+                checklist_station_id=12,
+                include_attachments=True,
+            )
+
+        self.assertEqual(len(data), 2)
+        self.assertEqual([item["id"] for item in data], [5, 6])
+        self.assertEqual([item["id"] for item in data[0]["attachments"]], [21, 23])
+        self.assertEqual([item["source"] for item in data[0]["attachments"]], ["app_attachment", "legacy_inv_note_attachment"])
+        self.assertEqual([item["id"] for item in data[1]["attachments"]], [22])
+        self.assertIn("checklistStationId", data[0])
+        self.assertIn("checklistId", data[0])
+        self.assertEqual(db_calls.count(inv.list_inv_note_attachments), 1)
+
+    def test_list_notes_with_attachments_returns_empty_arrays_when_none_exist(self):
+        note_rows = [
+            {
+                "noteId": 5,
+                "checklistStationId": 12,
+                "checklistId": "cid-1",
+                "checklistYear": 2026,
+                "checklistMonth": 5,
+                "estNum": 26001,
+                "stationCode": "KABC",
+                "amount": 10.0,
+                "note": "first",
+                "dateCreated": "2026-05-20T10:00:00+07:00",
+                "dateUpdated": "2026-05-20T10:01:00+07:00",
+            }
+        ]
+
+        def _safe_db_side_effect(func, *args, **kwargs):
+            if func is inv.list_inv_checklist_note_detail_rows:
+                return note_rows
+            if func is inv.list_inv_note_attachments:
+                self.assertEqual(kwargs.get("note_ids"), [5])
+                return []
+            raise AssertionError(f"Unexpected db helper call: {getattr(func, '__name__', func)}")
+
+        with patch.object(inv, "get_tenant_id", return_value="demo-tenant"), patch.object(
+            inv, "_safe_db_call", side_effect=_safe_db_side_effect
+        ):
+            data = inv.list_invoice_checklist_notes_data(
+                checklist_station_id=12,
+                include_attachments=True,
+            )
+
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]["attachments"], [])
+
+
+class InvoiceChecklistDetailAttachmentBatchingTests(unittest.TestCase):
+    def test_get_checklist_detail_with_attachments_uses_single_batched_lookup(self):
+        detail_rows = [
+            {
+                "checklistId": "cid-1",
+                "checklistAccountCode": "TAAA",
+                "checklistYear": 2026,
+                "checklistMonth": 5,
+                "checklistStatus": "OPEN",
+                "checklistNote": "May",
+                "checklistDateCreated": "2026-05-20T10:00:00+07:00",
+                "checklistDateUpdated": "2026-05-20T10:01:00+07:00",
+                "stationRowId": 12,
+                "stationEstNum": 26001,
+                "stationCode": "KABC",
+                "stationStatus": "PENDING",
+                "stationDateCreated": "2026-05-20T10:00:00+07:00",
+                "stationDateUpdated": "2026-05-20T10:01:00+07:00",
+                "noteId": 5,
+                "noteAmount": 10.0,
+                "noteText": "first",
+                "noteDateCreated": "2026-05-20T10:00:00+07:00",
+                "noteDateUpdated": "2026-05-20T10:01:00+07:00",
+            },
+            {
+                "checklistId": "cid-1",
+                "checklistAccountCode": "TAAA",
+                "checklistYear": 2026,
+                "checklistMonth": 5,
+                "checklistStatus": "OPEN",
+                "checklistNote": "May",
+                "checklistDateCreated": "2026-05-20T10:00:00+07:00",
+                "checklistDateUpdated": "2026-05-20T10:01:00+07:00",
+                "stationRowId": 12,
+                "stationEstNum": 26001,
+                "stationCode": "KABC",
+                "stationStatus": "PENDING",
+                "stationDateCreated": "2026-05-20T10:00:00+07:00",
+                "stationDateUpdated": "2026-05-20T10:01:00+07:00",
+                "noteId": 6,
+                "noteAmount": 12.5,
+                "noteText": "second",
+                "noteDateCreated": "2026-05-20T10:02:00+07:00",
+                "noteDateUpdated": "2026-05-20T10:03:00+07:00",
+            },
+        ]
+        attachment_rows = [
+            {
+                "attachmentId": 21,
+                "attachmentNoteId": 5,
+                "attachmentOriginalFileName": "invoice-21.pdf",
+                "attachmentMimeType": "application/pdf",
+                "attachmentSource": "app_attachment",
+            },
+            {
+                "attachmentId": 22,
+                "attachmentNoteId": 6,
+                "attachmentFileName": "legacy-22.jpg",
+                "attachmentFileType": "image/jpeg",
+                "attachmentSource": "legacy_inv_note_attachment",
+            },
+            {
+                "attachmentId": 23,
+                "attachmentNoteId": 5,
+                "attachmentOriginalFileName": "invoice-23.pdf",
+                "attachmentMimeType": "application/pdf",
+                "attachmentSource": "legacy_inv_note_attachment",
+            },
+        ]
+        db_calls: list[object] = []
+
+        def _safe_db_side_effect(func, *args, **kwargs):
+            db_calls.append(func)
+            if func is inv.get_inv_checklist_detail_rows:
+                self.assertEqual(kwargs.get("checklist_id"), "cid-1")
+                return detail_rows
+            if func is inv.list_inv_note_attachments:
+                self.assertEqual(kwargs.get("note_ids"), [5, 6])
+                self.assertEqual(kwargs.get("tenant_slug"), "demo-tenant")
+                self.assertIsNone(kwargs.get("note_id"))
+                return attachment_rows
+            raise AssertionError(f"Unexpected db helper call: {getattr(func, '__name__', func)}")
+
+        with patch.object(inv, "get_tenant_id", return_value="Demo-Tenant"), patch.object(
+            inv, "_safe_db_call", side_effect=_safe_db_side_effect
+        ):
+            data = inv.get_invoice_checklists_data(
+                checklist_id="cid-1",
+                include_stations=True,
+                include_notes=True,
+                include_attachments=True,
+            )
+
+        stations = data["stations"]
+        notes = stations[0]["notes"]
+        self.assertEqual(data["id"], "cid-1")
+        self.assertEqual([note["id"] for note in notes], [5, 6])
+        self.assertEqual([item["id"] for item in notes[0]["attachments"]], [21, 23])
+        self.assertEqual([item["source"] for item in notes[0]["attachments"]], ["app_attachment", "legacy_inv_note_attachment"])
+        self.assertEqual([item["id"] for item in notes[1]["attachments"]], [22])
+        self.assertEqual(db_calls.count(inv.list_inv_note_attachments), 1)
+
 
 class InvoiceChecklistAttachmentStorageKeyTests(unittest.TestCase):
     def test_build_storage_key_uses_note_estnum_station_and_counter(self):

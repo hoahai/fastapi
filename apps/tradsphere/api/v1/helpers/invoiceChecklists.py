@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections import defaultdict
 from datetime import date
 from decimal import Decimal, InvalidOperation
 import json
@@ -603,6 +604,30 @@ def _serialize_note_row(row: dict) -> dict:
     return out
 
 
+def _list_serialized_note_attachments_by_note_id(
+    *,
+    note_ids: list[int],
+    tenant_slug: str | None,
+) -> dict[int, list[dict]]:
+    if not note_ids:
+        return {}
+    attachment_rows = _safe_db_call(
+        list_inv_note_attachments,
+        note_ids=[int(note_id) for note_id in note_ids],
+        tenant_slug=tenant_slug,
+    )
+    attachments_by_note_id: dict[int, list[dict]] = defaultdict(list)
+    for attachment_row in attachment_rows:
+        attachment_id = attachment_row.get("attachmentId")
+        attachment_note_id = attachment_row.get("attachmentNoteId")
+        if attachment_id is None or attachment_note_id is None:
+            continue
+        attachments_by_note_id[int(attachment_note_id)].append(
+            _serialize_attachment_row(attachment_row)
+        )
+    return dict(attachments_by_note_id)
+
+
 def _build_checklist_detail(
     rows: list[dict],
     *,
@@ -681,17 +706,13 @@ def _build_checklist_detail(
 
     if include_attachments_value and notes_by_id:
         tenant_slug = str(get_tenant_id() or "").strip().lower() or None
+        ordered_note_ids = [int(note_id) for note_id in notes_by_id.keys()]
+        attachments_by_note_id = _list_serialized_note_attachments_by_note_id(
+            note_ids=ordered_note_ids,
+            tenant_slug=tenant_slug,
+        )
         for note_id, note_entry in notes_by_id.items():
-            attachment_rows = _safe_db_call(
-                list_inv_note_attachments,
-                note_id=int(note_id),
-                tenant_slug=tenant_slug,
-            )
-            note_entry["attachments"] = [
-                _serialize_attachment_row(attachment_row)
-                for attachment_row in attachment_rows
-                if attachment_row.get("attachmentId") is not None
-            ]
+            note_entry["attachments"] = attachments_by_note_id.get(int(note_id), [])
 
     return checklist
 
@@ -985,17 +1006,12 @@ def list_invoice_checklist_notes_data(
 
     if include_attachments and notes_by_id:
         tenant_slug = str(get_tenant_id() or "").strip().lower() or None
+        attachments_by_note_id = _list_serialized_note_attachments_by_note_id(
+            note_ids=ordered_note_ids,
+            tenant_slug=tenant_slug,
+        )
         for note_id, note_entry in notes_by_id.items():
-            attachment_rows = _safe_db_call(
-                list_inv_note_attachments,
-                note_id=int(note_id),
-                tenant_slug=tenant_slug,
-            )
-            note_entry["attachments"] = [
-                _serialize_attachment_row(attachment_row)
-                for attachment_row in attachment_rows
-                if attachment_row.get("attachmentId") is not None
-            ]
+            note_entry["attachments"] = attachments_by_note_id.get(int(note_id), [])
 
     return [notes_by_id[key] for key in ordered_note_ids]
 
