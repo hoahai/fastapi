@@ -10,6 +10,8 @@ import { Spinner } from "@/components/ui/spinner";
 import { useApiRequest } from "@/hooks/useApiRequest";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { readBrowserCacheSnapshot, writeBrowserCache } from "@/lib/browserCache";
+import { TradspherePermissionDetailsSection } from "@/components/admin/TradspherePermissionDetailsSection";
+import { resolveAppScopedAdminSections } from "@/pages/appScopedAdminConfig";
 import { SectionCard } from "@shared/components";
 import { roleLabel } from "@shared/auth/accessAssignments";
 import { useAuth } from "@shared/auth/useAuth";
@@ -165,6 +167,10 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
   const [memberStatusFilter, setMemberStatusFilter] = useState<string>("all");
 
   const normalizedAppCode = String(appCode || "").trim().toLowerCase();
+  const enabledSections = useMemo(() => resolveAppScopedAdminSections(normalizedAppCode), [normalizedAppCode]);
+  const showUserAccessSection = enabledSections.includes("user_access");
+  const showTradspherePermissionDetails = enabledSections.includes("tradsphere_permission_details");
+  const needsUserDirectory = showUserAccessSection || showTradspherePermissionDetails;
   const appLabel = String(appName || normalizedAppCode || "App").trim() || "App";
   const currentTenantSlug = String(auth.accessProfile?.tenant?.slug || auth.tenantSlug || "-").trim() || "-";
   const scopedAdminCacheKey = useMemo(
@@ -262,8 +268,17 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
   }, [appLabel, isOnline, normalizedAppCode, requestJson, scopedAdminCacheKey]);
 
   useEffect(() => {
+    if (!needsUserDirectory) {
+      setUsers([]);
+      setLoadingUsers(false);
+      setRefreshingUsers(false);
+      setBackgroundRefreshingUsers(false);
+      setUsersError(null);
+      setCacheStatus(null);
+      return;
+    }
     void loadScopedUsers(false);
-  }, [loadScopedUsers]);
+  }, [loadScopedUsers, needsUserDirectory]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -347,7 +362,7 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
       : cacheStatus
         ? `Data source: ${cacheStatus.source}. Last updated ${formatRelativeTime(cacheStatus.fetchedAt)}.`
         : "No cached data yet";
-  const showCacheChip = !loadingUsers && !usersError;
+  const showCacheChip = needsUserDirectory && !loadingUsers && !usersError;
 
   async function handleLookup() {
     if (!canLookup) {
@@ -434,104 +449,107 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
         className="[&>div.relative]:min-h-[136px] [&>div.relative]:py-6 md:[&>div.relative]:min-h-[164px] md:[&>div.relative]:py-8"
       />
 
-      <SectionCard
-        title="Add Existing User"
-        description="Tenant/app admins can add active existing users only. Brand-new user invites remain Super Admin-only from global admin tools."
-        className="p-5"
-      >
+      {showUserAccessSection ? (
+        <SectionCard
+          title="Add Existing User"
+          description="Tenant/app admins can add active existing users only. Brand-new user invites remain Super Admin-only from global admin tools."
+          className="p-5"
+        >
 
-        <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
-          <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
-            <Search className="size-3.5" />
-            <span>Lookup Existing User</span>
-          </div>
-          <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
-            <Input
-              value={lookupEmail}
-              onChange={(event) => {
-                setLookupEmail(event.target.value);
-                setLookupResult(null);
-                setLookupMessage(null);
-              }}
-              placeholder="Enter user email"
-              type="email"
-              autoComplete="off"
-            />
-            <Button
-              type="button"
-              variant="outline"
-              disabled={!canLookup}
-              onClick={() => void handleLookup()}
-              className="min-w-32"
-            >
-              {lookingUp ? <Spinner className="size-4" /> : <Search className="size-4" />}
-              Find user
-            </Button>
-          </div>
-        </div>
-
-        {lookupMessage ? (
-          <p className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">{lookupMessage}</p>
-        ) : null}
-
-        {lookupResult ? (
-          <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
-            <div className="flex flex-wrap items-start justify-between gap-2">
-              <div>
-                <p className="text-sm font-semibold text-slate-900">{lookupResult.fullName || lookupResult.email || lookupResult.userId}</p>
-                <p className="text-xs text-slate-600">{lookupResult.email || lookupResult.userId}</p>
-              </div>
-              <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${statusChipClass(lookupResult.status)}`}>
-                {formatStatusChipLabel(lookupResult.status)}
-              </span>
+          <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+            <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+              <Search className="size-3.5" />
+              <span>Lookup Existing User</span>
             </div>
-
-            <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,220px)_auto] sm:items-center">
-              <AppDropdown
-                value={selectedRole}
-                onValueChange={(value) => setSelectedRole(value as RoleOption["value"])}
-                options={ROLE_OPTIONS.map((role) => ({ value: role.value, label: role.label }))}
-                searchable={false}
-                ariaLabel={`Select ${appLabel} role`}
+            <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+              <Input
+                value={lookupEmail}
+                onChange={(event) => {
+                  setLookupEmail(event.target.value);
+                  setLookupResult(null);
+                  setLookupMessage(null);
+                }}
+                placeholder="Enter user email"
+                type="email"
+                autoComplete="off"
               />
-              {canAdd ? (
-                <Button
-                  type="button"
-                  disabled={addingAccess}
-                  onClick={() => void handleAddAccess()}
-                  className="sm:justify-self-end"
-                >
-                  {addingAccess ? <Spinner className="size-4" /> : <UserPlus className="size-4" />}
-                  Add user access
-                </Button>
-              ) : null}
+              <Button
+                type="button"
+                variant="outline"
+                disabled={!canLookup}
+                onClick={() => void handleLookup()}
+                className="min-w-32"
+              >
+                {lookingUp ? <Spinner className="size-4" /> : <Search className="size-4" />}
+                Find user
+              </Button>
             </div>
           </div>
-        ) : null}
-      </SectionCard>
 
-      <SectionCard
-        title={`Current ${appLabel} Users`}
-        description={`Users currently assigned to this tenant + ${appLabel} scope.`}
-        actions={(
-          <div className="flex items-center gap-2">
-            <p className="text-sm text-slate-500">
-              {filteredUsers.length}/{users.length} users
-            </p>
-            <Button
-              type="button"
-              variant="outline"
-              disabled={refreshingUsers || backgroundRefreshingUsers || loadingUsers || !isOnline}
-              onClick={() => void loadScopedUsers(true)}
-              className="h-8 px-2.5 text-xs"
-            >
-              {refreshingUsers ? <Spinner className="size-3.5" /> : <RefreshCw className="size-3.5" />}
-              Refresh
-            </Button>
-          </div>
-        )}
-        className="p-5"
-      >
+          {lookupMessage ? (
+            <p className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">{lookupMessage}</p>
+          ) : null}
+
+          {lookupResult ? (
+            <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
+              <div className="flex flex-wrap items-start justify-between gap-2">
+                <div>
+                  <p className="text-sm font-semibold text-slate-900">{lookupResult.fullName || lookupResult.email || lookupResult.userId}</p>
+                  <p className="text-xs text-slate-600">{lookupResult.email || lookupResult.userId}</p>
+                </div>
+                <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${statusChipClass(lookupResult.status)}`}>
+                  {formatStatusChipLabel(lookupResult.status)}
+                </span>
+              </div>
+
+              <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,220px)_auto] sm:items-center">
+                <AppDropdown
+                  value={selectedRole}
+                  onValueChange={(value) => setSelectedRole(value as RoleOption["value"])}
+                  options={ROLE_OPTIONS.map((role) => ({ value: role.value, label: role.label }))}
+                  searchable={false}
+                  ariaLabel={`Select ${appLabel} role`}
+                />
+                {canAdd ? (
+                  <Button
+                    type="button"
+                    disabled={addingAccess}
+                    onClick={() => void handleAddAccess()}
+                    className="sm:justify-self-end"
+                  >
+                    {addingAccess ? <Spinner className="size-4" /> : <UserPlus className="size-4" />}
+                    Add user access
+                  </Button>
+                ) : null}
+              </div>
+            </div>
+          ) : null}
+        </SectionCard>
+      ) : null}
+
+      {showUserAccessSection ? (
+        <SectionCard
+          title={`Current ${appLabel} Users`}
+          description={`Users currently assigned to this tenant + ${appLabel} scope.`}
+          actions={(
+            <div className="flex items-center gap-2">
+              <p className="text-sm text-slate-500">
+                {filteredUsers.length}/{users.length} users
+              </p>
+              <Button
+                type="button"
+                variant="outline"
+                disabled={refreshingUsers || backgroundRefreshingUsers || loadingUsers || !isOnline}
+                onClick={() => void loadScopedUsers(true)}
+                className="h-8 px-2.5 text-xs"
+              >
+                {refreshingUsers ? <Spinner className="size-3.5" /> : <RefreshCw className="size-3.5" />}
+                Refresh
+              </Button>
+            </div>
+          )}
+          className="p-5"
+        >
 
         <div className="mt-4 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
           <div className="flex items-center gap-2 text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
@@ -584,34 +602,43 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
           </p>
         ) : null}
 
-        {filteredUsers.length > 0 ? (
-          <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-            {filteredUsers.map((user) => (
-              <article key={user.userId} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <p className="truncate text-sm font-semibold text-slate-900">{user.fullName || user.email || user.userId}</p>
-                    <p className="truncate text-xs text-slate-600">{user.email || user.userId}</p>
+          {filteredUsers.length > 0 ? (
+            <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+              {filteredUsers.map((user) => (
+                <article key={user.userId} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-semibold text-slate-900">{user.fullName || user.email || user.userId}</p>
+                      <p className="truncate text-xs text-slate-600">{user.email || user.userId}</p>
+                    </div>
+                    <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${statusChipClass(user.status)}`}>
+                      {formatStatusChipLabel(user.status)}
+                    </span>
                   </div>
-                  <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${statusChipClass(user.status)}`}>
-                    {formatStatusChipLabel(user.status)}
-                  </span>
-                </div>
-                <div className="mt-3 space-y-2">
-                  <div>
-                    <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Assignment</p>
-                    <div className="flex flex-wrap gap-1">
-                      <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
-                        {currentTenantSlug}: {appLabel} ({roleLabel(user.role || "viewer")})
-                      </span>
+                  <div className="mt-3 space-y-2">
+                    <div>
+                      <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Assignment</p>
+                      <div className="flex flex-wrap gap-1">
+                        <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
+                          {currentTenantSlug}: {appLabel} ({roleLabel(user.role || "viewer")})
+                        </span>
+                      </div>
                     </div>
                   </div>
-                </div>
-              </article>
-            ))}
-          </div>
-        ) : null}
-      </SectionCard>
+                </article>
+              ))}
+            </div>
+          ) : null}
+        </SectionCard>
+      ) : null}
+
+      {showTradspherePermissionDetails ? (
+        <TradspherePermissionDetailsSection
+          users={users}
+          loadingUsers={loadingUsers}
+          appLabel={appLabel}
+        />
+      ) : null}
 
       {showCacheChip ? (
         <div className="pointer-events-none fixed inset-x-0 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40">
