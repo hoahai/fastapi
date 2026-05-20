@@ -42,6 +42,7 @@ _DEFAULT_DB_TABLES = {
     "INVCHECKLISTS": "TradSphere_InvChecklist",
     "INVCHECKLISTSTATIONS": "TradSphere_InvChecklistStation",
     "INVCHECKLISTNOTES": "TradSphere_InvChecklistNote",
+    "APPATTACHMENTS": "AppAttachment",
     "INVNOTEATTACHMENTS": "TradSphere_InvNoteAttachment",
 }
 
@@ -66,6 +67,10 @@ _DB_KEY_ALIASES = {
     "inv_checklist_stations": "INVCHECKLISTSTATIONS",
     "invchecklistnotes": "INVCHECKLISTNOTES",
     "inv_checklist_notes": "INVCHECKLISTNOTES",
+    "appattachment": "APPATTACHMENTS",
+    "appattachments": "APPATTACHMENTS",
+    "app_attachment": "APPATTACHMENTS",
+    "app_attachments": "APPATTACHMENTS",
     "invnoteattachments": "INVNOTEATTACHMENTS",
     "inv_note_attachments": "INVNOTEATTACHMENTS",
 }

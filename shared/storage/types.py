@@ -13,6 +13,7 @@ class StoredAsset:
     original_filename: str
     mime_type: str
     file_size: int
+    provider_metadata: dict[str, object] | None = None
 
 
 @dataclass(frozen=True)
@@ -25,9 +26,11 @@ class StorageUploadInput:
     file_bytes: bytes
     original_filename: str
     mime_type: str
+    storage_key: str | None = None
 
 
 @dataclass(frozen=True)
 class DeleteAssetInput:
     provider_resource_type: str | None
     provider_public_id: str | None
+    mime_type: str | None = None

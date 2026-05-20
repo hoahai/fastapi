@@ -1,4 +1,5 @@
 import unittest
+from decimal import Decimal
 from unittest.mock import patch
 
 from apps.tradsphere.api.v1.helpers import config as trad_config
@@ -11,6 +12,7 @@ _TABLES = {
     "INVCHECKLISTS": "TradSphere_InvChecklist",
     "INVCHECKLISTSTATIONS": "TradSphere_InvChecklistStation",
     "INVCHECKLISTNOTES": "TradSphere_InvChecklistNote",
+    "APPATTACHMENTS": "AppAttachment",
     "INVNOTEATTACHMENTS": "TradSphere_InvNoteAttachment",
     "ACCOUNTS": "TradSphere_Accounts",
     "MASTERACCOUNTS": "Accounts",
@@ -297,7 +299,11 @@ class InvoiceChecklistInvalidationTests(unittest.TestCase):
     def test_note_and_attachment_mutations_invalidate_note_detail_cache(self):
         with patch.object(dq, "run_transaction", return_value=1), patch.object(
             dq, "_invalidate_inv_checklist_note_detail_cache"
-        ) as mock_invalidate:
+        ) as mock_invalidate, patch.object(
+            dq,
+            "get_inv_note_attachment_row",
+            return_value={"attachmentSource": "legacy_inv_note_attachment"},
+        ):
             dq.insert_inv_checklist_note(
                 {
                     "checklistStationId": 12,
@@ -322,41 +328,25 @@ class InvoiceChecklistInvalidationTests(unittest.TestCase):
 
 
 class InvoiceChecklistAttachmentOwnershipTests(unittest.TestCase):
-    def test_get_attachment_row_enforces_tenant_and_ownership_when_columns_exist(self):
-        attachment_columns = [
+    def test_get_attachment_row_queries_app_attachment_with_tenant_filter(self):
+        app_attachment_columns = [
             "id",
-            "noteId",
-            "url",
-            "fileName",
-            "fileType",
-            "dateCreated",
-            "dateUpdated",
-            "tenantSlug",
+            "appCode",
             "ownerEntityType",
             "ownerEntityId",
+            "storageProvider",
+            "accessUrl",
+            "originalFileName",
+            "mimeType",
+            "fileSize",
+            "storageKey",
+            "providerMetadata",
+            "uploadedBy",
+            "tenantSlug",
             "deletedAt",
+            "dateCreated",
+            "dateUpdated",
         ]
-        with patch.object(dq, "get_db_tables", return_value=dict(_TABLES)), patch.object(
-            dq, "_get_table_columns", return_value=attachment_columns
-        ), patch.object(dq, "fetch_all", return_value=[]) as mock_fetch:
-            row = dq.get_inv_note_attachment_row(
-                attachment_id=21,
-                tenant_slug="demo-tenant",
-            )
-
-        self.assertIsNone(row)
-        query = mock_fetch.call_args.args[0]
-        params = mock_fetch.call_args.args[1]
-        self.assertIn("JOIN `TradSphere_InvChecklistNote` n ON n.id = a.noteId", query)
-        self.assertIn("JOIN `TradSphere_InvChecklistStation` s ON s.id = n.checklistStationId", query)
-        self.assertIn("JOIN `TradSphere_InvChecklist` c ON c.id = s.checklistId", query)
-        self.assertIn("a.deletedAt IS NULL", query)
-        self.assertIn("a.ownerEntityType = 'invoice_checklist_note'", query)
-        self.assertIn("a.ownerEntityId = CAST(n.id AS CHAR)", query)
-        self.assertIn("LOWER(a.tenantSlug) = %s", query)
-        self.assertEqual(params, (21, "demo-tenant"))
-
-    def test_get_attachment_row_keeps_join_guard_without_tenant_column(self):
         legacy_columns = [
             "id",
             "noteId",
@@ -366,8 +356,54 @@ class InvoiceChecklistAttachmentOwnershipTests(unittest.TestCase):
             "dateCreated",
             "dateUpdated",
         ]
+
+        def _columns_side_effect(*, table_name_quoted):
+            if "AppAttachment" in table_name_quoted:
+                return app_attachment_columns
+            return legacy_columns
+
         with patch.object(dq, "get_db_tables", return_value=dict(_TABLES)), patch.object(
-            dq, "_get_table_columns", return_value=legacy_columns
+            dq, "_get_table_columns", side_effect=_columns_side_effect
+        ), patch.object(dq, "fetch_all", return_value=[]) as mock_fetch:
+            row = dq.get_inv_note_attachment_row(
+                attachment_id=21,
+                tenant_slug="demo-tenant",
+            )
+
+        self.assertIsNone(row)
+        queries = [str(call.args[0]) for call in mock_fetch.call_args_list]
+        params_list = [call.args[1] for call in mock_fetch.call_args_list]
+        joined_queries = "\n".join(queries)
+        app_call_index = next((idx for idx, query in enumerate(queries) if "FROM `AppAttachment` aa" in query), -1)
+        self.assertGreaterEqual(app_call_index, 0)
+        params = params_list[app_call_index]
+        self.assertIn("FROM `AppAttachment` aa", joined_queries)
+        self.assertIn("aa.appCode = %s", joined_queries)
+        self.assertIn("aa.ownerEntityType = %s", joined_queries)
+        self.assertIn("LOWER(aa.tenantSlug) = %s", joined_queries)
+        self.assertIn("JOIN `TradSphere_InvChecklistNote` n ON n.id = CAST(aa.ownerEntityId AS UNSIGNED)", joined_queries)
+        self.assertIn("JOIN `TradSphere_InvChecklistStation` s ON s.id = n.checklistStationId", joined_queries)
+        self.assertIn("JOIN `TradSphere_InvChecklist` c ON c.id = s.checklistId", joined_queries)
+        self.assertEqual(params, ("tradsphere", "invoice_checklist_note", 21, "demo-tenant"))
+
+    def test_get_attachment_row_falls_back_to_legacy_when_app_table_missing(self):
+        legacy_columns = [
+            "id",
+            "noteId",
+            "url",
+            "fileName",
+            "fileType",
+            "dateCreated",
+            "dateUpdated",
+        ]
+
+        def _columns_side_effect(*, table_name_quoted):
+            if "AppAttachment" in table_name_quoted:
+                raise RuntimeError("table missing")
+            return legacy_columns
+
+        with patch.object(dq, "get_db_tables", return_value=dict(_TABLES)), patch.object(
+            dq, "_get_table_columns", side_effect=_columns_side_effect
         ), patch.object(dq, "fetch_all", return_value=[]) as mock_fetch:
             row = dq.get_inv_note_attachment_row(
                 attachment_id=8,
@@ -377,22 +413,14 @@ class InvoiceChecklistAttachmentOwnershipTests(unittest.TestCase):
         self.assertIsNone(row)
         query = mock_fetch.call_args.args[0]
         params = mock_fetch.call_args.args[1]
+        self.assertNotIn("FROM `AppAttachment` aa", query)
         self.assertIn("JOIN `TradSphere_InvChecklistNote` n ON n.id = a.noteId", query)
         self.assertNotIn("tenantSlug", query)
         self.assertEqual(params, (8,))
 
-    def test_delete_attachment_uses_join_and_tenant_predicate(self):
-        attachment_columns = [
+    def test_delete_attachment_soft_deletes_app_attachment(self):
+        app_columns = [
             "id",
-            "noteId",
-            "url",
-            "fileName",
-            "fileType",
-            "dateCreated",
-            "dateUpdated",
-            "tenantSlug",
-            "ownerEntityType",
-            "ownerEntityId",
             "deletedAt",
         ]
         captured: dict[str, object] = {}
@@ -408,8 +436,12 @@ class InvoiceChecklistAttachmentOwnershipTests(unittest.TestCase):
             return work(_Cursor())
 
         with patch.object(dq, "get_db_tables", return_value=dict(_TABLES)), patch.object(
-            dq, "_get_table_columns", return_value=attachment_columns
-        ), patch.object(dq, "run_transaction", side_effect=_fake_run_transaction):
+            dq, "_get_table_columns", return_value=app_columns
+        ), patch.object(dq, "run_transaction", side_effect=_fake_run_transaction), patch.object(
+            dq,
+            "get_inv_note_attachment_row",
+            return_value={"attachmentSource": "app_attachment"},
+        ):
             deleted = dq.delete_inv_note_attachment(
                 attachment_id=34,
                 tenant_slug="demo-tenant",
@@ -418,10 +450,48 @@ class InvoiceChecklistAttachmentOwnershipTests(unittest.TestCase):
         self.assertEqual(deleted, 1)
         query = str(captured["query"])
         params = captured["params"]
-        self.assertIn("UPDATE `TradSphere_InvNoteAttachment` a", query)
-        self.assertIn("JOIN `TradSphere_InvChecklistNote` n ON n.id = a.noteId", query)
-        self.assertIn("LOWER(a.tenantSlug) = %s", query)
-        self.assertEqual(params, (34, "demo-tenant"))
+        self.assertIn("UPDATE `AppAttachment` SET deletedAt = CURRENT_TIMESTAMP WHERE id = %s", query)
+        self.assertEqual(params, (34,))
+
+    def test_soft_delete_app_attachments_for_invoice_note_uses_owner_scope(self):
+        app_columns = [
+            "id",
+            "appCode",
+            "ownerEntityType",
+            "ownerEntityId",
+            "tenantSlug",
+            "deletedAt",
+        ]
+        captured: dict[str, object] = {}
+
+        def _fake_run_transaction(work):
+            class _Cursor:
+                rowcount = 2
+
+                def execute(self, query, params):
+                    captured["query"] = query
+                    captured["params"] = params
+
+            return work(_Cursor())
+
+        with patch.object(dq, "get_db_tables", return_value=dict(_TABLES)), patch.object(
+            dq, "_get_table_columns", return_value=app_columns
+        ), patch.object(dq, "run_transaction", side_effect=_fake_run_transaction):
+            deleted = dq.soft_delete_app_attachments_for_invoice_note(
+                note_id=133,
+                tenant_slug="demo-tenant",
+            )
+
+        self.assertEqual(deleted, 2)
+        query = str(captured["query"])
+        params = captured["params"]
+        self.assertIn("UPDATE `AppAttachment` SET deletedAt = CURRENT_TIMESTAMP", query)
+        self.assertIn("appCode = %s", query)
+        self.assertIn("ownerEntityType = %s", query)
+        self.assertIn("ownerEntityId = %s", query)
+        self.assertIn("LOWER(tenantSlug) = %s", query)
+        self.assertIn("deletedAt IS NULL", query)
+        self.assertEqual(params, ("tradsphere", "invoice_checklist_note", "133", "demo-tenant"))
 
 
 class InvoiceChecklistSyncInvalidationTests(unittest.TestCase):
@@ -438,21 +508,36 @@ class InvoiceChecklistSyncInvalidationTests(unittest.TestCase):
             "_build_expected_schedule_pairs_by_account",
             return_value={"TAAA": {(2042, "KABC")}},
         ), patch.object(
+            inv.uuid,
+            "uuid4",
+            return_value="cid",
+        ), patch.object(
             inv,
             "list_invoice_checklists_data",
             side_effect=[[], [checklist_row], [checklist_row]],
         ), patch.object(
             inv,
-            "create_invoice_checklist_data",
-            return_value=checklist_row,
+            "insert_inv_checklists_for_sync",
+            return_value=1,
         ), patch.object(
             inv,
             "list_inv_checklist_station_rows_for_checklists",
-            return_value=[],
+            side_effect=[
+                [],
+                [
+                    {
+                        "id": 99,
+                        "checklistId": "cid",
+                        "estNum": 2042,
+                        "stationCode": "KABC",
+                        "status": None,
+                    }
+                ],
+            ],
         ), patch.object(
             inv,
-            "insert_inv_checklist_station",
-            return_value=99,
+            "insert_inv_checklist_stations_for_sync",
+            return_value=1,
         ), patch.object(
             inv,
             "_build_mismatch_rows_for_period",
@@ -474,6 +559,558 @@ class InvoiceChecklistSyncInvalidationTests(unittest.TestCase):
         self.assertEqual(result["createdChecklistsCount"], 1)
         self.assertEqual(result["createdStationsCount"], 1)
         mock_invalidate.assert_called_once()
+
+
+class InvoiceChecklistNoteDeleteAttachmentCleanupTests(unittest.TestCase):
+    def test_delete_note_cleans_linked_attachments_before_note_delete(self):
+        attachment_rows = [
+            {
+                "attachmentId": 21,
+                "attachmentStorageProvider": "cloudinary",
+                "attachmentStorageKey": "tradsphere/tenants/taaa/invoice-checklist-note/5/a1",
+                "attachmentProviderMetadata": {"resource_type": "image"},
+            }
+        ]
+        with patch.object(inv, "get_tenant_id", return_value="taaa"), patch.object(
+            inv, "_safe_db_call", side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)
+        ), patch.object(
+            inv, "get_inv_checklist_note_row", return_value={"id": 5}
+        ), patch.object(
+            inv, "list_inv_note_attachments", return_value=attachment_rows
+        ) as mock_list_attachments, patch.object(
+            inv, "delete_file"
+        ) as mock_delete_file, patch.object(
+            inv, "delete_inv_note_attachment", return_value=1
+        ) as mock_delete_attachment_row, patch.object(
+            inv, "delete_inv_checklist_note", return_value=1
+        ) as mock_delete_note:
+            result = inv.delete_invoice_checklist_note_data(note_id=5)
+
+        self.assertEqual(result, {"deleted": 1, "id": 5})
+        mock_list_attachments.assert_called_once_with(note_id=5, tenant_slug="taaa")
+        mock_delete_file.assert_called_once()
+        mock_delete_attachment_row.assert_called_once_with(attachment_id=21, tenant_slug="taaa")
+        mock_delete_note.assert_called_once_with(note_id=5)
+
+    def test_delete_note_continues_when_storage_delete_fails(self):
+        attachment_rows = [
+            {
+                "attachmentId": 21,
+                "attachmentStorageProvider": "cloudinary",
+                "attachmentStorageKey": "bad-key",
+            }
+        ]
+        with patch.object(inv, "get_tenant_id", return_value="taaa"), patch.object(
+            inv, "_safe_db_call", side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)
+        ), patch.object(
+            inv, "get_inv_checklist_note_row", return_value={"id": 5}
+        ), patch.object(
+            inv, "list_inv_note_attachments", return_value=attachment_rows
+        ), patch.object(
+            inv, "delete_file", side_effect=RuntimeError("delete failed")
+        ), patch.object(
+            inv, "delete_inv_note_attachment", return_value=1
+        ) as mock_delete_attachment_row, patch.object(
+            inv, "delete_inv_checklist_note", return_value=1
+        ) as mock_delete_note:
+            result = inv.delete_invoice_checklist_note_data(note_id=5)
+
+        self.assertEqual(result, {"deleted": 1, "id": 5})
+        mock_delete_attachment_row.assert_called_once_with(attachment_id=21, tenant_slug="taaa")
+        mock_delete_note.assert_called_once_with(note_id=5)
+
+    def test_delete_note_runs_owner_scope_soft_delete_when_list_is_empty(self):
+        with patch.object(inv, "get_tenant_id", return_value="taaa"), patch.object(
+            inv, "_safe_db_call", side_effect=lambda func, *args, **kwargs: func(*args, **kwargs)
+        ), patch.object(
+            inv, "get_inv_checklist_note_row", return_value={"id": 5}
+        ), patch.object(
+            inv, "list_inv_note_attachments", return_value=[]
+        ), patch.object(
+            inv, "soft_delete_app_attachments_for_invoice_note", return_value=1
+        ) as mock_soft_delete, patch.object(
+            inv, "delete_inv_checklist_note", return_value=1
+        ):
+            result = inv.delete_invoice_checklist_note_data(note_id=5)
+
+        self.assertEqual(result, {"deleted": 1, "id": 5})
+        mock_soft_delete.assert_called_once_with(note_id=5, tenant_slug="taaa")
+
+
+class InvoiceChecklistNoteInsertQueryTests(unittest.TestCase):
+    def test_insert_note_omits_amount_column_when_not_provided(self):
+        captured: dict[str, object] = {}
+
+        def _fake_run_transaction(work):
+            class _Cursor:
+                lastrowid = 17
+
+                def execute(self, query, params):
+                    captured["query"] = query
+                    captured["params"] = params
+
+            return work(_Cursor())
+
+        with patch.object(dq, "get_db_tables", return_value=dict(_TABLES)), patch.object(
+            dq, "run_transaction", side_effect=_fake_run_transaction
+        ), patch.object(dq, "_invalidate_inv_checklist_note_detail_cache", return_value=1):
+            inserted = dq.insert_inv_checklist_note(
+                {
+                    "checklistStationId": 12,
+                    "note": "Note only",
+                }
+            )
+
+        self.assertEqual(inserted, 17)
+        self.assertIn("(checklistStationId, note)", str(captured["query"]))
+        self.assertEqual(captured["params"], (12, "Note only"))
+
+
+class InvoiceChecklistNoteValidationTests(unittest.TestCase):
+    def test_normalize_note_payload_accepts_note_without_amount(self):
+        with patch.object(inv, "get_inv_checklist_station_row", return_value={"id": 12}):
+            normalized = inv._normalize_note_payload(  # pylint: disable=protected-access
+                {"checklistStationId": 12, "note": "Credit memo expected"}
+            )
+
+        self.assertEqual(normalized["checklistStationId"], 12)
+        self.assertIsNone(normalized["amount"])
+        self.assertEqual(normalized["note"], "Credit memo expected")
+
+    def test_normalize_note_payload_accepts_amount_without_note(self):
+        with patch.object(inv, "get_inv_checklist_station_row", return_value={"id": 12}):
+            normalized = inv._normalize_note_payload(  # pylint: disable=protected-access
+                {"checklistStationId": 12, "amount": "125.50"}
+            )
+
+        self.assertEqual(normalized["checklistStationId"], 12)
+        self.assertEqual(normalized["amount"], Decimal("125.50"))
+        self.assertIsNone(normalized["note"])
+
+    def test_normalize_note_payload_rejects_when_amount_and_note_missing(self):
+        with patch.object(inv, "get_inv_checklist_station_row", return_value={"id": 12}):
+            with self.assertRaisesRegex(ValueError, "At least one of amount or note is required"):
+                inv._normalize_note_payload({"checklistStationId": 12})  # pylint: disable=protected-access
+
+    def test_update_note_allows_null_amount_when_existing_note_is_present(self):
+        existing_row = {
+            "id": 5,
+            "checklistStationId": 12,
+            "amount": Decimal("10.00"),
+            "note": "Existing note",
+        }
+        updated_row = {
+            "id": 5,
+            "checklistStationId": 12,
+            "amount": None,
+            "note": "Existing note",
+        }
+        with patch.object(inv, "get_inv_checklist_note_row", side_effect=[existing_row, updated_row]), patch.object(
+            inv, "update_inv_checklist_note", return_value=1
+        ) as mock_update:
+            result = inv.update_invoice_checklist_note_data(payload={"noteId": 5, "amount": None})
+
+        self.assertEqual(result["id"], 5)
+        self.assertIsNone(result["amount"])
+        mock_update.assert_called_once_with(note_id=5, fields={"amount": None})
+
+    def test_update_note_rejects_when_amount_and_note_become_empty(self):
+        existing_row = {
+            "id": 5,
+            "checklistStationId": 12,
+            "amount": None,
+            "note": None,
+        }
+        with patch.object(inv, "get_inv_checklist_note_row", return_value=existing_row):
+            with self.assertRaisesRegex(ValueError, "At least one of amount or note is required"):
+                inv.update_invoice_checklist_note_data(payload={"noteId": 5, "note": "   "})
+
+
+class InvoiceChecklistNoteDateSerializationTests(unittest.TestCase):
+    def test_list_notes_accepts_cached_string_timestamps(self):
+        rows = [
+            {
+                "noteId": 5,
+                "checklistStationId": 12,
+                "checklistId": "cid",
+                "estNum": 26001,
+                "stationCode": "KABC",
+                "amount": 10.0,
+                "note": "x",
+                "dateCreated": "2026-05-20T10:00:00+07:00",
+                "dateUpdated": "2026-05-20T10:01:00+07:00",
+            }
+        ]
+        with patch.object(inv, "_safe_db_call", side_effect=lambda func, *args, **kwargs: rows):
+            data = inv.list_invoice_checklist_notes_data(
+                checklist_station_id=12,
+                include_attachments=False,
+            )
+
+        self.assertEqual(len(data), 1)
+        self.assertEqual(data[0]["dateCreated"], "2026-05-20T10:00:00+07:00")
+        self.assertEqual(data[0]["dateUpdated"], "2026-05-20T10:01:00+07:00")
+
+
+class InvoiceChecklistAttachmentStorageKeyTests(unittest.TestCase):
+    def test_build_storage_key_uses_note_estnum_station_and_counter(self):
+        key = inv._build_invoice_note_storage_key(
+            note_id=15,
+            est_num=2001,
+            station_code="K-ABC",
+            counter=3,
+        )
+        self.assertEqual(key, "15_2001_kabc_3")
+
+
+class InvoiceChecklistStoredAttachmentFileNameTests(unittest.TestCase):
+    def test_build_stored_attachment_file_name_uses_public_id_and_format(self):
+        file_name = inv._build_stored_attachment_file_name(  # pylint: disable=protected-access
+            provider_public_id="tradsphere/tenants/taaa/invoice-checklist-note/15_2001_kabc_3",
+            provider_metadata={"format": "png"},
+            mime_type="image/png",
+            fallback_name="image.png",
+        )
+        self.assertEqual(file_name, "15_2001_kabc_3.png")
+
+    def test_build_stored_attachment_file_name_keeps_existing_extension(self):
+        file_name = inv._build_stored_attachment_file_name(  # pylint: disable=protected-access
+            provider_public_id="tradsphere/tenants/taaa/invoice-checklist-note/15_2001_kabc_3.webp",
+            provider_metadata={"format": "png"},
+            mime_type="image/png",
+            fallback_name="image.png",
+        )
+        self.assertEqual(file_name, "15_2001_kabc_3.webp")
+
+
+class InvoiceChecklistBulkSaveFlowTests(unittest.TestCase):
+    def test_bulk_save_returns_id_mappings_for_local_checklist_station_and_note(self):
+        saved_kwargs: dict[str, object] = {}
+
+        def _safe_db_side_effect(func, *args, **kwargs):
+            if func is inv.save_inv_checklist_bulk_changes:
+                saved_kwargs.update(kwargs)
+                return {
+                    "checklistIds": {"local-checklist-1": "server-checklist-1"},
+                    "stationIds": {"-10": 910},
+                    "noteIds": {"-20": 920},
+                }
+            raise AssertionError(f"Unexpected db helper call: {getattr(func, '__name__', func)}")
+
+        payload = {
+            "year": 2026,
+            "month": 4,
+            "selectedChecklistId": "local-checklist-1",
+            "createChecklists": [
+                {
+                    "clientChecklistId": "local-checklist-1",
+                    "accountCode": "taaa",
+                    "year": 2026,
+                    "month": 4,
+                    "status": "OPEN",
+                    "note": "April review",
+                }
+            ],
+            "checklistUpdates": [],
+            "deleteChecklistIds": [],
+            "createStations": [
+                {
+                    "clientStationId": "-10",
+                    "checklistClientId": "local-checklist-1",
+                    "estNum": 2042,
+                    "stationCode": "kabc",
+                    "status": "PENDING",
+                }
+            ],
+            "stationUpdates": [],
+            "deleteStationIds": [],
+            "createNotes": [
+                {
+                    "clientNoteId": "-20",
+                    "checklistStationClientId": "-10",
+                    "amount": "125.50",
+                    "note": "Credit memo expected",
+                }
+            ],
+            "noteUpdates": [],
+            "deleteNoteIds": [],
+        }
+
+        with patch.object(inv.uuid, "uuid4", return_value="server-checklist-1"), patch.object(
+            inv, "ensure_master_account_codes_exist", return_value=None
+        ), patch.object(
+            inv, "ensure_est_nums_exist", return_value=None
+        ), patch.object(
+            inv, "ensure_station_codes_exist", return_value=None
+        ), patch.object(
+            inv, "_safe_db_call", side_effect=_safe_db_side_effect
+        ), patch.object(
+            inv,
+            "get_invoice_checklists_data",
+            return_value={"id": "server-checklist-1", "stations": [], "status": "OPEN", "note": "April review"},
+        ), patch.object(
+            inv,
+            "list_invoice_checklists_data",
+            return_value=[{"id": "server-checklist-1", "accountCode": "TAAA", "year": 2026, "month": 4}],
+        ):
+            result = inv.bulk_save_invoice_checklists_data(payload=payload)
+
+        self.assertEqual(result["selectedChecklistId"], "server-checklist-1")
+        self.assertEqual(result["mappings"]["checklistIds"], {"local-checklist-1": "server-checklist-1"})
+        self.assertEqual(result["mappings"]["stationIds"], {"-10": 910})
+        self.assertEqual(result["mappings"]["noteIds"], {"-20": 920})
+        self.assertEqual(result["summary"]["createdChecklistsCount"], 1)
+        self.assertEqual(result["summary"]["createdStationsCount"], 1)
+        self.assertEqual(result["summary"]["createdNotesCount"], 1)
+        checklist_creates = saved_kwargs.get("checklist_creates") or []
+        station_creates = saved_kwargs.get("station_creates") or []
+        note_creates = saved_kwargs.get("note_creates") or []
+        self.assertEqual(checklist_creates[0]["id"], "server-checklist-1")
+        self.assertEqual(station_creates[0]["checklistId"], "server-checklist-1")
+        self.assertEqual(note_creates[0]["checklistStationClientId"], "-10")
+
+    def test_bulk_save_combines_create_update_delete_groups(self):
+        save_call_kwargs: dict[str, object] = {}
+
+        def _safe_db_side_effect(func, *args, **kwargs):
+            if func is inv.list_inv_checklist_rows_by_ids:
+                return [{"id": checklist_id} for checklist_id in (kwargs.get("checklist_ids") or [])]
+            if func is inv.list_inv_checklist_station_rows_by_ids:
+                return [{"id": station_id} for station_id in (kwargs.get("station_row_ids") or [])]
+            if func is inv.list_inv_checklist_note_rows_by_ids:
+                return [{"id": note_id, "note": "existing"} for note_id in (kwargs.get("note_ids") or [])]
+            if func is inv.save_inv_checklist_bulk_changes:
+                save_call_kwargs.update(kwargs)
+                return {"checklistIds": {}, "stationIds": {}, "noteIds": {}}
+            raise AssertionError(f"Unexpected db helper call: {getattr(func, '__name__', func)}")
+
+        payload = {
+            "year": 2026,
+            "month": 4,
+            "selectedChecklistId": "checklist-a",
+            "createChecklists": [],
+            "checklistUpdates": [{"checklistId": "checklist-a", "status": "DONE"}],
+            "deleteChecklistIds": ["checklist-z", "checklist-z"],
+            "createStations": [],
+            "stationUpdates": [{"stationRowId": 10, "status": "MATCHED"}],
+            "deleteStationIds": [9, 9],
+            "createNotes": [],
+            "noteUpdates": [{"noteId": 8, "note": "Updated"}],
+            "deleteNoteIds": [7, 7],
+        }
+
+        with patch.object(inv, "ensure_master_account_codes_exist", return_value=None), patch.object(
+            inv, "ensure_est_nums_exist", return_value=None
+        ), patch.object(
+            inv, "ensure_station_codes_exist", return_value=None
+        ), patch.object(
+            inv, "_safe_db_call", side_effect=_safe_db_side_effect
+        ), patch.object(
+            inv,
+            "get_invoice_checklists_data",
+            return_value={"id": "checklist-a", "stations": [], "status": "DONE", "note": ""},
+        ), patch.object(inv, "list_invoice_checklists_data", return_value=[]):
+            result = inv.bulk_save_invoice_checklists_data(payload=payload)
+
+        self.assertEqual(result["deleted"]["checklistIds"], ["checklist-z"])
+        self.assertEqual(result["deleted"]["stationIds"], [9])
+        self.assertEqual(result["deleted"]["noteIds"], [7])
+        self.assertEqual(result["summary"]["updatedChecklistsCount"], 1)
+        self.assertEqual(result["summary"]["updatedStationsCount"], 1)
+        self.assertEqual(result["summary"]["updatedNotesCount"], 1)
+        self.assertEqual(save_call_kwargs["checklist_deletes"], ["checklist-z"])
+        self.assertEqual(save_call_kwargs["station_deletes"], [9])
+        self.assertEqual(save_call_kwargs["note_deletes"], [7])
+        self.assertEqual(len(save_call_kwargs["checklist_updates"]), 1)
+        self.assertEqual(len(save_call_kwargs["station_updates"]), 1)
+        self.assertEqual(len(save_call_kwargs["note_updates"]), 1)
+
+    def test_bulk_save_rejects_missing_checklist_before_write(self):
+        def _safe_db_side_effect(func, *args, **kwargs):
+            if func is inv.list_inv_checklist_rows_by_ids:
+                return []
+            if func is inv.save_inv_checklist_bulk_changes:
+                raise AssertionError("save_inv_checklist_bulk_changes must not run for invalid payload")
+            raise AssertionError(f"Unexpected db helper call: {getattr(func, '__name__', func)}")
+
+        payload = {
+            "year": 2026,
+            "month": 4,
+            "createChecklists": [],
+            "checklistUpdates": [],
+            "deleteChecklistIds": ["missing-checklist-id"],
+            "createStations": [],
+            "stationUpdates": [],
+            "deleteStationIds": [],
+            "createNotes": [],
+            "noteUpdates": [],
+            "deleteNoteIds": [],
+        }
+
+        with patch.object(inv, "_safe_db_call", side_effect=_safe_db_side_effect):
+            with self.assertRaisesRegex(inv.NotFoundError, "Checklist not found: missing-checklist-id"):
+                inv.bulk_save_invoice_checklists_data(payload=payload)
+
+    def test_bulk_save_rejects_missing_station_before_write(self):
+        def _safe_db_side_effect(func, *args, **kwargs):
+            if func is inv.list_inv_checklist_station_rows_by_ids:
+                return []
+            if func is inv.save_inv_checklist_bulk_changes:
+                raise AssertionError("save_inv_checklist_bulk_changes must not run for invalid payload")
+            raise AssertionError(f"Unexpected db helper call: {getattr(func, '__name__', func)}")
+
+        payload = {
+            "year": 2026,
+            "month": 4,
+            "createChecklists": [],
+            "checklistUpdates": [],
+            "deleteChecklistIds": [],
+            "createStations": [],
+            "stationUpdates": [],
+            "deleteStationIds": [9991],
+            "createNotes": [],
+            "noteUpdates": [],
+            "deleteNoteIds": [],
+        }
+
+        with patch.object(inv, "_safe_db_call", side_effect=_safe_db_side_effect):
+            with self.assertRaisesRegex(inv.NotFoundError, "Checklist station not found: 9991"):
+                inv.bulk_save_invoice_checklists_data(payload=payload)
+
+    def test_bulk_save_rejects_missing_note_before_write(self):
+        def _safe_db_side_effect(func, *args, **kwargs):
+            if func is inv.list_inv_checklist_note_rows_by_ids:
+                return []
+            if func is inv.save_inv_checklist_bulk_changes:
+                raise AssertionError("save_inv_checklist_bulk_changes must not run for invalid payload")
+            raise AssertionError(f"Unexpected db helper call: {getattr(func, '__name__', func)}")
+
+        payload = {
+            "year": 2026,
+            "month": 4,
+            "createChecklists": [],
+            "checklistUpdates": [],
+            "deleteChecklistIds": [],
+            "createStations": [],
+            "stationUpdates": [],
+            "deleteStationIds": [],
+            "createNotes": [],
+            "noteUpdates": [],
+            "deleteNoteIds": [9992],
+        }
+
+        with patch.object(inv, "_safe_db_call", side_effect=_safe_db_side_effect):
+            with self.assertRaisesRegex(inv.NotFoundError, "Checklist note not found: 9992"):
+                inv.bulk_save_invoice_checklists_data(payload=payload)
+
+
+class InvoiceChecklistBulkSaveDbTests(unittest.TestCase):
+    def test_bulk_save_db_write_failure_does_not_invalidate_caches(self):
+        class _Cursor:
+            def __init__(self):
+                self.lastrowid = 100
+                self.rowcount = 1
+
+            def executemany(self, query, params):
+                return None
+
+            def execute(self, query, params):
+                if "UPDATE `TradSphere_InvChecklist`" in str(query):
+                    raise RuntimeError("forced db failure")
+                return None
+
+        def _fake_run_transaction(work):
+            return work(_Cursor())
+
+        with patch.object(dq, "get_db_tables", return_value=dict(_TABLES)), patch.object(
+            dq, "_get_app_attachment_table_name", return_value="`AppAttachment`"
+        ), patch.object(
+            dq, "_get_app_attachment_columns", return_value=[]
+        ), patch.object(
+            dq, "_get_inv_note_attachment_columns", return_value=[]
+        ), patch.object(
+            dq, "run_transaction", side_effect=_fake_run_transaction
+        ), patch.object(
+            dq, "_invalidate_inv_checklist_all_related_scopes"
+        ) as mock_invalidate_all, patch.object(
+            dq, "_invalidate_inv_checklist_note_detail_cache"
+        ) as mock_invalidate_note:
+            with self.assertRaisesRegex(RuntimeError, "forced db failure"):
+                dq.save_inv_checklist_bulk_changes(
+                    checklist_creates=[
+                        {
+                            "clientChecklistId": "local-1",
+                            "id": "server-1",
+                            "accountCode": "TAAA",
+                            "year": 2026,
+                            "month": 4,
+                            "status": "OPEN",
+                            "note": "n",
+                        }
+                    ],
+                    checklist_updates=[{"checklistId": "server-1", "status": "DONE"}],
+                    checklist_deletes=[],
+                    station_creates=[],
+                    station_updates=[],
+                    station_deletes=[],
+                    note_creates=[],
+                    note_updates=[],
+                    note_deletes=[],
+                    tenant_slug="demo-tenant",
+                )
+
+        mock_invalidate_all.assert_not_called()
+        mock_invalidate_note.assert_not_called()
+
+    def test_bulk_save_note_delete_scopes_app_attachment_update_by_tenant(self):
+        executed: list[tuple[str, tuple[object, ...]]] = []
+
+        class _Cursor:
+            rowcount = 1
+            lastrowid = 1
+
+            def executemany(self, query, params):
+                return None
+
+            def execute(self, query, params):
+                executed.append((str(query), tuple(params)))
+                return None
+
+        def _fake_run_transaction(work):
+            return work(_Cursor())
+
+        app_columns = ["appCode", "ownerEntityType", "ownerEntityId", "tenantSlug", "deletedAt"]
+
+        with patch.object(dq, "get_db_tables", return_value=dict(_TABLES)), patch.object(
+            dq, "_get_app_attachment_table_name", return_value="`AppAttachment`"
+        ), patch.object(
+            dq, "_get_app_attachment_columns", return_value=app_columns
+        ), patch.object(
+            dq, "_get_inv_note_attachment_columns", return_value=[]
+        ), patch.object(
+            dq, "run_transaction", side_effect=_fake_run_transaction
+        ), patch.object(dq, "_invalidate_inv_checklist_all_related_scopes"), patch.object(
+            dq, "_invalidate_inv_checklist_note_detail_cache"
+        ):
+            dq.save_inv_checklist_bulk_changes(
+                checklist_creates=[],
+                checklist_updates=[],
+                checklist_deletes=[],
+                station_creates=[],
+                station_updates=[],
+                station_deletes=[],
+                note_creates=[],
+                note_updates=[],
+                note_deletes=[5],
+                tenant_slug="demo-tenant",
+            )
+
+        scoped_queries = [item for item in executed if "AppAttachment" in item[0]]
+        self.assertEqual(len(scoped_queries), 1)
+        scoped_query, scoped_params = scoped_queries[0]
+        self.assertIn("LOWER(tenantSlug) = %s", scoped_query)
+        self.assertIn("ownerEntityId IN (%s)", scoped_query)
+        self.assertEqual(scoped_params, ("tradsphere", "invoice_checklist_note", "5", "demo-tenant"))
 
 
 if __name__ == "__main__":

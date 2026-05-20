@@ -20,3 +20,4 @@ pyyaml==6.0.3
 fpdf2==2.7.9
 watchfiles==1.1.1
 python-multipart==0.0.26
+cloudinary==1.44.1

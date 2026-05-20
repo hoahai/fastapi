@@ -2,6 +2,8 @@ from __future__ import annotations
 
 from datetime import date
 from decimal import Decimal, InvalidOperation
+import json
+import re
 import uuid
 
 import mysql.connector
@@ -43,6 +45,7 @@ from apps.tradsphere.api.v1.helpers.dbQueries import (
     list_inv_note_attachments,
     list_schedule_invoice_checklist_expected_rows,
     save_inv_checklist_bulk_changes,
+    soft_delete_app_attachments_for_invoice_note,
     update_inv_checklist,
     update_inv_checklist_note,
     update_inv_checklist_station,
@@ -519,6 +522,24 @@ def _serialize_attachment_row(row: dict) -> dict:
         file_size = int(file_size_value) if file_size_value is not None else None
     except (TypeError, ValueError):
         file_size = None
+    provider_metadata_raw = row.get("attachmentProviderMetadata")
+    provider_metadata: dict | list | None
+    if isinstance(provider_metadata_raw, (dict, list)):
+        provider_metadata = provider_metadata_raw
+    elif isinstance(provider_metadata_raw, str) and provider_metadata_raw.strip():
+        try:
+            parsed_metadata = json.loads(provider_metadata_raw)
+            provider_metadata = parsed_metadata if isinstance(parsed_metadata, (dict, list)) else None
+        except Exception:
+            provider_metadata = None
+    else:
+        provider_metadata = None
+
+    storage_key = row.get("attachmentStorageKey")
+    provider_public_id = row.get("attachmentProviderPublicId") or storage_key
+    provider_resource_type = row.get("attachmentProviderResourceType")
+    if provider_resource_type is None and isinstance(provider_metadata, dict):
+        provider_resource_type = provider_metadata.get("resource_type")
 
     output = {
         "id": attachment_id,
@@ -529,18 +550,50 @@ def _serialize_attachment_row(row: dict) -> dict:
         "mimeType": mime_type,
         "fileSize": file_size,
         "storageProvider": row.get("attachmentStorageProvider"),
+        "storageKey": storage_key,
+        "providerMetadata": provider_metadata,
         "providerAssetId": row.get("attachmentProviderAssetId"),
-        "providerPublicId": row.get("attachmentProviderPublicId"),
-        "providerResourceType": row.get("attachmentProviderResourceType"),
+        "providerPublicId": provider_public_id,
+        "providerResourceType": provider_resource_type,
         "accessUrl": row.get("attachmentAccessUrl"),
         "uploadedBy": row.get("attachmentUploadedBy"),
         "tenantSlug": row.get("attachmentTenantSlug"),
         "ownerEntityType": row.get("attachmentOwnerEntityType"),
         "ownerEntityId": row.get("attachmentOwnerEntityId"),
-        "dateCreated": row.get("attachmentDateCreated").isoformat() if row.get("attachmentDateCreated") else None,
-        "dateUpdated": row.get("attachmentDateUpdated").isoformat() if row.get("attachmentDateUpdated") else None,
+        "source": row.get("attachmentSource"),
+        "dateCreated": _to_iso_text(row.get("attachmentDateCreated")),
+        "dateUpdated": _to_iso_text(row.get("attachmentDateUpdated")),
     }
     return output
+
+
+def _resolve_attachment_delete_payload(row: dict) -> tuple[str | None, str | None, str | None, str | None]:
+    storage_provider = str(row.get("attachmentStorageProvider") or "").strip().lower() or None
+    storage_key = str(
+        row.get("attachmentStorageKey")
+        or row.get("attachmentProviderPublicId")
+        or ""
+    ).strip() or None
+    provider_resource_type = str(row.get("attachmentProviderResourceType") or "").strip() or None
+
+    provider_metadata_raw = row.get("attachmentProviderMetadata")
+    if provider_resource_type is None and isinstance(provider_metadata_raw, dict):
+        provider_resource_type = str(provider_metadata_raw.get("resource_type") or "").strip() or None
+    elif provider_resource_type is None and isinstance(provider_metadata_raw, str) and provider_metadata_raw.strip():
+        try:
+            provider_metadata = json.loads(provider_metadata_raw)
+            if isinstance(provider_metadata, dict):
+                provider_resource_type = str(provider_metadata.get("resource_type") or "").strip() or None
+        except Exception:
+            provider_resource_type = None
+
+    mime_type = str(
+        row.get("attachmentMimeType")
+        or row.get("attachmentFileType")
+        or ""
+    ).strip() or None
+
+    return storage_provider, storage_key, provider_resource_type, mime_type
 
 
 def _serialize_note_row(row: dict) -> dict:
@@ -762,6 +815,14 @@ def delete_invoice_checklist_data(*, checklist_id: str) -> dict:
     existing = _safe_db_call(get_inv_checklist_row, checklist_id=checklist_id_text)
     if existing is None:
         raise NotFoundError(f"Checklist not found: {checklist_id_text}")
+
+    station_rows = _safe_db_call(list_inv_checklist_stations, checklist_id=checklist_id_text)
+    for station_row in station_rows:
+        station_row_id = station_row.get("id")
+        if station_row_id is None:
+            continue
+        delete_invoice_checklist_station_data(station_row_id=int(station_row_id))
+
     try:
         deleted = delete_inv_checklist(checklist_id=checklist_id_text)
     except Exception as exc:
@@ -839,6 +900,14 @@ def delete_invoice_checklist_station_data(*, station_row_id: int) -> dict:
     station_id = _ensure_required_unsigned_int(station_row_id, field="stationRowId")
     if _safe_db_call(get_inv_checklist_station_row, station_row_id=station_id) is None:
         raise NotFoundError(f"Checklist station not found: {station_id}")
+
+    note_rows = _safe_db_call(list_inv_checklist_notes, checklist_station_id=station_id)
+    for note_row in note_rows:
+        note_id_value = note_row.get("id")
+        if note_id_value is None:
+            continue
+        delete_invoice_checklist_note_data(note_id=int(note_id_value))
+
     try:
         deleted = delete_inv_checklist_station(station_row_id=station_id)
     except Exception as exc:
@@ -973,6 +1042,43 @@ def delete_invoice_checklist_note_data(*, note_id: int) -> dict:
     note_id_value = _ensure_required_unsigned_int(note_id, field="noteId")
     if _safe_db_call(get_inv_checklist_note_row, note_id=note_id_value) is None:
         raise NotFoundError(f"Checklist note not found: {note_id_value}")
+    tenant_slug = str(get_tenant_id() or "").strip().lower() or None
+    attachment_rows = _safe_db_call(
+        list_inv_note_attachments,
+        note_id=note_id_value,
+        tenant_slug=tenant_slug,
+    )
+
+    for attachment_row in attachment_rows:
+        attachment_id_raw = attachment_row.get("attachmentId")
+        if attachment_id_raw is None:
+            continue
+        attachment_id_value = int(attachment_id_raw)
+        storage_provider, storage_key, provider_resource_type, attachment_mime_type = _resolve_attachment_delete_payload(attachment_row)
+        if storage_provider and storage_key:
+            try:
+                delete_file(
+                    app_name="TradSphere",
+                    storage_provider=storage_provider,
+                    payload=DeleteAssetInput(
+                        provider_resource_type=provider_resource_type,
+                        provider_public_id=storage_key,
+                        mime_type=attachment_mime_type,
+                    ),
+                )
+            except Exception:
+                pass
+        _safe_db_call(
+            delete_inv_note_attachment,
+            attachment_id=attachment_id_value,
+            tenant_slug=tenant_slug,
+        )
+    _safe_db_call(
+        soft_delete_app_attachments_for_invoice_note,
+        note_id=note_id_value,
+        tenant_slug=tenant_slug,
+    )
+
     try:
         deleted = delete_inv_checklist_note(note_id=note_id_value)
     except Exception as exc:
@@ -1010,6 +1116,7 @@ def create_invoice_note_attachment_data(*, payload: dict) -> dict:
         count_inv_note_attachments,
         note_id=int(normalized["noteId"]),
         include_deleted=False,
+        tenant_slug=tenant_slug,
     )
     attachment_limit = get_note_attachment_limit()
     if int(existing_attachment_count) >= int(attachment_limit):
@@ -1038,28 +1145,45 @@ def create_invoice_note_attachment_upload_data(
     uploaded_by: str | None,
 ) -> dict:
     note_id_value = _ensure_required_unsigned_int(note_id, field="noteId")
+    tenant_slug = str(get_tenant_id() or "").strip().lower()
+    if not tenant_slug:
+        raise ValueError("Missing tenant context")
     note_row = _safe_db_call(get_inv_checklist_note_row, note_id=note_id_value)
     if note_row is None:
         raise NotFoundError(f"Checklist note not found: {note_id_value}")
+    station_row = _safe_db_call(
+        get_inv_checklist_station_row,
+        station_row_id=int(note_row.get("checklistStationId")),
+    )
 
     existing_attachment_count = _safe_db_call(
         count_inv_note_attachments,
         note_id=note_id_value,
         include_deleted=False,
+        tenant_slug=tenant_slug,
     )
     attachment_limit = get_note_attachment_limit()
     if int(existing_attachment_count) >= int(attachment_limit):
         raise ValueError(f"Attachment limit reached. Maximum {attachment_limit} files per note.")
+    total_attachment_count = _safe_db_call(
+        count_inv_note_attachments,
+        note_id=note_id_value,
+        include_deleted=True,
+        tenant_slug=tenant_slug,
+    )
+    next_attachment_counter = int(total_attachment_count or 0) + 1
+    storage_key = _build_invoice_note_storage_key(
+        note_id=note_id_value,
+        est_num=int(station_row.get("estNum")) if station_row and station_row.get("estNum") is not None else None,
+        station_code=station_row.get("stationCode") if station_row else None,
+        counter=next_attachment_counter,
+    )
 
     normalized_name, normalized_mime, normalized_size = validate_attachment_payload(
         file_bytes=file_bytes,
         filename=filename,
         mime_type=mime_type,
     )
-
-    tenant_slug = str(get_tenant_id() or "").strip().lower()
-    if not tenant_slug:
-        raise ValueError("Missing tenant context")
 
     uploaded_by_value = str(uploaded_by or "").strip() or None
     stored_asset = upload_file(
@@ -1072,27 +1196,44 @@ def create_invoice_note_attachment_upload_data(
             file_bytes=file_bytes,
             original_filename=normalized_name,
             mime_type=normalized_mime,
+            storage_key=storage_key,
         )
     )
     asset_size = int(stored_asset.file_size or normalized_size)
+    provider_metadata_payload = dict(stored_asset.provider_metadata or {})
+    provider_metadata_payload.setdefault("asset_id", stored_asset.provider_asset_id)
+    provider_metadata_payload.setdefault("public_id", stored_asset.provider_public_id)
+    provider_metadata_payload.setdefault("resource_type", stored_asset.provider_resource_type)
+    provider_metadata_payload.setdefault("bytes", asset_size)
+    provider_metadata_payload.setdefault("uploaded_original_filename", normalized_name)
+    stored_file_name = _build_stored_attachment_file_name(
+        provider_public_id=stored_asset.provider_public_id,
+        provider_metadata=provider_metadata_payload,
+        mime_type=normalized_mime,
+        fallback_name=normalized_name,
+    )
+    provider_metadata_payload.setdefault("stored_file_name", stored_file_name)
 
     row_payload = {
         "noteId": note_id_value,
         "url": stored_asset.access_url,
-        "fileName": normalized_name,
+        "accessUrl": stored_asset.access_url,
+        "fileName": stored_file_name,
         "fileType": normalized_mime,
+        "originalFileName": stored_file_name,
+        "mimeType": normalized_mime,
+        "appCode": "tradsphere",
+        "ownerEntityType": "invoice_checklist_note",
+        "ownerEntityId": str(note_id_value),
         "storageProvider": stored_asset.storage_provider,
+        "storageKey": stored_asset.provider_public_id,
+        "providerMetadata": provider_metadata_payload,
         "providerAssetId": stored_asset.provider_asset_id,
         "providerPublicId": stored_asset.provider_public_id,
         "providerResourceType": stored_asset.provider_resource_type,
-        "accessUrl": stored_asset.access_url,
-        "originalFileName": normalized_name,
-        "mimeType": normalized_mime,
         "fileSize": asset_size,
         "uploadedBy": uploaded_by_value,
         "tenantSlug": tenant_slug,
-        "ownerEntityType": "invoice_checklist_note",
-        "ownerEntityId": str(note_id_value),
     }
 
     try:
@@ -1105,6 +1246,7 @@ def create_invoice_note_attachment_upload_data(
                 payload=DeleteAssetInput(
                     provider_resource_type=stored_asset.provider_resource_type,
                     provider_public_id=stored_asset.provider_public_id,
+                    mime_type=stored_asset.mime_type,
                 ),
             )
         except Exception:
@@ -1135,7 +1277,11 @@ def update_invoice_note_attachment_data(*, payload: dict) -> dict:
 
     updates = _normalize_attachment_updates(payload)
     try:
-        update_inv_note_attachment(attachment_id=attachment_id_value, fields=updates)
+        update_inv_note_attachment(
+            attachment_id=attachment_id_value,
+            fields=updates,
+            tenant_slug=tenant_slug,
+        )
     except Exception as exc:
         raise _map_db_exception(exc) from exc
 
@@ -1160,16 +1306,16 @@ def delete_invoice_note_attachment_data(*, attachment_id: int) -> dict:
     if row is None:
         raise NotFoundError(f"Note attachment not found: {attachment_id_value}")
 
-    storage_provider = str(row.get("attachmentStorageProvider") or "").strip().lower() or None
-    provider_public_id = str(row.get("attachmentProviderPublicId") or "").strip() or None
-    provider_resource_type = str(row.get("attachmentProviderResourceType") or "").strip() or None
-    if storage_provider and provider_public_id:
+    storage_provider, storage_key, provider_resource_type, attachment_mime_type = _resolve_attachment_delete_payload(row)
+
+    if storage_provider and storage_key:
         delete_file(
             app_name="TradSphere",
             storage_provider=storage_provider,
             payload=DeleteAssetInput(
                 provider_resource_type=provider_resource_type,
-                provider_public_id=provider_public_id,
+                provider_public_id=storage_key,
+                mime_type=attachment_mime_type,
             ),
         )
 
