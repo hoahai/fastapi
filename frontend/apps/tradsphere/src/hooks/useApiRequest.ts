@@ -134,11 +134,11 @@ export function useApiRequest() {
       const method = options.method ?? "GET";
       const hasBody = options.body !== undefined;
       const isFormData = typeof FormData !== "undefined" && options.body instanceof FormData;
-      const ensuredSession = await authRef.current.ensureFreshSession();
-      const baseHeaders = buildAuthHeaders(ensuredSession, authRef.current.tenantSlug, false);
-      const requestHeaders = new Headers(baseHeaders);
       const callerHeaders = new Headers(options.headers ?? {});
-      callerHeaders.forEach((value, key) => requestHeaders.set(key, value));
+      const requestHeaders = new Headers(callerHeaders);
+      const ensuredSession = await authRef.current.ensureFreshSession();
+      const authHeaders = new Headers(buildAuthHeaders(ensuredSession, authRef.current.tenantSlug, false));
+      authHeaders.forEach((value, key) => requestHeaders.set(key, value));
 
       let body: BodyInit | undefined;
       if (hasBody) {
