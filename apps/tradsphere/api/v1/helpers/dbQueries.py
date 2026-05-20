@@ -4115,56 +4115,58 @@ def list_inv_checklist_rows_by_ids(*, checklist_ids: list[str]) -> list[dict]:
     return fetch_all(query, tuple(normalized_ids))
 
 
-def get_inv_checklist_detail_rows(*, checklist_id: str) -> list[dict]:
+def get_inv_checklist_detail_rows(
+    *,
+    checklist_id: str,
+    include_notes: bool = True,
+    include_attachments: bool = False,
+) -> list[dict]:
     checklist_id_text = str(checklist_id or "").strip()
     if not checklist_id_text:
         return []
+    include_notes_value = bool(include_notes or include_attachments)
     tables = get_db_tables()
     checklist_table = _quote_table_name(tables["INVCHECKLISTS"])
     station_table = _quote_table_name(tables["INVCHECKLISTSTATIONS"])
-    note_table = _quote_table_name(tables["INVCHECKLISTNOTES"])
-    attachment_table = _quote_table_name(tables["INVNOTEATTACHMENTS"])
-    attachment_columns = _get_inv_note_attachment_columns(
-        attachment_table=attachment_table,
-    )
-    attachment_select = _inv_note_attachment_select_clause(
-        alias="a",
-        columns=attachment_columns,
-    )
-    attachment_join_condition = "a.noteId = n.id"
-    if _has_column(attachment_columns, "deletedAt"):
-        attachment_join_condition += " AND a.deletedAt IS NULL"
+    select_parts = [
+        "c.id AS checklistId",
+        "c.accountCode AS checklistAccountCode",
+        "c.year AS checklistYear",
+        "c.month AS checklistMonth",
+        "c.status AS checklistStatus",
+        "c.note AS checklistNote",
+        "c.dateCreated AS checklistDateCreated",
+        "c.dateUpdated AS checklistDateUpdated",
+        "s.id AS stationRowId",
+        "s.estNum AS stationEstNum",
+        "s.stationCode AS stationCode",
+        "s.status AS stationStatus",
+        "s.dateCreated AS stationDateCreated",
+        "s.dateUpdated AS stationDateUpdated",
+    ]
 
-    query = (
-        "SELECT "
-        "c.id AS checklistId, "
-        "c.accountCode AS checklistAccountCode, "
-        "c.year AS checklistYear, "
-        "c.month AS checklistMonth, "
-        "c.status AS checklistStatus, "
-        "c.note AS checklistNote, "
-        "c.dateCreated AS checklistDateCreated, "
-        "c.dateUpdated AS checklistDateUpdated, "
-        "s.id AS stationRowId, "
-        "s.estNum AS stationEstNum, "
-        "s.stationCode AS stationCode, "
-        "s.status AS stationStatus, "
-        "s.dateCreated AS stationDateCreated, "
-        "s.dateUpdated AS stationDateUpdated, "
-        "n.id AS noteId, "
-        "n.amount AS noteAmount, "
-        "n.note AS noteText, "
-        "n.dateCreated AS noteDateCreated, "
-        "n.dateUpdated AS noteDateUpdated, "
-        + ", ".join(attachment_select)
-        + " "
-        f"FROM {checklist_table} c "
-        f"LEFT JOIN {station_table} s ON s.checklistId = c.id "
-        f"LEFT JOIN {note_table} n ON n.checklistStationId = s.id "
-        f"LEFT JOIN {attachment_table} a ON {attachment_join_condition} "
-        "WHERE c.id = %s "
-        "ORDER BY s.id ASC, n.id ASC, a.id ASC"
-    )
+    query_parts = [
+        "SELECT " + ", ".join(select_parts),
+        f"FROM {checklist_table} c",
+        f"LEFT JOIN {station_table} s ON s.checklistId = c.id",
+    ]
+    order_parts = ["s.id ASC"]
+
+    if include_notes_value:
+        note_table = _quote_table_name(tables["INVCHECKLISTNOTES"])
+        query_parts[0] += (
+            ", n.id AS noteId"
+            ", n.amount AS noteAmount"
+            ", n.note AS noteText"
+            ", n.dateCreated AS noteDateCreated"
+            ", n.dateUpdated AS noteDateUpdated"
+        )
+        query_parts.append(f"LEFT JOIN {note_table} n ON n.checklistStationId = s.id")
+        order_parts.append("n.id ASC")
+
+    query_parts.append("WHERE c.id = %s")
+    query_parts.append("ORDER BY " + ", ".join(order_parts))
+    query = " ".join(query_parts)
     return fetch_all(query, (checklist_id_text,))
 
 

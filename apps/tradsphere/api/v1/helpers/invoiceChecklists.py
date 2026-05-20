@@ -779,7 +779,12 @@ def get_invoice_checklists_data(
         )
 
     if include_stations or include_notes or include_attachments:
-        rows = _safe_db_call(get_inv_checklist_detail_rows, checklist_id=checklist_id_text)
+        rows = _safe_db_call(
+            get_inv_checklist_detail_rows,
+            checklist_id=checklist_id_text,
+            include_notes=bool(include_notes or include_attachments),
+            include_attachments=bool(include_attachments),
+        )
         if not rows:
             raise NotFoundError(f"Checklist not found: {checklist_id_text}")
         return _build_checklist_detail(

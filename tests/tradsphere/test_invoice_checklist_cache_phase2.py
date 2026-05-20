@@ -133,6 +133,42 @@ class InvoiceChecklistCacheKeyTests(unittest.TestCase):
         self.assertEqual(mock_fetch.call_args.args[1], ("a", "z"))
 
 
+class InvoiceChecklistDetailQueryTests(unittest.TestCase):
+    def test_detail_query_skips_note_join_when_note_data_not_requested(self):
+        with patch.object(dq, "get_db_tables", return_value=dict(_TABLES)), patch.object(
+            dq, "fetch_all", return_value=[]
+        ) as mock_fetch:
+            rows = dq.get_inv_checklist_detail_rows(
+                checklist_id="cid-1",
+                include_notes=False,
+            )
+
+        self.assertEqual(rows, [])
+        query = mock_fetch.call_args.args[0]
+        self.assertNotIn("LEFT JOIN `TradSphere_InvChecklistNote` n", query)
+        self.assertNotIn("noteId", query)
+        self.assertNotIn("`TradSphere_InvNoteAttachment`", query)
+        self.assertIn("ORDER BY s.id ASC", query)
+        self.assertNotIn("n.id ASC", query)
+
+    def test_detail_query_joins_notes_for_attachment_mode_without_legacy_attachment_join(self):
+        with patch.object(dq, "get_db_tables", return_value=dict(_TABLES)), patch.object(
+            dq, "fetch_all", return_value=[]
+        ) as mock_fetch:
+            rows = dq.get_inv_checklist_detail_rows(
+                checklist_id="cid-1",
+                include_notes=False,
+                include_attachments=True,
+            )
+
+        self.assertEqual(rows, [])
+        query = mock_fetch.call_args.args[0]
+        self.assertIn("LEFT JOIN `TradSphere_InvChecklistNote` n", query)
+        self.assertIn("n.id AS noteId", query)
+        self.assertIn("ORDER BY s.id ASC, n.id ASC", query)
+        self.assertNotIn("`TradSphere_InvNoteAttachment`", query)
+
+
 class InvoiceChecklistTtlTests(unittest.TestCase):
     def test_db_read_ttl_keys_default_to_60_seconds(self):
         keys = [
@@ -945,6 +981,8 @@ class InvoiceChecklistDetailAttachmentBatchingTests(unittest.TestCase):
             db_calls.append(func)
             if func is inv.get_inv_checklist_detail_rows:
                 self.assertEqual(kwargs.get("checklist_id"), "cid-1")
+                self.assertTrue(kwargs.get("include_notes"))
+                self.assertTrue(kwargs.get("include_attachments"))
                 return detail_rows
             if func is inv.list_inv_note_attachments:
                 self.assertEqual(kwargs.get("note_ids"), [5, 6])
