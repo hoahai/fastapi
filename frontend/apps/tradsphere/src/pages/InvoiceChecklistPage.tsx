@@ -34,7 +34,11 @@ import { useApiRequest } from "@/hooks/useApiRequest";
 import { useDirtyRefreshGuard } from "@/hooks/useDirtyRefreshGuard";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { usePersistentState } from "@/hooks/usePersistentState";
-import { readBrowserCacheSnapshot, writeBrowserCache } from "@/lib/browserCache";
+import {
+  readBrowserCacheSnapshot,
+  removeBrowserCacheByPrefix,
+  writeBrowserCache,
+} from "@/lib/browserCache";
 import { buildAuthHeaders as buildSharedAuthHeaders } from "@shared/api/authHeaders";
 import {
   readScopedPageState,
@@ -218,6 +222,7 @@ type LoadOptions = {
   checklistId?: string | null;
   includeSelectedDetail?: boolean;
   deferWhenDirty?: boolean;
+  preserveLocalDrafts?: boolean;
 };
 
 type AddStationNoteModalSubmitPayload = {
@@ -912,6 +917,104 @@ function cloneChecklistDetail(detail: ChecklistDetail | null): ChecklistDetail |
   };
 }
 
+function mergeIncomingChecklistsWithLocalDrafts(
+  incoming: ChecklistSummary[],
+  current: ChecklistSummary[],
+): ChecklistSummary[] {
+  const localDraftRows = current.filter((item) => item.isLocalDraft === true);
+  if (localDraftRows.length === 0) {
+    return incoming;
+  }
+  const incomingIdSet = new Set(incoming.map((item) => item.id));
+  const merged = incoming.concat(localDraftRows.filter((item) => !incomingIdSet.has(item.id)));
+  return merged.sort((left, right) => left.accountCode.localeCompare(right.accountCode));
+}
+
+function mergeSavedChecklistSummaryWithBaseline(
+  incoming: ChecklistSummary,
+  baseline: ChecklistSummary | null,
+): ChecklistSummary {
+  if (!baseline) {
+    return incoming;
+  }
+  return {
+    ...baseline,
+    ...incoming,
+    accountName: asString(incoming.accountName) || asString(baseline.accountName),
+    searchStations: (
+      incoming.searchStations.length > 0
+      || incoming.stationCount === 0
+      || baseline.searchStations.length === 0
+    )
+      ? incoming.searchStations
+      : baseline.searchStations,
+  };
+}
+
+function mergeSavedChecklistDetailWithBaseline(
+  incoming: ChecklistDetail | null,
+  baseline: ChecklistDetail | null,
+): ChecklistDetail | null {
+  if (!incoming) {
+    return baseline ? cloneChecklistDetail(baseline) : null;
+  }
+  if (!baseline) {
+    return incoming;
+  }
+  const baselineStationById = new Map<number, StationItem>();
+  for (const station of baseline.stations) {
+    baselineStationById.set(station.id, station);
+  }
+  const mergedStations = incoming.stations.map((station) => {
+    const baselineStation = baselineStationById.get(station.id);
+    if (!baselineStation) {
+      return station;
+    }
+    const likelyMissingScheduleMetadata = (
+      station.inCurrentSchedule === false
+      && station.scheduleMismatch === false
+      && station.scheduleMismatchReason === null
+      && (
+        baselineStation.inCurrentSchedule === true
+        || baselineStation.scheduleMismatch === true
+        || baselineStation.scheduleMismatchReason !== null
+      )
+    );
+    return {
+      ...baselineStation,
+      ...station,
+      stationName: station.stationName || baselineStation.stationName,
+      mediaType: station.mediaType || baselineStation.mediaType,
+      inCurrentSchedule: likelyMissingScheduleMetadata ? baselineStation.inCurrentSchedule : station.inCurrentSchedule,
+      scheduleMismatch: likelyMissingScheduleMetadata ? baselineStation.scheduleMismatch : station.scheduleMismatch,
+      scheduleMismatchReason: likelyMissingScheduleMetadata
+        ? baselineStation.scheduleMismatchReason
+        : station.scheduleMismatchReason,
+    };
+  });
+  return {
+    ...baseline,
+    ...incoming,
+    accountCode: incoming.accountCode || baseline.accountCode,
+    accountName: incoming.accountName || baseline.accountName,
+    stations: mergedStations,
+  };
+}
+
+function deriveMismatchMetaFromStations(stations: StationItem[]): {
+  mismatchStationCount: number;
+  hasScheduleMismatch: boolean;
+} {
+  const mismatchStationCount = stations.reduce((count, station) => {
+    const hasMismatch = station.scheduleMismatch || Boolean(asString(station.scheduleMismatchReason));
+    return hasMismatch ? count + 1 : count;
+  }, 0);
+  return {
+    mismatchStationCount,
+    hasScheduleMismatch: mismatchStationCount > 0,
+  };
+}
+
 function readSidebarCollapsedState(): boolean {
   if (typeof window === "undefined") {
     return false;
@@ -1057,7 +1160,6 @@ export default function InvoiceChecklistPage() {
   );
   const [loadedPeriodValue, setLoadedPeriodValue] = useState<string | null>(null);
   const [checklists, setChecklists] = useState<ChecklistSummary[]>([]);
-  const [mismatchStations, setMismatchStations] = useState<ChecklistMismatchItem[]>([]);
   const [selectedChecklist, setSelectedChecklist] = useState<ChecklistDetail | null>(null);
   const [selectedChecklistBaseline, setSelectedChecklistBaseline] = useState<ChecklistDetail | null>(null);
   const [localChecklistDetailsById, setLocalChecklistDetailsById] = useState<Record<string, ChecklistDetail>>({});
@@ -1913,9 +2015,13 @@ export default function InvoiceChecklistPage() {
   );
 
   const applyLoadedPayload = useCallback(
-    (payload: LoadPayload) => {
-      setChecklists(payload.checklists);
-      setMismatchStations(payload.mismatchStations);
+    (payload: LoadPayload, options?: { preserveLocalDrafts?: boolean }) => {
+      const preserveLocalDrafts = options?.preserveLocalDrafts !== false;
+      setChecklists((current) => (
+        preserveLocalDrafts
+          ? mergeIncomingChecklistsWithLocalDrafts(payload.checklists, current)
+          : payload.checklists
+      ));
       setSelectedChecklistId(payload.selectedChecklistId || null);
       setSelectedChecklist(payload.selectedChecklist);
       setSelectedChecklistBaseline(cloneChecklistDetail(payload.selectedChecklist));
@@ -2042,7 +2148,9 @@ export default function InvoiceChecklistPage() {
           }
         }
         if (isLatestRequest(requestId)) {
-          applyLoadedPayload(cachedPayload);
+          applyLoadedPayload(cachedPayload, {
+            preserveLocalDrafts: options.preserveLocalDrafts,
+          });
           setLoadedPeriodValue(cachedPayload.selectedPeriod?.value || targetPeriodValue);
           setCacheStatus({ source: "cache", fetchedAt: cacheSnapshot.fetchedAt });
           setError(null);
@@ -2116,7 +2224,9 @@ export default function InvoiceChecklistPage() {
         const applied = applyFromRequest(
           requestId,
           () => {
-            applyLoadedPayload(payloadForUi);
+            applyLoadedPayload(payloadForUi, {
+              preserveLocalDrafts: options.preserveLocalDrafts,
+            });
             setLoadedPeriodValue(payloadForUi.selectedPeriod?.value || targetPeriodValue);
             setCacheStatus({ source: "network", fetchedAt });
             setError(null);
@@ -2226,7 +2336,9 @@ export default function InvoiceChecklistPage() {
     await loadData({
       policy: "network-first",
       periodValue: selectedDraftPeriodValue,
-      includeSelectedDetail: false,
+      includeSelectedDetail: true,
+      deferWhenDirty: false,
+      preserveLocalDrafts: false,
     });
   }
 
@@ -2565,6 +2677,19 @@ export default function InvoiceChecklistPage() {
 
   function handleChecklistSelect(checklistId: string) {
     if (checklistId === selectedChecklistId) {
+      const selectedSummary = checklists.find((item) => item.id === checklistId) ?? null;
+      const shouldHydrateFallbackDetail = Boolean(
+        selectedChecklist
+        && selectedChecklist.id === checklistId
+        && selectedChecklist.stations.length === 0
+        && selectedSummary
+        && !selectedSummary.isLocalDraft
+        && (selectedSummary.stationCount > 0 || selectedSummary.mismatchStationCount > 0),
+      );
+      if (!shouldHydrateFallbackDetail) {
+        return;
+      }
+      void runChecklistSelect(checklistId, { fromUserSelection: true });
       return;
     }
     void runChecklistSelect(checklistId, { fromUserSelection: true });
@@ -3005,16 +3130,94 @@ export default function InvoiceChecklistPage() {
         }
       }
 
-      setChecklists(bulkChecklists);
+      const periodValue = selectedPeriod.value;
+      const loadCacheKey = buildLoadCacheKey(periodValue);
+      const existingLoadCacheSnapshot = readBrowserCacheSnapshot<LoadPayload>(loadCacheKey);
+      const existingLoadCachePayload = normalizeLoadPayload(existingLoadCacheSnapshot?.data);
+      const existingSelectedDetailSnapshot = selectedChecklistIdFromBulk
+        ? readBrowserCacheSnapshot<ChecklistDetail>(
+          buildChecklistDetailCacheKey(periodValue, selectedChecklistIdFromBulk),
+        )
+        : null;
+      const existingSelectedDetailFromCache = toChecklistDetail(existingSelectedDetailSnapshot?.data);
+      const baselineChecklistSummaryById = new Map<string, ChecklistSummary>();
+      for (const row of existingLoadCachePayload.checklists) {
+        baselineChecklistSummaryById.set(row.id, row);
+      }
+      for (const row of checklists) {
+        baselineChecklistSummaryById.set(row.id, row);
+      }
+      const mergedChecklists = bulkChecklists.map((row) => (
+        mergeSavedChecklistSummaryWithBaseline(row, baselineChecklistSummaryById.get(row.id) ?? null)
+      ));
+      const selectedSummaryFromMerged = mergedChecklists.find((item) => item.id === selectedChecklistIdFromBulk) ?? null;
+      const mergedSelectedChecklist = mergeSavedChecklistDetailWithBaseline(
+        nextSelectedChecklist,
+        selectedChecklist ?? selectedChecklistBaseline ?? existingSelectedDetailFromCache,
+      );
+      const normalizedSelectedChecklist = mergedSelectedChecklist
+        ? {
+          ...mergedSelectedChecklist,
+          accountCode: mergedSelectedChecklist.accountCode || selectedSummaryFromMerged?.accountCode || "",
+          accountName: mergedSelectedChecklist.accountName || selectedSummaryFromMerged?.accountName || "",
+        }
+        : mergedSelectedChecklist;
+
+      setChecklists(mergedChecklists);
       setPendingDeletedChecklistIds([]);
       setLocalChecklistDetailsById({});
       setStationStatusDraftById({});
       setSelectedChecklistId(selectedChecklistIdFromBulk);
-      setSelectedChecklist(nextSelectedChecklist);
+      setSelectedChecklist(normalizedSelectedChecklist);
       setSelectedChecklistBaseline(cloneChecklistDetail(baseSelectedChecklist));
-      setChecklistStatusDraft(nextSelectedChecklist?.status || "");
-      setChecklistNoteDraft(nextSelectedChecklist?.note || "");
-      setSelectedStationId(nextSelectedChecklist?.stations[0]?.id ?? null);
+      setChecklistStatusDraft(normalizedSelectedChecklist?.status || "");
+      setChecklistNoteDraft(normalizedSelectedChecklist?.note || "");
+      setSelectedStationId(normalizedSelectedChecklist?.stations[0]?.id ?? null);
+
+      const savedAt = Date.now();
+      const selectedChecklistForCache = normalizedSelectedChecklist
+        ?? baseSelectedChecklist
+        ?? (() => {
+          const selectedSummary = selectedSummaryFromMerged;
+          return selectedSummary ? toFallbackChecklistDetail(selectedSummary) : null;
+        })();
+      const checklistIdSet = new Set(mergedChecklists.map((item) => item.id));
+      const checklistWithMismatchIdSet = new Set(
+        mergedChecklists
+          .filter((item) => item.mismatchStationCount > 0)
+          .map((item) => item.id),
+      );
+      const deletedStationIdSet = new Set(stationDeletes);
+      const mismatchStationsForCache = existingLoadCachePayload.mismatchStations.filter((row) => (
+        checklistIdSet.has(row.checklistId)
+        && checklistWithMismatchIdSet.has(row.checklistId)
+        && !deletedStationIdSet.has(row.stationRowId)
+      ));
+      const loadPayloadForCache: LoadPayload = {
+        periods: existingLoadCachePayload.periods,
+        selectedPeriod: existingLoadCachePayload.selectedPeriod?.value === periodValue
+          ? existingLoadCachePayload.selectedPeriod
+          : selectedPeriod,
+        checklists: mergedChecklists,
+        selectedChecklistId: selectedChecklistIdFromBulk,
+        selectedChecklist: selectedChecklistForCache,
+        mismatchStations: mismatchStationsForCache,
+      };
+      writeBrowserCache(loadCacheKey, loadPayloadForCache, LOAD_CACHE_TTL_MS, {
+        source: "network",
+        fetchedAt: savedAt,
+      });
+
+      // Clear stale per-account detail caches for this period, then write back canonical selected detail.
+      removeBrowserCacheByPrefix(`invoice-checklists:detail:${periodValue}:`);
+      if (selectedChecklistForCache?.id) {
+        writeBrowserCache(
+          buildChecklistDetailCacheKey(periodValue, selectedChecklistForCache.id),
+          selectedChecklistForCache,
+          LOAD_CACHE_TTL_MS,
+          { source: "network", fetchedAt: savedAt },
+        );
+      }
 
       if (failedAttachmentDeletes.length > 0 || failedAttachmentUploads.length > 0) {
         toast.error(
@@ -3053,6 +3256,7 @@ export default function InvoiceChecklistPage() {
     resetLocalDrafts();
     setPendingDeletedChecklistIds([]);
     setLocalChecklistDetailsById({});
+    setChecklists((current) => current.filter((item) => item.isLocalDraft !== true));
     setIsAddChecklistAccountModalOpen(false);
     setPendingPeriodSyncPreview(null);
     if (isLocalChecklistId(selectedChecklistId)) {
@@ -3069,10 +3273,11 @@ export default function InvoiceChecklistPage() {
 
     if (shouldReload && targetPeriodValue && (hadDirtyState || hadDeferredServerUpdate)) {
       void loadData({
-        policy: "network-first",
+        policy: "cache-first",
         periodValue: targetPeriodValue,
         checklistId: checklistIdForReload,
         deferWhenDirty: false,
+        preserveLocalDrafts: false,
       });
     }
   }
@@ -3287,14 +3492,20 @@ export default function InvoiceChecklistPage() {
     }
     const removingStationId = deletingStationId;
     const removingStation = selectedChecklist.stations.find((station) => station.id === removingStationId) ?? null;
+    const nextStations = selectedChecklist.stations.filter((station) => station.id !== removingStationId);
+    const mismatchMeta = deriveMismatchMetaFromStations(nextStations);
     const summary = checklists.find((item) => item.id === selectedChecklist.id) ?? null;
     const summarySearchStations = summary?.searchStations ?? [];
     updateChecklistInState((current) => ({
       ...current,
       stations: current.stations.filter((station) => station.id !== removingStationId),
+      mismatchStationCount: mismatchMeta.mismatchStationCount,
+      hasScheduleMismatch: mismatchMeta.hasScheduleMismatch,
     }));
     updateChecklistSummaryInState(selectedChecklist.id, {
       stationCount: Math.max(0, selectedChecklist.stations.length - 1),
+      mismatchStationCount: mismatchMeta.mismatchStationCount,
+      hasScheduleMismatch: mismatchMeta.hasScheduleMismatch,
       searchStations: removingStation
         ? summarySearchStations.filter((station) => !(
           station.estNum === removingStation.estNum
@@ -3504,14 +3715,6 @@ export default function InvoiceChecklistPage() {
     && !isSavingAllChanges
     && !isSyncingPeriod
     && !pendingPeriodSyncPreview
-  );
-  const totalMismatchStationCount = useMemo(
-    () => {
-      const fromRows = mismatchStations.length;
-      const fromSummaries = checklists.reduce((total, item) => total + Math.max(0, item.mismatchStationCount || 0), 0);
-      return Math.max(fromRows, fromSummaries);
-    },
-    [checklists, mismatchStations],
   );
   const shouldShowSaveActions = canEditTradsphere && (hasUnsavedChanges || isSavingAllChanges || Boolean(pendingPeriodSyncPreview));
   const visibleRefreshMessage = useMemo(() => {
@@ -3758,18 +3961,6 @@ export default function InvoiceChecklistPage() {
         </div>
       ) : null}
 
-      {totalMismatchStationCount > 0 ? (
-        <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          <div className="flex items-start gap-2">
-            <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-            <p>
-              {totalMismatchStationCount} checklist station row(s) are not in the current period schedule.
-              They are kept for review and are not deleted automatically.
-            </p>
-          </div>
-        </div>
-      ) : null}
-
       {error ? (
         <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
           <div className="flex items-start gap-2">
@@ -3878,7 +4069,7 @@ export default function InvoiceChecklistPage() {
                             {item.mismatchStationCount > 0 ? (
                               <span className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
                                 <AlertTriangle className="size-3" />
-                                {item.mismatchStationCount} mismatch
+                                {item.mismatchStationCount} stations no schedule
                               </span>
                             ) : null}
                             {item.proposalLabel ? (
@@ -3944,7 +4135,7 @@ export default function InvoiceChecklistPage() {
                     {selectedChecklistForView.mismatchStationCount > 0 ? (
                       <span className="inline-flex items-center gap-1 rounded-full border border-amber-300 bg-amber-50 px-2 py-0.5 text-[11px] font-medium text-amber-800">
                         <AlertTriangle className="size-3" />
-                        {selectedChecklistForView.mismatchStationCount} station mismatch
+                        {selectedChecklistForView.mismatchStationCount} stations no schedule
                       </span>
                     ) : null}
                     {selectedChecklistForView.proposalLabel ? (

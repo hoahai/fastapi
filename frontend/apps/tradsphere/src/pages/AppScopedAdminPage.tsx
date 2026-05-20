@@ -84,6 +84,19 @@ function statusChipClass(status: string): string {
   return "border-emerald-200 bg-emerald-50 text-emerald-700";
 }
 
+function formatStatusChipLabel(status: string): string {
+  const normalized = String(status || "").trim().toLowerCase();
+  if (!normalized) {
+    return "Unknown";
+  }
+  return normalized
+    .replace(/[_-]+/g, " ")
+    .split(/\s+/)
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
 function formatRelativeTime(timestamp: number): string {
   const ageMs = Math.max(0, Date.now() - timestamp);
   if (ageMs < 30_000) {
@@ -469,7 +482,7 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
                 <p className="text-xs text-slate-600">{lookupResult.email || lookupResult.userId}</p>
               </div>
               <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${statusChipClass(lookupResult.status)}`}>
-                {lookupResult.status}
+                {formatStatusChipLabel(lookupResult.status)}
               </span>
             </div>
 
@@ -581,7 +594,7 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
                     <p className="truncate text-xs text-slate-600">{user.email || user.userId}</p>
                   </div>
                   <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${statusChipClass(user.status)}`}>
-                    {user.status}
+                    {formatStatusChipLabel(user.status)}
                   </span>
                 </div>
                 <div className="mt-3 space-y-2">
