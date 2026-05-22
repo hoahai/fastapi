@@ -1283,6 +1283,10 @@ uvicorn main:app --reload
 
 <!-- Compose commit command for what was changed follow my insturctions in AGENTS.md -->
 
+# 0) CodeGraph
+codegraph init -i
+codegraph status .
+
 # 1) Python deps
 python3 -m venv .venv
 source .venv/bin/activate
@@ -1293,6 +1297,7 @@ npm run install:all
 npm run build:all
 npm run sync-ui:all
 npm run serve:api
+
 
 
 <!--

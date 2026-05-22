@@ -70,3 +70,6 @@ apps/tradsphere/ui_dist/
 checkpoints/
 docs/
 .codegraph/
+
+# Python / pytest
+.pytest_cache/

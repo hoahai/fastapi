@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, AlertTriangle, Archive, Link2, Loader2, Plus, RefreshCw, Send, Table2, Trash2, Unlink, X } from "lucide-react";
+import { AlertCircle, AlertTriangle, Archive, Eye, Link2, Loader2, Pencil, Plus, RefreshCw, Send, Table2, Trash2, Unlink, X } from "lucide-react";
 
 import { ActionIconButton } from "@/components/dashboard/ActionIconButton";
 import { AccountSelector } from "@/components/dashboard/AccountSelector";
@@ -27,6 +27,13 @@ import { useDirtyRefreshGuard } from "@/hooks/useDirtyRefreshGuard";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { usePersistentState } from "@/hooks/usePersistentState";
 import { readBrowserCacheSnapshot, writeBrowserCache } from "@/lib/browserCache";
+import {
+  buildTrafficEmailHtmlDocument,
+  parseTrafficEmailWorkspaceFromBody,
+  persistTrafficEmailBody,
+  type TrafficEmailDownloadLink,
+  type TrafficEmailWorkspacePayload,
+} from "@/lib/trafficEmailTemplate";
 import { useTradsphereAccountSelections } from "@/hooks/useTradsphereAccountSelections";
 import { DateInputField } from "@/components/dashboard/FlightDateRangeField";
 import { buildAuthHeaders as buildSharedAuthHeaders } from "@shared/api/authHeaders";
@@ -179,6 +186,7 @@ type TrafficPageSnapshot = {
   detailDraft: TrafficDetail | null;
   cacheStatus: CacheStatus | null;
   refreshMessage: string | null;
+  activeWorkspaceTab: TrafficWorkspaceTab;
 };
 
 type TrafficStationCandidate = {
@@ -196,6 +204,13 @@ type TrafficStationCandidatesPayload = {
   summary: {
     candidateCount: number;
   };
+};
+
+type TrafficWorkspaceTab = "workflow" | "email";
+
+type TrafficEmailWorkspaceDraft = TrafficEmailWorkspacePayload & {
+  bodyTouched: boolean;
+  instructionsTouched: boolean;
 };
 
 const TRAFFIC_LIST_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.MAIN_LOAD;
@@ -218,6 +233,10 @@ const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspace.sidebar.collapsed";
 const LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY = "tradsphere:ui:sidebarCollapsed:v1";
 const SIDEBAR_COLLAPSED_EVENT = "workspace-sidebar-collapsed-change";
 const LOCAL_TRAFFIC_ID_PREFIX = "local-traffic:";
+const EMAIL_WORKSPACE_TABS: Array<{ value: TrafficWorkspaceTab; label: string }> = [
+  { value: "workflow", label: "Traffic Detail" },
+  { value: "email", label: "Email" },
+];
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -1132,6 +1151,21 @@ function formatStationDisplayLabel(code: string, meta: StationLookupMeta | null 
   return meta.name;
 }
 
+function formatDownloadLinkNotePreview(noteValue: string): string {
+  const firstLine = asString(noteValue)
+    .replace(/\r\n/g, "\n")
+    .split("\n")
+    .map((line) => line.trim())
+    .find(Boolean);
+  if (!firstLine) {
+    return "";
+  }
+  if (firstLine.length <= 48) {
+    return firstLine;
+  }
+  return `${firstLine.slice(0, 45)}...`;
+}
+
 function estimateContactTagWidth(email: string): number {
   return Math.max(74, email.length * 7 + 24);
 }
@@ -1345,6 +1379,8 @@ function normalizeTrafficPageSnapshot(payload: unknown): TrafficPageSnapshot | n
         fetchedAt: cacheFetchedAt,
       }
     : null;
+  const activeWorkspaceTabRaw = asString(payload.activeWorkspaceTab).toLowerCase();
+  const activeWorkspaceTab: TrafficWorkspaceTab = activeWorkspaceTabRaw === "email" ? "email" : "workflow";
 
   return {
     loadedAccountCode: asString(payload.loadedAccountCode).toUpperCase(),
@@ -1354,6 +1390,7 @@ function normalizeTrafficPageSnapshot(payload: unknown): TrafficPageSnapshot | n
     detailDraft: normalizeTrafficDetail(payload.detailDraft),
     cacheStatus,
     refreshMessage: asNullableString(payload.refreshMessage),
+    activeWorkspaceTab,
   };
 }
 
@@ -1485,6 +1522,69 @@ function validateStationModalDraft(station: TrafficStation | null): string | nul
   return null;
 }
 
+function resolveTrafficEmailExpiryLabel(flights: TrafficFlight[]): string {
+  const dates = flights
+    .map((flight) => asString(flight.flightEnd))
+    .filter((value) => /^(\d{4})-(\d{2})-(\d{2})$/.test(value));
+  if (!dates.length) {
+    return "";
+  }
+  const latest = [...dates].sort().at(-1) || "";
+  const formatted = formatIsoDateForTable(latest);
+  return formatted === "-" ? "" : formatted;
+}
+
+function mergeTrafficEmailDownloadLinksByFlight(
+  flights: TrafficFlight[],
+  previousLinks: TrafficEmailDownloadLink[] | null | undefined,
+): TrafficEmailDownloadLink[] {
+  const previousByFlightId = new Map<number, TrafficEmailDownloadLink>();
+  const previousByFallbackKey = new Map<string, TrafficEmailDownloadLink>();
+  for (const item of previousLinks ?? []) {
+    if (typeof item.flightId === "number" && Number.isFinite(item.flightId)) {
+      previousByFlightId.set(item.flightId, item);
+    }
+    const fallbackKey = `${asString(item.isci)}::${asString(item.fileUrl)}::${asString(item.scriptUrl)}`;
+    if (fallbackKey !== "::") {
+      previousByFallbackKey.set(fallbackKey, item);
+    }
+  }
+
+  return flights.map((flight) => {
+    const flightId = Number.isFinite(flight.id) ? flight.id : null;
+    const fallbackKey = `${asString(flight.isci || "")}::${asString(flight.fileUrl || "")}::${asString(flight.scriptUrl || "")}`;
+    const previous = (flightId !== null ? previousByFlightId.get(flightId) : undefined) || previousByFallbackKey.get(fallbackKey);
+    return {
+      flightId,
+      isci: asString(flight.isci || ""),
+      fileUrl: asString(flight.fileUrl || ""),
+      scriptUrl: asString(flight.scriptUrl || ""),
+      note: asString(previous?.note || ""),
+    };
+  });
+}
+
+function buildDefaultTrafficInstructionsText(flights: TrafficFlight[]): string {
+  const expiryLabel = resolveTrafficEmailExpiryLabel(flights);
+  return [
+    "Air ASAP",
+    expiryLabel ? `Expired: ${expiryLabel}` : "Expired: (set expiration date)",
+    "Keep airing after expiration or until the new commercial is sent.",
+  ].join("\n");
+}
+
+function buildTrafficEmailWorkspaceFromDetail(detail: TrafficDetail): TrafficEmailWorkspaceDraft {
+  const parsedBody = parseTrafficEmailWorkspaceFromBody(asString(detail.email?.body || ""));
+
+  return {
+    bodyContent: parsedBody.workspace?.bodyContent ?? parsedBody.bodyFallbackText,
+    instructionsContent: parsedBody.workspace?.instructionsContent ?? buildDefaultTrafficInstructionsText(detail.flights),
+    downloadLinks: mergeTrafficEmailDownloadLinksByFlight(detail.flights, parsedBody.workspace?.downloadLinks),
+    bodyTouched: false,
+    instructionsTouched: false,
+  };
+}
+
 function readSidebarCollapsedState(): boolean {
   if (typeof window === "undefined") {
     return false;
@@ -1584,6 +1684,12 @@ export default function TrafficPage() {
   const [isUnsavedDialogOpen, setIsUnsavedDialogOpen] = useState(false);
   const [isArchiveDialogOpen, setIsArchiveDialogOpen] = useState(false);
   const [archiveTargetTrafficId, setArchiveTargetTrafficId] = useState<string | null>(null);
+  const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<TrafficWorkspaceTab>("workflow");
+  const [isEmailPreviewOpen, setIsEmailPreviewOpen] = useState(false);
+  const [emailWorkspaceByTrafficId, setEmailWorkspaceByTrafficId] = useState<Record<string, TrafficEmailWorkspaceDraft>>({});
+  const [isDownloadLinkNoteModalOpen, setIsDownloadLinkNoteModalOpen] = useState(false);
+  const [activeDownloadLinkNoteIndex, setActiveDownloadLinkNoteIndex] = useState<number | null>(null);
+  const [downloadLinkNoteDraft, setDownloadLinkNoteDraft] = useState("");
   const [isScheduleTimelineModalOpen, setIsScheduleTimelineModalOpen] = useState(false);
   const [isScheduleTimelineLoading, setIsScheduleTimelineLoading] = useState(false);
   const [flightModalMode, setFlightModalMode] = useState<RowModalMode>("create");
@@ -1677,6 +1783,39 @@ export default function TrafficPage() {
       && !isLoadingDetail
       && !isSentLocked,
   );
+  const activeTrafficId = asString(activeDraft?.traffic.id);
+  const activeEmailWorkspace = useMemo(() => {
+    if (!activeDraft || !activeTrafficId) {
+      return null;
+    }
+    const existing = emailWorkspaceByTrafficId[activeTrafficId];
+    if (existing) {
+      return existing;
+    }
+    return buildTrafficEmailWorkspaceFromDetail(activeDraft);
+  }, [activeDraft, activeTrafficId, emailWorkspaceByTrafficId]);
+  const activeEmailPreviewHtml = useMemo(() => {
+    if (!activeDraft?.email || !activeEmailWorkspace) {
+      return "";
+    }
+    const accountCode = asString(activeDraft.traffic.accountCode).toUpperCase();
+    const accountLabel = accountNameByCode[accountCode] || accountCode || "Tradsphere";
+    return buildTrafficEmailHtmlDocument({
+      subject: asString(activeDraft.email.subject),
+      accountLabel,
+      campaignLabel: asString(activeDraft.traffic.campaign),
+      statusLabel: formatStatusOptionLabel(activeDraft.traffic.status),
+      bodyContent: activeEmailWorkspace.bodyContent,
+      instructionsContent: activeEmailWorkspace.instructionsContent,
+      downloadLinks: activeEmailWorkspace.downloadLinks,
+    });
+  }, [accountNameByCode, activeDraft, activeEmailWorkspace]);
+  const activeDownloadLinkNoteEntry = useMemo(() => {
+    if (!activeEmailWorkspace || activeDownloadLinkNoteIndex === null) {
+      return null;
+    }
+    return activeEmailWorkspace.downloadLinks[activeDownloadLinkNoteIndex] ?? null;
+  }, [activeDownloadLinkNoteIndex, activeEmailWorkspace]);
 
   const cacheStatusText = useMemo(() => {
     if (isRefreshingAccountTraffic || isLoadingDetail) {
@@ -2003,6 +2142,7 @@ export default function TrafficPage() {
       setDetailDraft(cloneDetail(normalized.detailDraft));
       setCacheStatus(normalized.cacheStatus);
       setRefreshMessage(normalized.refreshMessage);
+      setActiveWorkspaceTab(normalized.activeWorkspaceTab);
     }
     setHasHydratedPageState(true);
   }, [pageStateScope, setSelectedAccountCode, setSelectedTrafficByAccount]);
@@ -2019,9 +2159,11 @@ export default function TrafficPage() {
       detailDraft,
       cacheStatus,
       refreshMessage,
+      activeWorkspaceTab,
     };
     writeScopedPageState(pageStateScope, snapshot);
   }, [
+    activeWorkspaceTab,
     cacheStatus,
     detailBaseline,
     detailDraft,
@@ -2144,6 +2286,141 @@ export default function TrafficPage() {
         }
       : item));
   }, []);
+
+  useEffect(() => {
+    if (!activeDraft || !activeTrafficId) {
+      return;
+    }
+    setEmailWorkspaceByTrafficId((current) => {
+      const existing = current[activeTrafficId];
+      const defaults = buildTrafficEmailWorkspaceFromDetail(activeDraft);
+      if (!existing) {
+        return {
+          ...current,
+          [activeTrafficId]: defaults,
+        };
+      }
+
+      let changed = false;
+      let next = existing;
+      if (!existing.bodyTouched && defaults.bodyContent !== existing.bodyContent) {
+        next = {
+          ...next,
+          bodyContent: defaults.bodyContent,
+        };
+        changed = true;
+      }
+      if (!existing.instructionsTouched && defaults.instructionsContent !== existing.instructionsContent) {
+        next = {
+          ...next,
+          instructionsContent: defaults.instructionsContent,
+        };
+        changed = true;
+      }
+      const defaultLinksFingerprint = JSON.stringify(defaults.downloadLinks);
+      const existingLinksFingerprint = JSON.stringify(existing.downloadLinks);
+      if (defaultLinksFingerprint !== existingLinksFingerprint) {
+        next = {
+          ...next,
+          downloadLinks: defaults.downloadLinks,
+        };
+        changed = true;
+      }
+
+      if (!changed) {
+        return current;
+      }
+      return {
+        ...current,
+        [activeTrafficId]: next,
+      };
+    });
+  }, [activeDraft, activeTrafficId]);
+
+  const commitEmailWorkspace = useCallback((nextWorkspace: TrafficEmailWorkspaceDraft) => {
+    if (!activeDraft?.email || !activeTrafficId) {
+      return;
+    }
+    const accountCode = asString(activeDraft.traffic.accountCode).toUpperCase();
+    const accountLabel = accountNameByCode[accountCode] || accountCode || "Tradsphere";
+    const nextBodyValue = persistTrafficEmailBody({
+      workspace: {
+        bodyContent: nextWorkspace.bodyContent,
+        instructionsContent: nextWorkspace.instructionsContent,
+        downloadLinks: nextWorkspace.downloadLinks,
+      },
+      subject: asString(activeDraft.email.subject),
+      accountLabel,
+      campaignLabel: asString(activeDraft.traffic.campaign),
+      statusLabel: formatStatusOptionLabel(activeDraft.traffic.status),
+    });
+
+    setEmailWorkspaceByTrafficId((current) => ({
+      ...current,
+      [activeTrafficId]: nextWorkspace,
+    }));
+    updateDraft((current) => ({
+      ...current,
+      email: current.email
+        ? {
+            ...current.email,
+            body: nextBodyValue,
+          }
+        : current.email,
+    }));
+  }, [accountNameByCode, activeDraft, activeTrafficId, updateDraft]);
+
+  const handleOpenDownloadLinkNoteModal = useCallback((rowIndex: number) => {
+    const row = activeEmailWorkspace?.downloadLinks[rowIndex];
+    if (!row) {
+      return;
+    }
+    setActiveDownloadLinkNoteIndex(rowIndex);
+    setDownloadLinkNoteDraft(asString(row.note || ""));
+    setIsDownloadLinkNoteModalOpen(true);
+  }, [activeEmailWorkspace]);
+
+  const handleCloseDownloadLinkNoteModal = useCallback(() => {
+    setIsDownloadLinkNoteModalOpen(false);
+    setActiveDownloadLinkNoteIndex(null);
+    setDownloadLinkNoteDraft("");
+  }, []);
+
+  const handleSaveDownloadLinkNote = useCallback(() => {
+    if (!activeEmailWorkspace || activeDownloadLinkNoteIndex === null) {
+      return;
+    }
+    const nextLinks = activeEmailWorkspace.downloadLinks.map((entry, entryIndex) => entryIndex === activeDownloadLinkNoteIndex
+      ? { ...entry, note: downloadLinkNoteDraft }
+      : entry);
+    commitEmailWorkspace({
+      ...activeEmailWorkspace,
+      downloadLinks: nextLinks,
+    });
+    handleCloseDownloadLinkNoteModal();
+  }, [activeDownloadLinkNoteIndex, activeEmailWorkspace, commitEmailWorkspace, downloadLinkNoteDraft, handleCloseDownloadLinkNoteModal]);
+
+  useEffect(() => {
+    if (activeDraft) {
+      return;
+    }
+    setIsEmailPreviewOpen(false);
+    setIsDownloadLinkNoteModalOpen(false);
+    setActiveDownloadLinkNoteIndex(null);
+    setDownloadLinkNoteDraft("");
+  }, [activeDraft]);
+
+  useEffect(() => {
+    if (!isDownloadLinkNoteModalOpen) {
+      return;
+    }
+    if (activeDownloadLinkNoteEntry) {
+      return;
+    }
+    setIsDownloadLinkNoteModalOpen(false);
+    setActiveDownloadLinkNoteIndex(null);
+    setDownloadLinkNoteDraft("");
+  }, [activeDownloadLinkNoteEntry, isDownloadLinkNoteModalOpen]);
 
   useEffect(() => {
     if (!activeDraft) {
@@ -2467,10 +2744,39 @@ export default function TrafficPage() {
   ]);
 
   const handleDiscard = useCallback(() => {
+    const activeDraftId = asString(detailDraft?.traffic.id);
+    const shouldDropLocalDraft = !detailBaseline && isLocalTrafficId(activeDraftId);
+    if (shouldDropLocalDraft) {
+      const nextList = trafficList.filter((item) => item.id !== activeDraftId);
+      const nextSelected = selectedTrafficId === activeDraftId
+        ? (nextList[0]?.id || null)
+        : selectedTrafficId;
+      setTrafficList(nextList);
+      setSelectedTrafficId(nextSelected);
+      upsertSelectedByAccount(activeAccountCode, nextSelected);
+      if (nextSelected && !isLocalTrafficId(nextSelected)) {
+        void loadTrafficDetail(nextSelected, { policy: "stale-while-revalidate", deferWhenDirty: false });
+      } else {
+        setDetailBaseline(null);
+        setDetailDraft(null);
+      }
+      setRefreshMessage(null);
+      clearDeferredUpdate();
+      return;
+    }
     setDetailDraft(cloneDetail(detailBaseline));
     setRefreshMessage(null);
     clearDeferredUpdate();
-  }, [clearDeferredUpdate, detailBaseline]);
+  }, [
+    activeAccountCode,
+    clearDeferredUpdate,
+    detailBaseline,
+    detailDraft?.traffic.id,
+    loadTrafficDetail,
+    selectedTrafficId,
+    trafficList,
+    upsertSelectedByAccount,
+  ]);
 
   const handleRefresh = useCallback(async () => {
     if (!activeAccountCode) {
@@ -2708,7 +3014,26 @@ export default function TrafficPage() {
       return;
     }
 
-    setDetailDraft(cloneDetail(detailBaseline));
+    const resetDraft = cloneDetail(detailBaseline);
+    const activeDraftId = asString(detailDraft?.traffic.id);
+    const shouldDropLocalDraft = !detailBaseline && isLocalTrafficId(activeDraftId);
+    const nextListAfterDiscard = shouldDropLocalDraft
+      ? trafficList.filter((item) => item.id !== activeDraftId)
+      : trafficList;
+    const nextSelectedAfterDiscard = shouldDropLocalDraft
+      ? (selectedTrafficId === activeDraftId ? (nextListAfterDiscard[0]?.id || null) : selectedTrafficId)
+      : selectedTrafficId;
+
+    if (shouldDropLocalDraft) {
+      setTrafficList(nextListAfterDiscard);
+      setSelectedTrafficId(nextSelectedAfterDiscard);
+      upsertSelectedByAccount(activeAccountCode, nextSelectedAfterDiscard);
+      setDetailBaseline(null);
+      setDetailDraft(null);
+    } else {
+      setDetailDraft(resetDraft);
+    }
+    setRefreshMessage(null);
     clearDeferredUpdate();
 
     if (!action) {
@@ -2741,18 +3066,36 @@ export default function TrafficPage() {
       return;
     }
     if (action.type === "route") {
+      const snapshot: TrafficPageSnapshot = {
+        loadedAccountCode,
+        selectedTrafficId: nextSelectedAfterDiscard,
+        trafficList: nextListAfterDiscard,
+        detailBaseline,
+        detailDraft: shouldDropLocalDraft ? null : resetDraft,
+        cacheStatus,
+        refreshMessage: null,
+        activeWorkspaceTab,
+      };
+      writeScopedPageState(pageStateScope, snapshot);
       action.proceed();
     }
   }, [
+    activeWorkspaceTab,
     activeAccountCode,
+    cacheStatus,
     clearDeferredUpdate,
     detailBaseline,
+    detailDraft?.traffic.id,
     handleRefresh,
+    loadedAccountCode,
     loadAccountTraffic,
     loadTrafficDetail,
+    pageStateScope,
     pendingAction,
+    selectedTrafficId,
     selectedTrafficByAccount,
     setSelectedAccountCode,
+    trafficList,
     upsertSelectedByAccount,
   ]);
 
@@ -3947,7 +4290,43 @@ export default function TrafficPage() {
             </SectionCard>
           ) : (
             <>
+          <div className="flex justify-start">
+            <div
+              role="tablist"
+              aria-label="Traffic workspace mode"
+              className="grid w-full grid-cols-2 gap-1.5 rounded-xl border border-blue-200 bg-gradient-to-r from-blue-50/80 via-indigo-50/40 to-violet-50/70 p-1.5 sm:w-auto sm:min-w-[32rem]"
+            >
+              {EMAIL_WORKSPACE_TABS.map((tab) => {
+                const isActive = activeWorkspaceTab === tab.value;
+                const tabIcon = tab.value === "workflow" ? <Table2 className="size-3.5" /> : <Send className="size-3.5" />;
+                return (
+                  <button
+                    key={tab.value}
+                    id={`traffic-workspace-tab-${tab.value}`}
+                    role="tab"
+                    aria-selected={isActive}
+                    aria-controls={`traffic-workspace-panel-${tab.value}`}
+                    type="button"
+                    onClick={() => setActiveWorkspaceTab(tab.value)}
+                    className={[
+                      "inline-flex w-full items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300",
+                      isActive
+                        ? "border-blue-200 bg-white text-blue-700 shadow-sm"
+                        : "border-transparent bg-transparent text-slate-600 hover:border-blue-100 hover:bg-white/70 hover:text-blue-700",
+                    ].join(" ")}
+                  >
+                    {tabIcon}
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+
+          {activeWorkspaceTab === "workflow" ? (
+            <>
           <SectionCard
+            id="traffic-workspace-panel-workflow"
             title="Traffic Details"
             actions={(
               <ActionIconButton
@@ -4315,41 +4694,56 @@ export default function TrafficPage() {
               ) : null}
             </div>
           </SectionCard>
+            </>
+          ) : null}
 
-          <SectionCard
+          {activeWorkspaceTab === "email" ? (
+            <SectionCard
+            id="traffic-workspace-panel-email"
             title={(
               <div className="space-y-1">
-                <p>Email Draft</p>
+                <p>Email Workspace</p>
                 <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${emailStatusChipClass(activeDraft?.email?.sentStatus || "draft")}`}>
                   {formatStatusOptionLabel(activeDraft?.email?.sentStatus || "draft")}
                 </span>
               </div>
             )}
             actions={(
-              <ActionIconButton
-                icon={<Send />}
-                tooltip="Mark email as ready"
-                aria-label="Mark email as ready"
-                title="Mark email as ready"
-                onClick={() => {
-                  if (!activeDraft) {
-                    return;
-                  }
-                  updateDraft((current) => ({
-                    ...current,
-                    email: current.email
-                      ? {
-                          ...current.email,
-                          sentStatus: "ready",
-                        }
-                      : current.email,
-                  }));
-                }}
-                disabled={!canEditTradsphere || isSaving || isSentLocked || !activeDraft}
-                className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
-              />
+              <div className="flex items-center gap-1">
+                <ActionIconButton
+                  icon={<Eye />}
+                  tooltip="Preview email HTML"
+                  aria-label="Preview email HTML"
+                  title="Preview email HTML"
+                  onClick={() => setIsEmailPreviewOpen(true)}
+                  disabled={!activeDraft || !activeDraft.email || !activeEmailWorkspace}
+                  className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
+                />
+                <ActionIconButton
+                  icon={<Send />}
+                  tooltip="Mark email as ready"
+                  aria-label="Mark email as ready"
+                  title="Mark email as ready"
+                  onClick={() => {
+                    if (!activeDraft) {
+                      return;
+                    }
+                    updateDraft((current) => ({
+                      ...current,
+                      email: current.email
+                        ? {
+                            ...current.email,
+                            sentStatus: "ready",
+                          }
+                        : current.email,
+                    }));
+                  }}
+                  disabled={!canEditTradsphere || isSaving || isSentLocked || !activeDraft}
+                  className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
+                />
+              </div>
             )}
-            contentClassName="space-y-3"
+            contentClassName="space-y-4"
           >
             {!activeAccountCode ? (
               <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
@@ -4359,87 +4753,207 @@ export default function TrafficPage() {
               <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
                 Select a traffic record to manage the email draft.
               </div>
+            ) : !activeEmailWorkspace ? (
+              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+                Email workspace is unavailable for this traffic record.
+              </div>
             ) : (
               <>
-                <EmailChipsInput
-                  value={activeDraft.email?.toEmails || []}
-                  placeholder="To emails"
-                  disabled={!canEditTradsphere || isSaving || isSentLocked}
-                  labelByEmail={contactNameByEmail}
-                  onChange={(nextEmails) => updateDraft((current) => ({
-                    ...current,
-                    email: current.email
-                      ? {
-                          ...current.email,
-                          toEmails: nextEmails,
-                        }
-                      : current.email,
-                  }))}
-                />
-                <div className="grid gap-2 md:grid-cols-2">
-                  <EmailChipsInput
-                    value={activeDraft.email?.ccEmails || []}
-                    placeholder="CC emails"
+                <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Recipients</p>
+                  <p className="mt-1 text-xs text-slate-500">Manage recipients and draft subject.</p>
+                  <div className="mt-3 space-y-2">
+                    <EmailChipsInput
+                      value={activeDraft.email?.toEmails || []}
+                      placeholder="To emails"
+                      disabled={!canEditTradsphere || isSaving || isSentLocked}
+                      labelByEmail={contactNameByEmail}
+                      onChange={(nextEmails) => updateDraft((current) => ({
+                        ...current,
+                        email: current.email
+                          ? {
+                              ...current.email,
+                              toEmails: nextEmails,
+                            }
+                          : current.email,
+                      }))}
+                    />
+                    <div className="grid gap-2 md:grid-cols-2">
+                      <EmailChipsInput
+                        value={activeDraft.email?.ccEmails || []}
+                        placeholder="CC emails"
+                        disabled={!canEditTradsphere || isSaving || isSentLocked}
+                        labelByEmail={contactNameByEmail}
+                        onChange={(nextEmails) => updateDraft((current) => ({
+                          ...current,
+                          email: current.email
+                            ? {
+                                ...current.email,
+                                ccEmails: nextEmails,
+                              }
+                            : current.email,
+                        }))}
+                      />
+                      <EmailChipsInput
+                        value={activeDraft.email?.bccEmails || []}
+                        placeholder="BCC emails"
+                        disabled={!canEditTradsphere || isSaving || isSentLocked}
+                        labelByEmail={contactNameByEmail}
+                        onChange={(nextEmails) => updateDraft((current) => ({
+                          ...current,
+                          email: current.email
+                            ? {
+                                ...current.email,
+                                bccEmails: nextEmails,
+                              }
+                            : current.email,
+                        }))}
+                      />
+                    </div>
+                    <Input
+                      value={activeDraft.email?.subject || ""}
+                      placeholder="Email subject"
+                      disabled={!canEditTradsphere || isSaving || isSentLocked}
+                      onChange={(event) => updateDraft((current) => ({
+                        ...current,
+                        email: current.email
+                          ? {
+                              ...current.email,
+                              subject: event.target.value,
+                            }
+                          : current.email,
+                      }))}
+                    />
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Body Content</p>
+                  <p className="mt-1 text-xs text-slate-500">Main message shown in the email body.</p>
+                  <Textarea
+                    value={activeEmailWorkspace.bodyContent}
+                    placeholder="Email body"
+                    className="mt-3 min-h-[130px]"
                     disabled={!canEditTradsphere || isSaving || isSentLocked}
-                    labelByEmail={contactNameByEmail}
-                    onChange={(nextEmails) => updateDraft((current) => ({
-                      ...current,
-                      email: current.email
-                        ? {
-                            ...current.email,
-                            ccEmails: nextEmails,
-                          }
-                        : current.email,
-                    }))}
-                  />
-                  <EmailChipsInput
-                    value={activeDraft.email?.bccEmails || []}
-                    placeholder="BCC emails"
-                    disabled={!canEditTradsphere || isSaving || isSentLocked}
-                    labelByEmail={contactNameByEmail}
-                    onChange={(nextEmails) => updateDraft((current) => ({
-                      ...current,
-                      email: current.email
-                        ? {
-                            ...current.email,
-                            bccEmails: nextEmails,
-                          }
-                        : current.email,
-                    }))}
+                    onChange={(event) => {
+                      const nextWorkspace: TrafficEmailWorkspaceDraft = {
+                        ...activeEmailWorkspace,
+                        bodyContent: event.target.value,
+                        bodyTouched: true,
+                      };
+                      commitEmailWorkspace(nextWorkspace);
+                    }}
                   />
                 </div>
-                <Input
-                  value={activeDraft.email?.subject || ""}
-                  placeholder="Email subject"
-                  disabled={!canEditTradsphere || isSaving || isSentLocked}
-                  onChange={(event) => updateDraft((current) => ({
-                    ...current,
-                    email: current.email
-                      ? {
-                          ...current.email,
-                          subject: event.target.value,
-                        }
-                      : current.email,
-                  }))}
-                />
-                <Textarea
-                  value={activeDraft.email?.body || ""}
-                  placeholder="Email body"
-                  className="min-h-[110px]"
-                  disabled={!canEditTradsphere || isSaving || isSentLocked}
-                  onChange={(event) => updateDraft((current) => ({
-                    ...current,
-                    email: current.email
-                      ? {
-                          ...current.email,
-                          body: event.target.value,
-                        }
-                      : current.email,
-                  }))}
-                />
+
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  <div>
+                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Download Links</p>
+                    <p className="mt-1 text-xs text-slate-500">
+                      ISCI, File URL, and Script URL are auto-synced from Flights. To update these values, edit the corresponding flight row.
+                    </p>
+                  </div>
+                  <div className="mt-3">
+                    {activeEmailWorkspace.downloadLinks.length === 0 ? (
+                      <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">
+                        No flights found. Add flight rows to auto-generate this section.
+                      </div>
+                    ) : (
+                      <div className="overflow-x-auto rounded-lg border border-slate-200">
+                        <table className="min-w-full text-left text-xs">
+                          <thead className="bg-slate-50 text-slate-600">
+                            <tr>
+                              <th className="px-3 py-2 font-semibold">ISCI</th>
+                              <th className="px-3 py-2 font-semibold">File URL</th>
+                              <th className="px-3 py-2 font-semibold">Script URL</th>
+                              <th className="px-3 py-2 font-semibold">Note</th>
+                            </tr>
+                          </thead>
+                          <tbody>
+                            {activeEmailWorkspace.downloadLinks.map((item, index) => {
+                              const fileUrl = normalizeExternalUrl(item.fileUrl);
+                              const scriptUrl = normalizeExternalUrl(item.scriptUrl);
+                              const notePreview = formatDownloadLinkNotePreview(item.note);
+                              const hasNote = Boolean(notePreview);
+                              return (
+                                <tr key={`download-link-${index}`} className="border-t border-slate-200 text-slate-700">
+                                  <td className="whitespace-nowrap px-3 py-2.5 align-middle">{asString(item.isci) || "—"}</td>
+                                  <td className="px-3 py-2.5 align-middle">
+                                    {fileUrl ? (
+                                      <a
+                                        href={fileUrl}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="text-blue-700 hover:text-blue-800 hover:underline"
+                                      >
+                                        Open file
+                                      </a>
+                                    ) : (
+                                      <span className="text-slate-400">Missing</span>
+                                    )}
+                                  </td>
+                                  <td className="px-3 py-2.5 align-middle">
+                                    {scriptUrl ? (
+                                      <a
+                                        href={scriptUrl}
+                                        target="_blank"
+                                        rel="noreferrer"
+                                        className="text-blue-700 hover:text-blue-800 hover:underline"
+                                      >
+                                        Open script
+                                      </a>
+                                    ) : (
+                                      <span className="text-slate-400">Missing</span>
+                                    )}
+                                  </td>
+                                  <td className="px-3 py-2.5 align-middle">
+                                    {hasNote ? (
+                                      <span className="mr-2 inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
+                                        Note added
+                                      </span>
+                                    ) : null}
+                                    <ActionIconButton
+                                      icon={<Pencil />}
+                                      tooltip={hasNote ? "Edit note" : "Add note"}
+                                      aria-label={hasNote ? "Edit note" : "Add note"}
+                                      title={hasNote ? `Edit note: ${notePreview}` : "Add note"}
+                                      onClick={() => handleOpenDownloadLinkNoteModal(index)}
+                                      disabled={!canEditTradsphere || isSaving || isSentLocked}
+                                      className="!h-8 !w-8 !rounded-full !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-3.5 [&_svg]:!w-3.5"
+                                    />
+                                  </td>
+                                </tr>
+                              );
+                            })}
+                          </tbody>
+                        </table>
+                      </div>
+                    )}
+                  </div>
+                </div>
+
+                <div className="rounded-xl border border-slate-200 bg-white p-3">
+                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Traffic Instructions</p>
+                  <p className="mt-1 text-xs text-slate-500">Example: Air ASAP, Expired date, and airing guidance.</p>
+                  <Textarea
+                    value={activeEmailWorkspace.instructionsContent}
+                    placeholder="Air ASAP"
+                    className="mt-3 min-h-[120px]"
+                    disabled={!canEditTradsphere || isSaving || isSentLocked}
+                    onChange={(event) => {
+                      const nextWorkspace: TrafficEmailWorkspaceDraft = {
+                        ...activeEmailWorkspace,
+                        instructionsContent: event.target.value,
+                        instructionsTouched: true,
+                      };
+                      commitEmailWorkspace(nextWorkspace);
+                    }}
+                  />
+                </div>
               </>
             )}
           </SectionCard>
+          ) : null}
             </>
           )}
         </div>
@@ -4544,6 +5058,88 @@ export default function TrafficPage() {
               onLoadingChange={setIsScheduleTimelineLoading}
             />
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={isEmailPreviewOpen}
+        onOpenChange={(open) => {
+          setIsEmailPreviewOpen(open);
+        }}
+      >
+        <DialogContent className="!h-[90vh] !max-h-[90vh] !w-[min(96vw,1100px)] !max-w-[1100px] overflow-hidden p-0">
+          <DialogClose
+            className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label="Close email preview modal"
+          >
+            <X className="size-4" />
+          </DialogClose>
+          <DialogHeader className="border-b border-slate-200 px-5 py-4 pr-12">
+            <DialogTitle>Email Preview</DialogTitle>
+            <DialogDescription>
+              Offline preview using the current email workspace and traffic cache data.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="h-[calc(90vh-5.25rem)] overflow-y-auto bg-slate-100 p-4">
+            <div className="mx-auto h-full w-full max-w-[980px] overflow-hidden rounded-xl border border-blue-100 bg-white shadow-sm">
+              <iframe
+                title="Traffic email preview"
+                srcDoc={activeEmailPreviewHtml}
+                className="h-full min-h-[980px] w-full border-0 bg-white"
+              />
+            </div>
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={isDownloadLinkNoteModalOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            handleCloseDownloadLinkNoteModal();
+            return;
+          }
+          setIsDownloadLinkNoteModalOpen(true);
+        }}
+      >
+        <DialogContent className="max-w-xl">
+          <DialogClose
+            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label="Close download note modal"
+          >
+            <X className="size-4" />
+          </DialogClose>
+          <DialogHeader className="pr-8">
+            <DialogTitle>{activeDownloadLinkNoteEntry?.note ? "Edit Download Note" : "Add Download Note"}</DialogTitle>
+            <DialogDescription>
+              {activeDownloadLinkNoteEntry
+                ? `ISCI: ${asString(activeDownloadLinkNoteEntry.isci) || "-"}. This note appears in the Download Links email table.`
+                : "Add a short note for this flight download item."}
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <label className="space-y-1 text-sm">
+              <span className="text-slate-600">Note</span>
+              <Textarea
+                value={downloadLinkNoteDraft}
+                placeholder="Add a custom note for this flight download item"
+                className="min-h-[130px]"
+                disabled={!canEditTradsphere || isSaving || isSentLocked}
+                onChange={(event) => setDownloadLinkNoteDraft(event.target.value)}
+              />
+            </label>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={handleCloseDownloadLinkNoteModal}>
+              Cancel
+            </Button>
+            <Button
+              onClick={handleSaveDownloadLinkNote}
+              disabled={!canEditTradsphere || isSaving || isSentLocked || activeDownloadLinkNoteIndex === null}
+            >
+              Save Note
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
