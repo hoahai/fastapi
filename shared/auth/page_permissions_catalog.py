@@ -10,6 +10,7 @@ _APP_PAGE_CATALOG: dict[str, list[PageDefinition]] = {
         {"key": "tradsphere_estnums", "label": "Estimate Numbers", "route": "/tradsphere/estnums"},
         {"key": "tradsphere_contacts", "label": "Contacts", "route": "/tradsphere/contacts"},
         {"key": "tradsphere_stations", "label": "Stations", "route": "/tradsphere/stations"},
+        {"key": "tradsphere_traffic", "label": "Traffic", "route": "/tradsphere/traffic"},
         {"key": "tradsphere_invoice_checklists", "label": "Invoice Checklists", "route": "/tradsphere/invoice-checklists"},
     ],
     "shiftzy": [
@@ -67,6 +68,7 @@ _APP_API_PAGE_KEY_RULES: dict[str, tuple[tuple[tuple[str, ...], tuple[str, ...]]
                 "tradsphere_estnums",
                 "tradsphere_contacts",
                 "tradsphere_stations",
+                "tradsphere_traffic",
                 "tradsphere_invoice_checklists",
             ),
         ),
@@ -75,6 +77,7 @@ _APP_API_PAGE_KEY_RULES: dict[str, tuple[tuple[tuple[str, ...], tuple[str, ...]]
         (("/contacts/station-codes", "/contacts/selector"), ("tradsphere_stations", "tradsphere_contacts")),
         (("/contacts/stationscontacts", "/contacts"), ("tradsphere_contacts",)),
         (("/stations/deliverymethods", "/stations"), ("tradsphere_stations",)),
+        (("/traffic",), ("tradsphere_traffic",)),
         (
             (
                 "/ui/invoice-checklists/load",

@@ -6,6 +6,7 @@ import {
   LayoutDashboard,
   MapPinned,
   RadioTower,
+  Send,
   Search,
   UserCheck,
   Users,
@@ -66,6 +67,12 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
         id: "tradsphere-stations",
         label: "Stations",
         route: "/tradsphere/stations",
+        available: true,
+      },
+      {
+        id: "tradsphere-traffic",
+        label: "Traffic",
+        route: "/tradsphere/traffic",
         available: true,
       },
       {
@@ -136,6 +143,7 @@ export const TRADSPHERE_HOME_CHILD_ICON = House;
 export const TRADSPHERE_ESTNUMS_CHILD_ICON = Search;
 export const TRADSPHERE_CONTACTS_CHILD_ICON = ContactRound;
 export const TRADSPHERE_STATIONS_CHILD_ICON = MapPinned;
+export const TRADSPHERE_TRAFFIC_CHILD_ICON = Send;
 export const TRADSPHERE_INVOICE_CHECKLISTS_CHILD_ICON = ClipboardCheck;
 export const TRADSPHERE_USERS_ACCESS_CHILD_ICON = UserCheck;
 export const SHIFTZY_SCHEDULES_CHILD_ICON = CalendarClock;

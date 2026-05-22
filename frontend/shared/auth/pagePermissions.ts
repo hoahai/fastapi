@@ -12,6 +12,7 @@ const APP_PAGE_CATALOG: Record<string, AppPageDefinition[]> = {
     { key: "tradsphere_estnums", label: "Estimate Numbers", route: "/tradsphere/estnums" },
     { key: "tradsphere_contacts", label: "Contacts", route: "/tradsphere/contacts" },
     { key: "tradsphere_stations", label: "Stations", route: "/tradsphere/stations" },
+    { key: "tradsphere_traffic", label: "Traffic", route: "/tradsphere/traffic" },
     { key: "tradsphere_invoice_checklists", label: "Invoice Checklists", route: "/tradsphere/invoice-checklists" },
   ],
   shiftzy: [

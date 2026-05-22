@@ -5653,3 +5653,527 @@ def count_inv_note_attachments(
         include_deleted=include_deleted,
     )
     return len(rows)
+
+
+def list_traffic_by_account(
+    *,
+    account_code: str,
+    include_archived: bool = False,
+) -> list[dict]:
+    tables = get_db_tables()
+    traffic_table = _quote_table_name(tables["TRAFFIC"])
+    flights_table = _quote_table_name(tables["TRAFFICFLIGHTS"])
+    stations_table = _quote_table_name(tables["TRAFFICSTATIONS"])
+    email_table = _quote_table_name(tables["TRAFFICEMAILS"])
+
+    where_clauses = ["UPPER(t.accountCode) = UPPER(%s)"]
+    params: list[object] = [_normalize_account_code(account_code)]
+    if not include_archived:
+        where_clauses.append("t.status <> 'archived'")
+
+    query = (
+        "SELECT "
+        "t.id AS id, "
+        "t.accountCode AS accountCode, "
+        "t.campaign AS campaign, "
+        "t.status AS status, "
+        "t.note AS note, "
+        "t.dateCreated AS dateCreated, "
+        "t.dateUpdated AS dateUpdated, "
+        "COALESCE(flightsAgg.flightCount, 0) AS flightCount, "
+        "COALESCE(stationsAgg.stationCount, 0) AS stationCount, "
+        "COALESCE(flightsAgg.totalRotation, 0.00) AS totalRotation, "
+        "em.sentStatus AS emailSentStatus, "
+        "em.sentAt AS emailSentAt "
+        f"FROM {traffic_table} t "
+        "LEFT JOIN ("
+        "SELECT trafficId, COUNT(*) AS flightCount, COALESCE(SUM(rotation), 0.00) AS totalRotation "
+        f"FROM {flights_table} "
+        "GROUP BY trafficId"
+        ") flightsAgg ON flightsAgg.trafficId = t.id "
+        "LEFT JOIN ("
+        "SELECT trafficId, COUNT(*) AS stationCount "
+        f"FROM {stations_table} "
+        "GROUP BY trafficId"
+        ") stationsAgg ON stationsAgg.trafficId = t.id "
+        f"LEFT JOIN {email_table} em ON em.trafficId = t.id "
+        "WHERE " + " AND ".join(where_clauses) + " "
+        "ORDER BY t.dateUpdated DESC, t.dateCreated DESC, t.id DESC"
+    )
+    return fetch_all(query, tuple(params))
+
+
+def get_traffic_row(*, traffic_id: str) -> dict | None:
+    traffic_id_text = str(traffic_id or "").strip()
+    if not traffic_id_text:
+        return None
+    tables = get_db_tables()
+    traffic_table = _quote_table_name(tables["TRAFFIC"])
+    rows = fetch_all(
+        (
+            "SELECT "
+            "id, accountCode, campaign, status, note, dateCreated, dateUpdated "
+            f"FROM {traffic_table} "
+            "WHERE id = %s "
+            "LIMIT 1"
+        ),
+        (traffic_id_text,),
+    )
+    if not rows:
+        return None
+    return rows[0]
+
+
+def update_traffic(
+    *,
+    traffic_id: str,
+    fields: dict[str, object],
+) -> int:
+    if not fields:
+        return 0
+    tables = get_db_tables()
+    traffic_table = _quote_table_name(tables["TRAFFIC"])
+    updates: list[str] = []
+    params: list[object] = []
+    if "campaign" in fields:
+        updates.append("campaign = %s")
+        params.append(_normalize_input_text(fields.get("campaign")))
+    if "status" in fields:
+        updates.append("status = %s")
+        params.append(_normalize_input_text(fields.get("status")))
+    if "note" in fields:
+        updates.append("note = %s")
+        params.append(_normalize_optional_input_text(fields.get("note")))
+    if not updates:
+        return 0
+    params.append(str(traffic_id or "").strip())
+    updated = run_transaction(
+        lambda cursor: (
+            cursor.execute(
+                f"UPDATE {traffic_table} SET " + ", ".join(updates) + " WHERE id = %s",
+                tuple(params),
+            )
+            or int(cursor.rowcount or 0)
+        )
+    )
+    return int(updated or 0)
+
+
+def insert_traffic(item: dict) -> int:
+    tables = get_db_tables()
+    traffic_table = _quote_table_name(tables["TRAFFIC"])
+    query = (
+        f"INSERT INTO {traffic_table} "
+        "(id, accountCode, campaign, status, note) "
+        "VALUES (%s, %s, %s, %s, %s)"
+    )
+    values = (
+        str(item.get("id") or "").strip(),
+        _normalize_account_code(item.get("accountCode")),
+        _normalize_input_text(item.get("campaign")),
+        _normalize_input_text(item.get("status")),
+        _normalize_optional_input_text(item.get("note")),
+    )
+    return int(execute_many(query, [values]) or 0)
+
+
+def list_traffic_flights(*, traffic_id: str) -> list[dict]:
+    traffic_id_text = str(traffic_id or "").strip()
+    if not traffic_id_text:
+        return []
+    tables = get_db_tables()
+    flights_table = _quote_table_name(tables["TRAFFICFLIGHTS"])
+    query = (
+        "SELECT "
+        "id, trafficId, flightStart, flightEnd, medium, length, isci, rotation, "
+        "fileUrl, scriptUrl, note, dateCreated, dateUpdated "
+        f"FROM {flights_table} "
+        "WHERE trafficId = %s "
+        "ORDER BY flightStart ASC, id ASC"
+    )
+    return fetch_all(query, (traffic_id_text,))
+
+
+def get_traffic_flight_row(
+    *,
+    traffic_id: str,
+    flight_id: int,
+) -> dict | None:
+    tables = get_db_tables()
+    flights_table = _quote_table_name(tables["TRAFFICFLIGHTS"])
+    rows = fetch_all(
+        (
+            "SELECT "
+            "id, trafficId, flightStart, flightEnd, medium, length, isci, rotation, "
+            "fileUrl, scriptUrl, note, dateCreated, dateUpdated "
+            f"FROM {flights_table} "
+            "WHERE id = %s AND trafficId = %s "
+            "LIMIT 1"
+        ),
+        (int(flight_id), str(traffic_id or "").strip()),
+    )
+    if not rows:
+        return None
+    return rows[0]
+
+
+def insert_traffic_flight(item: dict) -> int:
+    tables = get_db_tables()
+    flights_table = _quote_table_name(tables["TRAFFICFLIGHTS"])
+    query = (
+        f"INSERT INTO {flights_table} "
+        "(trafficId, flightStart, flightEnd, medium, length, isci, rotation, fileUrl, scriptUrl, note) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+    )
+    values = (
+        str(item.get("trafficId") or "").strip(),
+        item.get("flightStart"),
+        item.get("flightEnd"),
+        _normalize_input_text(item.get("medium")),
+        int(item.get("length")),
+        _normalize_optional_input_text(item.get("isci")),
+        float(item.get("rotation")),
+        _normalize_input_text(item.get("fileUrl")),
+        _normalize_optional_input_text(item.get("scriptUrl")),
+        _normalize_optional_input_text(item.get("note")),
+    )
+    inserted_id = run_transaction(
+        lambda cursor: (
+            cursor.execute(query, values) or int(cursor.lastrowid or 0)
+        )
+    )
+    return int(inserted_id or 0)
+
+
+def update_traffic_flight(
+    *,
+    traffic_id: str,
+    flight_id: int,
+    fields: dict[str, object],
+) -> int:
+    if not fields:
+        return 0
+    tables = get_db_tables()
+    flights_table = _quote_table_name(tables["TRAFFICFLIGHTS"])
+    updates: list[str] = []
+    params: list[object] = []
+    if "flightStart" in fields:
+        updates.append("flightStart = %s")
+        params.append(fields.get("flightStart"))
+    if "flightEnd" in fields:
+        updates.append("flightEnd = %s")
+        params.append(fields.get("flightEnd"))
+    if "medium" in fields:
+        updates.append("medium = %s")
+        params.append(_normalize_input_text(fields.get("medium")))
+    if "length" in fields:
+        updates.append("length = %s")
+        params.append(int(fields.get("length")))
+    if "isci" in fields:
+        updates.append("isci = %s")
+        params.append(_normalize_optional_input_text(fields.get("isci")))
+    if "rotation" in fields:
+        updates.append("rotation = %s")
+        params.append(float(fields.get("rotation")))
+    if "fileUrl" in fields:
+        updates.append("fileUrl = %s")
+        params.append(_normalize_input_text(fields.get("fileUrl")))
+    if "scriptUrl" in fields:
+        updates.append("scriptUrl = %s")
+        params.append(_normalize_optional_input_text(fields.get("scriptUrl")))
+    if "note" in fields:
+        updates.append("note = %s")
+        params.append(_normalize_optional_input_text(fields.get("note")))
+    if not updates:
+        return 0
+    params.extend([int(flight_id), str(traffic_id or "").strip()])
+    updated = run_transaction(
+        lambda cursor: (
+            cursor.execute(
+                f"UPDATE {flights_table} SET " + ", ".join(updates) + " WHERE id = %s AND trafficId = %s",
+                tuple(params),
+            )
+            or int(cursor.rowcount or 0)
+        )
+    )
+    return int(updated or 0)
+
+
+def delete_traffic_flight(
+    *,
+    traffic_id: str,
+    flight_id: int,
+) -> int:
+    tables = get_db_tables()
+    flights_table = _quote_table_name(tables["TRAFFICFLIGHTS"])
+    deleted = run_transaction(
+        lambda cursor: (
+            cursor.execute(
+                f"DELETE FROM {flights_table} WHERE id = %s AND trafficId = %s",
+                (int(flight_id), str(traffic_id or "").strip()),
+            )
+            or int(cursor.rowcount or 0)
+        )
+    )
+    return int(deleted or 0)
+
+
+def list_traffic_stations(*, traffic_id: str) -> list[dict]:
+    traffic_id_text = str(traffic_id or "").strip()
+    if not traffic_id_text:
+        return []
+    tables = get_db_tables()
+    stations_table = _quote_table_name(tables["TRAFFICSTATIONS"])
+    query = (
+        "SELECT "
+        "id, trafficId, stationCode, contactsSnapshot, deliveryMethod, "
+        "deliveryStatus, confirmedStatus, note, dateCreated, dateUpdated "
+        f"FROM {stations_table} "
+        "WHERE trafficId = %s "
+        "ORDER BY id ASC"
+    )
+    return fetch_all(query, (traffic_id_text,))
+
+
+def get_traffic_station_row(
+    *,
+    traffic_id: str,
+    station_id: int,
+) -> dict | None:
+    tables = get_db_tables()
+    stations_table = _quote_table_name(tables["TRAFFICSTATIONS"])
+    rows = fetch_all(
+        (
+            "SELECT "
+            "id, trafficId, stationCode, contactsSnapshot, deliveryMethod, "
+            "deliveryStatus, confirmedStatus, note, dateCreated, dateUpdated "
+            f"FROM {stations_table} "
+            "WHERE id = %s AND trafficId = %s "
+            "LIMIT 1"
+        ),
+        (int(station_id), str(traffic_id or "").strip()),
+    )
+    if not rows:
+        return None
+    return rows[0]
+
+
+def insert_traffic_station(item: dict) -> int:
+    tables = get_db_tables()
+    stations_table = _quote_table_name(tables["TRAFFICSTATIONS"])
+    query = (
+        f"INSERT INTO {stations_table} "
+        "(trafficId, stationCode, contactsSnapshot, deliveryMethod, deliveryStatus, confirmedStatus, note) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s)"
+    )
+    values = (
+        str(item.get("trafficId") or "").strip(),
+        _normalize_account_code(item.get("stationCode")),
+        item.get("contactsSnapshot"),
+        _normalize_optional_input_text(item.get("deliveryMethod")),
+        _normalize_input_text(item.get("deliveryStatus")),
+        _normalize_input_text(item.get("confirmedStatus")),
+        _normalize_optional_input_text(item.get("note")),
+    )
+    inserted_id = run_transaction(
+        lambda cursor: (
+            cursor.execute(query, values) or int(cursor.lastrowid or 0)
+        )
+    )
+    return int(inserted_id or 0)
+
+
+def update_traffic_station(
+    *,
+    traffic_id: str,
+    station_id: int,
+    fields: dict[str, object],
+) -> int:
+    if not fields:
+        return 0
+    tables = get_db_tables()
+    stations_table = _quote_table_name(tables["TRAFFICSTATIONS"])
+    updates: list[str] = []
+    params: list[object] = []
+    if "stationCode" in fields:
+        updates.append("stationCode = %s")
+        params.append(_normalize_account_code(fields.get("stationCode")))
+    if "contactsSnapshot" in fields:
+        updates.append("contactsSnapshot = %s")
+        params.append(fields.get("contactsSnapshot"))
+    if "deliveryMethod" in fields:
+        updates.append("deliveryMethod = %s")
+        params.append(_normalize_optional_input_text(fields.get("deliveryMethod")))
+    if "deliveryStatus" in fields:
+        updates.append("deliveryStatus = %s")
+        params.append(_normalize_input_text(fields.get("deliveryStatus")))
+    if "confirmedStatus" in fields:
+        updates.append("confirmedStatus = %s")
+        params.append(_normalize_input_text(fields.get("confirmedStatus")))
+    if "note" in fields:
+        updates.append("note = %s")
+        params.append(_normalize_optional_input_text(fields.get("note")))
+    if not updates:
+        return 0
+    params.extend([int(station_id), str(traffic_id or "").strip()])
+    updated = run_transaction(
+        lambda cursor: (
+            cursor.execute(
+                f"UPDATE {stations_table} SET " + ", ".join(updates) + " WHERE id = %s AND trafficId = %s",
+                tuple(params),
+            )
+            or int(cursor.rowcount or 0)
+        )
+    )
+    return int(updated or 0)
+
+
+def delete_traffic_station(
+    *,
+    traffic_id: str,
+    station_id: int,
+) -> int:
+    tables = get_db_tables()
+    stations_table = _quote_table_name(tables["TRAFFICSTATIONS"])
+    deleted = run_transaction(
+        lambda cursor: (
+            cursor.execute(
+                f"DELETE FROM {stations_table} WHERE id = %s AND trafficId = %s",
+                (int(station_id), str(traffic_id or "").strip()),
+            )
+            or int(cursor.rowcount or 0)
+        )
+    )
+    return int(deleted or 0)
+
+
+def get_traffic_email_row(*, traffic_id: str) -> dict | None:
+    traffic_id_text = str(traffic_id or "").strip()
+    if not traffic_id_text:
+        return None
+    tables = get_db_tables()
+    email_table = _quote_table_name(tables["TRAFFICEMAILS"])
+    rows = fetch_all(
+        (
+            "SELECT "
+            "id, trafficId, toEmails, ccEmails, bccEmails, subject, body, sentStatus, "
+            "sentAt, sentByUserId, smtpMessageId, lastSendAttemptAt, lastSendError, "
+            "dateCreated, dateUpdated "
+            f"FROM {email_table} "
+            "WHERE trafficId = %s "
+            "LIMIT 1"
+        ),
+        (traffic_id_text,),
+    )
+    if not rows:
+        return None
+    return rows[0]
+
+
+def upsert_traffic_email(item: dict) -> int:
+    tables = get_db_tables()
+    email_table = _quote_table_name(tables["TRAFFICEMAILS"])
+    query = (
+        f"INSERT INTO {email_table} "
+        "(trafficId, toEmails, ccEmails, bccEmails, subject, body, sentStatus, sentAt, sentByUserId, smtpMessageId, lastSendAttemptAt, lastSendError) "
+        "VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s) "
+        "ON DUPLICATE KEY UPDATE "
+        "toEmails = VALUES(toEmails), "
+        "ccEmails = VALUES(ccEmails), "
+        "bccEmails = VALUES(bccEmails), "
+        "subject = VALUES(subject), "
+        "body = VALUES(body), "
+        "sentStatus = VALUES(sentStatus), "
+        "sentAt = VALUES(sentAt), "
+        "sentByUserId = VALUES(sentByUserId), "
+        "smtpMessageId = VALUES(smtpMessageId), "
+        "lastSendAttemptAt = VALUES(lastSendAttemptAt), "
+        "lastSendError = VALUES(lastSendError)"
+    )
+    values = (
+        str(item.get("trafficId") or "").strip(),
+        item.get("toEmails"),
+        item.get("ccEmails"),
+        item.get("bccEmails"),
+        _normalize_input_text(item.get("subject")),
+        _normalize_input_text(item.get("body")),
+        _normalize_input_text(item.get("sentStatus")),
+        item.get("sentAt"),
+        _normalize_optional_input_text(item.get("sentByUserId")),
+        _normalize_optional_input_text(item.get("smtpMessageId")),
+        item.get("lastSendAttemptAt"),
+        _normalize_optional_input_text(item.get("lastSendError")),
+    )
+    return int(execute_many(query, [values]) or 0)
+
+
+def list_traffic_station_attachments(
+    *,
+    station_ids: list[int],
+    tenant_slug: str | None = None,
+) -> list[dict]:
+    normalized_station_ids = _normalized_int_cache_values(
+        [int(item) for item in (station_ids or [])]
+    )
+    if not normalized_station_ids:
+        return []
+
+    tables = get_db_tables()
+    app_attachment_table = _get_app_attachment_table_name(tables=tables)
+    app_columns = _get_app_attachment_columns(app_attachment_table=app_attachment_table)
+    if not app_columns:
+        return []
+
+    owner_placeholders = _build_in_placeholders(
+        [str(station_id) for station_id in normalized_station_ids]
+    )
+    owner_id_expr = (
+        "CAST(aa.ownerEntityId AS UNSIGNED)"
+        if _has_column(app_columns, "ownerEntityId")
+        else "NULL"
+    )
+    select_parts = [
+        "aa.id AS attachmentId",
+        f"{owner_id_expr} AS stationId",
+        "aa.appCode AS appCode",
+        "aa.ownerEntityType AS ownerEntityType",
+        "aa.ownerEntityId AS ownerEntityId",
+        "aa.accessUrl AS accessUrl",
+        "aa.originalFileName AS originalFileName",
+        "aa.mimeType AS mimeType",
+        "aa.fileSize AS fileSize",
+        "aa.storageProvider AS storageProvider",
+        "aa.storageKey AS storageKey" if _has_column(app_columns, "storageKey") else "NULL AS storageKey",
+        "aa.providerMetadata AS providerMetadata" if _has_column(app_columns, "providerMetadata") else "NULL AS providerMetadata",
+        "aa.uploadedBy AS uploadedBy" if _has_column(app_columns, "uploadedBy") else "NULL AS uploadedBy",
+        "aa.tenantSlug AS tenantSlug" if _has_column(app_columns, "tenantSlug") else "NULL AS tenantSlug",
+        "aa.dateCreated AS dateCreated",
+        "aa.dateUpdated AS dateUpdated",
+    ]
+    where_clauses = [
+        "aa.appCode = %s",
+        "aa.ownerEntityType = %s",
+        f"aa.ownerEntityId IN ({owner_placeholders})",
+    ]
+    params: list[object] = [
+        _APP_CODE_TRADSPHERE,
+        "traffic_station",
+        *[str(station_id) for station_id in normalized_station_ids],
+    ]
+    if _has_column(app_columns, "deletedAt"):
+        where_clauses.append("aa.deletedAt IS NULL")
+    if _has_column(app_columns, "tenantSlug"):
+        normalized_tenant_slug = str(tenant_slug or "").strip().lower()
+        if normalized_tenant_slug:
+            where_clauses.append("LOWER(aa.tenantSlug) = %s")
+            params.append(normalized_tenant_slug)
+
+    query = (
+        "SELECT "
+        + ", ".join(select_parts)
+        + f" FROM {app_attachment_table} aa "
+        + "WHERE "
+        + " AND ".join(where_clauses)
+        + " ORDER BY aa.id ASC"
+    )
+    return fetch_all(query, tuple(params))

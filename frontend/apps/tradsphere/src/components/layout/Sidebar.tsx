@@ -21,6 +21,7 @@ import {
   TRADSPHERE_HOME_CHILD_ICON,
   TRADSPHERE_INVOICE_CHECKLISTS_CHILD_ICON,
   TRADSPHERE_STATIONS_CHILD_ICON,
+  TRADSPHERE_TRAFFIC_CHILD_ICON,
   type AppNavChildItem,
   type AppNavItem,
 } from "@/components/layout/navigation";
@@ -729,6 +730,8 @@ function SidebarChildItem({ child, currentPath, tenantSlug, activeTenantSlug, ac
           ? TRADSPHERE_INVOICE_CHECKLISTS_CHILD_ICON
         : child.route === "/tradsphere/stations"
           ? TRADSPHERE_STATIONS_CHILD_ICON
+          : child.route === "/tradsphere/traffic"
+            ? TRADSPHERE_TRAFFIC_CHILD_ICON
           : child.route.endsWith("/admin")
             ? ShieldCheck
           : child.route === "/shiftzy/home"

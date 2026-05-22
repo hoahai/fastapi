@@ -15,6 +15,10 @@ from apps.tradsphere.api.v1.endpoints.core import (
     schedulesWeeks,
     stations,
     stationsContacts,
+    traffic,
+    trafficEmail,
+    trafficFlights,
+    trafficStations,
 )
 from apps.tradsphere.api.v1.endpoints.core.ui import main as uiMain
 from shared.auth.dependencies import enforce_tradsphere_permission
@@ -37,4 +41,8 @@ router.include_router(invoiceChecklists.router, tags=["tradsphere"])
 router.include_router(invoiceChecklistStations.router, tags=["tradsphere"])
 router.include_router(invoiceChecklistNotes.router, tags=["tradsphere"])
 router.include_router(invoiceNoteAttachments.router, tags=["tradsphere"])
+router.include_router(traffic.router, tags=["tradsphere"])
+router.include_router(trafficFlights.router, tags=["tradsphere"])
+router.include_router(trafficStations.router, tags=["tradsphere"])
+router.include_router(trafficEmail.router, tags=["tradsphere"])
 router.include_router(uiMain.router, tags=["tradsphere"])

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type UIEvent } from "react";
 import {
   type ColumnDef,
   type FilterFn,
@@ -11,7 +11,6 @@ import { AlertCircle, CalendarDays, CloudUpload, Loader2, Monitor, Plus, X } fro
 import { AccountInformationCard } from "@/components/dashboard/AccountInformationCard";
 import { ActionIconButton } from "@/components/dashboard/ActionIconButton";
 import { AccountSelector } from "@/components/dashboard/AccountSelector";
-import { AppHeader } from "@/components/dashboard/AppHeader";
 import { DashboardPanel } from "@/components/dashboard/DashboardPanel";
 import { AccountEditableFields, ACCOUNT_BILLING_OPTIONS } from "@/components/dashboard/AccountEditableFields";
 import {
@@ -52,7 +51,6 @@ import type {
   MainLoadResponse,
   StationItem,
 } from "@/components/dashboard/types";
-import { Separator } from "@/components/ui/separator";
 import { UnsavedChangesDialog } from "@/components/ui/unsaved-changes-dialog";
 import { useToast } from "@/components/ui/toast";
 import { useApiRequest, type ApiRequestOptions } from "@/hooks/useApiRequest";
@@ -71,6 +69,7 @@ import { TRADSPHERE_CACHE_TTL_MS, shouldFetchNetwork, type CachePolicy } from "@
 import { useAuth } from "@shared/auth/useAuth";
 import { shouldProtectTradsphereFrontend } from "@shared/auth/guards";
 import { hasAppEditAccess } from "@shared/auth/permissions";
+import { SectionCard } from "@shared/components/layout/SectionCard";
 import { PageLoadingOverlay } from "@shared/components/status/LoadingOverlay";
 
 const scheduleColumns: ColumnDef<EsnumItem>[] = [{ accessorKey: "estnum" }, { accessorKey: "name" }];
@@ -85,6 +84,8 @@ const HOME_STATION_SEARCH_STORAGE_KEY = "tradsphere.home.searchText.station";
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspace.sidebar.collapsed";
 const LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY = "tradsphere:ui:sidebarCollapsed:v1";
 const SIDEBAR_COLLAPSED_EVENT = "workspace-sidebar-collapsed-change";
+const ESTNUM_BATCH_SIZE = 25;
+const ESTNUM_SCROLL_END_THRESHOLD_PX = 24;
 
 type CacheStatus = {
   source: "cache" | "network";
@@ -278,6 +279,39 @@ function App() {
 
   const filteredSchedules = schedulesTable.getFilteredRowModel().rows.map((row) => row.original);
   const filteredStations = stationsTable.getFilteredRowModel().rows.map((row) => row.original);
+  const [visibleScheduleCount, setVisibleScheduleCount] = useState(ESTNUM_BATCH_SIZE);
+  const scheduleListRef = useRef<HTMLDivElement | null>(null);
+  const visibleSchedules = useMemo(
+    () => filteredSchedules.slice(0, visibleScheduleCount),
+    [filteredSchedules, visibleScheduleCount],
+  );
+  const canLoadMoreSchedules = visibleScheduleCount < filteredSchedules.length;
+
+  const loadMoreSchedules = useCallback(() => {
+    setVisibleScheduleCount((current) => Math.min(filteredSchedules.length, current + ESTNUM_BATCH_SIZE));
+  }, [filteredSchedules.length]);
+
+  const handleScheduleListScroll = useCallback(
+    (event: UIEvent<HTMLDivElement>) => {
+      if (!canLoadMoreSchedules || isLoadingAccount || isSaving) {
+        return;
+      }
+      const container = event.currentTarget;
+      const reachedEnd =
+        container.scrollLeft + container.clientWidth >= container.scrollWidth - ESTNUM_SCROLL_END_THRESHOLD_PX;
+      if (reachedEnd) {
+        loadMoreSchedules();
+      }
+    },
+    [canLoadMoreSchedules, isLoadingAccount, isSaving, loadMoreSchedules],
+  );
+
+  useEffect(() => {
+    setVisibleScheduleCount(Math.min(ESTNUM_BATCH_SIZE, filteredSchedules.length));
+    if (scheduleListRef.current) {
+      scheduleListRef.current.scrollLeft = 0;
+    }
+  }, [selectedAccountCode, scheduleSearch, filteredSchedules.length]);
 
   const hasEditableChanges = Boolean(
     accountOriginal &&
@@ -824,7 +858,6 @@ function App() {
 
   return (
     <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-6 pb-12">
-      <AppHeader />
       <HeroBanner
         action={
           <Button onClick={openCreateAccountModal} className="min-w-40" disabled={!canEditTradsphere}>
@@ -833,17 +866,19 @@ function App() {
         }
       />
 
-      <AccountSelector
-        selectedAccountCode={selectedAccountCode}
-        options={accountSelections}
-        isLoadingSelections={isLoadingSelections}
-        selectionsError={selectionsError}
-        isLoadingAccount={isLoadingAccount}
-        isRefreshingAccount={isRefreshingAccount}
-        isSavingAccount={isSaving}
-        onAccountChange={handleAccountChange}
-        onLoad={handleLoadAccount}
-      />
+      <SectionCard title="Account & Load" divider={false} contentClassName="pt-1">
+        <AccountSelector
+          selectedAccountCode={selectedAccountCode}
+          options={accountSelections}
+          isLoadingSelections={isLoadingSelections}
+          selectionsError={selectionsError}
+          isLoadingAccount={isLoadingAccount}
+          isRefreshingAccount={isRefreshingAccount}
+          isSavingAccount={isSaving}
+          onAccountChange={handleAccountChange}
+          onLoad={handleLoadAccount}
+        />
+      </SectionCard>
 
       {loadError ? (
         <p className="flex items-center gap-2 text-sm text-rose-600">
@@ -859,8 +894,6 @@ function App() {
 
       {hasLoadedDashboard ? (
         <>
-          <Separator />
-
           <main className="grid gap-5 lg:grid-cols-[360px_minmax(0,1fr)] lg:items-start">
             <AccountInformationCard
               account={accountForm}
@@ -927,8 +960,12 @@ function App() {
                     {scheduleUploadSuccessMessage}
                   </p>
                 ) : null}
-                <div className="flex gap-3 overflow-x-auto pb-2">
-                  {filteredSchedules.map((esnum) => (
+                <div
+                  ref={scheduleListRef}
+                  onScroll={handleScheduleListScroll}
+                  className="flex gap-3 overflow-x-auto pb-2"
+                >
+                  {visibleSchedules.map((esnum) => (
                     <ScheduleCard
                       key={esnum.estnum}
                       esnum={esnum}
@@ -938,6 +975,12 @@ function App() {
                     />
                   ))}
                 </div>
+                {canLoadMoreSchedules ? (
+                  <p className="flex items-center gap-2 text-xs text-slate-500">
+                    <Loader2 className="size-3.5 animate-spin text-blue-600" />
+                    Showing {visibleSchedules.length} of {filteredSchedules.length}. Scroll right to load more.
+                  </p>
+                ) : null}
                 {!filteredSchedules.length ? (
                   <p className="text-sm text-slate-500">No EstNums or schedules were returned for this account.</p>
                 ) : null}

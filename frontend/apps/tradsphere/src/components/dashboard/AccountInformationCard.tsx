@@ -2,13 +2,13 @@ import { useState } from "react";
 import { Building2, Save, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import {
   Dialog,
   DialogClose,
   DialogContent,
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
+import { SectionCard } from "@shared/components/layout/SectionCard";
 
 import { LabeledField, ReadOnlyValue } from "./FormFieldRow";
 import { AccountEditableFields } from "./AccountEditableFields";
@@ -40,14 +40,16 @@ export function AccountInformationCard({
   const editableDisabled = !account || isSaving || !canEdit;
 
   return (
-    <Card className="h-fit overflow-hidden border-blue-100 shadow-soft">
-      <CardHeader className="border-b border-blue-100 bg-blue-50/70 py-3">
-        <div className="flex min-h-9 items-center gap-3">
+    <SectionCard
+      className="h-fit"
+      title={(
+        <span className="flex min-h-9 items-center gap-2">
           <Building2 className="size-5 text-blue-700" />
-          <h3 className="text-sm font-bold uppercase tracking-[0.14em] text-blue-800">Account Information</h3>
-        </div>
-      </CardHeader>
-      <CardContent className="space-y-6 pb-6 pt-5">
+          <span>Account Information</span>
+        </span>
+      )}
+      contentClassName="space-y-6"
+    >
         <LogoBlock account={account} />
 
         <div className="space-y-4">
@@ -90,8 +92,7 @@ export function AccountInformationCard({
             </Button>
           </div>
         ) : null}
-      </CardContent>
-    </Card>
+    </SectionCard>
   );
 }
 

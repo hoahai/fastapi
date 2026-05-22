@@ -10,7 +10,6 @@ import {
 } from "lucide-react";
 
 import { ActionIconButton } from "@/components/dashboard/ActionIconButton";
-import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { CacheStatusChip } from "@/components/ui/cache-status-chip";
 import {
   Dialog,
@@ -35,6 +34,7 @@ import {
   shouldFetchNetwork,
   type CachePolicy,
 } from "@shared/cache";
+import { SectionCard } from "@shared/components/layout/SectionCard";
 import type { EsnumItem } from "./types";
 
 type TimelineWeek = {
@@ -958,25 +958,27 @@ export function ScheduleTimelineSection({
 
   return (
     <>
-      <Card className="overflow-hidden">
-        <CardHeader className="border-b border-blue-100 bg-blue-50/70 py-3">
-          <div className="flex items-center justify-between gap-3">
-            <CardTitle className="flex items-center gap-3">
-              <CalendarRange className="size-5 text-blue-700" />
-              <span className="text-sm font-bold uppercase tracking-[0.14em] text-blue-800">Schedule Timeline</span>
-            </CardTitle>
-            <ActionIconButton
-              aria-label={isCollapsed ? "Expand schedule timeline" : "Collapse schedule timeline"}
-              tooltip={isCollapsed ? "Expand timeline" : "Collapse timeline"}
-              onClick={() => setIsCollapsed((current) => !current)}
-              icon={isCollapsed ? <ChevronDown className="size-5" /> : <ChevronUp className="size-5" />}
-            />
-          </div>
-          {rangeLimitMessage ? <p className="pt-1 text-xs text-slate-500">{rangeLimitMessage}</p> : null}
-        </CardHeader>
+      <SectionCard
+        title={(
+          <span className="flex items-center gap-2">
+            <CalendarRange className="size-5 text-blue-700" />
+            <span>Schedule Timeline</span>
+          </span>
+        )}
+        description={rangeLimitMessage ?? undefined}
+        actions={(
+          <ActionIconButton
+            aria-label={isCollapsed ? "Expand schedule timeline" : "Collapse schedule timeline"}
+            tooltip={isCollapsed ? "Expand timeline" : "Collapse timeline"}
+            onClick={() => setIsCollapsed((current) => !current)}
+            icon={isCollapsed ? <ChevronDown className="size-5" /> : <ChevronUp className="size-5" />}
+          />
+        )}
+        contentClassName="space-y-4"
+      >
 
         {!isCollapsed ? (
-          <CardContent className="space-y-4 p-5">
+          <>
             <div className="flex items-center justify-end">
               <div className="flex items-center gap-1">
                 <ActionIconButton
@@ -1019,7 +1021,6 @@ export function ScheduleTimelineSection({
               </div>
             </div>
 
-            <>
             {!accountCode ? (
               <p className="text-sm text-slate-500">Load an account to view schedule timeline.</p>
             ) : null}
@@ -1247,14 +1248,13 @@ export function ScheduleTimelineSection({
                       ? "Offline. Reconnect to refresh timeline data."
                       : "Refresh timeline for the current account and loaded visible range"
                   }
-                  className="max-w-[min(90vw,34rem)]"
-                />
-              </div>
-            ) : null}
+                    className="max-w-[min(90vw,34rem)]"
+                  />
+                </div>
+              ) : null}
             </>
-          </CardContent>
         ) : null}
-      </Card>
+      </SectionCard>
 
       <Dialog open={Boolean(selectedDetail)} onOpenChange={(open) => !open && setSelectedDetail(null)}>
         <DialogContent className="max-w-xl">

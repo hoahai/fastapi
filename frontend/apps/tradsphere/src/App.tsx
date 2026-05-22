@@ -5,6 +5,7 @@ import EstimateNumbersPage from "@/pages/EstimateNumbersPage";
 import ContactsPage from "@/pages/ContactsPage";
 import StationsPage from "@/pages/StationsPage";
 import InvoiceChecklistPage from "@/pages/InvoiceChecklistPage";
+import TrafficPage from "@/pages/TrafficPage";
 import ShiftzyEmployeesPage from "@shiftzy/ShiftzyEmployeesPage";
 import ShiftzySchedulePage from "@shiftzy/ShiftzySchedulePage";
 import AdminUsersPage from "@/pages/AdminUsersPage";
@@ -116,6 +117,9 @@ function toScrollStorageKey(route: string): string {
   }
   if (route === "/tradsphere/invoice-checklists") {
     return "tradsphere.invoice-checklists.scrollY";
+  }
+  if (route === "/tradsphere/traffic") {
+    return "tradsphere.traffic.scrollY";
   }
   const scopedAdminMatch = route.match(/^\/([a-z0-9-_]+)\/admin$/);
   if (scopedAdminMatch) {
@@ -390,6 +394,7 @@ function App() {
       "/tradsphere/estnums",
       "/tradsphere/contacts",
       "/tradsphere/stations",
+      "/tradsphere/traffic",
       "/tradsphere/invoice-checklists",
       "/shiftzy/home",
       "/shiftzy/employees",
@@ -465,6 +470,11 @@ function App() {
             {frontendPath === "/tradsphere/stations" ? (
               <RequireAppPageRoute appCode="tradsphere" route="/tradsphere/stations" fallback={<RedirectToHome />}>
                 <StationsPage />
+              </RequireAppPageRoute>
+            ) : null}
+            {frontendPath === "/tradsphere/traffic" ? (
+              <RequireAppPageRoute appCode="tradsphere" route="/tradsphere/traffic" fallback={<RedirectToHome />}>
+                <TrafficPage />
               </RequireAppPageRoute>
             ) : null}
             {frontendPath === "/tradsphere/invoice-checklists" ? (

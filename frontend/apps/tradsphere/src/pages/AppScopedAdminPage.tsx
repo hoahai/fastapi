@@ -1,10 +1,18 @@
-import { RefreshCw, Search, UserMinus, UserPlus } from "lucide-react";
+import { RefreshCw, Search, UserMinus, UserPlus, X } from "lucide-react";
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 
 import { PageBanner } from "@/components/layout/PageBanner";
 import { AppDropdown } from "@/components/ui/app-dropdown";
 import { Button } from "@/components/ui/button";
 import { CacheStatusChip } from "@/components/ui/cache-status-chip";
+import {
+  DialogClose,
+  Dialog,
+  DialogContent,
+  DialogFooter,
+  DialogHeader,
+  DialogTitle,
+} from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { useApiRequest } from "@/hooks/useApiRequest";
@@ -13,6 +21,7 @@ import { readBrowserCacheSnapshot, writeBrowserCache } from "@/lib/browserCache"
 import { TradspherePermissionDetailsSection } from "@/components/admin/TradspherePermissionDetailsSection";
 import { resolveAppScopedAdminSections } from "@/pages/appScopedAdminConfig";
 import { SectionCard } from "@shared/components";
+import { Tooltip } from "@shared/components/actions/Tooltip";
 import { roleLabel } from "@shared/auth/accessAssignments";
 import { useAuth } from "@shared/auth/useAuth";
 
@@ -49,6 +58,12 @@ type RoleOption = {
 type AppScopedAdminPageProps = {
   appCode: string;
   appName: string;
+};
+
+type RemoveAccessTarget = {
+  userId: string;
+  email: string | null;
+  fullName: string | null;
 };
 
 const ROLE_OPTIONS: RoleOption[] = [
@@ -164,6 +179,44 @@ function buildScopedAdminCacheKey(params: { userId: string; appCode: string; ten
   return `app-scoped-admin:${tenantKey}:${appKey}:${userKey}:v1`;
 }
 
+function RemoveAccessIconButton({
+  onRemove,
+  disabled,
+}: {
+  onRemove: () => void;
+  disabled: boolean;
+}) {
+  const anchorRef = useRef<HTMLButtonElement | null>(null);
+  const [tooltipOpen, setTooltipOpen] = useState(false);
+
+  return (
+    <>
+      <button
+        ref={anchorRef}
+        type="button"
+        onClick={(event) => {
+          event.stopPropagation();
+          onRemove();
+        }}
+        onMouseEnter={() => setTooltipOpen(true)}
+        onMouseLeave={() => setTooltipOpen(false)}
+        onFocus={() => setTooltipOpen(true)}
+        onBlur={() => setTooltipOpen(false)}
+        disabled={disabled}
+        className="inline-flex h-7 w-7 items-center justify-center rounded-full border border-slate-300 bg-white text-slate-600 transition-colors hover:border-rose-300 hover:bg-rose-50 hover:text-rose-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-rose-300 disabled:pointer-events-none disabled:opacity-60"
+        aria-label="Remove access"
+      >
+        <UserMinus className="size-3.5" />
+      </button>
+      <Tooltip
+        open={tooltipOpen}
+        anchorRef={anchorRef}
+        text="Remove access"
+      />
+    </>
+  );
+}
+
 export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminPageProps) {
   const auth = useAuth();
   const { requestJson } = useApiRequest();
@@ -188,6 +241,7 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
   const [memberRoleFilter, setMemberRoleFilter] = useState<string>("all");
   const [memberStatusFilter, setMemberStatusFilter] = useState<string>("all");
   const [removingUserId, setRemovingUserId] = useState<string | null>(null);
+  const [removeTarget, setRemoveTarget] = useState<RemoveAccessTarget | null>(null);
 
   const normalizedAppCode = String(appCode || "").trim().toLowerCase();
   const enabledSections = useMemo(() => resolveAppScopedAdminSections(normalizedAppCode), [normalizedAppCode]);
@@ -504,18 +558,24 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
     return true;
   }
 
-  async function handleRemoveAccess(user: ScopedUser) {
+  function handleRemoveAccess(user: ScopedUser) {
     if (!canManageUserAccess(user)) {
       return;
     }
-    const targetLabel = user.fullName || user.email || user.userId;
-    const approved = window.confirm(`Remove ${appLabel} access for ${targetLabel}?`);
-    if (!approved) {
+    setRemoveTarget({
+      userId: user.userId,
+      email: user.email || null,
+      fullName: user.fullName || null,
+    });
+  }
+
+  async function handleRemoveAccessConfirmed() {
+    if (!removeTarget) {
       return;
     }
-    setRemovingUserId(user.userId);
+    setRemovingUserId(removeTarget.userId);
     try {
-      await requestJson(`/api/auth/v1/invitations/users/${encodeURIComponent(user.userId)}/access`, {
+      await requestJson(`/api/auth/v1/invitations/users/${encodeURIComponent(removeTarget.userId)}/access`, {
         method: "DELETE",
         headers: {
           "X-App-Code": normalizedAppCode,
@@ -525,11 +585,12 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
           message: `${appLabel} access was removed from this user.`,
         },
       });
-      const normalizedTargetUserId = String(user.userId || "").trim();
+      const normalizedTargetUserId = String(removeTarget.userId || "").trim();
       if (normalizedTargetUserId) {
         const nextUsers = users.filter((item) => String(item.userId || "").trim() !== normalizedTargetUserId);
         persistScopedUsersCache(nextUsers);
       }
+      setRemoveTarget(null);
       await loadScopedUsers(true);
     } finally {
       setRemovingUserId(null);
@@ -708,9 +769,17 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
                       <p className="truncate text-sm font-semibold text-slate-900">{user.fullName || user.email || user.userId}</p>
                       <p className="truncate text-xs text-slate-600">{user.email || user.userId}</p>
                     </div>
-                    <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${statusChipClass(user.status)}`}>
-                      {formatStatusChipLabel(user.status)}
-                    </span>
+                    <div className="flex items-center gap-2">
+                      {canManageUserAccess(user) ? (
+                        <RemoveAccessIconButton
+                          onRemove={() => handleRemoveAccess(user)}
+                          disabled={removingUserId === user.userId}
+                        />
+                      ) : null}
+                      <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${statusChipClass(user.status)}`}>
+                        {formatStatusChipLabel(user.status)}
+                      </span>
+                    </div>
                   </div>
                   <div className="mt-3 space-y-2">
                     <div>
@@ -721,24 +790,11 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
                         </span>
                       </div>
                     </div>
-                    <div className="flex items-center justify-end gap-2">
-                      {canManageUserAccess(user) ? (
-                        <Button
-                          type="button"
-                          variant="outline"
-                          disabled={removingUserId === user.userId}
-                          onClick={() => void handleRemoveAccess(user)}
-                          className="h-8 px-2.5 text-xs text-rose-700 hover:text-rose-800"
-                        >
-                          {removingUserId === user.userId ? <Spinner className="size-3.5" /> : <UserMinus className="size-3.5" />}
-                          Remove access
-                        </Button>
-                      ) : (
-                        <span className="text-[11px] text-slate-500">
-                          Protected user access
-                        </span>
-                      )}
-                    </div>
+                    {!canManageUserAccess(user) ? (
+                      <div className="flex items-center justify-end">
+                        <span className="text-[11px] text-slate-500">Protected user access</span>
+                      </div>
+                    ) : null}
                   </div>
                 </article>
               ))}
@@ -753,6 +809,49 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
           appLabel={appLabel}
         />
       ) : null}
+
+      <Dialog open={Boolean(removeTarget)} onOpenChange={(open) => !open && !removingUserId && setRemoveTarget(null)}>
+        <DialogContent
+          className="max-w-[560px]"
+          onEscapeKeyDown={(event) => {
+            if (Boolean(removingUserId)) {
+              event.preventDefault();
+            }
+          }}
+          onInteractOutside={(event) => {
+            if (Boolean(removingUserId)) {
+              event.preventDefault();
+            }
+          }}
+        >
+          <DialogClose
+            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
+            aria-label="Close remove access modal"
+            disabled={Boolean(removingUserId)}
+          >
+            <X className="size-4" />
+          </DialogClose>
+          <DialogHeader>
+            <DialogTitle>Remove app access</DialogTitle>
+          </DialogHeader>
+
+          <p className="text-sm text-slate-700">
+            Remove {appLabel} access for{" "}
+            <span className="font-semibold">{removeTarget?.fullName || removeTarget?.email || removeTarget?.userId}</span>?
+          </p>
+
+          <DialogFooter>
+            <Button
+              className="border border-rose-700 bg-rose-600 text-white hover:bg-rose-700"
+              onClick={() => void handleRemoveAccessConfirmed()}
+              disabled={Boolean(removingUserId)}
+            >
+              {Boolean(removingUserId) ? <Spinner className="size-4" /> : null}
+              {Boolean(removingUserId) ? "Removing..." : "Remove access"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
       {showCacheChip ? (
         <div className="pointer-events-none fixed inset-x-0 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40">

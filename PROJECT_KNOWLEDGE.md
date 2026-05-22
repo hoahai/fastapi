@@ -233,6 +233,52 @@ Appears partially implemented:
 - Cross-app frontend platform is present but only one app has full UI.
 - Test coverage is focused on auth and a small TradSphere slice; broad domain coverage is limited.
 
+### TradSphere Traffic Feature (Foundation Status - May 21, 2026)
+- Backend foundation routes are implemented under `/api/tradsphere/v1/traffic/*`.
+- Workflow is account-centered:
+  1. Load lightweight rows by account via `GET /api/tradsphere/v1/traffic/account?code=<accountCode>`.
+  2. Load selected full detail lazily via `GET /api/tradsphere/v1/traffic?id=<trafficId>`.
+  3. Manage header/flights/stations/email via dedicated write routes using query-param IDs.
+- Route convention:
+  - Traffic record IDs use query params (not path IDs), for example:
+    - `GET /api/tradsphere/v1/traffic?id=<trafficId>`
+    - `PUT /api/tradsphere/v1/traffic?id=<trafficId>`
+    - `POST /api/tradsphere/v1/traffic/ready?id=<trafficId>`
+    - `POST /api/tradsphere/v1/traffic/archive?id=<trafficId>`
+  - Child resources use query params:
+    - `POST|PUT|DELETE /api/tradsphere/v1/traffic/flight?trafficId=<trafficId>&flightId=<flightId>`
+    - `POST|PUT|DELETE /api/tradsphere/v1/traffic/station?trafficId=<trafficId>&stationId=<stationId>`
+    - `PUT /api/tradsphere/v1/traffic/email?trafficId=<trafficId>`
+- Endpoint file organization (for maintainability before frontend rollout):
+  - `apps/tradsphere/api/v1/endpoints/core/traffic.py`
+    - account load + traffic detail/header + ready/archive
+  - `apps/tradsphere/api/v1/endpoints/core/trafficFlights.py`
+    - traffic flight create/update/delete
+  - `apps/tradsphere/api/v1/endpoints/core/trafficStations.py`
+    - traffic station create/update/delete
+  - `apps/tradsphere/api/v1/endpoints/core/trafficEmail.py`
+    - traffic email upsert (preview/send reserved for later phase)
+- Data model uses existing MySQL tables:
+  - `TradSphere_Traffic`
+  - `TradSphere_TrafficFlight`
+  - `TradSphere_TrafficStation`
+  - `TradSphere_TrafficEmail`
+- Soft remove behavior uses `status='archived'` (no `deletedAt` field in traffic tables).
+- Rotation rule:
+  - Flight rotation values remain DB-constrained per row (`0..100`).
+  - Total rotation is returned as metadata warning when total is not `100.00`.
+  - Warning is non-blocking for save, ready, and future send workflows.
+- Attachment ownership for traffic proof/confirmation files uses existing `AppAttachment`:
+  - `appCode='tradsphere'`
+  - `ownerEntityType='traffic_station'`
+  - `ownerEntityId=<TradSphere_TrafficStation.id>` (string form)
+- Email send behavior:
+  - Current phase stores/upserts email payload and status only.
+  - SMTP preview/send execution is planned for a later phase.
+- Frontend plan note (next phase):
+  - Use cache-first/offline-friendly account+detail loading for Traffic page state.
+  - Add footer cache/status chip to indicate freshness/offline/cache state.
+
 Appears missing or inconsistent:
 - SpendSphere v2 paths referenced in docs/instructions are not present in code tree.
 - Root docs mention local frontend `.env.local`, but Vite config points env loading to `etc/`.

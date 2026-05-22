@@ -137,7 +137,7 @@ function buildMondayFirstCalendarDays(year: number, month: number): CalendarDay[
   return cells;
 }
 
-function DateInputField({
+export function DateInputField({
   id,
   value,
   onChange,
