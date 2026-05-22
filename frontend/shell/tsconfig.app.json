@@ -14,11 +14,7 @@
     "strict": true,
     "noUnusedLocals": true,
     "noUnusedParameters": true,
-    "typeRoots": [
-      "../apps/tradsphere/node_modules/@types",
-      "../node_modules/@types",
-      "../../node_modules/@types"
-    ],
+    "typeRoots": ["./node_modules/@types", "../node_modules/@types", "../../node_modules/@types"],
     "baseUrl": ".",
     "paths": {
       "@/*": ["../apps/tradsphere/src/*"],
@@ -27,11 +23,15 @@
       "@home/*": ["../apps/home/src/*"],
       "@shiftzy/*": ["../apps/shiftzy/src/*"],
       "@shared/*": ["../shared/*"],
-      "react": ["../apps/tradsphere/node_modules/@types/react/index.d.ts"],
-      "react-dom": ["../apps/tradsphere/node_modules/@types/react-dom/index.d.ts"],
-      "react-dom/*": ["../apps/tradsphere/node_modules/@types/react-dom/*"],
-      "react/jsx-runtime": ["../apps/tradsphere/node_modules/@types/react/jsx-runtime.d.ts"],
-      "lucide-react": ["../apps/tradsphere/node_modules/lucide-react/dist/lucide-react.d.ts"]
+      "react": ["./node_modules/@types/react/index.d.ts"],
+      "react-dom": ["./node_modules/@types/react-dom/index.d.ts"],
+      "react-dom/*": ["./node_modules/@types/react-dom/*"],
+      "react/jsx-runtime": ["./node_modules/@types/react/jsx-runtime.d.ts"],
+      "lucide-react": ["./node_modules/lucide-react"],
+      "@radix-ui/react-dialog": ["./node_modules/@radix-ui/react-dialog"],
+      "@tanstack/react-table": ["./node_modules/@tanstack/react-table"],
+      "framer-motion": ["./node_modules/framer-motion"],
+      "recharts": ["./node_modules/recharts"]
     }
   },
   "include": [

@@ -3,12 +3,12 @@
   "private": true,
   "version": "0.1.0",
   "scripts": {
-    "install:tradsphere": "npm --prefix frontend/apps/tradsphere install",
-    "build:tradsphere": "npm --prefix frontend/apps/tradsphere run build",
+    "install:tradsphere": "npm --prefix frontend/shell install",
+    "build:tradsphere": "npm --prefix frontend/shell run build",
     "install:all": "npm --prefix frontend run install:all",
     "build:all": "npm --prefix frontend run build:all",
     "sync-ui:tradsphere": "mkdir -p apps/tradsphere/ui_dist && rm -rf apps/tradsphere/ui_dist/assets apps/tradsphere/ui_dist/index.html && cp -R frontend/apps/tradsphere/dist/* apps/tradsphere/ui_dist/",
-    "sync-ui:all": "bash -lc 'for app in frontend/apps/*; do [ -f \"$app/package.json\" ] || continue; name=$(basename \"$app\"); src=\"$app/dist\"; dst=\"apps/$name/ui_dist\"; if [ ! -d \"$src\" ] || [ -z \"$(ls -A \"$src\" 2>/dev/null)\" ]; then echo \"==> skip $name (no dist)\"; continue; fi; echo \"==> sync $name\"; mkdir -p \"$dst\"; rm -rf \"$dst/assets\" \"$dst/index.html\"; cp -R \"$src\"/* \"$dst\"/ || exit 1; done'",
+    "sync-ui:all": "bash -lc 'for name in tradsphere home shiftzy; do src=\"frontend/apps/$name/dist\"; dst=\"apps/$name/ui_dist\"; if [ ! -d \"$src\" ] || [ -z \"$(ls -A \"$src\" 2>/dev/null)\" ]; then echo \"==> skip $name (no dist)\"; continue; fi; echo \"==> sync $name\"; mkdir -p \"$dst\"; rm -rf \"$dst/assets\" \"$dst/index.html\"; cp -R \"$src\"/* \"$dst\"/ || exit 1; done'",
     "serve:api": "uvicorn main:app --reload --host 0.0.0.0 --port 8000"
   }
 }

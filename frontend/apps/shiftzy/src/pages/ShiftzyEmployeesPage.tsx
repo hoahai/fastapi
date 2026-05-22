@@ -5,7 +5,7 @@ import { PageBanner } from "@shell/components/layout/PageBanner";
 import { Button } from "@tradsphere/components/ui/button";
 import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@tradsphere/components/ui/dialog";
 import { useToast } from "@shell/components/ui/toast";
-import { useApiRequest } from "@tradsphere/hooks/useApiRequest";
+import { useApiRequest } from "@shared/hooks/useApiRequest";
 import { hasAppEditAccess } from "@shared/auth/permissions";
 import { useAuth } from "@shared/auth/useAuth";
 import {

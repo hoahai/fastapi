@@ -25,7 +25,7 @@ import {
   type AppNavChildItem,
   type AppNavItem,
 } from "@shell/components/layout/navigation";
-import { cn } from "@tradsphere/lib/utils";
+import { cn } from "@shared/components/utils/cn";
 import {
   getAccessAssignments,
   roleChipClass,

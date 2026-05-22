@@ -1,7 +1,7 @@
 import { type ReactNode, useEffect, useState } from "react";
 
 import { Sidebar } from "@shell/components/layout/Sidebar";
-import { cn } from "@tradsphere/lib/utils";
+import { cn } from "@shared/components/utils/cn";
 
 type AppShellProps = {
   currentPath: string;

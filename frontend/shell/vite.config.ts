@@ -1,8 +1,8 @@
 import path from "node:path";
-import react from "../apps/tradsphere/node_modules/@vitejs/plugin-react/dist/index.js";
+import react from "@vitejs/plugin-react";
 
 const shellRoot = __dirname;
-const tradsphereNodeModules = path.resolve(shellRoot, "../apps/tradsphere/node_modules");
+const shellNodeModules = path.resolve(shellRoot, "./node_modules");
 
 export default {
   root: shellRoot,
@@ -18,10 +18,13 @@ export default {
       "@home": path.resolve(shellRoot, "../apps/home/src"),
       "@shiftzy": path.resolve(shellRoot, "../apps/shiftzy/src"),
       "@shared": path.resolve(shellRoot, "../shared"),
-      react: path.resolve(tradsphereNodeModules, "react"),
-      "react-dom": path.resolve(tradsphereNodeModules, "react-dom"),
-      "lucide-react": path.resolve(tradsphereNodeModules, "lucide-react"),
-      "framer-motion": path.resolve(tradsphereNodeModules, "framer-motion"),
+      react: path.resolve(shellNodeModules, "react"),
+      "react-dom": path.resolve(shellNodeModules, "react-dom"),
+      "lucide-react": path.resolve(shellNodeModules, "lucide-react"),
+      "framer-motion": path.resolve(shellNodeModules, "framer-motion"),
+      "@radix-ui/react-dialog": path.resolve(shellNodeModules, "@radix-ui/react-dialog"),
+      "@tanstack/react-table": path.resolve(shellNodeModules, "@tanstack/react-table"),
+      recharts: path.resolve(shellNodeModules, "recharts"),
     },
   },
   build: {

@@ -39,6 +39,11 @@ function toIsoDate(year: number, month: number, day: number): string {
     .padStart(2, "0")}`;
 }
 
+function toStableUtcDate(year: number, month: number, day: number): Date {
+  // Use UTC noon so timezone formatting never shifts into adjacent dates/months.
+  return new Date(Date.UTC(year, month - 1, day, 12, 0, 0));
+}
+
 function parseIsoDate(value: string): ParsedIsoDate | null {
   const match = /^(\d{4})-(\d{2})-(\d{2})$/.exec(value.trim());
   if (!match) {
@@ -164,7 +169,7 @@ export function DateInputField({
     [displayMonth, displayYear],
   );
   const monthLabel = useMemo(() => {
-    return MONTH_LABEL_FORMATTER.format(new Date(Date.UTC(displayYear, displayMonth - 1, 1)));
+    return MONTH_LABEL_FORMATTER.format(toStableUtcDate(displayYear, displayMonth, 1));
   }, [displayMonth, displayYear]);
 
   useEffect(() => {

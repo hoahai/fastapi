@@ -1,6 +1,6 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
-import TradsphereHomePage from "@tradsphere/TradsphereHomePage";
+import AccountsPage from "@tradsphere/pages/AccountsPage";
 import EstimateNumbersPage from "@tradsphere/pages/EstimateNumbersPage";
 import ContactsPage from "@tradsphere/pages/ContactsPage";
 import StationsPage from "@tradsphere/pages/StationsPage";
@@ -454,7 +454,7 @@ function App() {
           <RequirePermission permission="tradsphere.viewer" fallback={<RedirectToHome />}>
             {frontendPath === "/tradsphere/home" ? (
               <RequireAppPageRoute appCode="tradsphere" route="/tradsphere/home" fallback={<RedirectToHome />}>
-                <TradsphereHomePage />
+                <AccountsPage />
               </RequireAppPageRoute>
             ) : null}
             {frontendPath === "/tradsphere/estnums" ? (

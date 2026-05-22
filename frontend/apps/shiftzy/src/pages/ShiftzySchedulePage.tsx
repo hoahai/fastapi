@@ -22,7 +22,7 @@ import { Button } from "@tradsphere/components/ui/button";
 import { AppDropdown } from "@tradsphere/components/ui/app-dropdown";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@tradsphere/components/ui/dialog";
 import { useToast } from "@shell/components/ui/toast";
-import { useApiRequest } from "@tradsphere/hooks/useApiRequest";
+import { useApiRequest } from "@shared/hooks/useApiRequest";
 import {
   createShiftzySchedules,
   deleteShiftzySchedules,

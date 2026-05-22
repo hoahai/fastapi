@@ -95,6 +95,10 @@ interface ScheduleTimelineSectionProps {
   esnums?: EsnumItem[];
   headers: HeadersInit;
   disabled?: boolean;
+  presentation?: "card" | "table-only";
+  anchorStartDate?: string | null;
+  anchorEndDate?: string | null;
+  onLoadingChange?: (isLoading: boolean) => void;
 }
 
 const TIMELINE_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.SCHEDULE_TIMELINE;
@@ -525,6 +529,10 @@ export function ScheduleTimelineSection({
   esnums = [],
   headers,
   disabled = false,
+  presentation = "card",
+  anchorStartDate = null,
+  anchorEndDate = null,
+  onLoadingChange,
 }: ScheduleTimelineSectionProps) {
   const { requestJson } = useApiRequest();
   const { isOnline } = useOnlineStatus();
@@ -559,6 +567,15 @@ export function ScheduleTimelineSection({
   const loadedWindowsRef = useRef<Array<{ start: string; end: string }>>([]);
   const scrollContainerRef = useRef<HTMLDivElement | null>(null);
   const requestIdRef = useRef(0);
+  const isTableOnlyPresentation = presentation === "table-only";
+  const normalizedAnchorStart = useMemo(() => {
+    const raw = asString(anchorStartDate);
+    return raw ? mondayOfIsoDate(raw) : "";
+  }, [anchorStartDate]);
+  const normalizedAnchorEnd = useMemo(() => {
+    const raw = asString(anchorEndDate);
+    return raw || "";
+  }, [anchorEndDate]);
 
   const canInteract = Boolean(accountCode) && !disabled;
 
@@ -804,13 +821,21 @@ export function ScheduleTimelineSection({
   }
 
   async function loadInitialWindow(policy: CachePolicy): Promise<void> {
-    if (!accountCode || isCollapsed) {
+    if (!accountCode || (isCollapsed && !isTableOnlyPresentation)) {
       return;
     }
 
     const requestId = ++requestIdRef.current;
-    const start = clampInitialAnchor(visibleStart);
-    const end = addDays(start, DEFAULT_WINDOW_WEEKS * 7 - 1);
+    const useAnchoredRange =
+      isTableOnlyPresentation
+      && normalizedAnchorStart
+      && normalizedAnchorEnd;
+    const start = useAnchoredRange
+      ? normalizedAnchorStart
+      : clampInitialAnchor(visibleStart);
+    const end = useAnchoredRange
+      ? normalizedAnchorEnd
+      : addDays(start, DEFAULT_WINDOW_WEEKS * 7 - 1);
 
     setRangeLimitMessage(null);
     setIsLoading(true);
@@ -949,312 +974,356 @@ export function ScheduleTimelineSection({
       return;
     }
 
-    if (isCollapsed) {
+    if (isCollapsed && !isTableOnlyPresentation) {
+      return;
+    }
+    if (isTableOnlyPresentation && normalizedAnchorStart && visibleStart !== normalizedAnchorStart) {
       return;
     }
 
     void loadInitialWindow("stale-while-revalidate");
-  }, [accountCode, isCollapsed, visibleStart]);
+  }, [accountCode, isCollapsed, isTableOnlyPresentation, normalizedAnchorEnd, normalizedAnchorStart, visibleStart]);
 
-  return (
+  useEffect(() => {
+    if (!isTableOnlyPresentation || !accountCode || !normalizedAnchorStart) {
+      return;
+    }
+    if (visibleStart === normalizedAnchorStart) {
+      return;
+    }
+    setVisibleStart(normalizedAnchorStart);
+  }, [accountCode, isTableOnlyPresentation, normalizedAnchorStart, setVisibleStart, visibleStart]);
+
+  useEffect(() => {
+    onLoadingChange?.(isLoading || isRefreshing || isLoadingPrevious || isLoadingNext);
+  }, [isLoading, isLoadingNext, isLoadingPrevious, isRefreshing, onLoadingChange]);
+
+  const timelineBody = (
     <>
-      <SectionCard
-        title={(
-          <span className="flex items-center gap-2">
-            <CalendarRange className="size-5 text-blue-700" />
-            <span>Schedule Timeline</span>
-          </span>
-        )}
-        description={rangeLimitMessage ?? undefined}
-        actions={(
-          <ActionIconButton
-            aria-label={isCollapsed ? "Expand schedule timeline" : "Collapse schedule timeline"}
-            tooltip={isCollapsed ? "Expand timeline" : "Collapse timeline"}
-            onClick={() => setIsCollapsed((current) => !current)}
-            icon={isCollapsed ? <ChevronDown className="size-5" /> : <ChevronUp className="size-5" />}
-          />
-        )}
-        contentClassName="space-y-4"
-      >
+      {!isTableOnlyPresentation ? (
+        <div className="flex items-center justify-end">
+          <div className="flex items-center gap-1">
+            <ActionIconButton
+              aria-label="Load previous period"
+              tooltip="Load previous period"
+              onClick={() => {
+                void loadAdjacentWindow("previous");
+              }}
+              disabled={!canInteract || isLoading || isLoadingPrevious || maxReached}
+              icon={
+                isLoadingPrevious ? (
+                  <Loader2 className="size-5 animate-spin" />
+                ) : (
+                  <ChevronLeft className="size-5" />
+                )
+              }
+            />
+            <ActionIconButton
+              aria-label="Current period"
+              tooltip="Current period"
+              onClick={handleCurrentPeriod}
+              disabled={!canInteract || isLoading}
+              icon={<CalendarRange className="size-5" />}
+            />
+            <ActionIconButton
+              aria-label="Load next period"
+              tooltip="Load next period"
+              onClick={() => {
+                void loadAdjacentWindow("next");
+              }}
+              disabled={!canInteract || isLoading || isLoadingNext || maxReached}
+              icon={
+                isLoadingNext ? (
+                  <Loader2 className="size-5 animate-spin" />
+                ) : (
+                  <ChevronRight className="size-5" />
+                )
+              }
+            />
+          </div>
+        </div>
+      ) : null}
 
-        {!isCollapsed ? (
-          <>
-            <div className="flex items-center justify-end">
-              <div className="flex items-center gap-1">
-                <ActionIconButton
-                  aria-label="Load previous period"
-                  tooltip="Load previous period"
-                  onClick={() => {
-                    void loadAdjacentWindow("previous");
-                  }}
-                  disabled={!canInteract || isLoading || isLoadingPrevious || maxReached}
-                  icon={
-                    isLoadingPrevious ? (
-                      <Loader2 className="size-5 animate-spin" />
-                    ) : (
-                      <ChevronLeft className="size-5" />
-                    )
-                  }
-                />
-                <ActionIconButton
-                  aria-label="Current period"
-                  tooltip="Current period"
-                  onClick={handleCurrentPeriod}
-                  disabled={!canInteract || isLoading}
-                  icon={<CalendarRange className="size-5" />}
-                />
-                <ActionIconButton
-                  aria-label="Load next period"
-                  tooltip="Load next period"
-                  onClick={() => {
-                    void loadAdjacentWindow("next");
-                  }}
-                  disabled={!canInteract || isLoading || isLoadingNext || maxReached}
-                  icon={
-                    isLoadingNext ? (
-                      <Loader2 className="size-5 animate-spin" />
-                    ) : (
-                      <ChevronRight className="size-5" />
-                    )
-                  }
-                />
-              </div>
-            </div>
+      {!accountCode ? (
+        <p className="text-sm text-slate-500">Load an account to view schedule timeline.</p>
+      ) : null}
 
-            {!accountCode ? (
-              <p className="text-sm text-slate-500">Load an account to view schedule timeline.</p>
-            ) : null}
+      {accountCode && error ? <p className="text-sm text-rose-600">{error}</p> : null}
 
-            {accountCode && error ? <p className="text-sm text-rose-600">{error}</p> : null}
+      {accountCode && isLoading && !timeline ? (
+        <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
+          <Loader2 className="size-4 animate-spin text-blue-600" />
+          Loading timeline data...
+        </div>
+      ) : null}
 
-            {accountCode && isLoading && !timeline ? (
-              <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
-                <Loader2 className="size-4 animate-spin text-blue-600" />
-                Loading timeline data...
-              </div>
-            ) : null}
+      {accountCode && !isLoading && timeline && !items.length ? (
+        <p className="text-sm text-slate-500">No scheduled activity found for this period.</p>
+      ) : null}
 
-            {accountCode && !isLoading && timeline && !items.length ? (
-              <p className="text-sm text-slate-500">No scheduled activity found for this period.</p>
-            ) : null}
-
-            {accountCode && items.length > 0 ? (
-              <div className="overflow-hidden rounded-lg border border-slate-200">
-                <div ref={scrollContainerRef} className="max-h-[32rem] overflow-auto">
-                  <div className="min-w-max" style={{ width: LABEL_COLUMN_PX + timelinePixelWidth }}>
-                    <div className="sticky top-0 z-30 border-b border-slate-200 bg-slate-100/95 backdrop-blur">
-                      <div className="flex h-8 border-b border-slate-200">
+      {accountCode && items.length > 0 ? (
+        <div className="overflow-hidden rounded-lg border border-slate-200">
+          <div ref={scrollContainerRef} className="max-h-[32rem] overflow-auto">
+            <div className="min-w-max" style={{ width: LABEL_COLUMN_PX + timelinePixelWidth }}>
+              <div className="sticky top-0 z-30 border-b border-slate-200 bg-slate-100/95 backdrop-blur">
+                <div className="flex h-8 border-b border-slate-200">
+                  <div
+                    className="sticky left-0 z-40 flex items-center border-r border-slate-200 bg-slate-100 px-3 text-xs font-semibold uppercase tracking-wide text-slate-600"
+                    style={{ width: LABEL_COLUMN_PX, minWidth: LABEL_COLUMN_PX }}
+                  >
+                    EstNum / Station
+                  </div>
+                  <div className="flex" style={{ width: timelinePixelWidth, minWidth: timelinePixelWidth }}>
+                    {monthGroups.map((group) => (
+                      <div
+                        key={group.key}
+                        className="flex items-center justify-center border-r border-slate-200 text-[11px] font-semibold uppercase tracking-wide text-slate-600"
+                        style={{ width: group.span * WEEK_COLUMN_PX }}
+                      >
+                        {group.label}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex h-9">
+                  <div
+                    className="sticky left-0 z-40 border-r border-slate-200 bg-slate-50"
+                    style={{ width: LABEL_COLUMN_PX, minWidth: LABEL_COLUMN_PX }}
+                  />
+                  <div className="flex" style={{ width: timelinePixelWidth, minWidth: timelinePixelWidth }}>
+                    {weeks.map((week) => {
+                      const isCurrentWeek = week.weekStart === currentWeekStart;
+                      return (
                         <div
-                          className="sticky left-0 z-40 flex items-center border-r border-slate-200 bg-slate-100 px-3 text-xs font-semibold uppercase tracking-wide text-slate-600"
+                          key={week.weekStart}
+                          className={`flex items-center justify-center border-r border-slate-200 text-xs font-semibold text-slate-600 ${
+                            isCurrentWeek ? "bg-blue-100 text-blue-800" : "bg-slate-50"
+                          }`}
+                          style={{ width: WEEK_COLUMN_PX, minWidth: WEEK_COLUMN_PX }}
+                        >
+                          {week.label}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                {groupedRows.map((group) => {
+                  const collapsed = isGroupCollapsed(group.estNum);
+                  const groupActiveWeeks = [...new Set(group.stations.flatMap((station) => station.activeWeeks))].sort();
+                  const groupSegments = buildSegments(groupActiveWeeks, weekIndexByStart);
+                  const groupColor = colorForRow(`group:${group.estNum}`);
+
+                  return (
+                    <div key={`group:${group.estNum}`} className="border-b border-slate-200 last:border-b-0">
+                      <button
+                        type="button"
+                        className="flex w-full border-b border-slate-200 bg-slate-50/60 text-left hover:bg-slate-100/70"
+                        aria-label={collapsed ? `Expand EstNum ${group.estNum}` : `Collapse EstNum ${group.estNum}`}
+                        onClick={() => setGroupCollapsed(group.estNum, !collapsed)}
+                      >
+                        <div
+                          className="sticky left-0 z-20 flex items-center gap-2 border-r border-slate-200 bg-slate-50 px-3 py-2"
                           style={{ width: LABEL_COLUMN_PX, minWidth: LABEL_COLUMN_PX }}
                         >
-                          EstNum / Station
+                          <span className="inline-flex size-6 items-center justify-center text-slate-600">
+                            {collapsed ? <ChevronRight className="size-3" /> : <ChevronDown className="size-3" />}
+                          </span>
+                          <div className="min-w-0">
+                            <p className="truncate text-sm font-semibold text-slate-900">EstNum {group.estNum}</p>
+                            <p className="truncate text-xs text-slate-500">{group.estNumName}</p>
+                            {group.estNumNote ? (
+                              <p className="truncate text-xs text-slate-500">{group.estNumNote}</p>
+                            ) : null}
+                          </div>
                         </div>
-                        <div className="flex" style={{ width: timelinePixelWidth, minWidth: timelinePixelWidth }}>
-                          {monthGroups.map((group) => (
-                            <div
-                              key={group.key}
-                              className="flex items-center justify-center border-r border-slate-200 text-[11px] font-semibold uppercase tracking-wide text-slate-600"
-                              style={{ width: group.span * WEEK_COLUMN_PX }}
-                            >
-                              {group.label}
-                            </div>
-                          ))}
+
+                        <div className="relative h-12" style={{ width: timelinePixelWidth, minWidth: timelinePixelWidth }}>
+                          <div className="absolute inset-0 flex">
+                            {weeks.map((week) => {
+                              const isCurrentWeek = week.weekStart === currentWeekStart;
+                              return (
+                                <div
+                                  key={`group:${group.estNum}:${week.weekStart}`}
+                                  className={`h-full border-r border-slate-200 ${isCurrentWeek ? "bg-blue-50/70" : "bg-slate-50/20"}`}
+                                  style={{ width: WEEK_COLUMN_PX, minWidth: WEEK_COLUMN_PX }}
+                                />
+                              );
+                            })}
+                          </div>
+                          {collapsed
+                            ? groupSegments.map((segment, segmentIndex) => {
+                                const left = segment.startIndex * WEEK_COLUMN_PX + 6;
+                                const width = (segment.endIndex - segment.startIndex + 1) * WEEK_COLUMN_PX - 12;
+                                const rangeStart =
+                                  segment.activeWeeks[0] ?? weeks[segment.startIndex]?.weekStart ?? "";
+                                const rangeEnd =
+                                  segment.activeWeeks[segment.activeWeeks.length - 1] ??
+                                  weeks[segment.endIndex]?.weekEnd ??
+                                  "";
+                                return (
+                                  <div
+                                    key={`group:${group.estNum}:segment:${segmentIndex}`}
+                                    className="absolute top-2.5 h-7 rounded-full border shadow-sm"
+                                    style={{
+                                      left,
+                                      width: Math.max(width, 16),
+                                      backgroundColor: groupColor.background,
+                                      borderColor: groupColor.border,
+                                    }}
+                                    title={`EstNum ${group.estNum} · ${formatIsoDateMmDdYyyy(rangeStart)} to ${formatIsoDateMmDdYyyy(rangeEnd)}`}
+                                  />
+                                );
+                              })
+                            : null}
                         </div>
-                      </div>
-                      <div className="flex h-9">
-                        <div
-                          className="sticky left-0 z-40 border-r border-slate-200 bg-slate-50"
-                          style={{ width: LABEL_COLUMN_PX, minWidth: LABEL_COLUMN_PX }}
-                        />
-                        <div className="flex" style={{ width: timelinePixelWidth, minWidth: timelinePixelWidth }}>
-                          {weeks.map((week) => {
-                            const isCurrentWeek = week.weekStart === currentWeekStart;
+                      </button>
+
+                      {!collapsed
+                        ? group.stations.map((item) => {
+                            const color = colorForRow(`${item.stationCode}:${item.estNum}`);
+                            const segments = buildSegments(item.activeWeeks, weekIndexByStart);
+
                             return (
-                              <div
-                                key={week.weekStart}
-                                className={`flex items-center justify-center border-r border-slate-200 text-xs font-semibold text-slate-600 ${
-                                  isCurrentWeek ? "bg-blue-100 text-blue-800" : "bg-slate-50"
-                                }`}
-                                style={{ width: WEEK_COLUMN_PX, minWidth: WEEK_COLUMN_PX }}
-                              >
-                                {week.label}
-                              </div>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    </div>
-
-                    <div>
-                      {groupedRows.map((group) => {
-                        const collapsed = isGroupCollapsed(group.estNum);
-                        const groupActiveWeeks = [...new Set(group.stations.flatMap((station) => station.activeWeeks))].sort();
-                        const groupSegments = buildSegments(groupActiveWeeks, weekIndexByStart);
-                        const groupColor = colorForRow(`group:${group.estNum}`);
-
-                        return (
-                          <div key={`group:${group.estNum}`} className="border-b border-slate-200 last:border-b-0">
-                            <button
-                              type="button"
-                              className="flex w-full border-b border-slate-200 bg-slate-50/60 text-left hover:bg-slate-100/70"
-                              aria-label={collapsed ? `Expand EstNum ${group.estNum}` : `Collapse EstNum ${group.estNum}`}
-                              onClick={() => setGroupCollapsed(group.estNum, !collapsed)}
-                            >
-                              <div
-                                className="sticky left-0 z-20 flex items-center gap-2 border-r border-slate-200 bg-slate-50 px-3 py-2"
-                                style={{ width: LABEL_COLUMN_PX, minWidth: LABEL_COLUMN_PX }}
-                              >
-                                <span className="inline-flex size-6 items-center justify-center text-slate-600">
-                                  {collapsed ? <ChevronRight className="size-3" /> : <ChevronDown className="size-3" />}
-                                </span>
-                                <div className="min-w-0">
-                                  <p className="truncate text-sm font-semibold text-slate-900">EstNum {group.estNum}</p>
-                                  <p className="truncate text-xs text-slate-500">{group.estNumName}</p>
-                                  {group.estNumNote ? (
-                                    <p className="truncate text-xs text-slate-500">{group.estNumNote}</p>
-                                  ) : null}
+                              <div key={`${item.stationCode}:${item.estNum}`} className="flex border-b border-slate-200 last:border-b-0">
+                                <div
+                                  className="sticky left-0 z-20 border-r border-slate-200 bg-white px-3 py-2"
+                                  style={{ width: LABEL_COLUMN_PX, minWidth: LABEL_COLUMN_PX }}
+                                >
+                                  <p className="text-sm font-medium text-slate-900">{item.stationCode}</p>
+                                  <p className="text-xs text-slate-500">{item.stationName || "Station name unavailable"}</p>
                                 </div>
-                              </div>
 
-                              <div className="relative h-12" style={{ width: timelinePixelWidth, minWidth: timelinePixelWidth }}>
-                                <div className="absolute inset-0 flex">
-                                  {weeks.map((week) => {
-                                    const isCurrentWeek = week.weekStart === currentWeekStart;
+                                <div className="relative h-14" style={{ width: timelinePixelWidth, minWidth: timelinePixelWidth }}>
+                                  <div className="absolute inset-0 flex">
+                                    {weeks.map((week) => {
+                                      const isCurrentWeek = week.weekStart === currentWeekStart;
+                                      return (
+                                        <div
+                                          key={`${item.stationCode}:${item.estNum}:${week.weekStart}`}
+                                          className={`h-full border-r border-slate-200 ${isCurrentWeek ? "bg-blue-50/70" : "bg-white"}`}
+                                          style={{ width: WEEK_COLUMN_PX, minWidth: WEEK_COLUMN_PX }}
+                                        />
+                                      );
+                                    })}
+                                  </div>
+
+                                  {segments.map((segment, segmentIndex) => {
+                                    const left = segment.startIndex * WEEK_COLUMN_PX + 6;
+                                    const width = (segment.endIndex - segment.startIndex + 1) * WEEK_COLUMN_PX - 12;
+                                    const rangeStart = segment.activeWeeks[0] ?? weeks[segment.startIndex]?.weekStart ?? "";
+                                    const rangeEnd =
+                                      segment.activeWeeks[segment.activeWeeks.length - 1] ??
+                                      weeks[segment.endIndex]?.weekEnd ??
+                                      "";
+
                                     return (
-                                      <div
-                                        key={`group:${group.estNum}:${week.weekStart}`}
-                                        className={`h-full border-r border-slate-200 ${isCurrentWeek ? "bg-blue-50/70" : "bg-slate-50/20"}`}
-                                        style={{ width: WEEK_COLUMN_PX, minWidth: WEEK_COLUMN_PX }}
+                                      <button
+                                        key={`${item.stationCode}:${item.estNum}:segment:${segmentIndex}`}
+                                        type="button"
+                                        className="absolute top-3 h-8 rounded-full border shadow-sm transition-all hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                        style={{
+                                          left,
+                                          width: Math.max(width, 16),
+                                          backgroundColor: color.background,
+                                          borderColor: color.border,
+                                        }}
+                                        title={`${item.stationCode} · ${item.estNum} · ${rangeStart} to ${rangeEnd}`}
+                                        onClick={() =>
+                                          setSelectedDetail({
+                                            item,
+                                            segment,
+                                            rangeStart,
+                                            rangeEnd,
+                                          })
+                                        }
                                       />
                                     );
                                   })}
                                 </div>
-                                {collapsed
-                                  ? groupSegments.map((segment, segmentIndex) => {
-                                      const left = segment.startIndex * WEEK_COLUMN_PX + 6;
-                                      const width = (segment.endIndex - segment.startIndex + 1) * WEEK_COLUMN_PX - 12;
-                                      const rangeStart =
-                                        segment.activeWeeks[0] ?? weeks[segment.startIndex]?.weekStart ?? "";
-                                      const rangeEnd =
-                                        segment.activeWeeks[segment.activeWeeks.length - 1] ??
-                                        weeks[segment.endIndex]?.weekEnd ??
-                                        "";
-                                      return (
-                                        <div
-                                          key={`group:${group.estNum}:segment:${segmentIndex}`}
-                                          className="absolute top-2.5 h-7 rounded-full border shadow-sm"
-                                          style={{
-                                            left,
-                                            width: Math.max(width, 16),
-                                            backgroundColor: groupColor.background,
-                                            borderColor: groupColor.border,
-                                          }}
-                                          title={`EstNum ${group.estNum} · ${formatIsoDateMmDdYyyy(rangeStart)} to ${formatIsoDateMmDdYyyy(rangeEnd)}`}
-                                        />
-                                      );
-                                    })
-                                  : null}
                               </div>
-                            </button>
-
-                            {!collapsed
-                              ? group.stations.map((item) => {
-                                  const color = colorForRow(`${item.stationCode}:${item.estNum}`);
-                                  const segments = buildSegments(item.activeWeeks, weekIndexByStart);
-
-                                  return (
-                                    <div key={`${item.stationCode}:${item.estNum}`} className="flex border-b border-slate-200 last:border-b-0">
-                                      <div
-                                        className="sticky left-0 z-20 border-r border-slate-200 bg-white px-3 py-2"
-                                        style={{ width: LABEL_COLUMN_PX, minWidth: LABEL_COLUMN_PX }}
-                                      >
-                                        <p className="text-sm font-medium text-slate-900">{item.stationCode}</p>
-                                        <p className="text-xs text-slate-500">{item.stationName || "Station name unavailable"}</p>
-                                      </div>
-
-                                      <div className="relative h-14" style={{ width: timelinePixelWidth, minWidth: timelinePixelWidth }}>
-                                        <div className="absolute inset-0 flex">
-                                          {weeks.map((week) => {
-                                            const isCurrentWeek = week.weekStart === currentWeekStart;
-                                            return (
-                                              <div
-                                                key={`${item.stationCode}:${item.estNum}:${week.weekStart}`}
-                                                className={`h-full border-r border-slate-200 ${isCurrentWeek ? "bg-blue-50/70" : "bg-white"}`}
-                                                style={{ width: WEEK_COLUMN_PX, minWidth: WEEK_COLUMN_PX }}
-                                              />
-                                            );
-                                          })}
-                                        </div>
-
-                                        {segments.map((segment, segmentIndex) => {
-                                          const left = segment.startIndex * WEEK_COLUMN_PX + 6;
-                                          const width = (segment.endIndex - segment.startIndex + 1) * WEEK_COLUMN_PX - 12;
-                                          const rangeStart = segment.activeWeeks[0] ?? weeks[segment.startIndex]?.weekStart ?? "";
-                                          const rangeEnd =
-                                            segment.activeWeeks[segment.activeWeeks.length - 1] ??
-                                            weeks[segment.endIndex]?.weekEnd ??
-                                            "";
-
-                                          return (
-                                            <button
-                                              key={`${item.stationCode}:${item.estNum}:segment:${segmentIndex}`}
-                                              type="button"
-                                              className="absolute top-3 h-8 rounded-full border shadow-sm transition-all hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                              style={{
-                                                left,
-                                                width: Math.max(width, 16),
-                                                backgroundColor: color.background,
-                                                borderColor: color.border,
-                                              }}
-                                              title={`${item.stationCode} · ${item.estNum} · ${rangeStart} to ${rangeEnd}`}
-                                              onClick={() =>
-                                                setSelectedDetail({
-                                                  item,
-                                                  segment,
-                                                  rangeStart,
-                                                  rangeEnd,
-                                                })
-                                              }
-                                            />
-                                          );
-                                        })}
-                                      </div>
-                                    </div>
-                                  );
-                                })
-                              : null}
-                          </div>
-                        );
-                      })}
+                            );
+                          })
+                        : null}
                     </div>
-                  </div>
-                </div>
+                  );
+                })}
               </div>
-            ) : null}
+            </div>
+          </div>
+        </div>
+      ) : null}
 
-            {statusText ? (
-              <div className="flex justify-start">
-                <CacheStatusChip
-                  text={statusText}
-                  onRefresh={() => {
-                    void handleRefreshVisibleWindows();
-                  }}
-                  disabled={!canInteract || !isOnline || isRefreshing || isLoading || isLoadingNext || isLoadingPrevious}
-                  refreshing={isRefreshing}
-                  refreshLabel="Refresh timeline"
-                  tooltipText={
-                    !isOnline
-                      ? "Offline. Reconnect to refresh timeline data."
-                      : "Refresh timeline for the current account and loaded visible range"
-                  }
-                    className="max-w-[min(90vw,34rem)]"
-                  />
-                </div>
-              ) : null}
-            </>
-        ) : null}
-      </SectionCard>
+      {statusText ? (
+        isTableOnlyPresentation ? (
+          <div className="flex justify-start border-t border-slate-200 px-4 py-3">
+            <CacheStatusChip
+              text={statusText}
+              onRefresh={() => {
+                void handleRefreshVisibleWindows();
+              }}
+              disabled={!canInteract || !isOnline || isRefreshing || isLoading || isLoadingNext || isLoadingPrevious}
+              refreshing={isRefreshing}
+              refreshLabel="Refresh timeline"
+              tooltipText={
+                !isOnline
+                  ? "Offline. Reconnect to refresh timeline data."
+                  : "Refresh timeline for the current account and loaded visible range"
+              }
+              className="max-w-[min(92vw,42rem)]"
+            />
+          </div>
+        ) : (
+          <div className="flex justify-start">
+            <CacheStatusChip
+              text={statusText}
+              onRefresh={() => {
+                void handleRefreshVisibleWindows();
+              }}
+              disabled={!canInteract || !isOnline || isRefreshing || isLoading || isLoadingNext || isLoadingPrevious}
+              refreshing={isRefreshing}
+              refreshLabel="Refresh timeline"
+              tooltipText={
+                !isOnline
+                  ? "Offline. Reconnect to refresh timeline data."
+                  : "Refresh timeline for the current account and loaded visible range"
+              }
+              className="max-w-[min(90vw,34rem)]"
+            />
+          </div>
+        )
+      ) : null}
+    </>
+  );
+
+  return (
+    <>
+      {isTableOnlyPresentation ? (
+        <div className="space-y-4">{timelineBody}</div>
+      ) : (
+        <SectionCard
+          title={(
+            <span className="flex items-center gap-2">
+              <CalendarRange className="size-5 text-blue-700" />
+              <span>Schedule Timeline</span>
+            </span>
+          )}
+          description={rangeLimitMessage ?? undefined}
+          actions={(
+            <ActionIconButton
+              aria-label={isCollapsed ? "Expand schedule timeline" : "Collapse schedule timeline"}
+              tooltip={isCollapsed ? "Expand timeline" : "Collapse timeline"}
+              onClick={() => setIsCollapsed((current) => !current)}
+              icon={isCollapsed ? <ChevronDown className="size-5" /> : <ChevronUp className="size-5" />}
+            />
+          )}
+          contentClassName="space-y-4"
+        >
+          {!isCollapsed ? timelineBody : null}
+        </SectionCard>
+      )}
 
       <Dialog open={Boolean(selectedDetail)} onOpenChange={(open) => !open && setSelectedDetail(null)}>
         <DialogContent className="max-w-xl">

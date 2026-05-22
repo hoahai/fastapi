@@ -15,9 +15,9 @@ import {
 } from "@tradsphere/components/ui/dialog";
 import { Input } from "@tradsphere/components/ui/input";
 import { Spinner } from "@tradsphere/components/ui/spinner";
-import { useApiRequest } from "@tradsphere/hooks/useApiRequest";
-import { useOnlineStatus } from "@tradsphere/hooks/useOnlineStatus";
-import { readBrowserCacheSnapshot, writeBrowserCache } from "@tradsphere/lib/browserCache";
+import { useApiRequest } from "@shared/hooks/useApiRequest";
+import { useOnlineStatus } from "@shared/hooks/useOnlineStatus";
+import { readBrowserCacheSnapshot, writeBrowserCache } from "@shared/lib/browserCache";
 import { TradspherePermissionDetailsSection } from "@tradsphere/components/admin/TradspherePermissionDetailsSection";
 import { resolveAppScopedAdminSections } from "@shell/admin/appScopedAdminConfig";
 import { SectionCard } from "@shared/components";

@@ -1,6 +1,6 @@
 import type { ReactNode } from "react";
 
-import { cn } from "@tradsphere/lib/utils";
+import { cn } from "@shared/components/utils/cn";
 
 type PageBannerProps = {
   eyebrow: string;

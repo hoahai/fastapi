@@ -1,31 +1,17 @@
-# TradSphere UI
+# TradSphere App Source
 
-React + TypeScript dashboard UI for TradSphere.
+TradSphere business frontend source lives in this folder.
 
-## Stack
+## Ownership
+- Shell host/build/routing/toolchain: `frontend/shell`
+- TradSphere business pages/components/hooks/lib: `frontend/apps/tradsphere/src`
+- Shared cross-app primitives/auth/api/cache: `frontend/shared`
 
-- shadcn-style component structure in `src/components/ui`
-- Tailwind CSS
-- TanStack Table
-- Recharts
-- lucide-react
-- Vite + React
-
-## Run
-
-```bash
-npm --prefix frontend/apps/tradsphere install
-npm --prefix frontend/apps/tradsphere dev
-```
-
-## Build
-
-```bash
-npm --prefix frontend/apps/tradsphere run build
-```
+## Development
+- Run via shell host:
+  - `npm --prefix frontend/shell run dev`
+  - `npm --prefix frontend/shell run build`
 
 ## Notes
-
-- Main page is in `src/App.tsx`.
-- Reusable dashboard components are in `src/components/dashboard`.
-- Base UI primitives are in `src/components/ui`.
+- This app folder intentionally excludes Vite host/bootstrap ownership.
+- Compatibility wrappers remain while legacy `@/...` imports are still used.

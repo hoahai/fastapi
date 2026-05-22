@@ -6,7 +6,7 @@ import { Button } from "@tradsphere/components/ui/button";
 import { Input } from "@tradsphere/components/ui/input";
 import { Spinner } from "@tradsphere/components/ui/spinner";
 import { getAccessAssignments, roleLabel } from "@shared/auth/accessAssignments";
-import { useApiRequest } from "@tradsphere/hooks/useApiRequest";
+import { useApiRequest } from "@shared/hooks/useApiRequest";
 import { MIN_PASSWORD_LENGTH, PASSWORD_RULE_MESSAGE, validatePasswordAgainstPolicy } from "@shared/auth/passwordRules";
 import { useAuth } from "@shared/auth/useAuth";
 

@@ -1,8 +1,9 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle, AlertTriangle, Archive, Link2, Loader2, Plus, Send, Trash2, Unlink, X } from "lucide-react";
+import { AlertCircle, AlertTriangle, Archive, Link2, Loader2, Plus, RefreshCw, Send, Table2, Trash2, Unlink, X } from "lucide-react";
 
 import { ActionIconButton } from "@/components/dashboard/ActionIconButton";
 import { AccountSelector } from "@/components/dashboard/AccountSelector";
+import { ScheduleTimelineSection } from "@/components/dashboard/ScheduleTimelineSection";
 import { PageBanner } from "@/components/layout/PageBanner";
 import { AppDropdown } from "@/components/ui/app-dropdown";
 import { Button } from "@/components/ui/button";
@@ -180,6 +181,23 @@ type TrafficPageSnapshot = {
   refreshMessage: string | null;
 };
 
+type TrafficStationCandidate = {
+  stationCode: string;
+  stationName: string | null;
+  deliveryMethod: string | null;
+  contactsSnapshot: Record<string, unknown> | null;
+};
+
+type TrafficStationCandidatesPayload = {
+  accountCode: string;
+  flightStart: string;
+  flightEnd: string;
+  stations: TrafficStationCandidate[];
+  summary: {
+    candidateCount: number;
+  };
+};
+
 const TRAFFIC_LIST_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.MAIN_LOAD;
 const TRAFFIC_DETAIL_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.MAIN_LOAD;
 const STATION_LOOKUP_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.STATION_DETAIL;
@@ -199,6 +217,7 @@ const CONFIRMED_STATUS_OPTIONS = ["pending", "confirmed", "issue", "not_required
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspace.sidebar.collapsed";
 const LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY = "tradsphere:ui:sidebarCollapsed:v1";
 const SIDEBAR_COLLAPSED_EVENT = "workspace-sidebar-collapsed-change";
+const LOCAL_TRAFFIC_ID_PREFIX = "local-traffic:";
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -288,10 +307,6 @@ function mergeUniqueEmails(base: string[], additions: string[]): string[] {
   return output;
 }
 
-function joinEmailList(values: string[]): string {
-  return values.join(", ");
-}
-
 function resolveEarliestFlightStartIso(flights: TrafficFlight[]): string {
   let earliest = "";
   for (const flight of flights) {
@@ -304,6 +319,31 @@ function resolveEarliestFlightStartIso(flights: TrafficFlight[]): string {
     }
   }
   return earliest;
+}
+
+function resolveFlightRangeFromFlights(flights: TrafficFlight[]): { flightStart: string; flightEnd: string } | null {
+  let minStart = "";
+  let maxEnd = "";
+  for (const flight of flights) {
+    const start = asString(flight.flightStart);
+    const end = asString(flight.flightEnd);
+    if (!start || !end) {
+      continue;
+    }
+    if (!minStart || start < minStart) {
+      minStart = start;
+    }
+    if (!maxEnd || end > maxEnd) {
+      maxEnd = end;
+    }
+  }
+  if (!minStart || !maxEnd) {
+    return null;
+  }
+  return {
+    flightStart: minStart,
+    flightEnd: maxEnd,
+  };
 }
 
 function formatMonthYearFromIsoDate(isoDate: string): string {
@@ -597,6 +637,74 @@ function normalizeTrafficDetail(payload: unknown): TrafficDetail | null {
   return detail.traffic.id ? detail : null;
 }
 
+function normalizeTrafficStationCandidates(payload: unknown): TrafficStationCandidatesPayload | null {
+  const data = unwrapData(payload);
+  if (!isRecord(data)) {
+    return null;
+  }
+  const accountCode = asString(data.accountCode).toUpperCase();
+  const flightStart = asString(data.flightStart);
+  const flightEnd = asString(data.flightEnd);
+  if (!accountCode || !flightStart || !flightEnd) {
+    return null;
+  }
+  const stationsRaw = Array.isArray(data.stations) ? data.stations : [];
+  const stations = stationsRaw
+    .filter(isRecord)
+    .map((item) => ({
+      stationCode: asString(item.stationCode).toUpperCase(),
+      stationName: asNullableString(item.stationName),
+      deliveryMethod: asNullableString(item.deliveryMethod),
+      contactsSnapshot: isRecord(item.contactsSnapshot) ? item.contactsSnapshot : null,
+    }))
+    .filter((item) => Boolean(item.stationCode));
+  return {
+    accountCode,
+    flightStart,
+    flightEnd,
+    stations,
+    summary: {
+      candidateCount: Math.max(0, Math.trunc(asNumber(isRecord(data.summary) ? data.summary.candidateCount : stations.length, stations.length))),
+    },
+  };
+}
+
+function normalizeStationLookupMeta(raw: unknown, fallbackCode?: string): StationLookupMeta | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+  const code = asString(raw.code || raw.stationCode || fallbackCode).toUpperCase();
+  if (!code) {
+    return null;
+  }
+  const deliveryMethodRaw = isRecord(raw.deliveryMethod) ? raw.deliveryMethod : null;
+  const deliveryMethodName = deliveryMethodRaw
+    ? asString(deliveryMethodRaw.name)
+    : asString(raw.deliveryMethod);
+  return {
+    code,
+    name: asString(raw.name),
+    mediaType: asString(raw.mediaType).toUpperCase(),
+    deliveryMethod: deliveryMethodRaw
+      ? {
+          name: asString(deliveryMethodRaw.name),
+          url: asString(deliveryMethodRaw.url),
+          username: asString(deliveryMethodRaw.username),
+          deadline: asString(deliveryMethodRaw.deadline),
+          note: asString(deliveryMethodRaw.note),
+        }
+      : (deliveryMethodName
+          ? {
+              name: deliveryMethodName,
+              url: "",
+              username: "",
+              deadline: "",
+              note: "",
+            }
+          : null),
+  };
+}
+
 function cloneDetail(detail: TrafficDetail | null): TrafficDetail | null {
   if (!detail) {
     return null;
@@ -661,6 +769,14 @@ function buildTrafficListCacheKey(accountCode: string): string {
 function buildTrafficDetailCacheKey(trafficId: string): string {
   const normalized = asString(trafficId) || "missing";
   return `traffic:detail:${normalized}:v1`;
+}
+
+function isLocalTrafficId(trafficId: string): boolean {
+  return asString(trafficId).startsWith(LOCAL_TRAFFIC_ID_PREFIX);
+}
+
+function buildLocalTrafficId(): string {
+  return `${LOCAL_TRAFFIC_ID_PREFIX}${Date.now()}`;
 }
 
 function getTrafficErrorMessage(error: unknown, fallback: string): string {
@@ -764,6 +880,87 @@ function stationStatusChipClass(status: string): string {
     return "border-sky-200 bg-sky-50 text-sky-700";
   }
   return "border-slate-200 bg-slate-100 text-slate-700";
+}
+
+function isGoogleDriveDeliveryMethod(value: string | null): boolean {
+  return asString(value).toLowerCase().includes("google drive");
+}
+
+function hasAllFlightFileUrls(flights: TrafficFlight[]): boolean {
+  return flights.length > 0 && flights.every((flight) => Boolean(asString(flight.fileUrl)));
+}
+
+function isAutoReadyToEmailEligibleDeliveryMethod(value: string | null): boolean {
+  const normalized = asString(value);
+  return !normalized || isGoogleDriveDeliveryMethod(normalized);
+}
+
+function resolveAutoReadyToEmailStatus(currentStatusRaw: string, deliveryMethod: string | null, hasCompleteFlightAssets: boolean): string {
+  const currentStatus = asString(currentStatusRaw).toLowerCase();
+  if (!isAutoReadyToEmailEligibleDeliveryMethod(deliveryMethod)) {
+    return currentStatus;
+  }
+  if (!hasCompleteFlightAssets) {
+    return currentStatus === "ready_to_email" ? "" : currentStatus;
+  }
+  if (currentStatus === "ready_to_email") {
+    return currentStatus;
+  }
+  if (currentStatus === "sent" || currentStatus === "skipped" || currentStatus === "issue") {
+    return currentStatus;
+  }
+  return "ready_to_email";
+}
+
+function applyAutoReadyToEmailFromFlights(detail: TrafficDetail): TrafficDetail {
+  const hasCompleteFlightAssets = hasAllFlightFileUrls(detail.flights);
+  if (detail.stations.length === 0) {
+    return detail;
+  }
+  let changed = false;
+  const nextStations = detail.stations.map((station) => {
+    const nextStatus = resolveAutoReadyToEmailStatus(
+      station.deliveryStatus,
+      station.deliveryMethod,
+      hasCompleteFlightAssets,
+    );
+    if (nextStatus === asString(station.deliveryStatus).toLowerCase()) {
+      return station;
+    }
+    changed = true;
+    return {
+      ...station,
+      deliveryStatus: nextStatus,
+    };
+  });
+  if (!changed) {
+    return detail;
+  }
+  return {
+    ...detail,
+    stations: nextStations,
+  };
+}
+
+const DELIVERY_METHOD_CHIP_STYLES = [
+  "border-blue-200 bg-blue-50 text-blue-700 hover:bg-blue-100 focus-visible:ring-blue-300",
+  "border-emerald-200 bg-emerald-50 text-emerald-700 hover:bg-emerald-100 focus-visible:ring-emerald-300",
+  "border-amber-200 bg-amber-50 text-amber-700 hover:bg-amber-100 focus-visible:ring-amber-300",
+  "border-violet-200 bg-violet-50 text-violet-700 hover:bg-violet-100 focus-visible:ring-violet-300",
+  "border-cyan-200 bg-cyan-50 text-cyan-700 hover:bg-cyan-100 focus-visible:ring-cyan-300",
+  "border-rose-200 bg-rose-50 text-rose-700 hover:bg-rose-100 focus-visible:ring-rose-300",
+];
+
+function deliveryMethodChipClass(methodName: string | null): string {
+  const normalized = asString(methodName).toLowerCase();
+  if (!normalized) {
+    return "border-slate-200 bg-slate-100 text-slate-600 hover:bg-slate-200 focus-visible:ring-slate-300";
+  }
+  let hash = 0;
+  for (let index = 0; index < normalized.length; index += 1) {
+    hash = (hash * 31 + normalized.charCodeAt(index)) >>> 0;
+  }
+  return DELIVERY_METHOD_CHIP_STYLES[hash % DELIVERY_METHOD_CHIP_STYLES.length];
 }
 
 function formatStatusOptionLabel(value: string): string {
@@ -1047,6 +1244,93 @@ function StationContactsCell({
   );
 }
 
+function EmailChipsInput({
+  value,
+  onChange,
+  placeholder,
+  disabled,
+  labelByEmail,
+}: {
+  value: string[];
+  onChange: (nextEmails: string[]) => void;
+  placeholder: string;
+  disabled: boolean;
+  labelByEmail: Record<string, string>;
+}) {
+  const [draftValue, setDraftValue] = useState("");
+
+  const commitDraft = useCallback(() => {
+    const parsed = splitEmailList(draftValue);
+    if (parsed.length > 0) {
+      onChange(mergeUniqueEmails(value, parsed));
+    }
+    setDraftValue("");
+  }, [draftValue, onChange, value]);
+
+  return (
+    <div
+      className={[
+        "flex min-h-10 w-full flex-wrap items-center gap-1 rounded-md border border-input bg-background px-2 py-1 text-sm ring-offset-background",
+        disabled ? "cursor-not-allowed opacity-70" : "focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2",
+      ].join(" ")}
+    >
+      {value.map((email) => {
+        const normalizedEmail = asString(email).toLowerCase();
+        const displayLabel = asString(labelByEmail[normalizedEmail]) || normalizedEmail;
+        return (
+          <span
+            key={normalizedEmail}
+            title={displayLabel === normalizedEmail ? normalizedEmail : `${displayLabel} <${normalizedEmail}>`}
+            className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-700"
+          >
+            <span className="max-w-[14rem] truncate">{displayLabel}</span>
+            {!disabled ? (
+              <button
+                type="button"
+                onClick={() => onChange(value.filter((entry) => asString(entry).toLowerCase() !== normalizedEmail))}
+                className="inline-flex size-4 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-200 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                aria-label={`Remove ${normalizedEmail}`}
+              >
+                <X className="size-3" />
+              </button>
+            ) : null}
+          </span>
+        );
+      })}
+      <input
+        value={draftValue}
+        onChange={(event) => setDraftValue(event.target.value)}
+        onBlur={commitDraft}
+        onPaste={(event) => {
+          const pasted = event.clipboardData.getData("text");
+          if (!/[;,\n]/.test(pasted)) {
+            return;
+          }
+          event.preventDefault();
+          const parsed = splitEmailList(pasted);
+          if (parsed.length > 0) {
+            onChange(mergeUniqueEmails(value, parsed));
+          }
+        }}
+        onKeyDown={(event) => {
+          if (event.key === "Enter" || event.key === "Tab" || event.key === "," || event.key === ";") {
+            event.preventDefault();
+            commitDraft();
+            return;
+          }
+          if (event.key === "Backspace" && !draftValue && value.length > 0) {
+            event.preventDefault();
+            onChange(value.slice(0, -1));
+          }
+        }}
+        placeholder={value.length === 0 ? placeholder : ""}
+        disabled={disabled}
+        className="min-w-[9rem] flex-1 border-0 bg-transparent px-1 py-1 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
+      />
+    </div>
+  );
+}
+
 function normalizeTrafficPageSnapshot(payload: unknown): TrafficPageSnapshot | null {
   if (!isRecord(payload)) {
     return null;
@@ -1106,6 +1390,65 @@ function createEmptyStationDraft(trafficId: string): TrafficStation {
   };
 }
 
+function formatStationCodesPreview(codes: string[], limit = 5): string {
+  const normalized = codes
+    .map((code) => asString(code).toUpperCase())
+    .filter(Boolean);
+  if (!normalized.length) {
+    return "";
+  }
+  const clipped = normalized.slice(0, limit).join(", ");
+  if (normalized.length <= limit) {
+    return clipped;
+  }
+  return `${clipped}, +${normalized.length - limit} more`;
+}
+
+function normalizeExternalUrl(value: string | null | undefined): string {
+  const raw = asString(value);
+  if (!raw) {
+    return "";
+  }
+  const candidates = raw.includes("://") ? [raw] : [raw, `https://${raw}`];
+  for (const candidate of candidates) {
+    try {
+      const parsed = new URL(candidate);
+      if (parsed.protocol === "http:" || parsed.protocol === "https:") {
+        return parsed.toString();
+      }
+    } catch {
+      continue;
+    }
+  }
+  return "";
+}
+
+function isStrictHttpUrlInput(value: string | null | undefined): boolean {
+  const raw = asString(value);
+  if (!raw) {
+    return false;
+  }
+  if (!/^https?:\/\//i.test(raw)) {
+    return false;
+  }
+  try {
+    const parsed = new URL(raw);
+    if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+      return false;
+    }
+    const hostname = parsed.hostname.toLowerCase();
+    if (!hostname) {
+      return false;
+    }
+    const isLocalhost = hostname === "localhost";
+    const isIpAddress = /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname);
+    const isDomainLike = hostname.includes(".");
+    return isLocalhost || isIpAddress || isDomainLike;
+  } catch {
+    return false;
+  }
+}
+
 function validateFlightModalDraft(flight: TrafficFlight | null): string | null {
   if (!flight) {
     return "Flight row is unavailable.";
@@ -1120,6 +1463,14 @@ function validateFlightModalDraft(flight: TrafficFlight | null): string | null {
   const length = asNumber(flight.length, 0);
   if (!Number.isFinite(length) || length < 0) {
     return "Length must be zero or greater.";
+  }
+  const fileUrl = asString(flight.fileUrl);
+  if (fileUrl && !isStrictHttpUrlInput(fileUrl)) {
+    return "File URL must be a valid http(s) URL (for example, https://example.com/file).";
+  }
+  const scriptUrl = asString(flight.scriptUrl || "");
+  if (scriptUrl && !isStrictHttpUrlInput(scriptUrl)) {
+    return "Script URL must be a valid http(s) URL.";
   }
   return null;
 }
@@ -1233,12 +1584,18 @@ export default function TrafficPage() {
   const [isUnsavedDialogOpen, setIsUnsavedDialogOpen] = useState(false);
   const [isArchiveDialogOpen, setIsArchiveDialogOpen] = useState(false);
   const [archiveTargetTrafficId, setArchiveTargetTrafficId] = useState<string | null>(null);
+  const [isScheduleTimelineModalOpen, setIsScheduleTimelineModalOpen] = useState(false);
+  const [isScheduleTimelineLoading, setIsScheduleTimelineLoading] = useState(false);
   const [flightModalMode, setFlightModalMode] = useState<RowModalMode>("create");
   const [isFlightModalOpen, setIsFlightModalOpen] = useState(false);
   const [flightModalBaseline, setFlightModalBaseline] = useState<TrafficFlight | null>(null);
   const [flightModalDraft, setFlightModalDraft] = useState<TrafficFlight | null>(null);
   const [flightModalError, setFlightModalError] = useState<string | null>(null);
+  const [flightFileUrlError, setFlightFileUrlError] = useState<string | null>(null);
+  const [flightScriptUrlError, setFlightScriptUrlError] = useState<string | null>(null);
   const [isFlightDiscardDialogOpen, setIsFlightDiscardDialogOpen] = useState(false);
+  const [isLastFlightDeleteConfirmOpen, setIsLastFlightDeleteConfirmOpen] = useState(false);
+  const [pendingFlightDeleteId, setPendingFlightDeleteId] = useState<number | null>(null);
   const [stationModalMode, setStationModalMode] = useState<RowModalMode>("create");
   const [isStationModalOpen, setIsStationModalOpen] = useState(false);
   const [stationModalBaseline, setStationModalBaseline] = useState<TrafficStation | null>(null);
@@ -1247,6 +1604,7 @@ export default function TrafficPage() {
   const [stationLookupName, setStationLookupName] = useState<string | null>(null);
   const [stationLookupError, setStationLookupError] = useState<string | null>(null);
   const [isStationLookupLoading, setIsStationLookupLoading] = useState(false);
+  const [isStationAutoSyncing, setIsStationAutoSyncing] = useState(false);
   const [stationLookupQueryCode, setStationLookupQueryCode] = useState("");
   const [stationLookupCacheStatus, setStationLookupCacheStatus] = useState<CacheStatus | null>(null);
   const [stationLookupRefreshToken, setStationLookupRefreshToken] = useState(0);
@@ -1262,6 +1620,7 @@ export default function TrafficPage() {
   const tempRowIdRef = useRef(-1);
   const stationLookupRequestIdRef = useRef(0);
   const stationMetaRequestIdRef = useRef(0);
+  const stationLookupMetaByCodeRef = useRef<Record<string, StationLookupMeta>>({});
 
   const hasUnsavedChanges = useMemo(() => {
     return buildFingerprint(detailBaseline) !== buildFingerprint(detailDraft);
@@ -1275,7 +1634,13 @@ export default function TrafficPage() {
 
   const activeAccountCode = asString(loadedAccountCode).toUpperCase();
   const activeDraft = detailDraft;
+  const timelineAccountCode = asString(activeDraft?.traffic.accountCode).toUpperCase();
   const isSentLocked = asString(detailBaseline?.traffic.status).toLowerCase() === "sent";
+  const stationSyncFlightRange = useMemo(() => {
+    return resolveFlightRangeFromFlights(activeDraft?.flights ?? []);
+  }, [activeDraft?.flights]);
+  const timelineAnchorStart = stationSyncFlightRange?.flightStart ?? null;
+  const timelineAnchorEnd = stationSyncFlightRange?.flightEnd ?? null;
   const shouldShowSaveActions = canEditTradsphere && (hasUnsavedChanges || isSaving);
   const hasFlightModalChanges = useMemo(() => {
     return JSON.stringify(normalizeFlightForCompare(flightModalBaseline)) !== JSON.stringify(normalizeFlightForCompare(flightModalDraft));
@@ -1430,6 +1795,8 @@ export default function TrafficPage() {
     if (!isOnline) {
       if (!shouldUseCache) {
         setError("You're offline. Traffic detail is unavailable until connection is restored.");
+      } else {
+        setRefreshMessage("You're offline. Showing cached traffic.");
       }
       setIsLoadingDetail(false);
       return;
@@ -1509,6 +1876,12 @@ export default function TrafficPage() {
     const preferredSelectedId = asString(options?.selectedIdOverride)
       || asString(selectedTrafficByAccount[accountCode])
       || "";
+    const resolveExistingSelection = (list: TrafficSummary[], preferredId: string): string | null => {
+      if (preferredId && list.some((item) => item.id === preferredId)) {
+        return preferredId;
+      }
+      return list[0]?.id || null;
+    };
 
     if (shouldUseCache) {
       applyListState(accountCode, cachedList, preferredSelectedId || null);
@@ -1517,7 +1890,7 @@ export default function TrafficPage() {
       setIsLoadingAccountTraffic(false);
       setIsRefreshingAccountTraffic(shouldFetchFromNetwork);
 
-      const nextSelected = preferredSelectedId || cachedList[0]?.id || null;
+      const nextSelected = resolveExistingSelection(cachedList, preferredSelectedId);
       if (nextSelected) {
         await loadTrafficDetail(nextSelected, {
           policy: "stale-while-revalidate",
@@ -1539,6 +1912,8 @@ export default function TrafficPage() {
     if (!isOnline) {
       if (!shouldUseCache) {
         setError("You're offline. Traffic data is unavailable until connection is restored.");
+      } else {
+        setRefreshMessage("You're offline. Showing cached traffic.");
       }
       setIsLoadingAccountTraffic(false);
       setIsRefreshingAccountTraffic(false);
@@ -1567,7 +1942,7 @@ export default function TrafficPage() {
       setError(null);
       setRefreshMessage(null);
 
-      const nextSelected = preferredSelectedId || normalizedList[0]?.id || null;
+      const nextSelected = resolveExistingSelection(normalizedList, preferredSelectedId);
 
       if (nextSelected) {
         await loadTrafficDetail(nextSelected, {
@@ -1750,7 +2125,8 @@ export default function TrafficPage() {
       const previousDetail = cloneDetail(current) as TrafficDetail;
       const nextDetail = updater(cloneDetail(current) as TrafficDetail);
       const withAutoSyncedSubject = syncAutoTrafficEmailSubject(previousDetail, nextDetail, accountNameByCode);
-      const withDefaultSubject = applyDefaultTrafficEmailSubject(withAutoSyncedSubject, accountNameByCode);
+      const withAutoReadyToEmail = applyAutoReadyToEmailFromFlights(withAutoSyncedSubject);
+      const withDefaultSubject = applyDefaultTrafficEmailSubject(withAutoReadyToEmail, accountNameByCode);
       return computeSummary(withDefaultSubject as TrafficDetail);
     });
   }, [accountNameByCode]);
@@ -1835,7 +2211,7 @@ export default function TrafficPage() {
   }, []);
 
   const handleSaveAll = useCallback(async () => {
-    if (!detailDraft || !detailBaseline || !canSaveChanges) {
+    if (!detailDraft || !canSaveChanges) {
       return;
     }
 
@@ -1849,12 +2225,37 @@ export default function TrafficPage() {
     setError(null);
 
     try {
-      const trafficId = detailDraft.traffic.id;
+      const isLocalDraft = isLocalTrafficId(detailDraft.traffic.id);
+      let trafficId = detailDraft.traffic.id;
+
+      if (isLocalDraft) {
+        const createdPayload = await requestJson("/api/tradsphere/v1/traffic", {
+          method: "POST",
+          headers: requestHeaders,
+          body: {
+            accountCode: detailDraft.traffic.accountCode,
+            campaign: detailDraft.traffic.campaign,
+            status: detailDraft.traffic.status,
+            note: detailDraft.traffic.note,
+          },
+          successToast: false,
+        });
+        const createdHeader = isRecord(unwrapData(createdPayload)) ? unwrapData(createdPayload) : null;
+        const createdTrafficId = asString(isRecord(createdHeader) ? createdHeader.id : "");
+        if (!createdTrafficId) {
+          throw new Error("Failed to create traffic record.");
+        }
+        trafficId = createdTrafficId;
+      }
 
       if (
-        detailDraft.traffic.campaign !== detailBaseline.traffic.campaign
-        || detailDraft.traffic.status !== detailBaseline.traffic.status
-        || (detailDraft.traffic.note || "") !== (detailBaseline.traffic.note || "")
+        !isLocalDraft
+        && detailBaseline
+        && (
+          detailDraft.traffic.campaign !== detailBaseline.traffic.campaign
+          || detailDraft.traffic.status !== detailBaseline.traffic.status
+          || (detailDraft.traffic.note || "") !== (detailBaseline.traffic.note || "")
+        )
       ) {
         const payload = {
           campaign: detailDraft.traffic.campaign,
@@ -1869,10 +2270,10 @@ export default function TrafficPage() {
         });
       }
 
-      const baselineFlightsById = new Map(detailBaseline.flights.map((item) => [item.id, item]));
+      const baselineFlightsById = new Map((detailBaseline?.flights ?? []).map((item) => [item.id, item]));
       const draftFlightsById = new Map(detailDraft.flights.map((item) => [item.id, item]));
 
-      for (const baselineFlight of detailBaseline.flights) {
+      for (const baselineFlight of (detailBaseline?.flights ?? [])) {
         if (baselineFlight.id <= 0) {
           continue;
         }
@@ -1944,10 +2345,10 @@ export default function TrafficPage() {
         );
       }
 
-      const baselineStationsById = new Map(detailBaseline.stations.map((item) => [item.id, item]));
+      const baselineStationsById = new Map((detailBaseline?.stations ?? []).map((item) => [item.id, item]));
       const draftStationsById = new Map(detailDraft.stations.map((item) => [item.id, item]));
 
-      for (const baselineStation of detailBaseline.stations) {
+      for (const baselineStation of (detailBaseline?.stations ?? [])) {
         if (baselineStation.id <= 0) {
           continue;
         }
@@ -2021,19 +2422,31 @@ export default function TrafficPage() {
       }
 
       await loadAccountTraffic(detailDraft.traffic.accountCode, "network-first", {
-        selectedIdOverride: detailDraft.traffic.id,
+        selectedIdOverride: trafficId,
         deferWhenDirty: false,
       });
 
-      const refreshedDetailSnapshot = readBrowserCacheSnapshot<TrafficDetail>(buildTrafficDetailCacheKey(detailDraft.traffic.id));
+      const refreshedDetailSnapshot = readBrowserCacheSnapshot<TrafficDetail>(buildTrafficDetailCacheKey(trafficId));
       const refreshedDetail = normalizeTrafficDetail(refreshedDetailSnapshot?.data);
-      const nextDetail = computeSummary(refreshedDetail || detailDraft);
-      const nextList = trafficList.map((item) => item.id === nextDetail.traffic.id
-        ? buildListSummaryFromDetail(nextDetail)
-        : item);
+      const nextDetail = computeSummary(refreshedDetail || {
+        ...detailDraft,
+        traffic: {
+          ...detailDraft.traffic,
+          id: trafficId,
+        },
+      });
+      let nextList: TrafficSummary[] = [];
+      setTrafficList((current) => {
+        const mapped = current.map((item) => item.id === nextDetail.traffic.id
+          ? buildListSummaryFromDetail(nextDetail)
+          : item);
+        nextList = mapped;
+        return mapped;
+      });
       applyDetailState(nextDetail);
-      setTrafficList(nextList);
-      persistCurrentCaches(nextDetail, nextList);
+      if (nextList.length > 0) {
+        persistCurrentCaches(nextDetail, nextList);
+      }
       setRefreshMessage(null);
     } catch (saveError) {
       setError(getTrafficErrorMessage(saveError, "Failed to save traffic changes."));
@@ -2102,6 +2515,9 @@ export default function TrafficPage() {
     }
     setSelectedTrafficId(trafficId);
     upsertSelectedByAccount(activeAccountCode, trafficId);
+    if (isLocalTrafficId(trafficId)) {
+      return;
+    }
     void loadTrafficDetail(trafficId, { policy: "stale-while-revalidate", deferWhenDirty: false });
   }, [activeAccountCode, hasUnsavedChanges, loadTrafficDetail, selectedTrafficId, upsertSelectedByAccount]);
 
@@ -2110,61 +2526,59 @@ export default function TrafficPage() {
       return;
     }
     setError(null);
-    try {
-      const createdPayload = await requestJson("/api/tradsphere/v1/traffic", {
-        method: "POST",
-        headers: requestHeaders,
-        body: {
-          accountCode: activeAccountCode,
-          campaign: "New Traffic",
-          status: "draft",
-          note: "",
-        },
-        successToast: {
-          title: "Traffic created",
-          message: "A new traffic record was created.",
-        },
-      });
-      const created = normalizeTrafficDetail({
-        data: {
-          traffic: unwrapData(createdPayload),
-          flights: [],
-          stations: [],
-          email: null,
-          summary: {
-            totalRotation: 0,
-            rotationWarning: false,
-            rotationWarningMessage: null,
-            warnings: [],
-            flightCount: 0,
-            stationCount: 0,
-          },
-        },
-      });
-      if (!created) {
-        throw new Error("Failed to normalize created traffic.");
-      }
-
-      const computed = computeSummary(created);
-      const nextList = [buildListSummaryFromDetail(computed), ...trafficList];
-      setTrafficList(nextList);
-      setSelectedTrafficId(computed.traffic.id);
-      upsertSelectedByAccount(activeAccountCode, computed.traffic.id);
-      applyDetailState(computed);
-      persistCurrentCaches(computed, nextList);
-      setRefreshMessage(null);
-    } catch (createError) {
-      setError(getTrafficErrorMessage(createError, "Unable to create traffic."));
-    }
+    const localTrafficId = buildLocalTrafficId();
+    const localDraft = computeSummary({
+      traffic: {
+        id: localTrafficId,
+        accountCode: activeAccountCode,
+        campaign: "New Traffic",
+        status: "draft",
+        note: "",
+        dateCreated: null,
+        dateUpdated: null,
+      },
+      flights: [],
+      stations: [],
+      email: {
+        id: 0,
+        trafficId: localTrafficId,
+        toEmails: [],
+        ccEmails: [],
+        bccEmails: [],
+        subject: "",
+        body: "",
+        sentStatus: "draft",
+        sentAt: null,
+        sentByUserId: null,
+        smtpMessageId: null,
+        lastSendAttemptAt: null,
+        lastSendError: null,
+        dateCreated: null,
+        dateUpdated: null,
+      },
+      summary: {
+        totalRotation: 0,
+        rotationWarning: false,
+        rotationWarningMessage: null,
+        warnings: [],
+        flightCount: 0,
+        stationCount: 0,
+      },
+    });
+    const nextList = [buildListSummaryFromDetail(localDraft), ...trafficList];
+    setTrafficList(nextList);
+    setSelectedTrafficId(localDraft.traffic.id);
+    upsertSelectedByAccount(activeAccountCode, localDraft.traffic.id);
+    setDetailBaseline(null);
+    setDetailDraft(localDraft);
+    setRefreshMessage(null);
+    toast.info("Draft traffic created", "Record will be created in the database when you click Save.");
   }, [
     activeAccountCode,
-    applyDetailState,
     canEditTradsphere,
     isSaving,
     isSentLocked,
-    persistCurrentCaches,
-    requestHeaders,
-    requestJson,
+    toast,
     trafficList,
     upsertSelectedByAccount,
   ]);
@@ -2172,6 +2586,22 @@ export default function TrafficPage() {
   const handleArchiveTraffic = useCallback(async () => {
     const targetTrafficId = asString(archiveTargetTrafficId) || asString(detailDraft?.traffic.id);
     if (!targetTrafficId) {
+      return;
+    }
+    if (isLocalTrafficId(targetTrafficId)) {
+      const nextList = trafficList.filter((item) => item.id !== targetTrafficId);
+      const nextSelected = nextList[0]?.id || null;
+      setTrafficList(nextList);
+      setSelectedTrafficId(nextSelected);
+      upsertSelectedByAccount(activeAccountCode, nextSelected);
+      if (nextSelected && !isLocalTrafficId(nextSelected)) {
+        void loadTrafficDetail(nextSelected, { policy: "stale-while-revalidate", deferWhenDirty: false });
+      } else {
+        setDetailBaseline(null);
+        setDetailDraft(null);
+      }
+      setArchiveTargetTrafficId(null);
+      setIsArchiveDialogOpen(false);
       return;
     }
     try {
@@ -2220,7 +2650,7 @@ export default function TrafficPage() {
     setTrafficList(nextList);
     setSelectedTrafficId(nextSelected);
     upsertSelectedByAccount(activeAccountCode, nextSelected);
-    if (nextSelected) {
+    if (nextSelected && !isLocalTrafficId(nextSelected)) {
       await loadTrafficDetail(nextSelected, { policy: "stale-while-revalidate", deferWhenDirty: false });
     } else {
       setDetailBaseline(null);
@@ -2237,6 +2667,11 @@ export default function TrafficPage() {
   const handleHardDeleteTraffic = useCallback(async (trafficIdRaw: string) => {
     const trafficId = asString(trafficIdRaw);
     if (!trafficId || !canEditTradsphere || isSaving || isLoadingAccountTraffic || isLoadingDetail) {
+      return;
+    }
+    if (isLocalTrafficId(trafficId)) {
+      await handleRemoveTrafficLocally(trafficId);
+      toast.success("Draft removed", "Unsaved local traffic draft was removed.");
       return;
     }
     try {
@@ -2262,7 +2697,7 @@ export default function TrafficPage() {
       });
       await handleRemoveTrafficLocally(trafficId);
     }
-  }, [canEditTradsphere, handleRemoveTrafficLocally, isLoadingAccountTraffic, isLoadingDetail, isSaving, requestHeaders, requestJson]);
+  }, [canEditTradsphere, handleRemoveTrafficLocally, isLoadingAccountTraffic, isLoadingDetail, isSaving, requestHeaders, requestJson, toast]);
 
   const handleResolveUnsavedDialog = useCallback(async (discardChanges: boolean) => {
     const action = pendingAction;
@@ -2292,6 +2727,9 @@ export default function TrafficPage() {
     if (action.type === "traffic") {
       setSelectedTrafficId(action.trafficId);
       upsertSelectedByAccount(activeAccountCode, action.trafficId);
+      if (isLocalTrafficId(action.trafficId)) {
+        return;
+      }
       await loadTrafficDetail(action.trafficId, {
         policy: "stale-while-revalidate",
         deferWhenDirty: false,
@@ -2318,8 +2756,243 @@ export default function TrafficPage() {
     upsertSelectedByAccount,
   ]);
 
+  const syncStationsFromFlightRange = useCallback(async (params: {
+    flightStart: string;
+    flightEnd: string;
+    trafficId: string;
+  }) => {
+    const accountCode = asString(activeAccountCode).toUpperCase();
+    const flightStart = asString(params.flightStart);
+    const flightEnd = asString(params.flightEnd);
+    if (!accountCode || !flightStart || !flightEnd) {
+      return;
+    }
+
+    setIsStationAutoSyncing(true);
+    try {
+      const query = new URLSearchParams({
+        accountCode,
+        flightStart,
+        flightEnd,
+      });
+      const payload = await requestJson(`/api/tradsphere/v1/traffic/station-candidates?${query.toString()}`, {
+        headers: requestHeaders,
+        successToast: false,
+        errorToast: false,
+      });
+      const normalized = normalizeTrafficStationCandidates(payload);
+      if (!normalized) {
+        toast.info("No station candidates returned");
+        return;
+      }
+
+      const currentCodes = new Set(
+        (detailDraft?.stations ?? [])
+          .map((station) => asString(station.stationCode).toUpperCase())
+          .filter(Boolean),
+      );
+      const candidateCodes = normalized.stations
+        .map((station) => asString(station.stationCode).toUpperCase())
+        .filter(Boolean);
+      const stationCandidateByCode = new Map(
+        normalized.stations.map((station) => [
+          asString(station.stationCode).toUpperCase(),
+          station,
+        ]),
+      );
+      const uniqueCandidateCodes = [...new Set(candidateCodes)];
+      const autoAddedCodes = uniqueCandidateCodes.filter((code) => !currentCodes.has(code));
+      const preservedCodes = uniqueCandidateCodes.filter((code) => currentCodes.has(code));
+      const currentStationsByCode = new Map(
+        (detailDraft?.stations ?? []).map((station) => [
+          asString(station.stationCode).toUpperCase(),
+          station,
+        ]),
+      );
+      const updatedExistingCount = preservedCodes.filter((stationCode) => {
+        const existing = currentStationsByCode.get(stationCode);
+        const candidate = stationCandidateByCode.get(stationCode);
+        if (!existing || !candidate) {
+          return false;
+        }
+        return !(
+          asString(existing.deliveryMethod ?? "") === asString(candidate.deliveryMethod ?? "")
+          && JSON.stringify(existing.contactsSnapshot ?? null) === JSON.stringify(candidate.contactsSnapshot ?? null)
+        );
+      }).length;
+
+      const stationDrafts: TrafficStation[] = autoAddedCodes.map((stationCode) => {
+        const candidate = stationCandidateByCode.get(stationCode);
+        const nextId = tempRowIdRef.current;
+        tempRowIdRef.current -= 1;
+        return {
+          id: nextId,
+          trafficId: params.trafficId,
+          stationCode,
+          contactsSnapshot: candidate?.contactsSnapshot ?? null,
+          deliveryMethod: candidate?.deliveryMethod ?? null,
+          deliveryStatus: "",
+          confirmedStatus: "",
+          note: null,
+          dateCreated: null,
+          dateUpdated: null,
+        };
+      });
+
+      let readyToEmailUpdatedCount = 0;
+      updateDraft((current) => {
+        if (current.traffic.id !== params.trafficId) {
+          return current;
+        }
+        const shouldAutoMarkReadyToEmail = hasAllFlightFileUrls(current.flights);
+        const syncContactEmails = uniqueCandidateCodes.flatMap((stationCode) => {
+          const candidate = stationCandidateByCode.get(stationCode);
+          return extractPreferredContactEmails(candidate?.contactsSnapshot ?? null);
+        });
+        let changed = false;
+        const nextStations = current.stations.map((station) => {
+          const stationCode = asString(station.stationCode).toUpperCase();
+          const candidate = stationCandidateByCode.get(stationCode);
+          const nextDeliveryMethod = candidate ? (candidate.deliveryMethod ?? null) : station.deliveryMethod;
+          const nextContactsSnapshot = candidate ? (candidate.contactsSnapshot ?? null) : station.contactsSnapshot;
+          const currentDeliveryStatus = asString(station.deliveryStatus).toLowerCase();
+          const nextDeliveryStatus = resolveAutoReadyToEmailStatus(
+            currentDeliveryStatus,
+            nextDeliveryMethod ?? null,
+            shouldAutoMarkReadyToEmail,
+          );
+          if (nextDeliveryStatus === "ready_to_email" && currentDeliveryStatus !== "ready_to_email") {
+            readyToEmailUpdatedCount += 1;
+          }
+          if (
+            asString(station.deliveryMethod ?? "") === asString(nextDeliveryMethod ?? "")
+            && JSON.stringify(station.contactsSnapshot ?? null) === JSON.stringify(nextContactsSnapshot)
+            && currentDeliveryStatus === nextDeliveryStatus
+          ) {
+            return station;
+          }
+          changed = true;
+          return {
+            ...station,
+            deliveryMethod: nextDeliveryMethod,
+            contactsSnapshot: nextContactsSnapshot,
+            deliveryStatus: nextDeliveryStatus,
+          };
+        });
+        const existingCodes = new Set(
+          nextStations
+            .map((station) => asString(station.stationCode).toUpperCase())
+            .filter(Boolean),
+        );
+        const rowsToAdd = stationDrafts
+          .filter((station) => !existingCodes.has(station.stationCode))
+          .map((station) => ({
+            ...station,
+            deliveryStatus: resolveAutoReadyToEmailStatus(
+              station.deliveryStatus,
+              station.deliveryMethod,
+              shouldAutoMarkReadyToEmail,
+            ),
+          }));
+        if (rowsToAdd.length > 0) {
+          changed = true;
+          nextStations.push(...rowsToAdd);
+        }
+        const nextEmail = current.email
+          ? {
+              ...current.email,
+              toEmails: mergeUniqueEmails(current.email.toEmails, syncContactEmails),
+            }
+          : current.email;
+        const emailChanged = Boolean(
+          current.email
+            && JSON.stringify(nextEmail?.toEmails ?? []) !== JSON.stringify(current.email.toEmails),
+        );
+        if (!changed && !emailChanged) {
+          return current;
+        }
+        return {
+          ...current,
+          stations: nextStations,
+          email: nextEmail,
+        };
+      });
+      const readyToEmailSuffix = readyToEmailUpdatedCount > 0
+        ? ` ${readyToEmailUpdatedCount} station(s) marked Ready to Email.`
+        : "";
+
+      if (autoAddedCodes.length > 0) {
+        const addedLabel = formatStationCodesPreview(autoAddedCodes);
+        if (updatedExistingCount > 0) {
+          toast.info(
+            "Stations synced from schedule",
+            `${autoAddedCodes.length} station(s) added (${addedLabel}). ${updatedExistingCount} existing station(s) had contacts/delivery method refreshed.${readyToEmailSuffix}`,
+          );
+        } else if (preservedCodes.length > 0) {
+          toast.info(
+            "Stations auto-added from schedule",
+            `${autoAddedCodes.length} station(s) added (${addedLabel}). ${preservedCodes.length} existing station(s) were preserved.${readyToEmailSuffix}`,
+          );
+        } else {
+          toast.info(
+            "Stations auto-added from schedule",
+            `${autoAddedCodes.length} station(s) added (${addedLabel}).${readyToEmailSuffix}`,
+          );
+        }
+        return;
+      }
+
+      if (uniqueCandidateCodes.length === 0) {
+        toast.info(
+          "No matching schedule stations found",
+          "No stations were returned for the selected account and flight date range.",
+        );
+        return;
+      }
+
+      if (updatedExistingCount > 0) {
+        toast.info(
+          "Stations synced from schedule",
+          `${updatedExistingCount} existing station(s) had contacts/delivery method refreshed.${readyToEmailSuffix}`,
+        );
+      } else {
+        toast.info(
+          "Existing stations preserved",
+          `${preservedCodes.length} matching station(s) already exist and were left unchanged.${readyToEmailSuffix}`,
+        );
+      }
+    } catch (syncError) {
+      toast.error(
+        "Unable to auto-sync stations",
+        getTrafficErrorMessage(syncError, "The flight was saved, but schedule stations could not be loaded."),
+      );
+    } finally {
+      setIsStationAutoSyncing(false);
+    }
+  }, [activeAccountCode, detailDraft?.stations, requestHeaders, requestJson, toast, updateDraft]);
+
+  const handleManualStationSync = useCallback(() => {
+    if (!activeDraft || isStationAutoSyncing) {
+      return;
+    }
+    if (!stationSyncFlightRange) {
+      toast.info(
+        "No flight date range available",
+        "Add at least one flight with a start and end date before syncing stations.",
+      );
+      return;
+    }
+    void syncStationsFromFlightRange({
+      trafficId: activeDraft.traffic.id,
+      flightStart: stationSyncFlightRange.flightStart,
+      flightEnd: stationSyncFlightRange.flightEnd,
+    });
+  }, [activeDraft, isStationAutoSyncing, stationSyncFlightRange, syncStationsFromFlightRange, toast]);
+
   function resetFlightModalState() {
     setFlightModalError(null);
+    setFlightFileUrlError(null);
+    setFlightScriptUrlError(null);
     setFlightModalBaseline(null);
     setFlightModalDraft(null);
     setIsFlightDiscardDialogOpen(false);
@@ -2374,10 +3047,84 @@ export default function TrafficPage() {
     if (isSentLocked) {
       return;
     }
+    const currentDetail = detailDraft;
+    const remainingFlights = (currentDetail?.flights ?? []).filter((item) => item.id !== flightId);
+    const nextSyncRange = resolveFlightRangeFromFlights(remainingFlights);
+    const shouldConfirmClearStations = Boolean(
+      currentDetail
+      && !nextSyncRange
+      && currentDetail.stations.length > 0,
+    );
+    if (shouldConfirmClearStations) {
+      setPendingFlightDeleteId(flightId);
+      setIsLastFlightDeleteConfirmOpen(true);
+      return;
+    }
     updateDraft((current) => ({
       ...current,
       flights: current.flights.filter((item) => item.id !== flightId),
     }));
+    if (currentDetail && nextSyncRange) {
+      void syncStationsFromFlightRange({
+        trafficId: currentDetail.traffic.id,
+        flightStart: nextSyncRange.flightStart,
+        flightEnd: nextSyncRange.flightEnd,
+      });
+      return;
+    }
+    if (currentDetail && !nextSyncRange) {
+      toast.info(
+        "Station sync skipped",
+        "No flight date range remains after deleting this flight. Existing stations were preserved.",
+      );
+    }
+  }
+
+  function handleResolveLastFlightDelete(shouldClearStations: boolean) {
+    const flightId = pendingFlightDeleteId;
+    setPendingFlightDeleteId(null);
+    setIsLastFlightDeleteConfirmOpen(false);
+    if (flightId === null || isSentLocked) {
+      return;
+    }
+    const currentDetail = detailDraft;
+    updateDraft((current) => {
+      const remainingFlights = current.flights.filter((item) => item.id !== flightId);
+      const shouldClear = shouldClearStations && remainingFlights.length === 0;
+      const shouldResetDeliveryStatus = !shouldClear && remainingFlights.length === 0;
+      return {
+        ...current,
+        flights: remainingFlights,
+        stations: shouldClear
+          ? []
+          : shouldResetDeliveryStatus
+            ? current.stations.map((station) => ({ ...station, deliveryStatus: "" }))
+            : current.stations,
+      };
+    });
+    if (currentDetail) {
+      const remainingFlights = currentDetail.flights.filter((item) => item.id !== flightId);
+      const nextSyncRange = resolveFlightRangeFromFlights(remainingFlights);
+      if (nextSyncRange) {
+        void syncStationsFromFlightRange({
+          trafficId: currentDetail.traffic.id,
+          flightStart: nextSyncRange.flightStart,
+          flightEnd: nextSyncRange.flightEnd,
+        });
+        return;
+      }
+      if (shouldClearStations) {
+        toast.info(
+          "Last flight removed",
+          "No flight date range remains, so all station rows were cleared.",
+        );
+      } else {
+        toast.info(
+          "Stations preserved",
+          "No flight date range remains after deleting this flight. Existing stations were preserved and delivery status was reset.",
+        );
+      }
+    }
   }
 
   function saveFlightModal() {
@@ -2389,27 +3136,54 @@ export default function TrafficPage() {
       setFlightModalError(validationError);
       return;
     }
+    const normalizedFileUrl = normalizeExternalUrl(flightModalDraft.fileUrl);
+    const normalizedScriptUrl = normalizeExternalUrl(flightModalDraft.scriptUrl || "");
+    const sanitizedFlightDraft: TrafficFlight = {
+      ...flightModalDraft,
+      fileUrl: normalizedFileUrl,
+      scriptUrl: asNullableString(normalizedScriptUrl),
+    };
+
+    let nextFlightForSync: { trafficId: string; flightStart: string; flightEnd: string } | null = null;
 
     if (flightModalMode === "create") {
       const nextTempId = tempRowIdRef.current;
       tempRowIdRef.current -= 1;
       const nextFlight: TrafficFlight = {
-        ...flightModalDraft,
+        ...sanitizedFlightDraft,
         id: nextTempId,
+      };
+      nextFlightForSync = {
+        trafficId: nextFlight.trafficId,
+        flightStart: nextFlight.flightStart,
+        flightEnd: nextFlight.flightEnd,
       };
       updateDraft((current) => ({
         ...current,
         flights: [...current.flights, nextFlight],
       }));
     } else if (flightModalBaseline) {
+      const hasDateRangeChanged =
+        asString(flightModalBaseline.flightStart) !== asString(sanitizedFlightDraft.flightStart)
+        || asString(flightModalBaseline.flightEnd) !== asString(sanitizedFlightDraft.flightEnd);
+      if (hasDateRangeChanged) {
+        nextFlightForSync = {
+          trafficId: sanitizedFlightDraft.trafficId,
+          flightStart: sanitizedFlightDraft.flightStart,
+          flightEnd: sanitizedFlightDraft.flightEnd,
+        };
+      }
       updateDraft((current) => ({
         ...current,
-        flights: current.flights.map((item) => item.id === flightModalBaseline.id ? { ...flightModalDraft, id: item.id } : item),
+        flights: current.flights.map((item) => item.id === flightModalBaseline.id ? { ...sanitizedFlightDraft, id: item.id } : item),
       }));
     }
 
     setIsFlightModalOpen(false);
     resetFlightModalState();
+    if (nextFlightForSync) {
+      void syncStationsFromFlightRange(nextFlightForSync);
+    }
   }
 
   function handleFlightModalOpenChange(nextOpen: boolean) {
@@ -2770,16 +3544,47 @@ export default function TrafficPage() {
     const requestId = stationMetaRequestIdRef.current + 1;
     stationMetaRequestIdRef.current = requestId;
 
+    const cachedMeta: Record<string, StationLookupMeta> = {};
+    const localMeta: Record<string, StationLookupMeta> = {};
+    const existingMetaByCode = stationLookupMetaByCodeRef.current;
+    for (const stationCode of uniqueCodes) {
+      const existingMeta = existingMetaByCode[stationCode];
+      if (existingMeta) {
+        localMeta[stationCode] = existingMeta;
+      }
+      const cacheSnapshot = readBrowserCacheSnapshot<unknown>(buildStationLookupCacheKey(stationCode));
+      const cachedData = isRecord(cacheSnapshot?.data) ? cacheSnapshot.data : null;
+      const normalizedCached = normalizeStationLookupMeta(cachedData, stationCode);
+      if (!normalizedCached) {
+        continue;
+      }
+      cachedMeta[stationCode] = normalizedCached;
+      localMeta[stationCode] = normalizedCached;
+    }
+    if (Object.keys(localMeta).length > 0) {
+      setStationLookupMetaByCode(localMeta);
+    }
+
+    const missingCodes = uniqueCodes.filter((stationCode) => !localMeta[stationCode]);
+    if (missingCodes.length === 0) {
+      return;
+    }
+    if (!isOnline) {
+      return;
+    }
+
     async function loadStationMeta() {
       try {
         const params = new URLSearchParams();
-        params.set("codes", uniqueCodes.join(","));
+        params.set("codes", missingCodes.join(","));
         params.set("deliveryMethodDetail", "true");
-        params.set("contactDetail", "true");
-        params.set("includeContacts", "true");
+        // Keep this background prefetch lightweight; table rendering only needs station meta.
+        params.set("contactDetail", "false");
+        params.set("includeContacts", "false");
         const payload = await requestJson(`/api/tradsphere/v1/stations?${params.toString()}`, {
           headers: requestHeaders,
           successToast: false,
+          errorToast: false,
         });
         if (stationMetaRequestIdRef.current !== requestId) {
           return;
@@ -2788,42 +3593,54 @@ export default function TrafficPage() {
         if (!Array.isArray(rows)) {
           return;
         }
-        const nextMeta: Record<string, StationLookupMeta> = {};
+        const nextMeta: Record<string, StationLookupMeta> = { ...localMeta };
         for (const row of rows) {
-          if (!isRecord(row)) {
+          const normalizedMeta = normalizeStationLookupMeta(row);
+          if (!normalizedMeta) {
             continue;
           }
-          const code = asString(row.code || row.stationCode).toUpperCase();
-          if (!code) {
-            continue;
-          }
-          const deliveryMethodRaw = isRecord(row.deliveryMethod) ? row.deliveryMethod : null;
-          nextMeta[code] = {
-            code,
-            name: asString(row.name),
-            mediaType: asString(row.mediaType).toUpperCase(),
-            deliveryMethod: deliveryMethodRaw
-              ? {
-                  name: asString(deliveryMethodRaw.name),
-                  url: asString(deliveryMethodRaw.url),
-                  username: asString(deliveryMethodRaw.username),
-                  deadline: asString(deliveryMethodRaw.deadline),
-                  note: asString(deliveryMethodRaw.note),
-                }
-              : null,
-          };
+          nextMeta[normalizedMeta.code] = normalizedMeta;
+          writeBrowserCache(
+            buildStationLookupCacheKey(normalizedMeta.code),
+            {
+              code: normalizedMeta.code,
+              name: normalizedMeta.name,
+              mediaType: normalizedMeta.mediaType,
+              deliveryMethod: normalizedMeta.deliveryMethod?.name || "",
+            },
+            STATION_LOOKUP_CACHE_TTL_MS,
+            {
+              source: "network",
+              fetchedAt: Date.now(),
+            },
+          );
         }
-        setStationLookupMetaByCode(nextMeta);
+        if (Object.keys(nextMeta).length > 0) {
+          const visibleMeta: Record<string, StationLookupMeta> = {};
+          for (const stationCode of uniqueCodes) {
+            const meta = nextMeta[stationCode];
+            if (meta) {
+              visibleMeta[stationCode] = meta;
+            }
+          }
+          setStationLookupMetaByCode(visibleMeta);
+          return;
+        }
+        if (Object.keys(localMeta).length > 0) {
+          setStationLookupMetaByCode(localMeta);
+        }
       } catch {
         if (stationMetaRequestIdRef.current !== requestId) {
           return;
         }
-        setStationLookupMetaByCode({});
+        if (Object.keys(localMeta).length > 0) {
+          setStationLookupMetaByCode(localMeta);
+        }
       }
     }
 
     void loadStationMeta();
-  }, [requestHeaders, requestJson, stationMetaCodesKey]);
+  }, [isOnline, requestHeaders, requestJson, stationMetaCodesKey]);
 
   const selectedDeliveryStationMeta = useMemo(() => {
     const code = asString(selectedDeliveryStationCode).toUpperCase();
@@ -2833,6 +3650,10 @@ export default function TrafficPage() {
     return stationLookupMetaByCode[code] ?? null;
   }, [selectedDeliveryStationCode, stationLookupMetaByCode]);
 
+  useEffect(() => {
+    stationLookupMetaByCodeRef.current = stationLookupMetaByCode;
+  }, [stationLookupMetaByCode]);
+
   const selectedDeliveryStationLabel = useMemo(() => {
     const code = asString(selectedDeliveryStationCode).toUpperCase();
     if (!code) {
@@ -2840,6 +3661,75 @@ export default function TrafficPage() {
     }
     return formatStationDisplayLabel(code, selectedDeliveryStationMeta);
   }, [selectedDeliveryStationCode, selectedDeliveryStationMeta]);
+
+  const sortedStations = useMemo(() => {
+    const stations = activeDraft?.stations ?? [];
+    if (!stations.length) {
+      return stations;
+    }
+    return [...stations].sort((left, right) => {
+      const leftCode = asString(left.stationCode).toUpperCase();
+      const rightCode = asString(right.stationCode).toUpperCase();
+      const leftMediumRaw = asString(stationLookupMetaByCode[leftCode]?.mediaType).toUpperCase();
+      const rightMediumRaw = asString(stationLookupMetaByCode[rightCode]?.mediaType).toUpperCase();
+      const leftMedium = leftMediumRaw || "ZZZ";
+      const rightMedium = rightMediumRaw || "ZZZ";
+      const mediumCompare = leftMedium.localeCompare(rightMedium, "en", {
+        sensitivity: "base",
+      });
+      if (mediumCompare !== 0) {
+        return mediumCompare;
+      }
+      const leftDeliveryMethod = asString(left.deliveryMethod).toUpperCase() || "ZZZ";
+      const rightDeliveryMethod = asString(right.deliveryMethod).toUpperCase() || "ZZZ";
+      const deliveryMethodCompare = leftDeliveryMethod.localeCompare(rightDeliveryMethod, "en", {
+        sensitivity: "base",
+      });
+      if (deliveryMethodCompare !== 0) {
+        return deliveryMethodCompare;
+      }
+      return leftCode.localeCompare(rightCode, "en", {
+        numeric: true,
+        sensitivity: "base",
+      });
+    });
+  }, [activeDraft?.stations, stationLookupMetaByCode]);
+  const stationContactEmailsById = useMemo<Record<string, string[]>>(() => {
+    const output: Record<string, string[]> = {};
+    for (const station of sortedStations) {
+      output[String(station.id)] = extractPreferredContactEmails(station.contactsSnapshot);
+    }
+    return output;
+  }, [sortedStations]);
+  const contactNameByEmail = useMemo(() => {
+    const output: Record<string, string> = {};
+    const stations = activeDraft?.stations ?? [];
+    for (const station of stations) {
+      const snapshot = station.contactsSnapshot;
+      if (!isRecord(snapshot)) {
+        continue;
+      }
+      for (const bucket of Object.values(snapshot)) {
+        if (!Array.isArray(bucket)) {
+          continue;
+        }
+        for (const entry of bucket) {
+          if (!isRecord(entry)) {
+            continue;
+          }
+          const email = asString(entry.email).toLowerCase();
+          if (!email || output[email]) {
+            continue;
+          }
+          const fullName = asString(entry.fullName || entry.name || entry.contactName);
+          if (fullName) {
+            output[email] = fullName;
+          }
+        }
+      }
+    }
+    return output;
+  }, [activeDraft?.stations]);
 
   const handleOpenDeliveryMethodDetail = useCallback((stationCodeRaw: string) => {
     const code = asString(stationCodeRaw).toUpperCase();
@@ -3047,6 +3937,16 @@ export default function TrafficPage() {
         </SectionCard>
 
         <div className="space-y-4">
+          {!activeDraft ? (
+            <SectionCard title="Traffic Workspace" contentClassName="space-y-3">
+              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-sm text-slate-600">
+                {activeAccountCode
+                  ? "Select a traffic record from the left panel to enable details, flights, stations, and email sections."
+                  : "Select an account and load traffic records first."}
+              </div>
+            </SectionCard>
+          ) : (
+            <>
           <SectionCard
             title="Traffic Details"
             actions={(
@@ -3210,9 +4110,9 @@ export default function TrafficPage() {
                             <td className="whitespace-nowrap px-3 py-2">{flight.isci || "-"}</td>
                             <td className="whitespace-nowrap px-3 py-2">{formatRotationValue(flight.rotation)}</td>
                             <td className="whitespace-nowrap px-3 py-2">
-                              {asString(flight.fileUrl) ? (
+                              {normalizeExternalUrl(flight.fileUrl) ? (
                                 <a
-                                  href={flight.fileUrl}
+                                  href={normalizeExternalUrl(flight.fileUrl)}
                                   target="_blank"
                                   rel="noreferrer"
                                   onClick={(event) => event.stopPropagation()}
@@ -3229,9 +4129,9 @@ export default function TrafficPage() {
                               )}
                             </td>
                             <td className="whitespace-nowrap px-3 py-2">
-                              {asString(flight.scriptUrl) ? (
+                              {normalizeExternalUrl(flight.scriptUrl) ? (
                                 <a
-                                  href={asString(flight.scriptUrl)}
+                                  href={normalizeExternalUrl(flight.scriptUrl)}
                                   target="_blank"
                                   rel="noreferrer"
                                   onClick={(event) => event.stopPropagation()}
@@ -3274,108 +4174,146 @@ export default function TrafficPage() {
           <SectionCard
             title="Station"
             actions={(
-              <ActionIconButton
-                icon={<Plus />}
-                tooltip="Add Station"
-                aria-label="Add Station"
-                title="Add Station"
-                onClick={addStationDraft}
-                disabled={!canEditTradsphere || isSaving || isSentLocked}
-                className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
-              />
+              <div className="flex items-center gap-1">
+                <ActionIconButton
+                  icon={isStationAutoSyncing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+                  tooltip="Sync stations from flight date range"
+                  aria-label="Sync stations from flight date range"
+                  title="Sync stations from flight date range"
+                  onClick={handleManualStationSync}
+                  disabled={
+                    !activeDraft
+                    || !stationSyncFlightRange
+                    || !canEditTradsphere
+                    || isSaving
+                    || isSentLocked
+                    || isStationAutoSyncing
+                    || !isOnline
+                  }
+                  className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
+                />
+                <ActionIconButton
+                  icon={(isScheduleTimelineLoading || isStationAutoSyncing) ? <Loader2 className="animate-spin" /> : <Table2 />}
+                  tooltip="View Schedule Timeline"
+                  aria-label="View Schedule Timeline"
+                  title="View Schedule Timeline"
+                  onClick={() => {
+                    if (!timelineAccountCode || !stationSyncFlightRange) {
+                      return;
+                    }
+                    setIsScheduleTimelineModalOpen(true);
+                  }}
+                  disabled={!timelineAccountCode || !stationSyncFlightRange || isLoadingAccountTraffic || isStationAutoSyncing}
+                  className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
+                />
+                <ActionIconButton
+                  icon={<Plus />}
+                  tooltip="Add Station"
+                  aria-label="Add Station"
+                  title="Add Station"
+                  onClick={addStationDraft}
+                  disabled={!canEditTradsphere || isSaving || isSentLocked}
+                  className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
+                />
+              </div>
             )}
             contentClassName="space-y-3"
           >
-            {!activeAccountCode ? (
-              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
-                Select an account to view stations.
-              </div>
-            ) : !activeDraft ? (
-              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
-                Select a traffic record to manage stations.
-              </div>
-            ) : activeDraft.stations.length === 0 ? (
-              <div className="rounded-lg border border-dashed border-slate-200 bg-white px-3 py-4 text-sm text-slate-600">
-                No station rows yet.
-              </div>
-            ) : (
-              <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-                <table className="min-w-full text-left text-xs">
-                  <thead className="bg-slate-50 text-slate-600">
-                    <tr>
-                      <th className="px-3 py-2 font-semibold">Station</th>
-                      <th className="px-3 py-2 font-semibold">Delivery Method</th>
-                      <th className="px-3 py-2 font-semibold">Contacts</th>
-                      <th className="px-3 py-2 font-semibold">Delivery Status</th>
-                      <th className="px-3 py-2 font-semibold">Confirmed Status</th>
-                      <th className="px-3 py-2 text-right font-semibold"></th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {activeDraft.stations.map((station) => (
-                      <tr
-                        key={station.id}
-                        onClick={() => editStationDraft(station.id)}
-                        className="group cursor-pointer border-t border-slate-200 text-slate-700 transition hover:bg-blue-50/40"
-                      >
-                        <td className="whitespace-nowrap px-3 py-2">
-                          {formatStationDisplayLabel(station.stationCode, stationLookupMetaByCode[asString(station.stationCode).toUpperCase()])}
-                        </td>
-                        <td className="whitespace-nowrap px-3 py-2">
-                          <button
-                            type="button"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              handleOpenDeliveryMethodDetail(station.stationCode);
-                            }}
-                            className="inline-flex items-center rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700 transition hover:bg-indigo-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-300"
-                          >
-                            {station.deliveryMethod || "View"}
-                          </button>
-                        </td>
-                        <td className="px-3 py-2 min-w-[14rem]">
-                          {(() => {
-                            const allEmails = extractPreferredContactEmails(station.contactsSnapshot);
-                            return (
-                              <StationContactsCell
-                                emails={allEmails}
-                                onCopy={() => {
-                                  void handleCopyStationContacts(allEmails);
-                                }}
-                              />
-                            );
-                          })()}
-                        </td>
-                        <td className="whitespace-nowrap px-3 py-2">
-                          <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${stationStatusChipClass(station.deliveryStatus)}`}>
-                            {formatStatusOptionLabel(station.deliveryStatus)}
-                          </span>
-                        </td>
-                        <td className="whitespace-nowrap px-3 py-2">
-                          <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${stationStatusChipClass(station.confirmedStatus)}`}>
-                            {formatStatusOptionLabel(station.confirmedStatus)}
-                          </span>
-                        </td>
-                        <td className="px-3 py-2 text-right">
-                          <ActionIconButton
-                            icon={<Trash2 />}
-                            tooltip="Delete station row"
-                            aria-label="Delete station row"
-                            title="Delete station row"
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              removeStationDraft(station.id);
-                            }}
-                            disabled={!canEditTradsphere || isSaving || isSentLocked}
-                            className="!h-6 !w-6 !rounded-full !p-0 text-rose-500 hover:!bg-rose-50 hover:!scale-105 hover:text-rose-600 focus-visible:!bg-rose-50 focus-visible:!scale-105 focus-visible:text-rose-600 [&_svg]:!h-3.5 [&_svg]:!w-3.5"
-                          />
-                        </td>
+            <div className="relative min-h-[5.5rem]">
+              {!activeAccountCode ? (
+                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+                  Select an account to view stations.
+                </div>
+              ) : !activeDraft ? (
+                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+                  Select a traffic record to manage stations.
+                </div>
+              ) : activeDraft.stations.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-slate-200 bg-white px-3 py-4 text-sm text-slate-600">
+                  No station rows yet.
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+                  <table className="min-w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-600">
+                      <tr>
+                        <th className="px-3 py-2 font-semibold">Station</th>
+                        <th className="px-3 py-2 font-semibold">Delivery Method</th>
+                        <th className="px-3 py-2 font-semibold">Contacts</th>
+                        <th className="px-3 py-2 font-semibold">Delivery Status</th>
+                        <th className="px-3 py-2 font-semibold">Confirmed Status</th>
+                        <th className="px-3 py-2 text-right font-semibold"></th>
                       </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
-            )}
+                    </thead>
+                    <tbody>
+                      {sortedStations.map((station) => (
+                        <tr
+                          key={station.id}
+                          onClick={() => editStationDraft(station.id)}
+                          className="group cursor-pointer border-t border-slate-200 text-slate-700 transition hover:bg-blue-50/40"
+                        >
+                          <td className="whitespace-nowrap px-3 py-2">
+                            {formatStationDisplayLabel(station.stationCode, stationLookupMetaByCode[asString(station.stationCode).toUpperCase()])}
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-2">
+                            <button
+                              type="button"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                handleOpenDeliveryMethodDetail(station.stationCode);
+                              }}
+                              className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium transition focus-visible:outline-none focus-visible:ring-2 ${deliveryMethodChipClass(station.deliveryMethod)}`}
+                            >
+                              {station.deliveryMethod || "View"}
+                            </button>
+                          </td>
+                          <td className="px-3 py-2 min-w-[14rem]">
+                            {(() => {
+                              const allEmails = stationContactEmailsById[String(station.id)] ?? [];
+                              return (
+                                <StationContactsCell
+                                  emails={allEmails}
+                                  onCopy={() => {
+                                    void handleCopyStationContacts(allEmails);
+                                  }}
+                                />
+                              );
+                            })()}
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-2">
+                            <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${stationStatusChipClass(station.deliveryStatus)}`}>
+                              {formatStatusOptionLabel(station.deliveryStatus)}
+                            </span>
+                          </td>
+                          <td className="whitespace-nowrap px-3 py-2">
+                            <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${stationStatusChipClass(station.confirmedStatus)}`}>
+                              {formatStatusOptionLabel(station.confirmedStatus)}
+                            </span>
+                          </td>
+                          <td className="px-3 py-2 text-right">
+                            <ActionIconButton
+                              icon={<Trash2 />}
+                              tooltip="Delete station row"
+                              aria-label="Delete station row"
+                              title="Delete station row"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                removeStationDraft(station.id);
+                              }}
+                              disabled={!canEditTradsphere || isSaving || isSentLocked}
+                              className="!h-6 !w-6 !rounded-full !p-0 text-rose-500 hover:!bg-rose-50 hover:!scale-105 hover:text-rose-600 focus-visible:!bg-rose-50 focus-visible:!scale-105 focus-visible:text-rose-600 [&_svg]:!h-3.5 [&_svg]:!w-3.5"
+                            />
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+              {isStationAutoSyncing ? (
+                <SectionLoadingOverlay message="Auto-syncing stations from schedule..." />
+              ) : null}
+            </div>
           </SectionCard>
 
           <SectionCard
@@ -3423,49 +4361,52 @@ export default function TrafficPage() {
               </div>
             ) : (
               <>
-                <Input
-                  value={joinEmailList(activeDraft.email?.toEmails || [])}
-                  placeholder="To emails (comma separated)"
+                <EmailChipsInput
+                  value={activeDraft.email?.toEmails || []}
+                  placeholder="To emails"
                   disabled={!canEditTradsphere || isSaving || isSentLocked}
-                  onChange={(event) => updateDraft((current) => ({
+                  labelByEmail={contactNameByEmail}
+                  onChange={(nextEmails) => updateDraft((current) => ({
                     ...current,
                     email: current.email
                       ? {
                           ...current.email,
-                          toEmails: splitEmailList(event.target.value),
+                          toEmails: nextEmails,
                         }
                       : current.email,
                   }))}
                 />
                 <div className="grid gap-2 md:grid-cols-2">
-                  <Input
-                    value={joinEmailList(activeDraft.email?.ccEmails || [])}
+                  <EmailChipsInput
+                    value={activeDraft.email?.ccEmails || []}
                     placeholder="CC emails"
                     disabled={!canEditTradsphere || isSaving || isSentLocked}
-                    onChange={(event) => updateDraft((current) => ({
+                    labelByEmail={contactNameByEmail}
+                    onChange={(nextEmails) => updateDraft((current) => ({
                       ...current,
                       email: current.email
                         ? {
                             ...current.email,
-                            ccEmails: splitEmailList(event.target.value),
+                            ccEmails: nextEmails,
                           }
                         : current.email,
                     }))}
                   />
-                  <Input
-                    value={joinEmailList(activeDraft.email?.bccEmails || [])}
+                  <EmailChipsInput
+                    value={activeDraft.email?.bccEmails || []}
                     placeholder="BCC emails"
                     disabled={!canEditTradsphere || isSaving || isSentLocked}
-                    onChange={(event) => updateDraft((current) => ({
+                    labelByEmail={contactNameByEmail}
+                    onChange={(nextEmails) => updateDraft((current) => ({
                       ...current,
                       email: current.email
                         ? {
                             ...current.email,
-                            bccEmails: splitEmailList(event.target.value),
+                            bccEmails: nextEmails,
                           }
                         : current.email,
-                  }))}
-                />
+                    }))}
+                  />
                 </div>
                 <Input
                   value={activeDraft.email?.subject || ""}
@@ -3499,6 +4440,8 @@ export default function TrafficPage() {
               </>
             )}
           </SectionCard>
+            </>
+          )}
         </div>
 
         {(isLoadingAccountTraffic || isLoadingDetail || isSaving) ? (
@@ -3566,6 +4509,43 @@ export default function TrafficPage() {
           </div>
         </div>
       ) : null}
+
+      <Dialog
+        open={isScheduleTimelineModalOpen}
+        onOpenChange={(open) => {
+          setIsScheduleTimelineModalOpen(open);
+          if (!open) {
+            setIsScheduleTimelineLoading(false);
+          }
+        }}
+      >
+        <DialogContent className="!h-fit !max-h-[95vh] !w-fit !max-w-[95vw] overflow-hidden p-4 sm:p-5 lg:p-6">
+          <DialogClose
+            className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label="Close schedule timeline modal"
+          >
+            <X className="size-4" />
+          </DialogClose>
+          <DialogHeader className="space-y-1 pr-12 text-left">
+            <DialogTitle>Schedule Timeline</DialogTitle>
+            <DialogDescription>
+              View account schedule timeline table with cache-first loading.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="mt-3">
+            <ScheduleTimelineSection
+              accountCode={timelineAccountCode}
+              esnums={[]}
+              headers={requestHeaders}
+              disabled={isLoadingAccountTraffic || isSaving}
+              presentation="table-only"
+              anchorStartDate={timelineAnchorStart}
+              anchorEndDate={timelineAnchorEnd}
+              onLoadingChange={setIsScheduleTimelineLoading}
+            />
+          </div>
+        </DialogContent>
+      </Dialog>
 
       <Dialog open={isFlightModalOpen} onOpenChange={handleFlightModalOpenChange}>
         <DialogContent
@@ -3674,26 +4654,58 @@ export default function TrafficPage() {
             <label className="space-y-1 text-sm">
               <span className="text-slate-600">File URL</span>
               <Input
+                type="url"
                 value={flightModalDraft?.fileUrl || ""}
                 placeholder="https://..."
                 disabled={!canEditTradsphere || isSaving || isSentLocked}
                 onChange={(event) => {
                   setFlightModalError(null);
+                  setFlightFileUrlError(null);
                   setFlightModalDraft((current) => (current ? { ...current, fileUrl: event.target.value } : current));
                 }}
+                onBlur={(event) => {
+                  const raw = asString(event.target.value);
+                  if (!raw) {
+                    setFlightFileUrlError(null);
+                    return;
+                  }
+                  if (isStrictHttpUrlInput(raw)) {
+                    setFlightFileUrlError(null);
+                    return;
+                  }
+                  setFlightFileUrlError("Invalid URL. Enter a valid http(s) URL.");
+                  setFlightModalDraft((current) => (current ? { ...current, fileUrl: "" } : current));
+                }}
               />
+              {flightFileUrlError ? <p className="text-xs text-rose-600">{flightFileUrlError}</p> : null}
             </label>
             <label className="space-y-1 text-sm">
               <span className="text-slate-600">Script URL</span>
               <Input
+                type="url"
                 value={flightModalDraft?.scriptUrl || ""}
                 placeholder="https://..."
                 disabled={!canEditTradsphere || isSaving || isSentLocked}
                 onChange={(event) => {
                   setFlightModalError(null);
+                  setFlightScriptUrlError(null);
                   setFlightModalDraft((current) => (current ? { ...current, scriptUrl: asNullableString(event.target.value) } : current));
                 }}
+                onBlur={(event) => {
+                  const raw = asString(event.target.value);
+                  if (!raw) {
+                    setFlightScriptUrlError(null);
+                    return;
+                  }
+                  if (isStrictHttpUrlInput(raw)) {
+                    setFlightScriptUrlError(null);
+                    return;
+                  }
+                  setFlightScriptUrlError("Invalid URL. Enter a valid http(s) URL.");
+                  setFlightModalDraft((current) => (current ? { ...current, scriptUrl: null } : current));
+                }}
               />
+              {flightScriptUrlError ? <p className="text-xs text-rose-600">{flightScriptUrlError}</p> : null}
             </label>
             <label className="space-y-1 text-sm">
               <span className="text-slate-600">Note</span>
@@ -3715,6 +4727,36 @@ export default function TrafficPage() {
                 {flightModalMode === "create" ? "Add" : "Save"}
               </Button>
             ) : null}
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={isLastFlightDeleteConfirmOpen}
+        onOpenChange={(open) => {
+          setIsLastFlightDeleteConfirmOpen(open);
+          if (!open) {
+            setPendingFlightDeleteId(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Clear Stations?</DialogTitle>
+            <DialogDescription>
+              Deleting this flight leaves no flight date range. Do you want to clear all station rows?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => handleResolveLastFlightDelete(false)}>
+              Keep Stations
+            </Button>
+            <Button
+              className="bg-rose-600 text-white hover:bg-rose-700"
+              onClick={() => handleResolveLastFlightDelete(true)}
+            >
+              Clear All Stations
+            </Button>
           </DialogFooter>
         </DialogContent>
       </Dialog>

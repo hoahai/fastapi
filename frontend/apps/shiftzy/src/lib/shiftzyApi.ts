@@ -1,4 +1,4 @@
-import type { ApiRequestOptions } from "@tradsphere/hooks/useApiRequest";
+import type { ApiRequestOptions } from "@shared/hooks/useApiRequest";
 
 export type ShiftzyRequestJson = (url: string, options?: ApiRequestOptions) => Promise<unknown>;
 

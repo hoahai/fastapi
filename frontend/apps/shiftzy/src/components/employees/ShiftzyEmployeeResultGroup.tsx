@@ -1,7 +1,7 @@
 import { useRef, useState } from "react";
 import { ChevronDown, UserMinus, UserRoundCheck } from "lucide-react";
 
-import { cn } from "@tradsphere/lib/utils";
+import { cn } from "@shared/components/utils/cn";
 import { Tooltip } from "@shared/components/actions/Tooltip";
 import type { ShiftzyEmployeeItem, ShiftzyEmployeeSectionGroup } from "./types";
 

@@ -1,0 +1,21 @@
+{
+  "$schema": "https://ui.shadcn.com/schema.json",
+  "style": "default",
+  "rsc": false,
+  "tsx": true,
+  "tailwind": {
+    "config": "./shell/tailwind.config.ts",
+    "css": "./shell/src/styles/index.css",
+    "baseColor": "blue",
+    "cssVariables": false
+  },
+  "aliases": {
+    "components": "@shared/components",
+    "ui": "@shared/components/ui",
+    "hooks": "@shared/hooks",
+    "lib": "@shared/lib",
+    "utils": "@shared/components/utils/cn",
+    "shell": "@shell",
+    "tradsphere": "@tradsphere"
+  }
+}
