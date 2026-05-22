@@ -1527,6 +1527,69 @@ def get_schedule_timeline_rows(
     return rows
 
 
+def list_schedule_station_candidates_for_account_range(
+    *,
+    account_code: str,
+    flight_start: str,
+    flight_end: str,
+) -> list[dict]:
+    tables = get_db_tables()
+    schedules_table = _quote_table_name(tables["SCHEDULES"])
+    est_nums_table = _quote_table_name(tables["ESTNUMS"])
+    stations_table = _quote_table_name(tables["STATIONS"])
+
+    normalized_account_code = _normalize_account_code(account_code)
+    normalized_flight_start = str(flight_start or "").strip()
+    normalized_flight_end = str(flight_end or "").strip()
+    if not normalized_account_code:
+        raise ValueError("accountCode is required")
+    if not normalized_flight_start:
+        raise ValueError("flightStart is required")
+    if not normalized_flight_end:
+        raise ValueError("flightEnd is required")
+
+    cache_key = _build_db_read_cache_key(
+        "traffic_station_candidates",
+        "schema=v1",
+        f"schedules_table={schedules_table}",
+        f"est_nums_table={est_nums_table}",
+        f"stations_table={stations_table}",
+        f"account_code={normalized_account_code}",
+        f"flight_start={normalized_flight_start}",
+        f"flight_end={normalized_flight_end}",
+    )
+    cached_rows = _get_cached_list(
+        cache_key,
+        ttl_key="db_schedule_timeline_ttl_time",
+    )
+    if cached_rows is not None:
+        return cached_rows
+
+    query = (
+        "SELECT DISTINCT "
+        "UPPER(TRIM(s.stationCode)) AS stationCode, "
+        "st.name AS stationName "
+        f"FROM {schedules_table} s "
+        f"INNER JOIN {est_nums_table} en ON en.estNum = s.estNum "
+        f"LEFT JOIN {stations_table} st ON UPPER(st.code) = UPPER(s.stationCode) "
+        "WHERE UPPER(en.accountCode) = %s "
+        "AND COALESCE(TRIM(s.stationCode), '') <> '' "
+        "AND s.endDate >= %s "
+        "AND s.startDate <= %s "
+        "ORDER BY stationCode ASC"
+    )
+    rows = fetch_all(
+        query,
+        (
+            normalized_account_code,
+            normalized_flight_start,
+            normalized_flight_end,
+        ),
+    )
+    _set_cached_value(cache_key, rows)
+    return rows
+
+
 def get_schedules_by_match_keys(match_keys: list[str]) -> list[dict]:
     normalized_match_keys = [str(item or "").strip() for item in (match_keys or [])]
     normalized_match_keys = [item for item in normalized_match_keys if item]

@@ -13,10 +13,67 @@ from apps.tradsphere.api.v1.helpers.traffic import (
     SafeDatabaseError,
     create_traffic_station_data,
     delete_traffic_station_data,
+    list_station_candidates_for_flight_range_data,
     update_traffic_station_data,
 )
 
 router = APIRouter(prefix="/traffic")
+
+
+@router.get("/station-candidates")
+def get_traffic_station_candidates_route(
+    account_code: str | None = Query(None, alias="accountCode"),
+    flight_start: str | None = Query(None, alias="flightStart"),
+    flight_end: str | None = Query(None, alias="flightEnd"),
+):
+    """
+    Return distinct schedule station candidates for one account within a flight date range.
+
+    Example request:
+        GET /api/tradsphere/v1/traffic/station-candidates?accountCode=TAAA&flightStart=2026-06-01&flightEnd=2026-06-30
+
+    Example response:
+        {
+          "meta": {"timestamp": "2026-05-22T10:00:00+07:00", "duration_ms": 2},
+          "data": {
+            "accountCode": "TAAA",
+            "flightStart": "2026-06-01",
+            "flightEnd": "2026-06-30",
+            "stations": [
+              {
+                "stationCode": "KABC",
+                "stationName": "ABC Affiliate",
+                "deliveryMethod": "Station Portal",
+                "contactsSnapshot": {
+                  "TRAFFIC": ["traffic@kabc.com"],
+                  "REP": [{"id": 88, "name": "Mina Tran", "email": "rep@kabc.com"}]
+                }
+              }
+            ],
+            "summary": {"candidateCount": 1}
+          }
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key / bearer session
+        - accountCode, flightStart, and flightEnd query params are required
+        - flightStart/flightEnd must be ISO dates and flightStart <= flightEnd
+        - Unknown query params are rejected (400)
+    """
+    account_code_value = require_query_value(account_code, field="accountCode")
+    flight_start_value = require_query_value(flight_start, field="flightStart")
+    flight_end_value = require_query_value(flight_end, field="flightEnd")
+    try:
+        return list_station_candidates_for_flight_range_data(
+            account_code=account_code_value,
+            flight_start=flight_start_value,
+            flight_end=flight_end_value,
+        )
+    except (InvalidReferenceError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except SafeDatabaseError:
+        raise HTTPException(status_code=500, detail="Failed to load station candidates")
 
 
 @router.post("/station")

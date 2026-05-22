@@ -111,6 +111,78 @@ class TrafficHelperValidationTests(unittest.TestCase):
                 )
             self.assertEqual(str(ctx_rotation.exception), "rotation must be between 0 and 100")
 
+    def test_station_candidates_require_valid_date_range(self):
+        with patch.object(
+            traffic_helper,
+            "ensure_tradsphere_account_codes_exist",
+            return_value=None,
+        ):
+            with self.assertRaises(ValueError) as ctx:
+                traffic_helper.list_station_candidates_for_flight_range_data(
+                    account_code="TAAA",
+                    flight_start="2026-06-30",
+                    flight_end="2026-06-01",
+                )
+        self.assertEqual(str(ctx.exception), "flightStart must be on or before flightEnd")
+
+    def test_station_candidates_deduplicate_and_normalize_codes(self):
+        with patch.object(
+            traffic_helper,
+            "ensure_tradsphere_account_codes_exist",
+            return_value=None,
+        ), patch.object(
+            traffic_helper,
+            "_safe_db_call",
+            return_value=[
+                {"stationCode": "kabc", "stationName": "ABC"},
+                {"stationCode": "KABC", "stationName": "ABC Duplicate"},
+                {"stationCode": "Kxyz", "stationName": "XYZ"},
+            ],
+        ) as safe_db_call_mock, patch.object(
+            traffic_helper,
+            "list_stations_data",
+            return_value=[
+                {
+                    "code": "KABC",
+                    "deliveryMethod": {"id": 12, "name": "Station Portal"},
+                    "contacts": {"TRAFFIC": ["traffic@kabc.com"]},
+                }
+            ],
+        ):
+            result = traffic_helper.list_station_candidates_for_flight_range_data(
+                account_code="taaa",
+                flight_start="2026-06-01",
+                flight_end="2026-06-30",
+            )
+
+        self.assertEqual(result["accountCode"], "TAAA")
+        self.assertEqual(result["flightStart"], "2026-06-01")
+        self.assertEqual(result["flightEnd"], "2026-06-30")
+        self.assertEqual(
+            result["stations"],
+            [
+                {
+                    "stationCode": "KABC",
+                    "stationName": "ABC",
+                    "deliveryMethod": "Station Portal",
+                    "contactsSnapshot": {"TRAFFIC": ["traffic@kabc.com"]},
+                },
+                {
+                    "stationCode": "KXYZ",
+                    "stationName": "XYZ",
+                    "deliveryMethod": None,
+                    "contactsSnapshot": None,
+                },
+            ],
+        )
+        self.assertEqual(result["summary"]["candidateCount"], 2)
+        safe_db_call_mock.assert_called_once_with(
+            traffic_helper.list_schedule_station_candidates_for_account_range,
+            account_code="TAAA",
+            flight_start="2026-06-01",
+            flight_end="2026-06-30",
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

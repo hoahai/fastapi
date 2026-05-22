@@ -32,6 +32,7 @@ class TrafficRouteContractTests(unittest.TestCase):
             ("POST", "/v1/traffic/flight"),
             ("PUT", "/v1/traffic/flight"),
             ("DELETE", "/v1/traffic/flight"),
+            ("GET", "/v1/traffic/station-candidates"),
             ("POST", "/v1/traffic/station"),
             ("PUT", "/v1/traffic/station"),
             ("DELETE", "/v1/traffic/station"),
@@ -113,6 +114,27 @@ class TrafficMissingQueryParamTests(unittest.TestCase):
             traffic_id=None,
             payload={},
             expected_detail="trafficId is required",
+        )
+        self.assert_missing_param(
+            trafficStations.get_traffic_station_candidates_route,
+            account_code=None,
+            flight_start="2026-06-01",
+            flight_end="2026-06-30",
+            expected_detail="accountCode is required",
+        )
+        self.assert_missing_param(
+            trafficStations.get_traffic_station_candidates_route,
+            account_code="TAAA",
+            flight_start=None,
+            flight_end="2026-06-30",
+            expected_detail="flightStart is required",
+        )
+        self.assert_missing_param(
+            trafficStations.get_traffic_station_candidates_route,
+            account_code="TAAA",
+            flight_start="2026-06-01",
+            flight_end=None,
+            expected_detail="flightEnd is required",
         )
 
     def test_missing_flight_id_or_traffic_id_for_flight_update_delete(self):

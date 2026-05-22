@@ -19,6 +19,7 @@ from apps.tradsphere.api.v1.helpers.dbQueries import (
     get_traffic_email_row,
     get_traffic_flight_row,
     get_traffic_row,
+    list_schedule_station_candidates_for_account_range,
     get_traffic_station_row,
     insert_traffic,
     insert_traffic_flight,
@@ -32,6 +33,7 @@ from apps.tradsphere.api.v1.helpers.dbQueries import (
     update_traffic_station,
     upsert_traffic_email,
 )
+from apps.tradsphere.api.v1.helpers.stations import list_stations_data
 from shared.tenant import get_tenant_id
 
 
@@ -519,6 +521,85 @@ def get_traffic_detail_data(*, traffic_id: str) -> dict:
     normalized_traffic_id = _require_uuid4(traffic_id, field="trafficId")
     traffic_row = _ensure_traffic_exists(normalized_traffic_id)
     return _build_detail_payload(traffic_row=traffic_row)
+
+
+def list_station_candidates_for_flight_range_data(
+    *,
+    account_code: str,
+    flight_start: str,
+    flight_end: str,
+) -> dict:
+    normalized_account_code = require_account_code(account_code, field="accountCode")
+    ensure_tradsphere_account_codes_exist([normalized_account_code])
+    normalized_flight_start = _normalize_date(flight_start, field="flightStart")
+    normalized_flight_end = _normalize_date(flight_end, field="flightEnd")
+    if date.fromisoformat(normalized_flight_start) > date.fromisoformat(normalized_flight_end):
+        raise ValueError("flightStart must be on or before flightEnd")
+
+    rows = _safe_db_call(
+        list_schedule_station_candidates_for_account_range,
+        account_code=normalized_account_code,
+        flight_start=normalized_flight_start,
+        flight_end=normalized_flight_end,
+    )
+
+    station_codes: list[str] = []
+    stations: list[dict] = []
+    seen_codes: set[str] = set()
+    for row in rows:
+        station_code = str(row.get("stationCode") or "").strip().upper()
+        if not station_code or station_code in seen_codes:
+            continue
+        seen_codes.add(station_code)
+        station_codes.append(station_code)
+        stations.append(
+            {
+                "stationCode": station_code,
+                "stationName": str(row.get("stationName") or "").strip() or None,
+            }
+        )
+
+    station_detail_by_code: dict[str, dict[str, object]] = {}
+    if station_codes:
+        station_rows = list_stations_data(
+            codes=station_codes,
+            delivery_method_detail=False,
+            contact_detail=True,
+            include_contacts=True,
+        )
+        for station_row in station_rows:
+            station_code = str(station_row.get("code") or "").strip().upper()
+            if not station_code:
+                continue
+
+            delivery_method_name: str | None = None
+            delivery_method = station_row.get("deliveryMethod")
+            if isinstance(delivery_method, dict):
+                delivery_method_name = str(delivery_method.get("name") or "").strip() or None
+            elif delivery_method is not None:
+                delivery_method_name = str(delivery_method).strip() or None
+
+            contacts_snapshot = station_row.get("contacts")
+            station_detail_by_code[station_code] = {
+                "deliveryMethod": delivery_method_name,
+                "contactsSnapshot": contacts_snapshot if isinstance(contacts_snapshot, dict) else None,
+            }
+
+    for station in stations:
+        station_code = str(station.get("stationCode") or "").strip().upper()
+        detail = station_detail_by_code.get(station_code, {})
+        station["deliveryMethod"] = detail.get("deliveryMethod")
+        station["contactsSnapshot"] = detail.get("contactsSnapshot")
+
+    return {
+        "accountCode": normalized_account_code,
+        "flightStart": normalized_flight_start,
+        "flightEnd": normalized_flight_end,
+        "stations": stations,
+        "summary": {
+            "candidateCount": len(stations),
+        },
+    }
 
 
 def create_traffic_data(*, payload: dict) -> dict:
