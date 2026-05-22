@@ -5,10 +5,10 @@ const config: Config = {
   content: [
     "./index.html",
     "./src/**/*.{ts,tsx}",
-    "../../shell/src/**/*.{ts,tsx}",
-    "../home/src/**/*.{ts,tsx}",
-    "../shiftzy/src/**/*.{ts,tsx}",
-    "../../shared/**/*.{ts,tsx}",
+    "../apps/tradsphere/src/**/*.{ts,tsx}",
+    "../apps/home/src/**/*.{ts,tsx}",
+    "../apps/shiftzy/src/**/*.{ts,tsx}",
+    "../shared/**/*.{ts,tsx}",
   ],
   theme: {
     extend: {

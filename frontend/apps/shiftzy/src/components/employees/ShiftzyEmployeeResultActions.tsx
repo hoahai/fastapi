@@ -1,6 +1,6 @@
 import { Pencil, UserRoundCheck, UserRoundX } from "lucide-react";
 
-import { Button } from "@/components/ui/button";
+import { Button } from "@tradsphere/components/ui/button";
 
 import type { ShiftzyEmployeeItem } from "./types";
 

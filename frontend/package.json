@@ -5,9 +5,11 @@
   "scripts": {
     "install:tradsphere": "npm --prefix apps/tradsphere install",
     "install:all": "bash -lc 'for app in apps/*; do [ -f \"$app/package.json\" ] || continue; echo \"==> install ${app}\"; npm --prefix \"$app\" install || exit 1; done'",
+    "dev:shell": "npm --prefix shell run dev",
     "dev:tradsphere": "npm --prefix apps/tradsphere run dev",
+    "build:shell": "npm --prefix shell run build",
     "build:tradsphere": "npm --prefix apps/tradsphere run build",
-    "build:all": "bash -lc 'for app in apps/*; do [ -f \"$app/package.json\" ] || continue; echo \"==> build ${app}\"; npm --prefix \"$app\" run build --if-present || exit 1; done'",
+    "build:all": "npm run build:shell",
     "build": "npm run build:all"
   }
 }

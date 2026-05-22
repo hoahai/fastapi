@@ -1,8 +1,8 @@
 import { LayoutDashboard } from "lucide-react";
 
-import { HOME_ROUTE } from "@/components/layout/navigation";
-import { PageBanner } from "@/components/layout/PageBanner";
-import { Button } from "@/components/ui/button";
+import { HOME_ROUTE } from "@shell/components/layout/navigation";
+import { PageBanner } from "@shell/components/layout/PageBanner";
+import { Button } from "@tradsphere/components/ui/button";
 
 type WorkspaceNotFoundPageProps = {
   onNavigate: (route: string) => void;

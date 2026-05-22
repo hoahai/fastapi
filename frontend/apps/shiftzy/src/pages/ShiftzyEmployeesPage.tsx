@@ -1,11 +1,11 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Plus } from "lucide-react";
 
-import { PageBanner } from "@/components/layout/PageBanner";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { useToast } from "@/components/ui/toast";
-import { useApiRequest } from "@/hooks/useApiRequest";
+import { PageBanner } from "@shell/components/layout/PageBanner";
+import { Button } from "@tradsphere/components/ui/button";
+import { Dialog, DialogContent, DialogFooter, DialogHeader, DialogTitle } from "@tradsphere/components/ui/dialog";
+import { useToast } from "@shell/components/ui/toast";
+import { useApiRequest } from "@tradsphere/hooks/useApiRequest";
 import { hasAppEditAccess } from "@shared/auth/permissions";
 import { useAuth } from "@shared/auth/useAuth";
 import {

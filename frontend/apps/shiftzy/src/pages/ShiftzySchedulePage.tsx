@@ -16,13 +16,13 @@ import {
   X,
 } from "lucide-react";
 
-import { PageBanner } from "@/components/layout/PageBanner";
+import { PageBanner } from "@shell/components/layout/PageBanner";
 import { FloatingActionMenu, type FloatingActionMenuItem } from "@shared/components/actions/FloatingActionMenu";
-import { Button } from "@/components/ui/button";
-import { AppDropdown } from "@/components/ui/app-dropdown";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { useToast } from "@/components/ui/toast";
-import { useApiRequest } from "@/hooks/useApiRequest";
+import { Button } from "@tradsphere/components/ui/button";
+import { AppDropdown } from "@tradsphere/components/ui/app-dropdown";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@tradsphere/components/ui/dialog";
+import { useToast } from "@shell/components/ui/toast";
+import { useApiRequest } from "@tradsphere/hooks/useApiRequest";
 import {
   createShiftzySchedules,
   deleteShiftzySchedules,

@@ -1,9 +1,9 @@
 import { type ReactNode } from "react";
 import { Loader2, Search, X } from "lucide-react";
 
-import { AppDropdown } from "@/components/ui/app-dropdown";
-import { Button } from "@/components/ui/button";
-import { Input } from "@/components/ui/input";
+import { AppDropdown } from "@tradsphere/components/ui/app-dropdown";
+import { Button } from "@tradsphere/components/ui/button";
+import { Input } from "@tradsphere/components/ui/input";
 import { Section, SectionHeader } from "@shared/components";
 
 import type { ShiftzyEmployeeSearchFormValues } from "./types";

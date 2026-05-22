@@ -1,8 +1,8 @@
 import { ArrowRight, LayoutDashboard, LogIn, Lock, type LucideIcon } from "lucide-react";
 
-import { APP_NAV_ITEMS } from "@/components/layout/navigation";
-import { PageBanner } from "@/components/layout/PageBanner";
-import { Button } from "@/components/ui/button";
+import { APP_NAV_ITEMS } from "@shell/components/layout/navigation";
+import { PageBanner } from "@shell/components/layout/PageBanner";
+import { Button } from "@tradsphere/components/ui/button";
 import { Section, SectionHeader } from "@shared/components";
 import { CacheStatusChip } from "@shared/components/status/CacheStatusChip";
 import { getAccessAssignments, roleChipClass, roleLabel, rolePriority, tenantChipClass } from "@shared/auth/accessAssignments";

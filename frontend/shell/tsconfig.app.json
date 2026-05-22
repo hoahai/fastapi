@@ -1,0 +1,44 @@
+{
+  "compilerOptions": {
+    "target": "ES2020",
+    "useDefineForClassFields": true,
+    "lib": ["ES2020", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "skipLibCheck": true,
+    "moduleResolution": "Bundler",
+    "allowImportingTsExtensions": false,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "noEmit": true,
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "typeRoots": [
+      "../apps/tradsphere/node_modules/@types",
+      "../node_modules/@types",
+      "../../node_modules/@types"
+    ],
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["../apps/tradsphere/src/*"],
+      "@shell/*": ["./src/*"],
+      "@tradsphere/*": ["../apps/tradsphere/src/*"],
+      "@home/*": ["../apps/home/src/*"],
+      "@shiftzy/*": ["../apps/shiftzy/src/*"],
+      "@shared/*": ["../shared/*"],
+      "react": ["../apps/tradsphere/node_modules/@types/react/index.d.ts"],
+      "react-dom": ["../apps/tradsphere/node_modules/@types/react-dom/index.d.ts"],
+      "react-dom/*": ["../apps/tradsphere/node_modules/@types/react-dom/*"],
+      "react/jsx-runtime": ["../apps/tradsphere/node_modules/@types/react/jsx-runtime.d.ts"],
+      "lucide-react": ["../apps/tradsphere/node_modules/lucide-react/dist/lucide-react.d.ts"]
+    }
+  },
+  "include": [
+    "src",
+    "../apps/tradsphere/src/**/*",
+    "../apps/shiftzy/src/**/*",
+    "../apps/home/src/**/*",
+    "../shared/**/*"
+  ]
+}

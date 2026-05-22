@@ -1,13 +1,13 @@
 import { useEffect, useMemo, useState } from "react";
 import { Loader2, X } from "lucide-react";
 
-import { AppDropdown } from "@/components/ui/app-dropdown";
-import { Button } from "@/components/ui/button";
-import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@/components/ui/dialog";
-import { Input } from "@/components/ui/input";
-import { canModalClose, shouldBlockOutsideClose } from "@/components/ui/modal-close-guard";
-import { Textarea } from "@/components/ui/textarea";
-import { UnsavedChangesDialog } from "@/components/ui/unsaved-changes-dialog";
+import { AppDropdown } from "@tradsphere/components/ui/app-dropdown";
+import { Button } from "@tradsphere/components/ui/button";
+import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@tradsphere/components/ui/dialog";
+import { Input } from "@tradsphere/components/ui/input";
+import { canModalClose, shouldBlockOutsideClose } from "@tradsphere/components/ui/modal-close-guard";
+import { Textarea } from "@tradsphere/components/ui/textarea";
+import { UnsavedChangesDialog } from "@tradsphere/components/ui/unsaved-changes-dialog";
 import { FormRow } from "@shared/components/form/FormRow";
 import type { ShiftzyEmployee, ShiftzyPosition } from "@shiftzy/lib/shiftzyApi";
 
