@@ -69,3 +69,4 @@ apps/tradsphere/ui_dist/
 # ------------------
 checkpoints/
 docs/
+.codegraph/
