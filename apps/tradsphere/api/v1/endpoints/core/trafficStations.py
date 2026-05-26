@@ -6,6 +6,7 @@ from apps.tradsphere.api.v1.endpoints.core.traffic import (
     parse_unsigned_int_query,
     require_query_value,
 )
+from apps.tradsphere.api.v1.helpers.queryParsing import parse_csv_values, parse_int_list
 from apps.tradsphere.api.v1.helpers.traffic import (
     ConflictError,
     InvalidReferenceError,
@@ -25,12 +26,22 @@ def get_traffic_station_candidates_route(
     account_code: str | None = Query(None, alias="accountCode"),
     flight_start: str | None = Query(None, alias="flightStart"),
     flight_end: str | None = Query(None, alias="flightEnd"),
+    est_nums: list[str] | None = Query(None, alias="estNums"),
+    est_num: list[str] | None = Query(None, alias="estNum"),
+    languages: list[str] | None = Query(None, alias="languages"),
+    language: list[str] | None = Query(None, alias="language"),
 ):
     """
-    Return distinct schedule station candidates for one account within a flight date range.
+    Return schedule station candidates for one account within a flight date range.
 
     Example request:
         GET /api/tradsphere/v1/traffic/station-candidates?accountCode=TAAA&flightStart=2026-06-01&flightEnd=2026-06-30
+
+    Example request (filtered by estimate numbers):
+        GET /api/tradsphere/v1/traffic/station-candidates?accountCode=TAAA&flightStart=2026-06-01&flightEnd=2026-06-30&estNums=26001,26002
+
+    Example request (filtered by flight languages):
+        GET /api/tradsphere/v1/traffic/station-candidates?accountCode=TAAA&flightStart=2026-06-01&flightEnd=2026-06-30&languages=English,Spanish
 
     Example response:
         {
@@ -39,6 +50,9 @@ def get_traffic_station_candidates_route(
             "accountCode": "TAAA",
             "flightStart": "2026-06-01",
             "flightEnd": "2026-06-30",
+            "estNums": [
+              {"estNum": 26001, "note": "June TV Push", "medium": "TV", "stationCount": 2}
+            ],
             "stations": [
               {
                 "stationCode": "KABC",
@@ -50,7 +64,7 @@ def get_traffic_station_candidates_route(
                 }
               }
             ],
-            "summary": {"candidateCount": 1}
+            "summary": {"candidateCount": 1, "estNumCount": 1}
           }
         }
 
@@ -58,17 +72,23 @@ def get_traffic_station_candidates_route(
         - Requires X-Tenant-Id header
         - Requires valid API key / bearer session
         - accountCode, flightStart, and flightEnd query params are required
+        - Optional estNums/estNum accepts comma-separated integer values
+        - Optional languages/language accepts comma-separated values: English, Spanish
         - flightStart/flightEnd must be ISO dates and flightStart <= flightEnd
         - Unknown query params are rejected (400)
     """
     account_code_value = require_query_value(account_code, field="accountCode")
     flight_start_value = require_query_value(flight_start, field="flightStart")
     flight_end_value = require_query_value(flight_end, field="flightEnd")
+    normalized_est_nums = parse_int_list(est_nums, est_num)
+    normalized_languages = parse_csv_values(languages, language)
     try:
         return list_station_candidates_for_flight_range_data(
             account_code=account_code_value,
             flight_start=flight_start_value,
             flight_end=flight_end_value,
+            est_nums=normalized_est_nums,
+            languages=normalized_languages,
         )
     except (InvalidReferenceError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

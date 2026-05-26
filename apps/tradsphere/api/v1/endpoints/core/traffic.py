@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, HTTPException, Query
+from fastapi import APIRouter, Body, HTTPException, Query, Request
 
 from apps.tradsphere.api.v1.helpers.traffic import (
     ConflictError,
@@ -8,6 +8,7 @@ from apps.tradsphere.api.v1.helpers.traffic import (
     NotFoundError,
     SafeDatabaseError,
     archive_traffic_data,
+    bulk_save_traffic_data,
     create_traffic_data,
     get_traffic_detail_data,
     list_traffic_for_account_data,
@@ -63,6 +64,9 @@ def get_account_traffic_route(
               "status": "draft",
               "flightCount": 2,
               "stationCount": 6,
+              "searchIscis": ["TAAA260611EH", "TAAA260611EN"],
+              "searchStations": ["KABC", "KABC LOS ANGELES", "KXYZ"],
+              "searchEmails": ["traffic@kabc.com", "buyer@agency.com"],
               "summary": {
                 "totalRotation": 92.5,
                 "rotationWarning": true,
@@ -77,6 +81,7 @@ def get_account_traffic_route(
         - Requires valid API key / bearer session
         - code query param is required
         - Archived records are excluded by default on this account load route
+        - searchStations includes station code and station name tokens for client-side keyword search
         - Unknown query params are rejected (400)
     """
     code_value = require_query_value(code, field="code")
@@ -226,6 +231,91 @@ def update_traffic_route(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except SafeDatabaseError:
         raise HTTPException(status_code=500, detail="Failed to update traffic")
+
+
+@router.post("/bulk-save")
+def bulk_save_traffic_route(
+    request: Request,
+    payload: dict = Body(...),
+):
+    """
+    Save one traffic draft in bulk with changed header/flight/station/email mutations in a single request.
+
+    Example request:
+        POST /api/tradsphere/v1/traffic/bulk-save
+        {
+          "trafficId": "d9c98f56-54da-4688-bc96-3d3cb6388f5d",
+          "traffic": {
+            "accountCode": "TAAA",
+            "campaign": "Spring Retail Push",
+            "status": "draft",
+            "note": "Save all updates together"
+          },
+          "updateTraffic": true,
+          "flightCreates": [],
+          "flightUpdates": [
+            {
+              "id": 101,
+              "rotation": 55
+            }
+          ],
+          "flightDeletes": [],
+          "stationCreates": [],
+          "stationUpdates": [],
+          "stationDeletes": [],
+          "upsertEmail": false
+        }
+
+    Example response:
+        {
+          "meta": {"timestamp": "2026-05-23T10:00:00+07:00", "duration_ms": 8},
+          "data": {
+            "trafficId": "d9c98f56-54da-4688-bc96-3d3cb6388f5d",
+            "detail": {
+              "traffic": {
+                "id": "d9c98f56-54da-4688-bc96-3d3cb6388f5d",
+                "accountCode": "TAAA",
+                "campaign": "Spring Retail Push",
+                "status": "draft"
+              },
+              "flights": [],
+              "stations": [],
+              "email": null,
+              "summary": {
+                "totalRotation": 0.0,
+                "rotationWarning": true
+              }
+            }
+          }
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key / bearer session
+        - traffic object is required
+        - trafficId is optional: when missing/empty a new traffic header is created
+        - updateTraffic=true applies traffic header updates for existing trafficId
+        - flight/station changes are sent as create/update/delete arrays
+        - upsertEmail=true requires email payload
+        - Archived traffic cannot be modified
+    """
+    principal = getattr(request.state, "auth_principal", None)
+    sent_by_user_id = None
+    if principal is not None:
+        sent_by_user_id = str(
+            getattr(principal, "user_id", "") or getattr(principal, "email", "") or ""
+        ).strip() or None
+
+    try:
+        return bulk_save_traffic_data(payload=payload, sent_by_user_id=sent_by_user_id)
+    except NotFoundError as exc:
+        raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except ConflictError as exc:
+        raise HTTPException(status_code=409, detail=str(exc)) from exc
+    except (InvalidReferenceError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except SafeDatabaseError:
+        raise HTTPException(status_code=500, detail="Failed to bulk save traffic")
 
 
 @router.post("/ready")

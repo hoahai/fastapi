@@ -46,8 +46,9 @@ def create_traffic_flight_route(
         - trafficId query param is required and must be UUID v4
         - flightStart/flightEnd are required ISO dates and flightStart <= flightEnd
         - medium supports: TV, RA, CA, OD, NP, CINE
+        - language supports: English, Spanish (defaults to English)
         - rotation must be between 0 and 100
-        - fileUrl is required
+        - fileUrl is optional
         - Archived traffic cannot be modified
     """
     traffic_id_value = require_query_value(traffic_id, field="trafficId")

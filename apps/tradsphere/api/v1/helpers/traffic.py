@@ -28,6 +28,7 @@ from apps.tradsphere.api.v1.helpers.dbQueries import (
     list_traffic_flights,
     list_traffic_station_attachments,
     list_traffic_stations,
+    save_traffic_bulk_changes,
     update_traffic,
     update_traffic_flight,
     update_traffic_station,
@@ -35,11 +36,14 @@ from apps.tradsphere.api.v1.helpers.dbQueries import (
 )
 from apps.tradsphere.api.v1.helpers.stations import list_stations_data
 from shared.tenant import get_tenant_id
+from shared.utils import run_parallel
 
 
 _TRAFFIC_STATUSES = {"draft", "ready", "sent", "confirmed", "archived"}
 _FLIGHT_MEDIA_VALUES = {"TV", "RA", "CA", "OD", "NP", "CINE"}
+_FLIGHT_LANGUAGE_VALUES = {"English", "Spanish"}
 _DELIVERY_STATUS_VALUES = {
+    "",
     "not_started",
     "needs_manual_upload",
     "ready_to_email",
@@ -47,7 +51,7 @@ _DELIVERY_STATUS_VALUES = {
     "skipped",
     "issue",
 }
-_CONFIRMED_STATUS_VALUES = {"pending", "confirmed", "issue", "not_required"}
+_CONFIRMED_STATUS_VALUES = {"", "pending", "confirmed", "issue", "not_required"}
 _EMAIL_SENT_STATUS_VALUES = {"draft", "ready", "sent", "failed"}
 
 _ROTATION_TARGET = Decimal("100.00")
@@ -176,9 +180,12 @@ def _normalize_enum(
     field: str,
     allowed_values: set[str],
     default_value: str | None = None,
+    allow_blank: bool = False,
 ) -> str:
     text = str(value or "").strip()
     if not text:
+        if allow_blank:
+            return ""
         if default_value is None:
             raise ValueError(f"{field} is required")
         return default_value
@@ -197,6 +204,26 @@ def _normalize_flight_medium(value: object) -> str:
         allowed = ", ".join(sorted(_FLIGHT_MEDIA_VALUES))
         raise ValueError(f"medium must be one of: {allowed}")
     return text
+
+
+def _normalize_flight_language(value: object) -> str:
+    text = str(value or "").strip()
+    if not text:
+        return "English"
+    lowered = text.lower()
+    if lowered == "english":
+        return "English"
+    if lowered == "spanish":
+        return "Spanish"
+    allowed = ", ".join(sorted(_FLIGHT_LANGUAGE_VALUES))
+    raise ValueError(f"language must be one of: {allowed}")
+
+
+def _coerce_flight_language_for_output(value: object) -> str:
+    try:
+        return _normalize_flight_language(value)
+    except ValueError:
+        return "English"
 
 
 def _normalize_rotation(value: object) -> Decimal:
@@ -345,6 +372,7 @@ def _serialize_flight_row(row: dict) -> dict:
         "flightStart": _to_iso_text(row.get("flightStart")),
         "flightEnd": _to_iso_text(row.get("flightEnd")),
         "medium": row.get("medium"),
+        "language": _coerce_flight_language_for_output(row.get("language")),
         "length": int(row.get("length") or 0),
         "isci": row.get("isci"),
         "rotation": float(rotation_decimal),
@@ -421,6 +449,68 @@ def _serialize_email_row(row: dict | None) -> dict | None:
     }
 
 
+def _split_search_concat_tokens(raw_value: object) -> list[str]:
+    normalized = str(raw_value or "").strip()
+    if not normalized:
+        return []
+    seen: set[str] = set()
+    output: list[str] = []
+    for token in normalized.split("||"):
+        text = str(token or "").strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        output.append(text)
+    return output
+
+
+def _merge_search_tokens(*groups: list[str]) -> list[str]:
+    seen: set[str] = set()
+    output: list[str] = []
+    for group in groups:
+        for token in group:
+            text = str(token or "").strip()
+            if not text or text in seen:
+                continue
+            seen.add(text)
+            output.append(text)
+    return output
+
+
+def _extract_email_search_values(*raw_values: object) -> list[str]:
+    seen: set[str] = set()
+    output: list[str] = []
+    for raw in raw_values:
+        if raw is None:
+            continue
+        values: list[object] = []
+        if isinstance(raw, (list, tuple)):
+            values.extend(list(raw))
+        else:
+            text = str(raw).strip()
+            if not text:
+                continue
+            if text.startswith("["):
+                try:
+                    parsed = json.loads(text)
+                except Exception:
+                    parsed = []
+                if isinstance(parsed, list):
+                    values.extend(parsed)
+                else:
+                    values.append(parsed)
+            else:
+                values.append(text)
+
+        for value in values:
+            email = str(value or "").strip().lower()
+            if not email or email in seen:
+                continue
+            seen.add(email)
+            output.append(email)
+    return output
+
+
 def _ensure_traffic_exists(traffic_id: str) -> dict:
     traffic_row = _safe_db_call(get_traffic_row, traffic_id=traffic_id)
     if not traffic_row:
@@ -434,11 +524,28 @@ def _ensure_not_archived(traffic_row: dict, *, action: str) -> None:
         raise ValueError(f"Archived traffic cannot be modified ({action})")
 
 
+def _load_traffic_flights_safe(traffic_id: str) -> list[dict]:
+    return _safe_db_call(list_traffic_flights, traffic_id=traffic_id)
+
+
+def _load_traffic_stations_safe(traffic_id: str) -> list[dict]:
+    return _safe_db_call(list_traffic_stations, traffic_id=traffic_id)
+
+
+def _load_traffic_email_safe(traffic_id: str) -> dict | None:
+    return _safe_db_call(get_traffic_email_row, traffic_id=traffic_id)
+
+
 def _build_detail_payload(*, traffic_row: dict) -> dict:
     traffic_id = str(traffic_row.get("id") or "").strip()
-    flights_rows = _safe_db_call(list_traffic_flights, traffic_id=traffic_id)
-    stations_rows = _safe_db_call(list_traffic_stations, traffic_id=traffic_id)
-    email_row = _safe_db_call(get_traffic_email_row, traffic_id=traffic_id)
+    flights_rows, stations_rows, email_row = run_parallel(
+        tasks=[
+            (_load_traffic_flights_safe, (traffic_id,)),
+            (_load_traffic_stations_safe, (traffic_id,)),
+            (_load_traffic_email_safe, (traffic_id,)),
+        ],
+        api_name="tradsphere.traffic.detail",
+    )
 
     serialized_flights = [_serialize_flight_row(row) for row in flights_rows]
 
@@ -504,6 +611,8 @@ def list_traffic_for_account_data(
             rounding=ROUND_HALF_UP,
         )
         summary = _build_rotation_summary(total_rotation=total_rotation)
+        search_station_codes = _split_search_concat_tokens(row.get("stationCodeSearch"))
+        search_station_names = _split_search_concat_tokens(row.get("stationNameSearch"))
         out.append(
             {
                 **_serialize_traffic_row(row),
@@ -511,6 +620,13 @@ def list_traffic_for_account_data(
                 "stationCount": int(row.get("stationCount") or 0),
                 "emailSentStatus": row.get("emailSentStatus"),
                 "emailSentAt": _to_iso_text(row.get("emailSentAt")),
+                "searchIscis": _split_search_concat_tokens(row.get("isciSearch")),
+                "searchStations": _merge_search_tokens(search_station_codes, search_station_names),
+                "searchEmails": _extract_email_search_values(
+                    row.get("searchToEmails"),
+                    row.get("searchCcEmails"),
+                    row.get("searchBccEmails"),
+                ),
                 "summary": summary,
             }
         )
@@ -528,11 +644,24 @@ def list_station_candidates_for_flight_range_data(
     account_code: str,
     flight_start: str,
     flight_end: str,
+    est_nums: list[int] | None = None,
+    languages: list[str] | None = None,
 ) -> dict:
     normalized_account_code = require_account_code(account_code, field="accountCode")
     ensure_tradsphere_account_codes_exist([normalized_account_code])
     normalized_flight_start = _normalize_date(flight_start, field="flightStart")
     normalized_flight_end = _normalize_date(flight_end, field="flightEnd")
+    normalized_est_nums = sorted({int(item) for item in (est_nums or [])})
+    normalized_languages = sorted(
+        {
+            _normalize_flight_language(item)
+            for item in (languages or [])
+            if str(item or "").strip()
+        }
+    )
+    for est_num in normalized_est_nums:
+        if est_num < 0:
+            raise ValueError("estNums must contain unsigned integers")
     if date.fromisoformat(normalized_flight_start) > date.fromisoformat(normalized_flight_end):
         raise ValueError("flightStart must be on or before flightEnd")
 
@@ -541,17 +670,43 @@ def list_station_candidates_for_flight_range_data(
         account_code=normalized_account_code,
         flight_start=normalized_flight_start,
         flight_end=normalized_flight_end,
+        est_nums=normalized_est_nums,
+        languages=normalized_languages,
     )
 
     station_codes: list[str] = []
     stations: list[dict] = []
     seen_codes: set[str] = set()
+    est_num_meta_by_value: dict[int, dict[str, object]] = {}
     for row in rows:
+        est_num_raw = row.get("estNum")
+        try:
+            est_num = int(est_num_raw)
+        except (TypeError, ValueError):
+            est_num = None
+        if est_num is not None and est_num >= 0 and est_num not in est_num_meta_by_value:
+            est_num_note_raw = str(row.get("estNumNote") or "").strip()
+            est_num_medium_raw = str(row.get("estNumMedium") or "").strip().upper()
+            est_num_meta_by_value[est_num] = {
+                "estNum": est_num,
+                "note": est_num_note_raw or None,
+                "medium": est_num_medium_raw or None,
+                "stationCodes": set(),
+            }
+
         station_code = str(row.get("stationCode") or "").strip().upper()
         if not station_code or station_code in seen_codes:
+            if est_num is not None and est_num in est_num_meta_by_value:
+                station_codes_set = est_num_meta_by_value[est_num]["stationCodes"]
+                if isinstance(station_codes_set, set) and station_code:
+                    station_codes_set.add(station_code)
             continue
         seen_codes.add(station_code)
         station_codes.append(station_code)
+        if est_num is not None and est_num in est_num_meta_by_value:
+            station_codes_set = est_num_meta_by_value[est_num]["stationCodes"]
+            if isinstance(station_codes_set, set):
+                station_codes_set.add(station_code)
         stations.append(
             {
                 "stationCode": station_code,
@@ -591,13 +746,29 @@ def list_station_candidates_for_flight_range_data(
         station["deliveryMethod"] = detail.get("deliveryMethod")
         station["contactsSnapshot"] = detail.get("contactsSnapshot")
 
+    est_num_candidates: list[dict] = []
+    for est_num in sorted(est_num_meta_by_value.keys()):
+        meta = est_num_meta_by_value[est_num]
+        station_codes_set = meta.get("stationCodes")
+        station_count = len(station_codes_set) if isinstance(station_codes_set, set) else 0
+        est_num_candidates.append(
+            {
+                "estNum": est_num,
+                "note": meta.get("note"),
+                "medium": meta.get("medium"),
+                "stationCount": station_count,
+            }
+        )
+
     return {
         "accountCode": normalized_account_code,
         "flightStart": normalized_flight_start,
         "flightEnd": normalized_flight_end,
+        "estNums": est_num_candidates,
         "stations": stations,
         "summary": {
             "candidateCount": len(stations),
+            "estNumCount": len(est_num_candidates),
         },
     }
 
@@ -710,6 +881,7 @@ def create_traffic_flight_data(*, traffic_id: str, payload: dict) -> dict:
         raise ValueError("flightStart must be on or before flightEnd")
 
     medium = _normalize_flight_medium(payload.get("medium"))
+    language = _normalize_flight_language(payload.get("language"))
     length = _normalize_unsigned_int(
         payload.get("length"),
         field="length",
@@ -718,7 +890,7 @@ def create_traffic_flight_data(*, traffic_id: str, payload: dict) -> dict:
     )
     isci = _normalize_optional_text(payload.get("isci"), field="isci", max_length=128)
     rotation = _normalize_rotation(payload.get("rotation"))
-    file_url = _normalize_required_text(payload.get("fileUrl"), field="fileUrl", max_length=2048)
+    file_url = _normalize_optional_text(payload.get("fileUrl"), field="fileUrl", max_length=2048)
     script_url = _normalize_optional_text(payload.get("scriptUrl"), field="scriptUrl", max_length=2048)
     note = _normalize_optional_text(payload.get("note"), field="note", max_length=2048)
 
@@ -729,6 +901,7 @@ def create_traffic_flight_data(*, traffic_id: str, payload: dict) -> dict:
             "flightStart": flight_start,
             "flightEnd": flight_end,
             "medium": medium,
+            "language": language,
             "length": length,
             "isci": isci,
             "rotation": str(rotation),
@@ -781,6 +954,8 @@ def update_traffic_flight_data(*, traffic_id: str, flight_id: int, payload: dict
 
     if "medium" in payload:
         fields["medium"] = _normalize_flight_medium(payload.get("medium"))
+    if "language" in payload:
+        fields["language"] = _normalize_flight_language(payload.get("language"))
     if "length" in payload:
         fields["length"] = _normalize_unsigned_int(
             payload.get("length"),
@@ -793,7 +968,7 @@ def update_traffic_flight_data(*, traffic_id: str, flight_id: int, payload: dict
     if "rotation" in payload:
         fields["rotation"] = str(_normalize_rotation(payload.get("rotation")))
     if "fileUrl" in payload:
-        fields["fileUrl"] = _normalize_required_text(payload.get("fileUrl"), field="fileUrl", max_length=2048)
+        fields["fileUrl"] = _normalize_optional_text(payload.get("fileUrl"), field="fileUrl", max_length=2048)
     if "scriptUrl" in payload:
         fields["scriptUrl"] = _normalize_optional_text(payload.get("scriptUrl"), field="scriptUrl", max_length=2048)
     if "note" in payload:
@@ -801,7 +976,7 @@ def update_traffic_flight_data(*, traffic_id: str, flight_id: int, payload: dict
 
     if not fields:
         raise ValueError(
-            "At least one updatable field is required: flightStart, flightEnd, medium, length, isci, rotation, fileUrl, scriptUrl, note"
+            "At least one updatable field is required: flightStart, flightEnd, medium, language, length, isci, rotation, fileUrl, scriptUrl, note"
         )
 
     updated = _safe_db_call(
@@ -866,13 +1041,15 @@ def create_traffic_station_data(*, traffic_id: str, payload: dict) -> dict:
         payload.get("deliveryStatus"),
         field="deliveryStatus",
         allowed_values=_DELIVERY_STATUS_VALUES,
-        default_value="not_started",
+        default_value="",
+        allow_blank=True,
     )
     confirmed_status = _normalize_enum(
         payload.get("confirmedStatus"),
         field="confirmedStatus",
         allowed_values=_CONFIRMED_STATUS_VALUES,
-        default_value="pending",
+        default_value="",
+        allow_blank=True,
     )
     note = _normalize_optional_text(payload.get("note"), field="note", max_length=2048)
 
@@ -937,12 +1114,16 @@ def update_traffic_station_data(*, traffic_id: str, station_id: int, payload: di
             payload.get("deliveryStatus"),
             field="deliveryStatus",
             allowed_values=_DELIVERY_STATUS_VALUES,
+            default_value="",
+            allow_blank=True,
         )
     if "confirmedStatus" in payload:
         fields["confirmedStatus"] = _normalize_enum(
             payload.get("confirmedStatus"),
             field="confirmedStatus",
             allowed_values=_CONFIRMED_STATUS_VALUES,
+            default_value="",
+            allow_blank=True,
         )
     if "note" in payload:
         fields["note"] = _normalize_optional_text(payload.get("note"), field="note", max_length=2048)
@@ -1091,3 +1272,403 @@ def upsert_traffic_email_data(*, traffic_id: str, payload: dict, sent_by_user_id
 
     row = _safe_db_call(get_traffic_email_row, traffic_id=normalized_traffic_id)
     return _serialize_email_row(row)
+
+
+def bulk_save_traffic_data(*, payload: dict, sent_by_user_id: str | None = None) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError("Payload must be an object")
+
+    traffic_payload = payload.get("traffic")
+    if not isinstance(traffic_payload, dict):
+        raise ValueError("traffic is required")
+
+    traffic_id_raw = str(payload.get("trafficId") or "").strip()
+    update_traffic = bool(payload.get("updateTraffic"))
+
+    def _ensure_dict_items(value: object, *, field: str) -> list[dict]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise ValueError(f"{field} must be an array")
+        out: list[dict] = []
+        for index, item in enumerate(value):
+            if not isinstance(item, dict):
+                raise ValueError(f"{field}[{index}] must be an object")
+            out.append(item)
+        return out
+
+    def _ensure_int_items(value: object, *, field: str) -> list[int]:
+        if value is None:
+            return []
+        if not isinstance(value, list):
+            raise ValueError(f"{field} must be an array")
+        out: list[int] = []
+        for index, item in enumerate(value):
+            try:
+                parsed = int(item)
+            except (TypeError, ValueError) as exc:
+                raise ValueError(f"{field}[{index}] must be an integer") from exc
+            if parsed < 0:
+                raise ValueError(f"{field}[{index}] must be an unsigned integer")
+            out.append(parsed)
+        return out
+
+    flight_creates = _ensure_dict_items(payload.get("flightCreates"), field="flightCreates")
+    flight_updates = _ensure_dict_items(payload.get("flightUpdates"), field="flightUpdates")
+    flight_deletes = _ensure_int_items(payload.get("flightDeletes"), field="flightDeletes")
+    station_creates = _ensure_dict_items(payload.get("stationCreates"), field="stationCreates")
+    station_updates = _ensure_dict_items(payload.get("stationUpdates"), field="stationUpdates")
+    station_deletes = _ensure_int_items(payload.get("stationDeletes"), field="stationDeletes")
+
+    traffic_create_item: dict[str, object] | None = None
+    traffic_fields: dict[str, object] = {}
+    if traffic_id_raw:
+        normalized_traffic_id = _require_uuid4(traffic_id_raw, field="trafficId")
+        traffic_row = _ensure_traffic_exists(normalized_traffic_id)
+        _ensure_not_archived(traffic_row, action="bulk save")
+        if update_traffic:
+            traffic_fields = {
+                "campaign": _normalize_required_text(
+                    traffic_payload.get("campaign"),
+                    field="campaign",
+                    max_length=255,
+                ),
+                "status": _normalize_enum(
+                    traffic_payload.get("status"),
+                    field="status",
+                    allowed_values=_TRAFFIC_STATUSES,
+                ),
+                "note": _normalize_optional_text(
+                    traffic_payload.get("note"),
+                    field="note",
+                    max_length=2048,
+                ),
+            }
+    else:
+        account_code = require_account_code(traffic_payload.get("accountCode"), field="accountCode")
+        ensure_tradsphere_account_codes_exist([account_code])
+        traffic_create_item = {
+            "accountCode": account_code,
+            "campaign": _normalize_required_text(
+                traffic_payload.get("campaign"),
+                field="campaign",
+                max_length=255,
+            ),
+            "status": _normalize_enum(
+                traffic_payload.get("status"),
+                field="status",
+                allowed_values=_TRAFFIC_STATUSES,
+                default_value="draft",
+            ),
+            "note": _normalize_optional_text(
+                traffic_payload.get("note"),
+                field="note",
+                max_length=2048,
+            ),
+        }
+        normalized_traffic_id = str(uuid.uuid4())
+
+    existing_flights_rows, existing_stations_rows = run_parallel(
+        tasks=[
+            (_load_traffic_flights_safe, (normalized_traffic_id,)),
+            (_load_traffic_stations_safe, (normalized_traffic_id,)),
+        ],
+        api_name="tradsphere.traffic.bulk_save.prefetch",
+    )
+    existing_flights_by_id = {
+        int(row.get("id")): row
+        for row in existing_flights_rows
+        if row.get("id") is not None
+    }
+    existing_stations_by_id = {
+        int(row.get("id")): row
+        for row in existing_stations_rows
+        if row.get("id") is not None
+    }
+
+    normalized_flight_deletes = sorted({int(item) for item in flight_deletes if int(item) > 0}, reverse=True)
+    normalized_station_deletes = sorted({int(item) for item in station_deletes if int(item) > 0}, reverse=True)
+    for flight_id in normalized_flight_deletes:
+        if flight_id not in existing_flights_by_id:
+            raise NotFoundError("Flight record not found for this traffic")
+    for station_id in normalized_station_deletes:
+        if station_id not in existing_stations_by_id:
+            raise NotFoundError("Station record not found for this traffic")
+
+    normalized_flight_creates: list[dict] = []
+    for item in flight_creates:
+        flight_start = _normalize_date(item.get("flightStart"), field="flightStart")
+        flight_end = _normalize_date(item.get("flightEnd"), field="flightEnd")
+        if date.fromisoformat(flight_start) > date.fromisoformat(flight_end):
+            raise ValueError("flightStart must be on or before flightEnd")
+        normalized_flight_creates.append(
+            {
+                "flightStart": flight_start,
+                "flightEnd": flight_end,
+                "medium": _normalize_flight_medium(item.get("medium")),
+                "language": _normalize_flight_language(item.get("language")),
+                "length": _normalize_unsigned_int(
+                    item.get("length"),
+                    field="length",
+                    default=60,
+                    max_value=65535,
+                ),
+                "isci": _normalize_optional_text(item.get("isci"), field="isci", max_length=128),
+                "rotation": str(_normalize_rotation(item.get("rotation"))),
+                "fileUrl": _normalize_optional_text(item.get("fileUrl"), field="fileUrl", max_length=2048),
+                "scriptUrl": _normalize_optional_text(item.get("scriptUrl"), field="scriptUrl", max_length=2048),
+                "note": _normalize_optional_text(item.get("note"), field="note", max_length=2048),
+            }
+        )
+
+    normalized_flight_updates: list[dict] = []
+    for item in flight_updates:
+        flight_id_value = item.get("id")
+        if flight_id_value is None:
+            raise ValueError("flightUpdates[].id is required")
+        try:
+            flight_id = int(flight_id_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("flightUpdates[].id must be an unsigned integer") from exc
+        if flight_id < 0:
+            raise ValueError("flightUpdates[].id must be an unsigned integer")
+        existing_row = existing_flights_by_id.get(flight_id)
+        if existing_row is None:
+            raise NotFoundError("Flight record not found for this traffic")
+
+        fields: dict[str, object] = {}
+        if "flightStart" in item:
+            fields["flightStart"] = _normalize_date(item.get("flightStart"), field="flightStart")
+        if "flightEnd" in item:
+            fields["flightEnd"] = _normalize_date(item.get("flightEnd"), field="flightEnd")
+
+        resolved_start = fields.get("flightStart") or _to_iso_text(existing_row.get("flightStart"))
+        resolved_end = fields.get("flightEnd") or _to_iso_text(existing_row.get("flightEnd"))
+        if resolved_start and resolved_end and date.fromisoformat(str(resolved_start)) > date.fromisoformat(str(resolved_end)):
+            raise ValueError("flightStart must be on or before flightEnd")
+
+        if "medium" in item:
+            fields["medium"] = _normalize_flight_medium(item.get("medium"))
+        if "language" in item:
+            fields["language"] = _normalize_flight_language(item.get("language"))
+        if "length" in item:
+            fields["length"] = _normalize_unsigned_int(
+                item.get("length"),
+                field="length",
+                default=60,
+                max_value=65535,
+            )
+        if "isci" in item:
+            fields["isci"] = _normalize_optional_text(item.get("isci"), field="isci", max_length=128)
+        if "rotation" in item:
+            fields["rotation"] = str(_normalize_rotation(item.get("rotation")))
+        if "fileUrl" in item:
+            fields["fileUrl"] = _normalize_optional_text(item.get("fileUrl"), field="fileUrl", max_length=2048)
+        if "scriptUrl" in item:
+            fields["scriptUrl"] = _normalize_optional_text(item.get("scriptUrl"), field="scriptUrl", max_length=2048)
+        if "note" in item:
+            fields["note"] = _normalize_optional_text(item.get("note"), field="note", max_length=2048)
+        if not fields:
+            continue
+        normalized_flight_updates.append(
+            {
+                "id": flight_id,
+                "fields": fields,
+            }
+        )
+
+    station_codes_to_validate: list[str] = []
+    for item in station_creates:
+        station_codes_to_validate.append(
+            require_account_code(item.get("stationCode"), field="stationCode")
+        )
+    for item in station_updates:
+        if "stationCode" not in item:
+            continue
+        station_codes_to_validate.append(
+            require_account_code(item.get("stationCode"), field="stationCode")
+        )
+    if station_codes_to_validate:
+        ensure_station_codes_exist(station_codes_to_validate)
+
+    normalized_station_creates: list[dict] = []
+    for item in station_creates:
+        station_code = require_account_code(item.get("stationCode"), field="stationCode")
+        normalized_station_creates.append(
+            {
+                "stationCode": station_code,
+                "contactsSnapshot": _normalize_contacts_snapshot(item.get("contactsSnapshot")),
+                "deliveryMethod": _normalize_optional_text(item.get("deliveryMethod"), field="deliveryMethod", max_length=128),
+                "deliveryStatus": _normalize_enum(
+                    item.get("deliveryStatus"),
+                    field="deliveryStatus",
+                    allowed_values=_DELIVERY_STATUS_VALUES,
+                    default_value="",
+                    allow_blank=True,
+                ),
+                "confirmedStatus": _normalize_enum(
+                    item.get("confirmedStatus"),
+                    field="confirmedStatus",
+                    allowed_values=_CONFIRMED_STATUS_VALUES,
+                    default_value="",
+                    allow_blank=True,
+                ),
+                "note": _normalize_optional_text(item.get("note"), field="note", max_length=2048),
+            }
+        )
+
+    normalized_station_updates: list[dict] = []
+    for item in station_updates:
+        station_id_value = item.get("id")
+        if station_id_value is None:
+            raise ValueError("stationUpdates[].id is required")
+        try:
+            station_id = int(station_id_value)
+        except (TypeError, ValueError) as exc:
+            raise ValueError("stationUpdates[].id must be an unsigned integer") from exc
+        if station_id < 0:
+            raise ValueError("stationUpdates[].id must be an unsigned integer")
+        if station_id not in existing_stations_by_id:
+            raise NotFoundError("Station record not found for this traffic")
+
+        fields: dict[str, object] = {}
+        if "stationCode" in item:
+            station_code = require_account_code(item.get("stationCode"), field="stationCode")
+            fields["stationCode"] = station_code
+        if "contactsSnapshot" in item:
+            fields["contactsSnapshot"] = _normalize_contacts_snapshot(item.get("contactsSnapshot"))
+        if "deliveryMethod" in item:
+            fields["deliveryMethod"] = _normalize_optional_text(
+                item.get("deliveryMethod"),
+                field="deliveryMethod",
+                max_length=128,
+            )
+        if "deliveryStatus" in item:
+            fields["deliveryStatus"] = _normalize_enum(
+                item.get("deliveryStatus"),
+                field="deliveryStatus",
+                allowed_values=_DELIVERY_STATUS_VALUES,
+                default_value="",
+                allow_blank=True,
+            )
+        if "confirmedStatus" in item:
+            fields["confirmedStatus"] = _normalize_enum(
+                item.get("confirmedStatus"),
+                field="confirmedStatus",
+                allowed_values=_CONFIRMED_STATUS_VALUES,
+                default_value="",
+                allow_blank=True,
+            )
+        if "note" in item:
+            fields["note"] = _normalize_optional_text(item.get("note"), field="note", max_length=2048)
+        if not fields:
+            continue
+        normalized_station_updates.append(
+            {
+                "id": station_id,
+                "fields": fields,
+            }
+        )
+
+    email_item: dict | None = None
+    if bool(payload.get("upsertEmail")):
+        email_payload = payload.get("email")
+        if not isinstance(email_payload, dict):
+            raise ValueError("email is required when upsertEmail=true")
+
+        sent_status = _normalize_enum(
+            email_payload.get("sentStatus"),
+            field="sentStatus",
+            allowed_values=_EMAIL_SENT_STATUS_VALUES,
+            default_value="draft",
+        )
+        require_ready_fields = sent_status == "ready"
+        to_emails = _normalize_email_list(
+            email_payload.get("toEmails"),
+            field="toEmails",
+            required=require_ready_fields,
+        )
+        cc_emails = _normalize_email_list(
+            email_payload.get("ccEmails") or [],
+            field="ccEmails",
+            required=False,
+        )
+        bcc_emails = _normalize_email_list(
+            email_payload.get("bccEmails") or [],
+            field="bccEmails",
+            required=False,
+        )
+        subject = _normalize_optional_text(email_payload.get("subject"), field="subject", max_length=500)
+        body_text = str(email_payload.get("body") or "").strip()
+        if require_ready_fields:
+            if not subject:
+                raise ValueError("subject is required when sentStatus is ready")
+            if not body_text:
+                raise ValueError("body is required when sentStatus is ready")
+        if not subject:
+            subject = "(draft)"
+        if not body_text:
+            body_text = ""
+
+        sent_at_value = email_payload.get("sentAt")
+        if sent_at_value is not None and str(sent_at_value).strip() != "":
+            sent_at_text = str(sent_at_value).strip().replace("Z", "+00:00")
+            try:
+                _ = datetime.fromisoformat(sent_at_text)
+            except ValueError as exc:
+                raise ValueError("sentAt must be ISO datetime") from exc
+        else:
+            sent_at_text = None
+
+        last_send_attempt_value = email_payload.get("lastSendAttemptAt")
+        if last_send_attempt_value is not None and str(last_send_attempt_value).strip() != "":
+            last_send_attempt_text = str(last_send_attempt_value).strip().replace("Z", "+00:00")
+            try:
+                _ = datetime.fromisoformat(last_send_attempt_text)
+            except ValueError as exc:
+                raise ValueError("lastSendAttemptAt must be ISO datetime") from exc
+        else:
+            last_send_attempt_text = None
+
+        sent_by_value = _normalize_optional_text(
+            email_payload.get("sentByUserId") or sent_by_user_id,
+            field="sentByUserId",
+            max_length=128,
+        )
+        smtp_message_id = _normalize_optional_text(email_payload.get("smtpMessageId"), field="smtpMessageId", max_length=500)
+        last_send_error = _normalize_optional_text(email_payload.get("lastSendError"), field="lastSendError", max_length=8192)
+
+        email_item = {
+            "trafficId": normalized_traffic_id,
+            "toEmails": json.dumps(to_emails),
+            "ccEmails": json.dumps(cc_emails) if cc_emails else None,
+            "bccEmails": json.dumps(bcc_emails) if bcc_emails else None,
+            "subject": subject,
+            "body": body_text,
+            "sentStatus": sent_status,
+            "sentAt": sent_at_text,
+            "sentByUserId": sent_by_value,
+            "smtpMessageId": smtp_message_id,
+            "lastSendAttemptAt": last_send_attempt_text,
+            "lastSendError": last_send_error,
+        }
+
+    _safe_db_call(
+        save_traffic_bulk_changes,
+        traffic_id=normalized_traffic_id,
+        traffic_create_item=traffic_create_item,
+        traffic_fields=traffic_fields if update_traffic else {},
+        flight_creates=normalized_flight_creates,
+        flight_updates=normalized_flight_updates,
+        flight_deletes=normalized_flight_deletes,
+        station_creates=normalized_station_creates,
+        station_updates=normalized_station_updates,
+        station_deletes=normalized_station_deletes,
+        email_item=email_item,
+    )
+
+    detail = get_traffic_detail_data(traffic_id=normalized_traffic_id)
+    return {
+        "trafficId": normalized_traffic_id,
+        "detail": detail,
+    }

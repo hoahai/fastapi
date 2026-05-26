@@ -1,5 +1,6 @@
 import unittest
 from types import SimpleNamespace
+from unittest.mock import patch
 
 from fastapi import HTTPException
 
@@ -26,6 +27,7 @@ class TrafficRouteContractTests(unittest.TestCase):
             ("GET", "/v1/traffic/account"),
             ("GET", "/v1/traffic"),
             ("POST", "/v1/traffic"),
+            ("POST", "/v1/traffic/bulk-save"),
             ("PUT", "/v1/traffic"),
             ("POST", "/v1/traffic/ready"),
             ("POST", "/v1/traffic/archive"),
@@ -202,6 +204,44 @@ class TrafficMissingQueryParamTests(unittest.TestCase):
             payload={},
             expected_detail="trafficId is required",
         )
+
+    def test_station_candidates_accept_optional_est_num_filters(self):
+        with patch.object(
+            trafficStations,
+            "list_station_candidates_for_flight_range_data",
+            return_value={"ok": True},
+        ) as list_mock:
+            result = trafficStations.get_traffic_station_candidates_route(
+                account_code="TAAA",
+                flight_start="2026-06-01",
+                flight_end="2026-06-30",
+                est_nums=["26001,26002"],
+                est_num=None,
+                languages=None,
+                language=None,
+            )
+
+        self.assertEqual(result, {"ok": True})
+        list_mock.assert_called_once_with(
+            account_code="TAAA",
+            flight_start="2026-06-01",
+            flight_end="2026-06-30",
+            est_nums=[26001, 26002],
+            languages=[],
+        )
+
+    def test_station_candidates_reject_invalid_est_num_filter(self):
+        with self.assertRaises(HTTPException) as ctx:
+            trafficStations.get_traffic_station_candidates_route(
+                account_code="TAAA",
+                flight_start="2026-06-01",
+                flight_end="2026-06-30",
+                est_nums=["BAD"],
+                est_num=None,
+                languages=None,
+                language=None,
+            )
+        self.assertEqual(ctx.exception.status_code, 400)
 
 
 if __name__ == "__main__":

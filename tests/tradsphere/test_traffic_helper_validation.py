@@ -80,7 +80,7 @@ class TrafficHelperValidationTests(unittest.TestCase):
                 )
             self.assertEqual(str(ctx_body.exception), "body is required when sentStatus is ready")
 
-    def test_flight_requires_file_url_and_rotation_range(self):
+    def test_flight_allows_missing_file_url_and_validates_rotation_range(self):
         traffic_id = str(uuid.uuid4())
 
         base_payload = {
@@ -92,14 +92,23 @@ class TrafficHelperValidationTests(unittest.TestCase):
             traffic_helper,
             "_ensure_traffic_exists",
             return_value={"id": traffic_id, "status": "draft"},
+        ), patch.object(
+            traffic_helper,
+            "_safe_db_call",
+            side_effect=[101, {"id": 101, "trafficId": traffic_id, "rotation": 100}],
         ):
-            with self.assertRaises(ValueError) as ctx_file:
-                traffic_helper.create_traffic_flight_data(
-                    traffic_id=traffic_id,
-                    payload=dict(base_payload),
-                )
-            self.assertEqual(str(ctx_file.exception), "fileUrl is required")
+            result = traffic_helper.create_traffic_flight_data(
+                traffic_id=traffic_id,
+                payload=dict(base_payload),
+            )
+            self.assertEqual(result["id"], 101)
+            self.assertEqual(result["trafficId"], traffic_id)
 
+        with patch.object(
+            traffic_helper,
+            "_ensure_traffic_exists",
+            return_value={"id": traffic_id, "status": "draft"},
+        ):
             with self.assertRaises(ValueError) as ctx_rotation:
                 traffic_helper.create_traffic_flight_data(
                     traffic_id=traffic_id,
@@ -134,9 +143,9 @@ class TrafficHelperValidationTests(unittest.TestCase):
             traffic_helper,
             "_safe_db_call",
             return_value=[
-                {"stationCode": "kabc", "stationName": "ABC"},
-                {"stationCode": "KABC", "stationName": "ABC Duplicate"},
-                {"stationCode": "Kxyz", "stationName": "XYZ"},
+                {"estNum": 26001, "estNumNote": "June test", "estNumMedium": "tv", "stationCode": "kabc", "stationName": "ABC"},
+                {"estNum": 26001, "estNumNote": "June test", "estNumMedium": "tv", "stationCode": "KABC", "stationName": "ABC Duplicate"},
+                {"estNum": 26002, "estNumNote": "", "estNumMedium": "ra", "stationCode": "Kxyz", "stationName": "XYZ"},
             ],
         ) as safe_db_call_mock, patch.object(
             traffic_helper,
@@ -159,6 +168,13 @@ class TrafficHelperValidationTests(unittest.TestCase):
         self.assertEqual(result["flightStart"], "2026-06-01")
         self.assertEqual(result["flightEnd"], "2026-06-30")
         self.assertEqual(
+            result["estNums"],
+            [
+                {"estNum": 26001, "note": "June test", "medium": "TV", "stationCount": 1},
+                {"estNum": 26002, "note": None, "medium": "RA", "stationCount": 1},
+            ],
+        )
+        self.assertEqual(
             result["stations"],
             [
                 {
@@ -176,11 +192,74 @@ class TrafficHelperValidationTests(unittest.TestCase):
             ],
         )
         self.assertEqual(result["summary"]["candidateCount"], 2)
+        self.assertEqual(result["summary"]["estNumCount"], 2)
         safe_db_call_mock.assert_called_once_with(
             traffic_helper.list_schedule_station_candidates_for_account_range,
             account_code="TAAA",
             flight_start="2026-06-01",
             flight_end="2026-06-30",
+            est_nums=[],
+            languages=[],
+        )
+
+    def test_station_candidates_forward_est_num_filter(self):
+        with patch.object(
+            traffic_helper,
+            "ensure_tradsphere_account_codes_exist",
+            return_value=None,
+        ), patch.object(
+            traffic_helper,
+            "_safe_db_call",
+            return_value=[],
+        ) as safe_db_call_mock, patch.object(
+            traffic_helper,
+            "list_stations_data",
+            return_value=[],
+        ):
+            traffic_helper.list_station_candidates_for_flight_range_data(
+                account_code="TAAA",
+                flight_start="2026-06-01",
+                flight_end="2026-06-30",
+                est_nums=[26002, 26001, 26001],
+            )
+
+        safe_db_call_mock.assert_called_once_with(
+            traffic_helper.list_schedule_station_candidates_for_account_range,
+            account_code="TAAA",
+            flight_start="2026-06-01",
+            flight_end="2026-06-30",
+            est_nums=[26001, 26002],
+            languages=[],
+        )
+
+    def test_station_candidates_forward_language_filter(self):
+        with patch.object(
+            traffic_helper,
+            "ensure_tradsphere_account_codes_exist",
+            return_value=None,
+        ), patch.object(
+            traffic_helper,
+            "_safe_db_call",
+            return_value=[],
+        ) as safe_db_call_mock, patch.object(
+            traffic_helper,
+            "list_stations_data",
+            return_value=[],
+        ):
+            traffic_helper.list_station_candidates_for_flight_range_data(
+                account_code="TAAA",
+                flight_start="2026-06-01",
+                flight_end="2026-06-30",
+                languages=["spanish", "english", "SPANISH"],
+            )
+
+        safe_db_call_mock.assert_called_once_with(
+            traffic_helper.list_schedule_station_candidates_for_account_range,
+            account_code="TAAA",
+            flight_start="2026-06-01",
+            flight_end="2026-06-30",
+            est_nums=[],
+            languages=["English", "Spanish"],
         )
 
 
