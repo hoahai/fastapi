@@ -115,6 +115,13 @@ export type StationModalSaveResult = {
   };
 };
 
+export type StationModalDetailLoadResult = {
+  stationCode: string;
+  draft: StationModalDraft;
+  source: "network";
+  fetchedAt: number;
+};
+
 type DeliveryMethodEditorForm = {
   id: number | null;
   name: string;
@@ -212,10 +219,17 @@ interface StationModalProps {
   onOpenChange: (open: boolean) => void;
   mode: StationModalMode;
   canEdit?: boolean;
+  modalTitleOverride?: string;
+  modalDescriptionOverride?: string;
+  showDeliveryMethodSection?: boolean;
+  showContactHeaderActions?: boolean;
+  showContactCardActions?: boolean;
+  showContactCopyAction?: boolean;
   stationCode?: string | null;
   stationCatalog?: StationCatalogItem[];
   headers: HeadersInit;
   onSuccess?: (result: StationModalSaveResult) => Promise<void> | void;
+  onDetailLoaded?: (result: StationModalDetailLoadResult) => Promise<void> | void;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -1387,10 +1401,17 @@ export function StationModal({
   onOpenChange,
   mode,
   canEdit = true,
+  modalTitleOverride,
+  modalDescriptionOverride,
+  showDeliveryMethodSection = true,
+  showContactHeaderActions = true,
+  showContactCardActions = true,
+  showContactCopyAction = true,
   stationCode,
   stationCatalog = [],
   headers,
   onSuccess,
+  onDetailLoaded,
 }: StationModalProps) {
   const { requestJson } = useApiRequest();
   const toast = useToast();
@@ -1691,6 +1712,12 @@ export function StationModal({
           source: "network",
           fetchedAt,
         });
+        void onDetailLoaded?.({
+          stationCode: normalizedStationCode,
+          draft: nextDraft,
+          source: "network",
+          fetchedAt,
+        });
         const nextCacheStatus = {
           source: "network",
           fetchedAt,
@@ -1723,7 +1750,7 @@ export function StationModal({
     return () => {
       isMounted = false;
     };
-  }, [detailRefreshToken, headers, mode, open, requestJson, stationCode]);
+  }, [detailRefreshToken, headers, mode, onDetailLoaded, open, requestJson, stationCode]);
 
   useEffect(() => {
     if (!open || hasUnsavedChanges) {
@@ -2681,10 +2708,10 @@ export function StationModal({
     return deliveryMethodOptions.filter((item) => item.searchText.includes(query));
   }, [deliveryMethodOptions, deliveryMethodSearch]);
 
-  const modalTitle = isEditMode ? "Edit Station" : "Create Station";
-  const description = isEditMode
+  const modalTitle = modalTitleOverride || (isEditMode ? "Edit Station" : "Create Station");
+  const description = modalDescriptionOverride || (isEditMode
     ? "Update station, delivery method, and linked contacts in one draft."
-    : "Create a station with delivery method and contacts using one local draft.";
+    : "Create a station with delivery method and contacts using one local draft.");
   const submitLabel = isEditMode ? "Save Changes" : "Create Station";
   const detailStatusText = isEditMode
     ? isLoadingDetail
@@ -2704,12 +2731,13 @@ export function StationModal({
     status: existingContactsCacheStatus,
   });
   const shouldShowSubmitButton = canEdit && (isSubmitting || canSubmit);
+  const dialogWidthClass = showDeliveryMethodSection ? "w-[min(88vw,1320px)]" : "w-[min(88vw,980px)]";
 
   return (
     <>
       <Dialog open={open} onOpenChange={handleDialogOpenChange}>
         <DialogContent
-          className="flex max-h-[90vh] w-[min(88vw,1320px)] max-w-none flex-col overflow-hidden rounded-xl bg-white px-8 py-6"
+          className={`flex max-h-[90vh] ${dialogWidthClass} max-w-none flex-col overflow-hidden rounded-xl bg-white px-8 py-6`}
           onEscapeKeyDown={(event) => {
             if (isSubmitting) {
               event.preventDefault();
@@ -2762,19 +2790,24 @@ export function StationModal({
                   }}
                 />
 
-                <StationDeliveryMethodSection
-                  deliveryMethod={draft.deliveryMethod}
-                  isSubmitting={isSubmitting}
-                  isReadOnly={isReadOnly}
-                  onSelectDeliveryMethod={openDeliveryMethodSelector}
-                  onAddDeliveryMethod={openCreateDeliveryMethodEditor}
-                  onEditDeliveryMethod={openEditDeliveryMethodEditor}
-                />
+                {showDeliveryMethodSection ? (
+                  <StationDeliveryMethodSection
+                    deliveryMethod={draft.deliveryMethod}
+                    isSubmitting={isSubmitting}
+                    isReadOnly={isReadOnly}
+                    onSelectDeliveryMethod={openDeliveryMethodSelector}
+                    onAddDeliveryMethod={openCreateDeliveryMethodEditor}
+                    onEditDeliveryMethod={openEditDeliveryMethodEditor}
+                  />
+                ) : null}
 
                 <StationContactsSection
                   contacts={draft.contacts}
                   isSubmitting={isSubmitting}
                   isReadOnly={isReadOnly}
+                  showHeaderActions={showContactHeaderActions}
+                  showContactActions={showContactCardActions}
+                  showCopyAction={showContactCopyAction}
                   onAddExistingContact={openAddExistingContactDialog}
                   onCreateContact={openCreateContactEditor}
                   onEditContact={openEditContactEditor}

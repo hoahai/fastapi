@@ -1436,7 +1436,7 @@ def list_schedule_invoice_checklist_expected_rows(
 
     cache_key = _build_db_read_cache_key(
         "invoice_checklist_expected_rows",
-        "schema=v1",
+        "schema=v2",
         f"schedules_table={schedules_table}",
         f"est_nums_table={est_nums_table}",
         f"tradsphere_accounts_table={tradsphere_accounts_table}",
@@ -1454,7 +1454,10 @@ def list_schedule_invoice_checklist_expected_rows(
         "SELECT DISTINCT "
         "UPPER(TRIM(en.accountCode)) AS accountCode, "
         "s.estNum AS estNum, "
-        "UPPER(TRIM(s.stationCode)) AS stationCode "
+        "UPPER(TRIM(s.stationCode)) AS stationCode, "
+        "en.flightStart AS flightStart, "
+        "en.flightEnd AS flightEnd, "
+        "ta.billingType AS billingType "
         f"FROM {schedules_table} s "
         f"INNER JOIN {est_nums_table} en ON en.estNum = s.estNum "
         f"INNER JOIN {tradsphere_accounts_table} ta ON UPPER(ta.accountCode) = UPPER(en.accountCode) "

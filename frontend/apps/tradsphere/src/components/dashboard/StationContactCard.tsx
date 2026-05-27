@@ -29,6 +29,7 @@ interface StationContactCardProps {
   onCopy: () => void;
   showEditAction?: boolean;
   showRemoveAction?: boolean;
+  showCopyAction?: boolean;
 }
 
 function displayValue(value?: string | null): string {
@@ -84,6 +85,7 @@ export function StationContactCard({
   onCopy,
   showEditAction = true,
   showRemoveAction = true,
+  showCopyAction = true,
 }: StationContactCardProps) {
   const fullName = displayValue(contact.fullName);
   const email = displayValue(contact.email);
@@ -131,13 +133,15 @@ export function StationContactCard({
               className="!h-6 !w-6 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-3.5 [&_svg]:!w-3.5 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
             />
           ) : null}
-          <ActionIconButton
-            icon={<Copy />}
-            tooltip="Copy contact"
-            onClick={onCopy}
-            disabled={isSubmitting}
-            className="!h-6 !w-6 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-3.5 [&_svg]:!w-3.5 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
-          />
+          {showCopyAction ? (
+            <ActionIconButton
+              icon={<Copy />}
+              tooltip="Copy contact"
+              onClick={onCopy}
+              disabled={isSubmitting}
+              className="!h-6 !w-6 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-3.5 [&_svg]:!w-3.5 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
+            />
+          ) : null}
         </div>
       </div>
 

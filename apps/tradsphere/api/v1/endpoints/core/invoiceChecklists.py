@@ -251,7 +251,7 @@ def sync_invoice_checklists_period_route(
         - previewOnly is optional (default false)
         - year must be between 1901 and 2155
         - month must be between 1 and 12
-        - Generates expected rows from schedules where broadcastYear/year and broadcastMonth/month exactly match the selected period
+        - Generates expected rows from schedules where broadcastYear/year and broadcastMonth/month match the selected period, then applies account billingType period semantics (Calendar excludes trailing overlap week; Broadcast keeps full broadcast weeks)
         - Does not delete checklist rows or overwrite existing checklist/station status, notes, or attachments
         - Adds only missing checklist accounts/station rows required by the selected period schedule
     """

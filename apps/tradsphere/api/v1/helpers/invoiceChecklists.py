@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date
+from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 import json
 import re
@@ -15,6 +15,7 @@ from apps.tradsphere.api.v1.helpers.accountValidation import (
     ensure_master_account_codes_exist,
     ensure_station_codes_exist,
 )
+from apps.tradsphere.api.v1.helpers.estNums import get_est_num_broadcast_weeks
 from apps.tradsphere.api.v1.helpers.stations import build_rep_contact_full_name, list_stations_data
 from apps.tradsphere.api.v1.helpers.dbQueries import (
     count_inv_note_attachments,
@@ -1935,6 +1936,42 @@ def _build_expected_schedule_pairs_by_account(
     year: int,
     month: int,
 ) -> dict[str, set[tuple[int, str]]]:
+    def _coerce_to_date(value: object, *, field: str) -> date:
+        if isinstance(value, datetime):
+            return value.date()
+        if isinstance(value, date):
+            return value
+        text = str(value or "").strip()
+        if not text:
+            raise ValueError(f"{field} is required")
+        try:
+            return date.fromisoformat(text[:10])
+        except ValueError as exc:
+            raise ValueError(f"{field} must be ISO date YYYY-MM-DD") from exc
+
+    def _matches_selected_period(
+        *,
+        flight_start: object,
+        flight_end: object,
+        billing_type: object,
+        selected_year: int,
+        selected_month: int,
+    ) -> bool:
+        start = _coerce_to_date(flight_start, field="flightStart")
+        end = _coerce_to_date(flight_end, field="flightEnd")
+        if start > end:
+            return False
+        weeks = get_est_num_broadcast_weeks(
+            flight_start=start,
+            flight_end=end,
+            billing_type=str(billing_type or "").strip(),
+        )
+        for week in weeks:
+            week_end = week["weekEnd"]
+            if int(week_end.year) == int(selected_year) and int(week_end.month) == int(selected_month):
+                return True
+        return False
+
     rows = _safe_db_call(
         list_schedule_invoice_checklist_expected_rows,
         broadcast_year=int(year),
@@ -1947,6 +1984,18 @@ def _build_expected_schedule_pairs_by_account(
         station_code = str(row.get("stationCode") or "").strip().upper()
         if not account_code or est_num is None or not station_code:
             continue
+        try:
+            if not _matches_selected_period(
+                flight_start=row.get("flightStart"),
+                flight_end=row.get("flightEnd"),
+                billing_type=row.get("billingType"),
+                selected_year=int(year),
+                selected_month=int(month),
+            ):
+                continue
+        except ValueError:
+            # Keep legacy behavior for malformed schedule date rows.
+            pass
         mapped.setdefault(account_code, set()).add((int(est_num), station_code))
     return mapped
 

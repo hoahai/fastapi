@@ -8,6 +8,9 @@ interface StationContactsSectionProps {
   contacts: StationDraftContact[];
   isSubmitting: boolean;
   isReadOnly?: boolean;
+  showHeaderActions?: boolean;
+  showContactActions?: boolean;
+  showCopyAction?: boolean;
   onAddExistingContact: () => void;
   onCreateContact: () => void;
   onEditContact: (index: number) => void;
@@ -19,6 +22,9 @@ export function StationContactsSection({
   contacts,
   isSubmitting,
   isReadOnly = false,
+  showHeaderActions = true,
+  showContactActions = true,
+  showCopyAction = true,
   onAddExistingContact,
   onCreateContact,
   onEditContact,
@@ -30,20 +36,24 @@ export function StationContactsSection({
     <section className="flex min-h-[420px] min-w-0 flex-col space-y-3">
       <div className="flex min-h-10 items-center justify-between gap-3 border-b border-slate-200 pb-2">
         <h3 className="text-sm font-semibold text-slate-800">Contacts</h3>
-        <div className="flex flex-wrap items-center justify-end gap-1">
-          <ActionIconButton
-            icon={<CirclePlus />}
-            tooltip="Create contact"
-            onClick={onCreateContact}
-            disabled={isActionDisabled}
-          />
-          <ActionIconButton
-            icon={<UserPlus />}
-            tooltip="Add existing contact"
-            onClick={onAddExistingContact}
-            disabled={isActionDisabled}
-          />
-        </div>
+        {showHeaderActions ? (
+          <div className="flex flex-wrap items-center justify-end gap-1">
+            <ActionIconButton
+              icon={<CirclePlus />}
+              tooltip="Create contact"
+              onClick={onCreateContact}
+              disabled={isActionDisabled}
+            />
+            <ActionIconButton
+              icon={<UserPlus />}
+              tooltip="Add existing contact"
+              onClick={onAddExistingContact}
+              disabled={isActionDisabled}
+            />
+          </div>
+        ) : (
+          <div aria-hidden className="h-8 w-[76px]" />
+        )}
       </div>
 
       {contacts.length ? (
@@ -53,11 +63,14 @@ export function StationContactsSection({
               key={`${contact.contactId ?? contact.clientKey ?? index}:${contact.email ?? index}:${index}`}
               contact={contact}
               isSubmitting={isSubmitting}
-                onEdit={() => onEditContact(index)}
-                onRemove={() => onRemoveContact(index)}
-                onCopy={() => onCopyContact(index)}
-                isReadOnly={isReadOnly}
-              />
+              onEdit={() => onEditContact(index)}
+              onRemove={() => onRemoveContact(index)}
+              onCopy={() => onCopyContact(index)}
+              isReadOnly={isReadOnly}
+              showEditAction={showContactActions}
+              showRemoveAction={showContactActions}
+              showCopyAction={showCopyAction}
+            />
           ))}
         </div>
       ) : (
