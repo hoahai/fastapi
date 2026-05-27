@@ -1054,6 +1054,8 @@ class InvoiceChecklistBulkSaveFlowTests(unittest.TestCase):
                     "stationIds": {"-10": 910},
                     "noteIds": {"-20": 920},
                 }
+            if func is inv.list_inv_checklist_station_rows_for_checklists:
+                return []
             raise AssertionError(f"Unexpected db helper call: {getattr(func, '__name__', func)}")
 
         payload = {
@@ -1368,9 +1370,13 @@ class InvoiceChecklistUiLoadRecoveryTests(unittest.TestCase):
         with patch.object(inv, "list_invoice_checklists_data", side_effect=_list_side_effect), patch.object(
             inv, "get_invoice_checklists_data", side_effect=_detail_side_effect
         ), patch.object(
+            inv, "list_inv_checklist_periods", return_value=[{"year": 2026, "month": 5}]
+        ), patch.object(
             inv, "_build_account_names_map", return_value={"TAAA": "Alpha Motors"}
         ), patch.object(
             inv, "_build_checklist_station_search_map", return_value={}
+        ), patch.object(
+            inv, "list_inv_checklist_station_rows_for_checklists", return_value=[]
         ), patch.object(
             inv, "_build_expected_schedule_pairs_by_account", return_value={}
         ), patch.object(
