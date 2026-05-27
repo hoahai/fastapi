@@ -1,18 +1,5 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { Suspense, lazy, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 
-import AccountsPage from "@tradsphere/pages/AccountsPage";
-import EstimateNumbersPage from "@tradsphere/pages/EstimateNumbersPage";
-import ContactsPage from "@tradsphere/pages/ContactsPage";
-import StationsPage from "@tradsphere/pages/StationsPage";
-import InvoiceChecklistPage from "@tradsphere/pages/InvoiceChecklistPage";
-import TrafficPage from "@tradsphere/pages/TrafficPage";
-import ShiftzyEmployeesPage from "@shiftzy/pages/ShiftzyEmployeesPage";
-import ShiftzySchedulePage from "@shiftzy/pages/ShiftzySchedulePage";
-import AdminUsersPage from "@shell/pages/AdminUsersPage";
-import AppScopedAdminPage from "@shell/pages/AppScopedAdminPage";
-import ProfilePage from "@shell/pages/ProfilePage";
-import { WorkspaceNotFoundPage } from "@home/pages/WorkspaceNotFoundPage";
-import { WorkspacePortalPage } from "@home/pages/WorkspacePortalPage";
 import { AppShell } from "@shell/components/layout/AppShell";
 import { APP_NAV_ITEMS, HOME_ROUTE } from "@shell/components/layout/navigation";
 import { ToastProvider } from "@shell/components/ui/toast";
@@ -23,6 +10,24 @@ import { canAccessAppRoute } from "@shared/auth/pagePermissions";
 import { hasAppViewAccess, hasSuperAdminAccess } from "@shared/auth/permissions";
 import { AuthCallbackPage, InviteAcceptPage, LoginPage, PendingInvitePage, UnauthorizedPage, UpdatePasswordPage } from "@shared/auth/pages";
 import { useAuth } from "@shared/auth/useAuth";
+
+const AccountsPage = lazy(() => import("@tradsphere/pages/AccountsPage"));
+const EstimateNumbersPage = lazy(() => import("@tradsphere/pages/EstimateNumbersPage"));
+const ContactsPage = lazy(() => import("@tradsphere/pages/ContactsPage"));
+const StationsPage = lazy(() => import("@tradsphere/pages/StationsPage"));
+const InvoiceChecklistPage = lazy(() => import("@tradsphere/pages/InvoiceChecklistPage"));
+const TrafficPage = lazy(() => import("@tradsphere/pages/TrafficPage"));
+const ShiftzyEmployeesPage = lazy(() => import("@shiftzy/pages/ShiftzyEmployeesPage"));
+const ShiftzySchedulePage = lazy(() => import("@shiftzy/pages/ShiftzySchedulePage"));
+const AdminUsersPage = lazy(() => import("@shell/pages/AdminUsersPage"));
+const AppScopedAdminPage = lazy(() => import("@shell/pages/AppScopedAdminPage"));
+const ProfilePage = lazy(() => import("@shell/pages/ProfilePage"));
+const WorkspaceNotFoundPage = lazy(() =>
+  import("@home/pages/WorkspaceNotFoundPage").then((module) => ({ default: module.WorkspaceNotFoundPage })),
+);
+const WorkspacePortalPage = lazy(() =>
+  import("@home/pages/WorkspacePortalPage").then((module) => ({ default: module.WorkspacePortalPage })),
+);
 
 function getFrontendPath(pathname: string): string {
   const normalizedPath = pathname || "/";
@@ -161,6 +166,10 @@ function RedirectToHome() {
   }, []);
 
   return <div className="p-6 text-sm text-slate-600">Redirecting to workspace home...</div>;
+}
+
+function RouteChunkFallback() {
+  return <AuthLoadingFallback message="Loading page..." />;
 }
 
 function isAccessResolutionPending(
@@ -454,32 +463,44 @@ function App() {
           <RequirePermission permission="tradsphere.viewer" fallback={<RedirectToHome />}>
             {frontendPath === "/tradsphere/home" ? (
               <RequireAppPageRoute appCode="tradsphere" route="/tradsphere/home" fallback={<RedirectToHome />}>
-                <AccountsPage />
+                <Suspense fallback={<RouteChunkFallback />}>
+                  <AccountsPage />
+                </Suspense>
               </RequireAppPageRoute>
             ) : null}
             {frontendPath === "/tradsphere/estnums" ? (
               <RequireAppPageRoute appCode="tradsphere" route="/tradsphere/estnums" fallback={<RedirectToHome />}>
-                <EstimateNumbersPage />
+                <Suspense fallback={<RouteChunkFallback />}>
+                  <EstimateNumbersPage />
+                </Suspense>
               </RequireAppPageRoute>
             ) : null}
             {frontendPath === "/tradsphere/contacts" ? (
               <RequireAppPageRoute appCode="tradsphere" route="/tradsphere/contacts" fallback={<RedirectToHome />}>
-                <ContactsPage />
+                <Suspense fallback={<RouteChunkFallback />}>
+                  <ContactsPage />
+                </Suspense>
               </RequireAppPageRoute>
             ) : null}
             {frontendPath === "/tradsphere/stations" ? (
               <RequireAppPageRoute appCode="tradsphere" route="/tradsphere/stations" fallback={<RedirectToHome />}>
-                <StationsPage />
+                <Suspense fallback={<RouteChunkFallback />}>
+                  <StationsPage />
+                </Suspense>
               </RequireAppPageRoute>
             ) : null}
             {frontendPath === "/tradsphere/traffic" ? (
               <RequireAppPageRoute appCode="tradsphere" route="/tradsphere/traffic" fallback={<RedirectToHome />}>
-                <TrafficPage />
+                <Suspense fallback={<RouteChunkFallback />}>
+                  <TrafficPage />
+                </Suspense>
               </RequireAppPageRoute>
             ) : null}
             {frontendPath === "/tradsphere/invoice-checklists" ? (
               <RequireAppPageRoute appCode="tradsphere" route="/tradsphere/invoice-checklists" fallback={<RedirectToHome />}>
-                <InvoiceChecklistPage />
+                <Suspense fallback={<RouteChunkFallback />}>
+                  <InvoiceChecklistPage />
+                </Suspense>
               </RequireAppPageRoute>
             ) : null}
           </RequirePermission>
@@ -495,12 +516,16 @@ function App() {
           <RequireAppView appCode="shiftzy" fallback={<RedirectToHome />}>
             {frontendPath === "/shiftzy/home" ? (
               <RequireAppPageRoute appCode="shiftzy" route="/shiftzy/home" fallback={<RedirectToHome />}>
-                <ShiftzySchedulePage />
+                <Suspense fallback={<RouteChunkFallback />}>
+                  <ShiftzySchedulePage />
+                </Suspense>
               </RequireAppPageRoute>
             ) : null}
             {frontendPath === "/shiftzy/employees" ? (
               <RequireAppPageRoute appCode="shiftzy" route="/shiftzy/employees" fallback={<RedirectToHome />}>
-                <ShiftzyEmployeesPage />
+                <Suspense fallback={<RouteChunkFallback />}>
+                  <ShiftzyEmployeesPage />
+                </Suspense>
               </RequireAppPageRoute>
             ) : null}
           </RequireAppView>
@@ -512,7 +537,11 @@ function App() {
   function renderScopedAppAdminRoute(appCode: string) {
     const normalizedAppCode = String(appCode || "").trim().toLowerCase();
     if (!normalizedAppCode) {
-      return <WorkspaceNotFoundPage onNavigate={navigate} />;
+      return (
+        <Suspense fallback={<RouteChunkFallback />}>
+          <WorkspaceNotFoundPage onNavigate={navigate} />
+        </Suspense>
+      );
     }
     const appLabel = formatAppLabel(normalizedAppCode);
     return (
@@ -520,7 +549,9 @@ function App() {
         <RequireTenantAccess fallback={<UnauthorizedPage />}>
           <RequireAppView appCode={normalizedAppCode} fallback={<UnauthorizedPage />}>
             <RequireAnyPermission permissions={["workspace.super_admin", `${normalizedAppCode}.admin`]} fallback={<UnauthorizedPage />}>
-              <AppScopedAdminPage appCode={normalizedAppCode} appName={appLabel} />
+              <Suspense fallback={<RouteChunkFallback />}>
+                <AppScopedAdminPage appCode={normalizedAppCode} appName={appLabel} />
+              </Suspense>
             </RequireAnyPermission>
           </RequireAppView>
         </RequireTenantAccess>
@@ -533,7 +564,9 @@ function App() {
       <RequireSignedIn>
         <RequireTenantAccess fallback={<UnauthorizedPage />}>
           <RequireAnyPermission permissions={["workspace.super_admin", "tradsphere.viewer"]} fallback={<UnauthorizedPage />}>
-            <ProfilePage />
+            <Suspense fallback={<RouteChunkFallback />}>
+              <ProfilePage />
+            </Suspense>
           </RequireAnyPermission>
         </RequireTenantAccess>
       </RequireSignedIn>
@@ -545,7 +578,9 @@ function App() {
       <RequireSignedIn>
         <RequireTenantAccess fallback={<UnauthorizedPage />}>
           <RequireAdminScope fallback={<UnauthorizedPage />}>
-            <AdminUsersPage />
+            <Suspense fallback={<RouteChunkFallback />}>
+              <AdminUsersPage />
+            </Suspense>
           </RequireAdminScope>
         </RequireTenantAccess>
       </RequireSignedIn>
@@ -567,10 +602,16 @@ function App() {
       {scopedAdminAppCode ? renderScopedAppAdminRoute(scopedAdminAppCode) : null}
       {frontendPath === HOME_ROUTE ? (
         <RequireSignedIn>
-          <WorkspacePortalPage onNavigate={navigate} />
+          <Suspense fallback={<RouteChunkFallback />}>
+            <WorkspacePortalPage onNavigate={navigate} />
+          </Suspense>
         </RequireSignedIn>
       ) : null}
-      {!knownRoutes.has(frontendPath) && !inviteToken && !scopedAdminAppCode ? <WorkspaceNotFoundPage onNavigate={navigate} /> : null}
+      {!knownRoutes.has(frontendPath) && !inviteToken && !scopedAdminAppCode ? (
+        <Suspense fallback={<RouteChunkFallback />}>
+          <WorkspaceNotFoundPage onNavigate={navigate} />
+        </Suspense>
+      ) : null}
     </>
   );
 
