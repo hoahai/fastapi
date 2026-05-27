@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import json
+import socket
 from datetime import datetime, timezone
+from time import sleep
 from typing import Any
 from urllib.error import HTTPError, URLError
 from urllib.parse import urlencode
@@ -33,6 +35,17 @@ def _is_jwt_like(value: str) -> bool:
 
 
 class SupabaseRestClient:
+    _REQUEST_TIMEOUT_SECONDS = 15
+    _TIMEOUT_RETRY_ATTEMPTS = 3
+    _TIMEOUT_RETRY_BACKOFF_SECONDS = (0.25, 0.75)
+
+    @staticmethod
+    def _is_timeout_url_error(exc: URLError) -> bool:
+        reason = getattr(exc, "reason", None)
+        if isinstance(reason, (TimeoutError, socket.timeout)):
+            return True
+        return "timed out" in str(reason or "").lower()
+
     def __init__(self) -> None:
         self.base_url = get_supabase_url()
         self.anon_key = get_supabase_anon_key()
@@ -113,25 +126,45 @@ class SupabaseRestClient:
             headers=headers,
             data=data,
         )
-        try:
-            with urlopen(request, timeout=15) as response:
-                payload = response.read().decode("utf-8")
-                if not payload.strip():
-                    return None
-                return json.loads(payload)
-        except HTTPError as exc:
-            detail = exc.read().decode("utf-8", errors="replace")
-            message = f"Supabase request failed ({exc.code}): {detail}"
-            if path.startswith("/auth/v1/"):
-                raise SupabaseAuthError(message) from exc
-            raise SupabaseClientError(message) from exc
-        except TimeoutError as exc:
-            message = f"Supabase request timed out for {path}"
-            if path.startswith("/auth/v1/"):
-                raise SupabaseAuthError(message) from exc
-            raise SupabaseClientError(message) from exc
-        except URLError as exc:
-            raise SupabaseClientError(f"Supabase request failed: {exc}") from exc
+        last_timeout_error: Exception | None = None
+        for attempt in range(self._TIMEOUT_RETRY_ATTEMPTS):
+            try:
+                with urlopen(request, timeout=self._REQUEST_TIMEOUT_SECONDS) as response:
+                    payload = response.read().decode("utf-8")
+                    if not payload.strip():
+                        return None
+                    return json.loads(payload)
+            except HTTPError as exc:
+                detail = exc.read().decode("utf-8", errors="replace")
+                message = f"Supabase request failed ({exc.code}): {detail}"
+                if path.startswith("/auth/v1/"):
+                    raise SupabaseAuthError(message) from exc
+                raise SupabaseClientError(message) from exc
+            except TimeoutError as exc:
+                last_timeout_error = exc
+                if attempt < self._TIMEOUT_RETRY_ATTEMPTS - 1:
+                    sleep(self._TIMEOUT_RETRY_BACKOFF_SECONDS[min(attempt, len(self._TIMEOUT_RETRY_BACKOFF_SECONDS) - 1)])
+                    continue
+                message = f"Supabase request timed out for {path}"
+                if path.startswith("/auth/v1/"):
+                    raise SupabaseAuthError(message) from exc
+                raise SupabaseClientError(message) from exc
+            except URLError as exc:
+                if self._is_timeout_url_error(exc):
+                    last_timeout_error = exc
+                    if attempt < self._TIMEOUT_RETRY_ATTEMPTS - 1:
+                        sleep(self._TIMEOUT_RETRY_BACKOFF_SECONDS[min(attempt, len(self._TIMEOUT_RETRY_BACKOFF_SECONDS) - 1)])
+                        continue
+                    message = f"Supabase request timed out for {path}"
+                    if path.startswith("/auth/v1/"):
+                        raise SupabaseAuthError(message) from exc
+                    raise SupabaseClientError(message) from exc
+                raise SupabaseClientError(f"Supabase request failed: {exc}") from exc
+
+        message = f"Supabase request timed out for {path}"
+        if path.startswith("/auth/v1/"):
+            raise SupabaseAuthError(message) from last_timeout_error
+        raise SupabaseClientError(message) from last_timeout_error
 
     def get_user_from_token(self, access_token: str) -> dict[str, Any]:
         payload = self._request(

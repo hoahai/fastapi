@@ -30,6 +30,8 @@ def get_traffic_station_candidates_route(
     est_num: list[str] | None = Query(None, alias="estNum"),
     languages: list[str] | None = Query(None, alias="languages"),
     language: list[str] | None = Query(None, alias="language"),
+    media_types: list[str] | None = Query(None, alias="mediaTypes"),
+    media_type: list[str] | None = Query(None, alias="mediaType"),
 ):
     """
     Return schedule station candidates for one account within a flight date range.
@@ -42,6 +44,9 @@ def get_traffic_station_candidates_route(
 
     Example request (filtered by flight languages):
         GET /api/tradsphere/v1/traffic/station-candidates?accountCode=TAAA&flightStart=2026-06-01&flightEnd=2026-06-30&languages=English,Spanish
+
+    Example request (filtered by media types):
+        GET /api/tradsphere/v1/traffic/station-candidates?accountCode=TAAA&flightStart=2026-06-01&flightEnd=2026-06-30&mediaTypes=TV,RA
 
     Example response:
         {
@@ -74,6 +79,7 @@ def get_traffic_station_candidates_route(
         - accountCode, flightStart, and flightEnd query params are required
         - Optional estNums/estNum accepts comma-separated integer values
         - Optional languages/language accepts comma-separated values: English, Spanish
+        - Optional mediaTypes/mediaType accepts comma-separated values: TV, RA, CA, OD, NP, CINE
         - flightStart/flightEnd must be ISO dates and flightStart <= flightEnd
         - Unknown query params are rejected (400)
     """
@@ -82,6 +88,7 @@ def get_traffic_station_candidates_route(
     flight_end_value = require_query_value(flight_end, field="flightEnd")
     normalized_est_nums = parse_int_list(est_nums, est_num)
     normalized_languages = parse_csv_values(languages, language)
+    normalized_media_types = parse_csv_values(media_types, media_type, uppercase=True)
     try:
         return list_station_candidates_for_flight_range_data(
             account_code=account_code_value,
@@ -89,6 +96,7 @@ def get_traffic_station_candidates_route(
             flight_end=flight_end_value,
             est_nums=normalized_est_nums,
             languages=normalized_languages,
+            media_types=normalized_media_types,
         )
     except (InvalidReferenceError, ValueError) as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

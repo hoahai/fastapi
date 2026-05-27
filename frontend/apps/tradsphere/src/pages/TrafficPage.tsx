@@ -192,6 +192,8 @@ type FlightStationSyncParams = {
   flightEnd: string;
   estNums?: number[];
   languages?: FlightLanguage[];
+  mediums?: string[];
+  forceRefreshCandidates?: boolean;
 };
 
 type FlightStationSyncDialogSource = "flight_update" | "manual_sync";
@@ -709,6 +711,29 @@ function normalizeTrafficSummaryList(payload: unknown): TrafficSummary[] {
     .filter((row) => row.id.length > 0);
 }
 
+function normalizeTrafficEmail(raw: unknown): TrafficEmail | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+  return {
+    id: Math.trunc(asNumber(raw.id, 0)),
+    trafficId: asString(raw.trafficId),
+    toEmails: asStringArray(raw.toEmails),
+    ccEmails: asStringArray(raw.ccEmails),
+    bccEmails: asStringArray(raw.bccEmails),
+    subject: asString(raw.subject),
+    body: typeof raw.body === "string" ? raw.body : asString(raw.body),
+    sentStatus: asString(raw.sentStatus).toLowerCase() || "draft",
+    sentAt: asNullableString(raw.sentAt),
+    sentByUserId: asNullableString(raw.sentByUserId),
+    smtpMessageId: asNullableString(raw.smtpMessageId),
+    lastSendAttemptAt: asNullableString(raw.lastSendAttemptAt),
+    lastSendError: asNullableString(raw.lastSendError),
+    dateCreated: asNullableString(raw.dateCreated),
+    dateUpdated: asNullableString(raw.dateUpdated),
+  };
+}
+
 function normalizeTrafficDetail(payload: unknown): TrafficDetail | null {
   const data = unwrapData(payload);
   if (!isRecord(data)) {
@@ -769,25 +794,8 @@ function normalizeTrafficDetail(payload: unknown): TrafficDetail | null {
         dateUpdated: asNullableString(item.dateUpdated),
       }))
       .sort((a, b) => a.id - b.id),
-    email: emailRaw
-      ? {
-          id: Math.trunc(asNumber(emailRaw.id, 0)),
-          trafficId: asString(emailRaw.trafficId),
-          toEmails: asStringArray(emailRaw.toEmails),
-          ccEmails: asStringArray(emailRaw.ccEmails),
-          bccEmails: asStringArray(emailRaw.bccEmails),
-          subject: asString(emailRaw.subject),
-          body: typeof emailRaw.body === "string" ? emailRaw.body : asString(emailRaw.body),
-          sentStatus: asString(emailRaw.sentStatus).toLowerCase() || "draft",
-          sentAt: asNullableString(emailRaw.sentAt),
-          sentByUserId: asNullableString(emailRaw.sentByUserId),
-          smtpMessageId: asNullableString(emailRaw.smtpMessageId),
-          lastSendAttemptAt: asNullableString(emailRaw.lastSendAttemptAt),
-          lastSendError: asNullableString(emailRaw.lastSendError),
-          dateCreated: asNullableString(emailRaw.dateCreated),
-          dateUpdated: asNullableString(emailRaw.dateUpdated),
-        }
-      : {
+    email: normalizeTrafficEmail(emailRaw)
+      || {
           id: 0,
           trafficId: asString(trafficRaw.id),
           toEmails: [],
@@ -990,6 +998,49 @@ function normalizeFlightLanguageList(values: unknown[] | undefined): FlightLangu
   return [...new Set(values.map((item) => normalizeFlightLanguageValue(item)))];
 }
 
+function normalizeFlightMediumList(values: unknown[] | undefined): string[] {
+  if (!Array.isArray(values)) {
+    return [];
+  }
+  const allowed = new Set(FLIGHT_MEDIA_OPTIONS.map((item) => asString(item).toUpperCase()));
+  const dedupe = new Set<string>();
+  const output: string[] = [];
+  for (const raw of values) {
+    const normalized = asString(raw).toUpperCase();
+    if (!normalized || !allowed.has(normalized) || dedupe.has(normalized)) {
+      continue;
+    }
+    dedupe.add(normalized);
+    output.push(normalized);
+  }
+  return output;
+}
+
+function canonicalFlightMediumForCandidates(value: unknown): string {
+  const normalized = asString(value).toUpperCase();
+  if (normalized === "TV" || normalized === "CA") {
+    return "TV_CA";
+  }
+  return normalized;
+}
+
+function expandFlightMediumsForCandidateFilter(values: string[]): string[] {
+  const normalized = normalizeFlightMediumList(values);
+  const output = new Set<string>();
+  const includesTvOrCa = normalized.includes("TV") || normalized.includes("CA");
+  for (const medium of normalized) {
+    if (medium === "TV" || medium === "CA") {
+      continue;
+    }
+    output.add(medium);
+  }
+  if (includesTvOrCa) {
+    output.add("TV");
+    output.add("CA");
+  }
+  return [...output];
+}
+
 function hasIsoDateRangeOverlap(
   rangeStart: string,
   rangeEnd: string,
@@ -1023,21 +1074,52 @@ function resolveFlightLanguagesFromFlights(
   return [...dedupe];
 }
 
+function resolveFlightMediumsFromFlights(
+  flights: TrafficFlight[],
+  rangeStart?: string,
+  rangeEnd?: string,
+): string[] {
+  const targetStart = asString(rangeStart);
+  const targetEnd = asString(rangeEnd);
+  const allowed = new Set(FLIGHT_MEDIA_OPTIONS.map((item) => asString(item).toUpperCase()));
+  const dedupe = new Set<string>();
+  for (const flight of flights) {
+    const flightStart = asString(flight.flightStart);
+    const flightEnd = asString(flight.flightEnd);
+    if (targetStart && targetEnd) {
+      if (!hasIsoDateRangeOverlap(targetStart, targetEnd, flightStart, flightEnd)) {
+        continue;
+      }
+    }
+    const medium = asString(flight.medium).toUpperCase();
+    if (!medium || !allowed.has(medium)) {
+      continue;
+    }
+    dedupe.add(medium);
+  }
+  return [...dedupe];
+}
+
 function buildTrafficStationCandidatesCacheKey(params: {
   accountCode: string;
   flightStart: string;
   flightEnd: string;
   estNums?: number[];
   languages?: FlightLanguage[];
+  mediums?: string[];
 }): string {
   const accountCode = asString(params.accountCode).toUpperCase() || "UNKNOWN";
   const flightStart = asString(params.flightStart) || "missing";
   const flightEnd = asString(params.flightEnd) || "missing";
   const estNums = normalizeEstNumList(params.estNums);
   const languages = normalizeFlightLanguageList(params.languages);
+  const mediums = normalizeFlightMediumList(params.mediums);
   const estNumsKey = estNums.length > 0 ? estNums.join(",") : "*";
   const languagesKey = languages.length > 0 ? languages.join(",") : "*";
-  return `traffic:station-candidates:${accountCode}:${flightStart}:${flightEnd}:estNums=${estNumsKey}:languages=${languagesKey}:v1`;
+  const mediumsKey = mediums.length > 0
+    ? [...new Set(mediums.map((medium) => canonicalFlightMediumForCandidates(medium)))].sort().join(",")
+    : "*";
+  return `traffic:station-candidates:${accountCode}:${flightStart}:${flightEnd}:estNums=${estNumsKey}:languages=${languagesKey}:mediums=${mediumsKey}:v1`;
 }
 
 function isLocalTrafficId(trafficId: string): boolean {
@@ -1447,6 +1529,53 @@ function extractPreferredContactEmails(snapshot: unknown): string[] {
     ordered.push(email);
   }
   return ordered;
+}
+
+function buildStationEmailRecipients(stations: TrafficStation[]): string[] {
+  const stationEmails = stations.flatMap((station) => extractPreferredContactEmails(station.contactsSnapshot));
+  return mergeUniqueEmails([], stationEmails);
+}
+
+function buildStationSyncFingerprint(stations: TrafficStation[]): string {
+  const normalized = stations
+    .map((station) => normalizeStationForCompare(station))
+    .filter((item): item is Record<string, unknown> => Boolean(item))
+    .sort((left, right) => {
+      const leftCode = asString(left.stationCode).toUpperCase();
+      const rightCode = asString(right.stationCode).toUpperCase();
+      if (leftCode !== rightCode) {
+        return leftCode.localeCompare(rightCode);
+      }
+      const leftDelivery = asString(left.deliveryMethod).toUpperCase();
+      const rightDelivery = asString(right.deliveryMethod).toUpperCase();
+      if (leftDelivery !== rightDelivery) {
+        return leftDelivery.localeCompare(rightDelivery);
+      }
+      return JSON.stringify(left).localeCompare(JSON.stringify(right));
+    });
+  return JSON.stringify(normalized);
+}
+
+function syncTrafficEmailRecipientsFromStations(previousDetail: TrafficDetail, nextDetail: TrafficDetail): TrafficDetail {
+  if (!nextDetail.email) {
+    return nextDetail;
+  }
+  const previousFingerprint = buildStationSyncFingerprint(previousDetail.stations);
+  const nextFingerprint = buildStationSyncFingerprint(nextDetail.stations);
+  if (previousFingerprint === nextFingerprint) {
+    return nextDetail;
+  }
+  const nextToEmails = buildStationEmailRecipients(nextDetail.stations);
+  if (JSON.stringify(nextToEmails) === JSON.stringify(nextDetail.email.toEmails)) {
+    return nextDetail;
+  }
+  return {
+    ...nextDetail,
+    email: {
+      ...nextDetail.email,
+      toEmails: nextToEmails,
+    },
+  };
 }
 
 function formatStationDisplayLabel(code: string, meta: StationLookupMeta | null | undefined): string {
@@ -2054,7 +2183,16 @@ export default function TrafficPage() {
   const [isLoadingAccountTraffic, setIsLoadingAccountTraffic] = useState(false);
   const [isRefreshingAccountTraffic, setIsRefreshingAccountTraffic] = useState(false);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
+  const [isLoadActionOverlayVisible, setIsLoadActionOverlayVisible] = useState(false);
+  const [isChipRefreshOverlayVisible, setIsChipRefreshOverlayVisible] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
+  const [isSendingEmail, setIsSendingEmail] = useState(false);
+  const [isMarkingTrafficSent, setIsMarkingTrafficSent] = useState(false);
+  const [emailSendSuccessPrompt, setEmailSendSuccessPrompt] = useState<{
+    trafficId: string;
+    recipientCount: number;
+    askMarkSent: boolean;
+  } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
   const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null);
@@ -2063,7 +2201,7 @@ export default function TrafficPage() {
   const [isArchiveDialogOpen, setIsArchiveDialogOpen] = useState(false);
   const [archiveTargetTrafficId, setArchiveTargetTrafficId] = useState<string | null>(null);
   const [archiveDialogMode, setArchiveDialogMode] = useState<TrafficRemovalMode>("archive");
-  const [deletingTrafficId, setDeletingTrafficId] = useState<string | null>(null);
+  const [deletingTrafficIds, setDeletingTrafficIds] = useState<string[]>([]);
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<TrafficWorkspaceTab>("workflow");
   const [isEmailPreviewOpen, setIsEmailPreviewOpen] = useState(false);
   const [emailWorkspaceByTrafficId, setEmailWorkspaceByTrafficId] = useState<Record<string, TrafficEmailWorkspaceDraft>>({});
@@ -2089,6 +2227,9 @@ export default function TrafficPage() {
   const [flightStationSyncSelectionsByTrafficId, setFlightStationSyncSelectionsByTrafficId] = useState<Record<string, number[]>>({});
   const [isFlightStationSyncCandidatesLoading, setIsFlightStationSyncCandidatesLoading] = useState(false);
   const [flightStationSyncDialogSource, setFlightStationSyncDialogSource] = useState<FlightStationSyncDialogSource>("flight_update");
+  const [isSyncMissingStationsDialogOpen, setIsSyncMissingStationsDialogOpen] = useState(false);
+  const [pendingSyncMissingStationsCodes, setPendingSyncMissingStationsCodes] = useState<string[]>([]);
+  const [selectedSyncMissingStationsCodes, setSelectedSyncMissingStationsCodes] = useState<string[]>([]);
   const [flightSyncPreviewEstnum, setFlightSyncPreviewEstnum] = useState<EsnumItem | null>(null);
   const [isFlightSyncPreviewModalOpen, setIsFlightSyncPreviewModalOpen] = useState(false);
   const [stationModalMode, setStationModalMode] = useState<RowModalMode>("create");
@@ -2118,7 +2259,14 @@ export default function TrafficPage() {
   const tempRowIdRef = useRef(-1);
   const stationLookupRequestIdRef = useRef(0);
   const stationMetaRequestIdRef = useRef(0);
+  const syncMissingStationsResolverRef = useRef<((stationCodesToRemove: string[]) => void) | null>(null);
   const stationLookupMetaByCodeRef = useRef<Record<string, StationLookupMeta>>({});
+  const trafficListRef = useRef<TrafficSummary[]>(trafficList);
+  const selectedTrafficIdRef = useRef<string | null>(selectedTrafficId);
+  const detailBaselineRef = useRef<TrafficDetail | null>(detailBaseline);
+  const detailDraftRef = useRef<TrafficDetail | null>(detailDraft);
+  const refreshMessageRef = useRef<string | null>(refreshMessage);
+  const activeAccountCodeRef = useRef<string>("");
   const flightFileUrlInputRef = useRef<HTMLInputElement | null>(null);
   const flightScriptUrlInputRef = useRef<HTMLInputElement | null>(null);
   const flightNoteTextareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -2155,6 +2303,15 @@ export default function TrafficPage() {
   } = useDirtyRefreshGuard(hasUnsavedChanges);
 
   const activeAccountCode = asString(loadedAccountCode).toUpperCase();
+  useEffect(() => {
+    trafficListRef.current = trafficList;
+    selectedTrafficIdRef.current = selectedTrafficId;
+    detailBaselineRef.current = detailBaseline;
+    detailDraftRef.current = detailDraft;
+    refreshMessageRef.current = refreshMessage;
+    activeAccountCodeRef.current = activeAccountCode;
+  }, [activeAccountCode, detailBaseline, detailDraft, refreshMessage, selectedTrafficId, trafficList]);
+
   const activeDraft = detailDraft;
   const flightModalIsciPlaceholder = useMemo(() => {
     const accountCode = asString(activeDraft?.traffic.accountCode || loadedAccountCode).toUpperCase();
@@ -2209,11 +2366,15 @@ export default function TrafficPage() {
     }
     stationNoteTextareaRef.current?.focus();
   }, [focusStationConfirmedStatusField]);
-  const isDeletingTraffic = Boolean(deletingTrafficId);
+  const deletingTrafficIdSet = useMemo(() => new Set(deletingTrafficIds), [deletingTrafficIds]);
+  const isDeletingTraffic = deletingTrafficIds.length > 0;
   const isDeletingSelectedTraffic = Boolean(
-    deletingTrafficId
-    && selectedTrafficId
-    && deletingTrafficId === selectedTrafficId,
+    selectedTrafficId
+    && deletingTrafficIdSet.has(selectedTrafficId)
+  );
+  const isArchiveTargetDeleting = Boolean(
+    archiveTargetTrafficId
+    && deletingTrafficIdSet.has(archiveTargetTrafficId),
   );
   const timelineAccountCode = asString(activeDraft?.traffic.accountCode).toUpperCase();
   const isSentLocked = asString(detailBaseline?.traffic.status).toLowerCase() === "sent";
@@ -2252,6 +2413,8 @@ export default function TrafficPage() {
     canEditTradsphere
       && hasAnyUnsavedChanges
       && !isSaving
+      && !isSendingEmail
+      && !isMarkingTrafficSent
       && !isDeletingTraffic
       && !isLoadingAccountTraffic
       && !isLoadingDetail,
@@ -2289,6 +2452,27 @@ export default function TrafficPage() {
     }
     return activeEmailWorkspace.downloadLinks[activeDownloadLinkNoteIndex] ?? null;
   }, [activeDownloadLinkNoteIndex, activeEmailWorkspace]);
+  const canSendTrafficEmail = useMemo(() => {
+    if (!canEditTradsphere || isSaving || isSendingEmail || isMarkingTrafficSent || isSentLocked) {
+      return false;
+    }
+    if (!activeDraft?.email || !activeEmailWorkspace || !activeTrafficId) {
+      return false;
+    }
+    if (isLocalTrafficId(activeTrafficId)) {
+      return false;
+    }
+    return true;
+  }, [
+    activeDraft,
+    activeEmailWorkspace,
+    activeTrafficId,
+    canEditTradsphere,
+    isSaving,
+    isSendingEmail,
+    isMarkingTrafficSent,
+    isSentLocked,
+  ]);
 
   const cacheStatusText = useMemo(() => {
     if (isDeletingTraffic) {
@@ -2525,6 +2709,7 @@ export default function TrafficPage() {
     flightEnd: string;
     estNums?: number[];
     languages?: FlightLanguage[];
+    mediums?: string[];
     preferCache?: boolean;
   }): Promise<TrafficStationCandidatesPayload | null> => {
     const accountCode = asString(params.accountCode).toUpperCase();
@@ -2532,6 +2717,8 @@ export default function TrafficPage() {
     const flightEnd = asString(params.flightEnd);
     const estNums = normalizeEstNumList(params.estNums);
     const languages = normalizeFlightLanguageList(params.languages);
+    const mediums = normalizeFlightMediumList(params.mediums);
+    const mediumFilters = expandFlightMediumsForCandidateFilter(mediums);
     if (!accountCode || !flightStart || !flightEnd) {
       return null;
     }
@@ -2542,6 +2729,7 @@ export default function TrafficPage() {
       flightEnd,
       estNums,
       languages,
+      mediums: mediumFilters,
     });
     const cacheSnapshot = readBrowserCacheSnapshot<TrafficStationCandidatesPayload>(cacheKey);
     const cached = cacheSnapshot
@@ -2561,6 +2749,9 @@ export default function TrafficPage() {
     }
     if (languages.length > 0) {
       query.set("languages", languages.join(","));
+    }
+    if (mediumFilters.length > 0) {
+      query.set("mediaTypes", mediumFilters.join(","));
     }
 
     try {
@@ -2870,7 +3061,8 @@ export default function TrafficPage() {
       const withAutoSyncedSubject = syncAutoTrafficEmailSubject(previousDetail, nextDetail, accountNameByCode);
       const withAutoReadyToEmail = applyAutoReadyToEmailFromFlights(withAutoSyncedSubject);
       const withDefaultSubject = applyDefaultTrafficEmailSubject(withAutoReadyToEmail, accountNameByCode);
-      return computeSummary(withDefaultSubject as TrafficDetail);
+      const withStationSyncedToEmails = syncTrafficEmailRecipientsFromStations(previousDetail, withDefaultSubject as TrafficDetail);
+      return computeSummary(withStationSyncedToEmails as TrafficDetail);
     });
   }, [accountNameByCode]);
 
@@ -3522,6 +3714,7 @@ export default function TrafficPage() {
   const refreshStationRowsFromMaster = useCallback(async (params?: {
     trafficId?: string | null;
     stationCodes?: string[];
+    autoMergeEmails?: boolean;
   }) => {
     if (!isOnline) {
       return;
@@ -3653,6 +3846,7 @@ export default function TrafficPage() {
       const activeDetailForPrompt = detailDraft && detailDraft.traffic.id === targetTrafficId
         ? applyStationRefreshToDetail(detailDraft)
         : null;
+      let autoSyncToEmails = false;
       if (activeDetailForPrompt?.email) {
         const refreshContactEmails = activeDetailForPrompt.stations.flatMap((station) => (
           extractPreferredContactEmails(station.contactsSnapshot)
@@ -3661,16 +3855,41 @@ export default function TrafficPage() {
         const currentToEmailSet = new Set(activeDetailForPrompt.email.toEmails.map((email) => asString(email).toLowerCase()));
         const addedToEmails = mergedToEmails.filter((email) => !currentToEmailSet.has(email));
         if (addedToEmails.length > 0) {
-          setPendingRefreshEmailMerge({
-            trafficId: targetTrafficId,
-            emails: addedToEmails,
-          });
-          setIsRefreshEmailMergeDialogOpen(true);
+          if (params?.autoMergeEmails) {
+            autoSyncToEmails = true;
+          } else {
+            setPendingRefreshEmailMerge({
+              trafficId: targetTrafficId,
+              emails: addedToEmails,
+            });
+            setIsRefreshEmailMergeDialogOpen(true);
+          }
         }
       }
 
-      setDetailBaseline((current) => applyStationRefreshToDetail(current));
-      setDetailDraft((current) => applyStationRefreshToDetail(current));
+      const applyAutoEmailMerge = (detail: TrafficDetail | null): TrafficDetail | null => {
+        if (!detail || detail.traffic.id !== targetTrafficId || !detail.email || !autoSyncToEmails) {
+          return detail;
+        }
+        const nextToEmails = buildStationEmailRecipients(detail.stations);
+        if (JSON.stringify(nextToEmails) === JSON.stringify(detail.email.toEmails)) {
+          return detail;
+        }
+        return {
+          ...detail,
+          email: {
+            ...detail.email,
+            toEmails: nextToEmails,
+          },
+        };
+      };
+      const applyStationRefreshWithOptionalEmailMerge = (detail: TrafficDetail | null): TrafficDetail | null => {
+        const refreshed = applyStationRefreshToDetail(detail);
+        return applyAutoEmailMerge(refreshed);
+      };
+
+      setDetailBaseline((current) => applyStationRefreshWithOptionalEmailMerge(current));
+      setDetailDraft((current) => applyStationRefreshWithOptionalEmailMerge(current));
       setStationModalDraft((current) => {
         if (!current || asString(current.trafficId) !== targetTrafficId) {
           return current;
@@ -3720,6 +3939,76 @@ export default function TrafficPage() {
     });
   }, [activeAccountCode, activeDraft?.stations, activeDraft?.traffic.id, loadAccountTraffic, refreshStationRowsFromMaster, selectedTrafficId, stationLookupQueryCode]);
 
+  const handleRefreshFromChip = useCallback(async () => {
+    setIsChipRefreshOverlayVisible(true);
+    try {
+      await handleRefresh();
+    } finally {
+      setIsChipRefreshOverlayVisible(false);
+    }
+  }, [handleRefresh]);
+
+  const resolveSyncMissingStationsDialog = useCallback((stationCodesToRemove: string[]) => {
+    const resolver = syncMissingStationsResolverRef.current;
+    syncMissingStationsResolverRef.current = null;
+    setIsSyncMissingStationsDialogOpen(false);
+    setPendingSyncMissingStationsCodes([]);
+    setSelectedSyncMissingStationsCodes([]);
+    if (resolver) {
+      resolver(stationCodesToRemove);
+    }
+  }, []);
+
+  const promptSyncMissingStationsDecision = useCallback((missingCodes: string[]): Promise<string[]> => {
+    const normalized = [...new Set(
+      missingCodes.map((code) => asString(code).toUpperCase()).filter(Boolean),
+    )];
+    if (normalized.length === 0) {
+      return Promise.resolve([]);
+    }
+    if (syncMissingStationsResolverRef.current) {
+      syncMissingStationsResolverRef.current([]);
+      syncMissingStationsResolverRef.current = null;
+    }
+    setPendingSyncMissingStationsCodes(normalized);
+    setSelectedSyncMissingStationsCodes(normalized);
+    setIsSyncMissingStationsDialogOpen(true);
+    return new Promise<string[]>((resolve) => {
+      syncMissingStationsResolverRef.current = resolve;
+    });
+  }, []);
+
+  const toggleSyncMissingStationSelection = useCallback((stationCodeRaw: string) => {
+    const stationCode = asString(stationCodeRaw).toUpperCase();
+    if (!stationCode) {
+      return;
+    }
+    setSelectedSyncMissingStationsCodes((current) => {
+      if (current.includes(stationCode)) {
+        return current.filter((code) => code !== stationCode);
+      }
+      return [...current, stationCode];
+    });
+  }, []);
+
+  const handleSelectAllSyncMissingStations = useCallback(() => {
+    setSelectedSyncMissingStationsCodes([...pendingSyncMissingStationsCodes]);
+  }, [pendingSyncMissingStationsCodes]);
+
+  const handleClearSyncMissingStations = useCallback(() => {
+    setSelectedSyncMissingStationsCodes([]);
+  }, []);
+
+  const handleConfirmSyncMissingStationsRemoval = useCallback(() => {
+    const selectedSet = new Set(
+      selectedSyncMissingStationsCodes
+        .map((code) => asString(code).toUpperCase())
+        .filter(Boolean),
+    );
+    const normalizedSelection = pendingSyncMissingStationsCodes.filter((code) => selectedSet.has(code));
+    resolveSyncMissingStationsDialog(normalizedSelection);
+  }, [pendingSyncMissingStationsCodes, resolveSyncMissingStationsDialog, selectedSyncMissingStationsCodes]);
+
   const handleResolveRefreshEmailMerge = useCallback((shouldMerge: boolean) => {
     const pending = pendingRefreshEmailMerge;
     setIsRefreshEmailMergeDialogOpen(false);
@@ -3756,11 +4045,16 @@ export default function TrafficPage() {
     if (!targetAccountCode) {
       return;
     }
-    setLoadedAccountCode(targetAccountCode);
-    await loadAccountTraffic(targetAccountCode, "network-first", {
-      selectedIdOverride: selectedTrafficByAccount[targetAccountCode] || null,
-      deferWhenDirty: false,
-    });
+    setIsLoadActionOverlayVisible(true);
+    try {
+      setLoadedAccountCode(targetAccountCode);
+      await loadAccountTraffic(targetAccountCode, "network-first", {
+        selectedIdOverride: selectedTrafficByAccount[targetAccountCode] || null,
+        deferWhenDirty: false,
+      });
+    } finally {
+      setIsLoadActionOverlayVisible(false);
+    }
   }, [loadAccountTraffic, selectedAccountCode, selectedTrafficByAccount]);
 
   const handleAccountChange = useCallback((nextAccountCodeRaw: string) => {
@@ -3858,11 +4152,11 @@ export default function TrafficPage() {
     if (!trafficId) {
       return null;
     }
-    const previousList = trafficList;
-    const previousSelected = selectedTrafficId;
-    const previousDetailBaseline = cloneDetail(detailBaseline);
-    const previousDetailDraft = cloneDetail(detailDraft);
-    const previousRefreshMessage = refreshMessage;
+    const previousList = trafficListRef.current;
+    const previousSelected = selectedTrafficIdRef.current;
+    const previousDetailBaseline = cloneDetail(detailBaselineRef.current);
+    const previousDetailDraft = cloneDetail(detailDraftRef.current);
+    const previousRefreshMessage = refreshMessageRef.current;
 
     const nextList = previousList.filter((item) => item.id !== trafficId);
     const removedSelected = previousSelected === trafficId;
@@ -3872,8 +4166,10 @@ export default function TrafficPage() {
       : (selectedStillExists ? previousSelected : (nextList[0]?.id || null));
 
     setTrafficList(nextList);
+    trafficListRef.current = nextList;
     setSelectedTrafficId(nextSelected);
-    upsertSelectedByAccount(activeAccountCode, nextSelected);
+    selectedTrafficIdRef.current = nextSelected;
+    upsertSelectedByAccount(activeAccountCodeRef.current, nextSelected);
     setDraftSessionsByTrafficId((current) => {
       if (!(trafficId in current)) {
         return current;
@@ -3885,11 +4181,14 @@ export default function TrafficPage() {
     if (removedSelected) {
       setDetailBaseline(null);
       setDetailDraft(null);
+      detailBaselineRef.current = null;
+      detailDraftRef.current = null;
     }
     setRefreshMessage(null);
+    refreshMessageRef.current = null;
 
     const fetchedAt = Date.now();
-    writeBrowserCache(buildTrafficListCacheKey(activeAccountCode), nextList, TRAFFIC_LIST_CACHE_TTL_MS, {
+    writeBrowserCache(buildTrafficListCacheKey(activeAccountCodeRef.current), nextList, TRAFFIC_LIST_CACHE_TTL_MS, {
       source: "network",
       fetchedAt,
     });
@@ -3905,7 +4204,7 @@ export default function TrafficPage() {
       nextSelected,
       removedSelected,
     };
-  }, [activeAccountCode, detailBaseline, detailDraft, refreshMessage, selectedTrafficId, trafficList, upsertSelectedByAccount]);
+  }, [upsertSelectedByAccount]);
 
   const handleRemoveTrafficLocally = useCallback(async (trafficIdRaw: string) => {
     const snapshot = applyOptimisticTrafficRemoval(trafficIdRaw);
@@ -3919,27 +4218,33 @@ export default function TrafficPage() {
 
   const openTrafficRemovalDialog = useCallback((trafficIdRaw: string, mode: TrafficRemovalMode) => {
     const trafficId = asString(trafficIdRaw);
-    if (!trafficId || !canEditTradsphere || isSaving || isLoadingAccountTraffic || isLoadingDetail || isDeletingTraffic) {
+    if (!trafficId || !canEditTradsphere || isSaving || isLoadingAccountTraffic || isLoadingDetail) {
+      return;
+    }
+    if (deletingTrafficIdSet.has(trafficId)) {
       return;
     }
     setArchiveTargetTrafficId(trafficId);
     setArchiveDialogMode(mode);
     setIsArchiveDialogOpen(true);
-  }, [canEditTradsphere, isDeletingTraffic, isLoadingAccountTraffic, isLoadingDetail, isSaving]);
+  }, [canEditTradsphere, deletingTrafficIdSet, isLoadingAccountTraffic, isLoadingDetail, isSaving]);
 
   const handleArchiveTraffic = useCallback(async () => {
     const targetTrafficId = asString(archiveTargetTrafficId) || asString(detailDraft?.traffic.id);
-    if (!targetTrafficId || !canEditTradsphere || isSaving || isLoadingAccountTraffic || isLoadingDetail || isDeletingTraffic) {
+    if (!targetTrafficId || !canEditTradsphere || isSaving || isLoadingAccountTraffic || isLoadingDetail) {
+      return;
+    }
+    if (deletingTrafficIdSet.has(targetTrafficId)) {
       return;
     }
     const removalMode = archiveDialogMode;
-    setDeletingTrafficId(targetTrafficId);
+    setDeletingTrafficIds((current) => (current.includes(targetTrafficId) ? current : [...current, targetTrafficId]));
     setArchiveTargetTrafficId(null);
     setIsArchiveDialogOpen(false);
     if (isLocalTrafficId(targetTrafficId)) {
       await handleRemoveTrafficLocally(targetTrafficId);
       toast.success("Draft removed", "Unsaved local traffic draft was removed.");
-      setDeletingTrafficId(null);
+      setDeletingTrafficIds((current) => current.filter((id) => id !== targetTrafficId));
       return;
     }
 
@@ -3971,7 +4276,7 @@ export default function TrafficPage() {
           : "Unable to archive traffic.",
       ));
     } finally {
-      setDeletingTrafficId(null);
+      setDeletingTrafficIds((current) => current.filter((id) => id !== targetTrafficId));
       setArchiveDialogMode("archive");
       setArchiveTargetTrafficId(null);
       setIsArchiveDialogOpen(false);
@@ -3981,9 +4286,9 @@ export default function TrafficPage() {
     archiveDialogMode,
     archiveTargetTrafficId,
     canEditTradsphere,
+    deletingTrafficIdSet,
     detailDraft,
     handleRemoveTrafficLocally,
-    isDeletingTraffic,
     isLoadingAccountTraffic,
     isLoadingDetail,
     isSaving,
@@ -4067,7 +4372,7 @@ export default function TrafficPage() {
       return;
     }
     if (action.type === "refresh") {
-      await handleRefresh();
+      await handleRefreshFromChip();
       return;
     }
     if (action.type === "route") {
@@ -4091,6 +4396,7 @@ export default function TrafficPage() {
     cacheStatus,
     clearDeferredUpdate,
     handleRefresh,
+    handleRefreshFromChip,
     loadedAccountCode,
     loadAccountTraffic,
     loadTrafficDetail,
@@ -4109,10 +4415,15 @@ export default function TrafficPage() {
     const flightEnd = asString(params.flightEnd);
     const estNums = normalizeEstNumList(params.estNums);
     const requestedLanguages = normalizeFlightLanguageList(params.languages);
+    const requestedMediums = normalizeFlightMediumList(params.mediums);
     const fallbackLanguages = resolveFlightLanguagesFromFlights(detailDraft?.flights ?? [], flightStart, flightEnd);
+    const fallbackMediums = resolveFlightMediumsFromFlights(detailDraft?.flights ?? [], flightStart, flightEnd);
     const languages = requestedLanguages.length > 0
       ? requestedLanguages
       : fallbackLanguages;
+    const mediums = requestedMediums.length > 0
+      ? requestedMediums
+      : fallbackMediums;
     if (!accountCode || !flightStart || !flightEnd) {
       return;
     }
@@ -4125,6 +4436,7 @@ export default function TrafficPage() {
         flightEnd,
         estNums,
         languages,
+        mediums,
         preferCache: true,
       });
       if (!normalized) {
@@ -4147,8 +4459,14 @@ export default function TrafficPage() {
         ]),
       );
       const uniqueCandidateCodes = [...new Set(candidateCodes)];
+      const uniqueCandidateCodeSet = new Set(uniqueCandidateCodes);
       const autoAddedCodes = uniqueCandidateCodes.filter((code) => !currentCodes.has(code));
       const preservedCodes = uniqueCandidateCodes.filter((code) => currentCodes.has(code));
+      const missingExistingCodes = [...currentCodes].filter((code) => !uniqueCandidateCodeSet.has(code));
+      const selectedMissingStationsToRemove = missingExistingCodes.length > 0
+        ? await promptSyncMissingStationsDecision(missingExistingCodes)
+        : [];
+      const missingExistingCodeSet = new Set(selectedMissingStationsToRemove);
       const currentStationsByCode = new Map(
         (detailDraft?.stations ?? []).map((station) => [
           asString(station.stationCode).toUpperCase(),
@@ -4186,6 +4504,7 @@ export default function TrafficPage() {
       });
 
       let readyToEmailUpdatedCount = 0;
+      let removedMissingCount = 0;
       updateDraft((current) => {
         if (current.traffic.id !== params.trafficId) {
           return current;
@@ -4196,7 +4515,18 @@ export default function TrafficPage() {
           return extractPreferredContactEmails(candidate?.contactsSnapshot ?? null);
         });
         let changed = false;
-        const nextStations = current.stations.map((station) => {
+        const baseStations = selectedMissingStationsToRemove.length > 0
+          ? current.stations.filter((station) => {
+            const stationCode = asString(station.stationCode).toUpperCase();
+            if (!missingExistingCodeSet.has(stationCode)) {
+              return true;
+            }
+            removedMissingCount += 1;
+            changed = true;
+            return false;
+          })
+          : current.stations;
+        const nextStations = baseStations.map((station) => {
           const stationCode = asString(station.stationCode).toUpperCase();
           const candidate = stationCandidateByCode.get(stationCode);
           const nextDeliveryMethod = candidate ? (candidate.deliveryMethod ?? null) : station.deliveryMethod;
@@ -4255,6 +4585,22 @@ export default function TrafficPage() {
           email: nextEmail,
         };
       });
+      const stationCodesForMasterRefresh = [...new Set([...currentCodes, ...uniqueCandidateCodes])];
+      if (stationCodesForMasterRefresh.length > 0) {
+        void refreshStationRowsFromMaster({
+          trafficId: params.trafficId,
+          stationCodes: stationCodesForMasterRefresh,
+          autoMergeEmails: true,
+        });
+      }
+
+      const removedMissingSuffix = removedMissingCount > 0
+        ? ` ${removedMissingCount} station(s) removed because they are no longer in synced schedule results.`
+        : "";
+      const keptMissingCount = Math.max(0, missingExistingCodes.length - removedMissingCount);
+      const keptMissingSuffix = keptMissingCount > 0
+        ? ` ${keptMissingCount} non-matching existing station(s) were kept.`
+        : "";
       const readyToEmailSuffix = readyToEmailUpdatedCount > 0
         ? ` ${readyToEmailUpdatedCount} station(s) marked Ready to Email.`
         : "";
@@ -4264,26 +4610,29 @@ export default function TrafficPage() {
         if (updatedExistingCount > 0) {
           toast.info(
             "Stations synced from schedule",
-            `${autoAddedCodes.length} station(s) added (${addedLabel}). ${updatedExistingCount} existing station(s) had contacts/delivery method refreshed.${readyToEmailSuffix}`,
+            `${autoAddedCodes.length} station(s) added (${addedLabel}). ${updatedExistingCount} existing station(s) had contacts/delivery method refreshed.${removedMissingSuffix}${keptMissingSuffix}${readyToEmailSuffix}`,
           );
         } else if (preservedCodes.length > 0) {
           toast.info(
             "Stations auto-added from schedule",
-            `${autoAddedCodes.length} station(s) added (${addedLabel}). ${preservedCodes.length} existing station(s) were preserved.${readyToEmailSuffix}`,
+            `${autoAddedCodes.length} station(s) added (${addedLabel}). ${preservedCodes.length} existing station(s) were preserved.${removedMissingSuffix}${keptMissingSuffix}${readyToEmailSuffix}`,
           );
         } else {
           toast.info(
             "Stations auto-added from schedule",
-            `${autoAddedCodes.length} station(s) added (${addedLabel}).${readyToEmailSuffix}`,
+            `${autoAddedCodes.length} station(s) added (${addedLabel}).${removedMissingSuffix}${keptMissingSuffix}${readyToEmailSuffix}`,
           );
         }
         return;
       }
 
       if (uniqueCandidateCodes.length === 0) {
+        const noMatchDetail = removedMissingCount > 0
+          ? `No stations were returned for the selected account and flight date range.${removedMissingSuffix}${readyToEmailSuffix}`
+          : `No stations were returned for the selected account and flight date range.${keptMissingSuffix}${readyToEmailSuffix}`;
         toast.info(
           "No matching schedule stations found",
-          "No stations were returned for the selected account and flight date range.",
+          noMatchDetail,
         );
         return;
       }
@@ -4291,12 +4640,12 @@ export default function TrafficPage() {
       if (updatedExistingCount > 0) {
         toast.info(
           "Stations synced from schedule",
-          `${updatedExistingCount} existing station(s) had contacts/delivery method refreshed.${readyToEmailSuffix}`,
+          `${updatedExistingCount} existing station(s) had contacts/delivery method refreshed.${removedMissingSuffix}${keptMissingSuffix}${readyToEmailSuffix}`,
         );
       } else {
         toast.info(
           "Existing stations preserved",
-          `${preservedCodes.length} matching station(s) already exist and were left unchanged.${readyToEmailSuffix}`,
+          `${preservedCodes.length} matching station(s) already exist and were left unchanged.${removedMissingSuffix}${keptMissingSuffix}${readyToEmailSuffix}`,
         );
       }
     } catch (syncError) {
@@ -4307,7 +4656,7 @@ export default function TrafficPage() {
     } finally {
       setIsStationAutoSyncing(false);
     }
-  }, [activeAccountCode, detailDraft?.flights, detailDraft?.stations, requestStationCandidatesWithCache, toast, updateDraft]);
+  }, [activeAccountCode, detailDraft?.flights, detailDraft?.stations, promptSyncMissingStationsDecision, refreshStationRowsFromMaster, requestStationCandidatesWithCache, toast, updateDraft]);
 
   const openStationSyncSelectDialog = useCallback((params: FlightStationSyncParams, source: FlightStationSyncDialogSource) => {
     const accountCode = asString(activeAccountCode).toUpperCase();
@@ -4323,16 +4672,24 @@ export default function TrafficPage() {
     setIsFlightStationSyncCandidatesLoading(true);
     setIsFlightStationSyncSelectOpen(true);
     const requestedLanguages = normalizeFlightLanguageList(params.languages);
+    const requestedMediums = normalizeFlightMediumList(params.mediums);
     const fallbackLanguages = resolveFlightLanguagesFromFlights(detailDraft?.flights ?? [], params.flightStart, params.flightEnd);
+    const fallbackMediums = resolveFlightMediumsFromFlights(detailDraft?.flights ?? [], params.flightStart, params.flightEnd);
     const languages = requestedLanguages.length > 0
       ? requestedLanguages
       : fallbackLanguages;
+    const mediums = requestedMediums.length > 0
+      ? requestedMediums
+      : fallbackMediums;
+    const shouldForceNetworkCandidates = source === "flight_update" && Boolean(params.forceRefreshCandidates);
+    const preferCacheForDialog = !shouldForceNetworkCandidates;
     void requestStationCandidatesWithCache({
       accountCode,
       flightStart: params.flightStart,
       flightEnd: params.flightEnd,
       languages,
-      preferCache: true,
+      mediums,
+      preferCache: preferCacheForDialog,
     })
       .then((payload) => {
         if (!payload) {
@@ -4379,6 +4736,11 @@ export default function TrafficPage() {
       flightStart: stationSyncFlightRange.flightStart,
       flightEnd: stationSyncFlightRange.flightEnd,
       languages: resolveFlightLanguagesFromFlights(
+        activeDraft.flights,
+        stationSyncFlightRange.flightStart,
+        stationSyncFlightRange.flightEnd,
+      ),
+      mediums: resolveFlightMediumsFromFlights(
         activeDraft.flights,
         stationSyncFlightRange.flightStart,
         stationSyncFlightRange.flightEnd,
@@ -4467,11 +4829,17 @@ export default function TrafficPage() {
         nextSyncRange.flightStart,
         nextSyncRange.flightEnd,
       );
+      const remainingMediums = resolveFlightMediumsFromFlights(
+        remainingFlights,
+        nextSyncRange.flightStart,
+        nextSyncRange.flightEnd,
+      );
       void syncStationsFromFlightRange({
         trafficId: currentDetail.traffic.id,
         flightStart: nextSyncRange.flightStart,
         flightEnd: nextSyncRange.flightEnd,
         languages: remainingLanguages,
+        mediums: remainingMediums,
       });
       return;
     }
@@ -4514,11 +4882,17 @@ export default function TrafficPage() {
           nextSyncRange.flightStart,
           nextSyncRange.flightEnd,
         );
+        const remainingMediums = resolveFlightMediumsFromFlights(
+          remainingFlights,
+          nextSyncRange.flightStart,
+          nextSyncRange.flightEnd,
+        );
         void syncStationsFromFlightRange({
           trafficId: currentDetail.traffic.id,
           flightStart: nextSyncRange.flightStart,
           flightEnd: nextSyncRange.flightEnd,
           languages: remainingLanguages,
+          mediums: remainingMediums,
         });
         return;
       }
@@ -4558,6 +4932,8 @@ export default function TrafficPage() {
       flightStart: string;
       flightEnd: string;
       languages: FlightLanguage[];
+      mediums: string[];
+      forceRefreshCandidates?: boolean;
     } | null = null;
 
     if (flightModalMode === "create") {
@@ -4572,23 +4948,28 @@ export default function TrafficPage() {
         flightStart: nextFlight.flightStart,
         flightEnd: nextFlight.flightEnd,
         languages: [normalizeFlightLanguageValue(nextFlight.language)],
+        mediums: [asString(nextFlight.medium).toUpperCase()],
+        forceRefreshCandidates: true,
       };
       updateDraft((current) => ({
         ...current,
         flights: [...current.flights, nextFlight],
       }));
     } else if (flightModalBaseline) {
-      const hasDateRangeChanged =
+      const shouldForceRefreshCandidates = (
         asString(flightModalBaseline.flightStart) !== asString(sanitizedFlightDraft.flightStart)
-        || asString(flightModalBaseline.flightEnd) !== asString(sanitizedFlightDraft.flightEnd);
-      if (hasDateRangeChanged) {
-        nextFlightForSync = {
-          trafficId: sanitizedFlightDraft.trafficId,
-          flightStart: sanitizedFlightDraft.flightStart,
-          flightEnd: sanitizedFlightDraft.flightEnd,
-          languages: [normalizeFlightLanguageValue(sanitizedFlightDraft.language)],
-        };
-      }
+        || asString(flightModalBaseline.flightEnd) !== asString(sanitizedFlightDraft.flightEnd)
+        || normalizeFlightLanguageValue(flightModalBaseline.language) !== normalizeFlightLanguageValue(sanitizedFlightDraft.language)
+        || canonicalFlightMediumForCandidates(flightModalBaseline.medium) !== canonicalFlightMediumForCandidates(sanitizedFlightDraft.medium)
+      );
+      nextFlightForSync = {
+        trafficId: sanitizedFlightDraft.trafficId,
+        flightStart: sanitizedFlightDraft.flightStart,
+        flightEnd: sanitizedFlightDraft.flightEnd,
+        languages: [normalizeFlightLanguageValue(sanitizedFlightDraft.language)],
+        mediums: [asString(sanitizedFlightDraft.medium).toUpperCase()],
+        forceRefreshCandidates: shouldForceRefreshCandidates,
+      };
       updateDraft((current) => ({
         ...current,
         flights: current.flights.map((item) => item.id === flightModalBaseline.id ? { ...sanitizedFlightDraft, id: item.id } : item),
@@ -5155,6 +5536,13 @@ export default function TrafficPage() {
     stationLookupMetaByCodeRef.current = stationLookupMetaByCode;
   }, [stationLookupMetaByCode]);
 
+  useEffect(() => () => {
+    if (syncMissingStationsResolverRef.current) {
+      syncMissingStationsResolverRef.current([]);
+      syncMissingStationsResolverRef.current = null;
+    }
+  }, []);
+
   const selectedDeliveryStationLabel = useMemo(() => {
     const code = asString(selectedDeliveryStationCode).toUpperCase();
     if (!code) {
@@ -5281,6 +5669,245 @@ export default function TrafficPage() {
       toast.error("Unable to copy HTML", "Clipboard access is unavailable in this browser.");
     }
   }, [activeEmailPreviewHtml, toast]);
+
+  const handleSendTrafficEmail = useCallback(async () => {
+    if (!canEditTradsphere || isSaving || isSendingEmail || isMarkingTrafficSent || isSentLocked) {
+      return;
+    }
+    if (!activeDraft?.email || !activeEmailWorkspace || !activeTrafficId) {
+      toast.info("Select a traffic record", "Open a traffic record with an email draft before sending.");
+      return;
+    }
+    if (isLocalTrafficId(activeTrafficId)) {
+      toast.info("Save before sending", "This traffic draft must be saved before sending email.");
+      return;
+    }
+
+    const toEmails = asStringArray(activeDraft.email.toEmails).map((item) => item.toLowerCase());
+    const ccEmails = asStringArray(activeDraft.email.ccEmails).map((item) => item.toLowerCase());
+    const bccEmails = asStringArray(activeDraft.email.bccEmails).map((item) => item.toLowerCase());
+    const subject = asString(activeDraft.email.subject);
+    if (toEmails.length === 0) {
+      toast.error("Missing recipients", "Add at least one To email before sending.");
+      return;
+    }
+    if (!subject) {
+      toast.error("Missing subject", "Email subject is required before sending.");
+      return;
+    }
+
+    const accountCode = asString(activeDraft.traffic.accountCode).toUpperCase();
+    const accountLabel = accountNameByCode[accountCode] || accountCode || "Tradsphere";
+    const body = persistTrafficEmailBody({
+      workspace: {
+        bodyContent: activeEmailWorkspace.bodyContent,
+        instructionsContent: activeEmailWorkspace.instructionsContent,
+        downloadLinks: activeEmailWorkspace.downloadLinks,
+      },
+      subject,
+      accountLabel,
+      campaignLabel: asString(activeDraft.traffic.campaign),
+      statusLabel: formatStatusOptionLabel(activeDraft.traffic.status),
+    });
+    if (!asString(body)) {
+      toast.error("Missing email body", "Email body is required before sending.");
+      return;
+    }
+
+    setIsSendingEmail(true);
+    setError(null);
+    try {
+      const responsePayload = await requestJson(
+        `/api/tradsphere/v1/traffic/email/send?trafficId=${encodeURIComponent(activeTrafficId)}`,
+        {
+          method: "POST",
+          headers: requestHeaders,
+          body: {
+            toEmails,
+            ccEmails,
+            bccEmails,
+            subject,
+            body,
+          },
+          successToast: false,
+        },
+      );
+      const responseData = unwrapData(responsePayload);
+      const nextEmail = normalizeTrafficEmail(
+        isRecord(responseData) && isRecord(responseData.email)
+          ? responseData.email
+          : responseData,
+      );
+      if (!nextEmail) {
+        throw new Error("Invalid email send response.");
+      }
+
+      setDetailBaseline((current) => {
+        if (!current || asString(current.traffic.id) !== activeTrafficId) {
+          return current;
+        }
+        return computeSummary({
+          ...current,
+          email: nextEmail,
+        });
+      });
+      setDetailDraft((current) => {
+        if (!current || asString(current.traffic.id) !== activeTrafficId) {
+          return current;
+        }
+        return computeSummary({
+          ...current,
+          email: nextEmail,
+        });
+      });
+      setDraftSessionsByTrafficId((current) => {
+        const session = current[activeTrafficId];
+        if (!session) {
+          return current;
+        }
+        return {
+          ...current,
+          [activeTrafficId]: {
+            baseline: session.baseline
+              ? computeSummary({
+                  ...session.baseline,
+                  email: nextEmail,
+                })
+              : session.baseline,
+            draft: computeSummary({
+              ...session.draft,
+              email: nextEmail,
+            }),
+          },
+        };
+      });
+      setEmailSendSuccessPrompt({
+        trafficId: activeTrafficId,
+        recipientCount: toEmails.length,
+        askMarkSent: asString(activeDraft.traffic.status).toLowerCase() !== "sent",
+      });
+      setIsEmailPreviewOpen(false);
+    } catch (sendError) {
+      const message = getTrafficErrorMessage(sendError, "Failed to send email.");
+      const attemptAt = new Date().toISOString();
+      const applyFailedSendState = (current: TrafficDetail | null): TrafficDetail | null => {
+        if (!current || asString(current.traffic.id) !== activeTrafficId || !current.email) {
+          return current;
+        }
+        return computeSummary({
+          ...current,
+          email: {
+            ...current.email,
+            sentStatus: "failed",
+            sentAt: null,
+            lastSendAttemptAt: attemptAt,
+            lastSendError: message,
+          },
+        });
+      };
+      setDetailBaseline((current) => applyFailedSendState(current));
+      setDetailDraft((current) => applyFailedSendState(current));
+      setError(message);
+      toast.error("Send failed", message);
+    } finally {
+      setIsSendingEmail(false);
+    }
+  }, [
+    activeDraft,
+    activeEmailWorkspace,
+    activeTrafficId,
+    accountNameByCode,
+    canEditTradsphere,
+    isSaving,
+    isSendingEmail,
+    isMarkingTrafficSent,
+    isSentLocked,
+    requestHeaders,
+    requestJson,
+    toast,
+  ]);
+
+  const handleOpenEmailPreviewModal = useCallback(() => {
+    if (!activeDraft || !activeDraft.email || !activeEmailWorkspace) {
+      return;
+    }
+    setIsEmailPreviewOpen(true);
+  }, [activeDraft, activeEmailWorkspace]);
+
+  const handleMarkTrafficStatusSentAfterEmail = useCallback(async () => {
+    const prompt = emailSendSuccessPrompt;
+    if (!prompt) {
+      return;
+    }
+    const trafficId = asString(prompt.trafficId);
+    if (!trafficId || isLocalTrafficId(trafficId)) {
+      setEmailSendSuccessPrompt(null);
+      return;
+    }
+
+    setIsMarkingTrafficSent(true);
+    setError(null);
+    try {
+      const payload = await requestJson(`/api/tradsphere/v1/traffic?id=${encodeURIComponent(trafficId)}`, {
+        method: "PUT",
+        headers: requestHeaders,
+        body: { status: "sent" },
+        successToast: false,
+      });
+      const data = unwrapData(payload);
+      const persistedStatus = asString(isRecord(data) ? data.status : "").toLowerCase() || "sent";
+
+      const applyStatus = (current: TrafficDetail | null): TrafficDetail | null => {
+        if (!current || asString(current.traffic.id) !== trafficId) {
+          return current;
+        }
+        return computeSummary({
+          ...current,
+          traffic: {
+            ...current.traffic,
+            status: persistedStatus as TrafficStatus,
+          },
+        });
+      };
+      setDetailBaseline((current) => applyStatus(current));
+      setDetailDraft((current) => applyStatus(current));
+      setDraftSessionsByTrafficId((current) => {
+        const session = current[trafficId];
+        if (!session) {
+          return current;
+        }
+        return {
+          ...current,
+          [trafficId]: {
+            baseline: session.baseline
+              ? computeSummary({
+                  ...session.baseline,
+                  traffic: {
+                    ...session.baseline.traffic,
+                    status: persistedStatus as TrafficStatus,
+                  },
+                })
+              : session.baseline,
+            draft: computeSummary({
+              ...session.draft,
+              traffic: {
+                ...session.draft.traffic,
+                status: persistedStatus as TrafficStatus,
+              },
+            }),
+          },
+        };
+      });
+      setEmailSendSuccessPrompt(null);
+      toast.success("Traffic status updated", "Traffic status has been marked as Sent.");
+    } catch (statusError) {
+      const message = getTrafficErrorMessage(statusError, "Failed to update traffic status.");
+      setError(message);
+      toast.error("Status update failed", message);
+    } finally {
+      setIsMarkingTrafficSent(false);
+    }
+  }, [emailSendSuccessPrompt, requestHeaders, requestJson, toast]);
 
   const normalizedAppliedTrafficSearch = useMemo(
     () => normalizeSearchKeyword(appliedTrafficSearch),
@@ -5464,7 +6091,7 @@ export default function TrafficPage() {
                 const isDraft = asString(item.status).toLowerCase() === "draft";
                 const itemHasUnsavedChanges = unsavedTrafficIds.has(item.id);
                 const shouldHardDelete = itemHasUnsavedChanges || isDraft;
-                const isDeletingCard = asString(deletingTrafficId) === item.id;
+                const isDeletingCard = deletingTrafficIdSet.has(item.id);
                 const displayCampaign = active && activeDraft ? activeDraft.traffic.campaign : item.campaign;
                 const displayStatus = active && activeDraft ? activeDraft.traffic.status : item.status;
                 return (
@@ -5526,7 +6153,7 @@ export default function TrafficPage() {
                               }
                               openTrafficRemovalDialog(item.id, "archive");
                             }}
-                            disabled={!canEditTradsphere || isSaving || isDeletingTraffic || isDeletingCard || isLoadingAccountTraffic || isLoadingDetail}
+                            disabled={!canEditTradsphere || isSaving || isDeletingCard || isLoadingAccountTraffic || isLoadingDetail}
                             className="!h-6 !w-6 !rounded-full !p-0 text-rose-500 hover:!bg-rose-50 hover:!scale-105 hover:text-rose-600 focus-visible:!bg-rose-50 focus-visible:!scale-105 focus-visible:text-rose-600 [&_svg]:!h-3.5 [&_svg]:!w-3.5 [&_svg]:text-rose-500 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110 hover:[&_svg]:text-rose-600 focus-visible:[&_svg]:text-rose-600"
                           />
                         </div>
@@ -5539,7 +6166,7 @@ export default function TrafficPage() {
           </div>
         </SectionCard>
 
-        <div className="space-y-4">
+        <div className="relative space-y-4">
           {!activeDraft ? (
             <SectionCard title="Traffic Workspace" contentClassName="space-y-3">
               <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-sm text-slate-600">
@@ -5600,7 +6227,7 @@ export default function TrafficPage() {
                   }
                   openTrafficRemovalDialog(selectedTrafficId, "archive");
                 }}
-                disabled={!selectedTrafficId || !canEditTradsphere || isSaving || isDeletingTraffic || isSentLocked || hasUnsavedChanges}
+                disabled={!selectedTrafficId || !canEditTradsphere || isSaving || isDeletingSelectedTraffic || isSentLocked || hasUnsavedChanges}
                 className="!h-7 !w-7 !p-0 text-rose-600 hover:text-rose-700 focus-visible:text-rose-700 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:text-rose-600 hover:[&_svg]:text-rose-700 focus-visible:[&_svg]:text-rose-700"
               />
             )}
@@ -5994,30 +6621,28 @@ export default function TrafficPage() {
                   tooltip="Preview email HTML"
                   aria-label="Preview email HTML"
                   title="Preview email HTML"
-                  onClick={() => setIsEmailPreviewOpen(true)}
+                  onClick={handleOpenEmailPreviewModal}
                   disabled={!activeDraft || !activeDraft.email || !activeEmailWorkspace}
                   className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
                 />
                 <ActionIconButton
-                  icon={<Send />}
-                  tooltip="Mark email as ready"
-                  aria-label="Mark email as ready"
-                  title="Mark email as ready"
+                  icon={isSendingEmail ? <Loader2 className="animate-spin" /> : <Send />}
+                  tooltip={isSendingEmail ? "Sending email..." : "Review and send email"}
+                  aria-label={isSendingEmail ? "Sending email" : "Review and send email"}
+                  title={isSendingEmail ? "Sending email..." : "Review and send email"}
                   onClick={() => {
-                    if (!activeDraft) {
-                      return;
-                    }
-                    updateDraft((current) => ({
-                      ...current,
-                      email: current.email
-                        ? {
-                            ...current.email,
-                            sentStatus: "ready",
-                          }
-                        : current.email,
-                    }));
+                    handleOpenEmailPreviewModal();
                   }}
-                  disabled={!canEditTradsphere || isSaving || isSentLocked || !activeDraft}
+                  disabled={
+                    !canEditTradsphere
+                    || isSentLocked
+                    || !activeDraft
+                    || !activeDraft.email
+                    || !activeEmailWorkspace
+                    || isSaving
+                    || isSendingEmail
+                    || isMarkingTrafficSent
+                  }
                   className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
                 />
               </div>
@@ -6235,13 +6860,22 @@ export default function TrafficPage() {
           ) : null}
             </>
           )}
+          {isDeletingSelectedTraffic ? (
+            <SectionLoadingOverlay message="Deleting traffic..." />
+          ) : null}
         </div>
 
-        {(isLoadingAccountTraffic || isLoadingDetail || isSaving || isDeletingSelectedTraffic) ? (
+        {(isLoadActionOverlayVisible || isChipRefreshOverlayVisible || isSaving || isSendingEmail) ? (
           <SectionLoadingOverlay
-            message={isDeletingSelectedTraffic
-              ? "Deleting traffic..."
-              : (isSaving ? "Saving traffic changes..." : "Loading traffic data...")}
+            message={
+              isSendingEmail
+                ? "Sending email..."
+                : isLoadActionOverlayVisible
+                  ? "Loading traffic data..."
+                : isChipRefreshOverlayVisible
+                  ? "Loading latest traffic data..."
+                : (isSaving ? "Saving traffic changes..." : "Loading traffic data...")
+            }
           />
         ) : null}
       </div>
@@ -6253,7 +6887,7 @@ export default function TrafficPage() {
                 <Button
                   variant="outline"
                   onClick={() => handleDiscard()}
-                  disabled={isSaving || isDeletingSelectedTraffic || isSentLocked}
+                  disabled={isSaving || isSendingEmail || isMarkingTrafficSent || isDeletingSelectedTraffic || isSentLocked}
                 >
                   Revert
                 </Button>
@@ -6287,7 +6921,7 @@ export default function TrafficPage() {
                     setIsUnsavedDialogOpen(true);
                     return;
                   }
-                  void handleRefresh();
+                  void handleRefreshFromChip();
                 }}
                 disabled={!activeAccountCode || !isOnline || isSaving || isDeletingTraffic || isLoadingAccountTraffic || isLoadingDetail}
                 refreshing={isDeletingTraffic || isRefreshingAccountTraffic || isLoadingDetail}
@@ -6352,7 +6986,7 @@ export default function TrafficPage() {
           setIsEmailPreviewOpen(open);
         }}
       >
-        <DialogContent className="!h-[90vh] !max-h-[90vh] !w-[min(96vw,1100px)] !max-w-[1100px] overflow-hidden p-0">
+        <DialogContent className="!h-[92vh] !max-h-[92vh] !w-[min(96vw,1160px)] !max-w-[1160px] overflow-hidden p-0">
           <DialogClose
             className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
             aria-label="Close email preview modal"
@@ -6362,28 +6996,110 @@ export default function TrafficPage() {
           <DialogHeader className="border-b border-slate-200 px-5 py-4">
             <div className="flex items-center justify-between gap-2">
               <DialogTitle>Email Preview</DialogTitle>
-              <ActionIconButton
-                icon={<Copy />}
-                tooltip="Copy email HTML"
-                aria-label="Copy email HTML"
-                title="Copy email HTML"
-                onClick={() => {
-                  void handleCopyEmailHtml();
-                }}
-                disabled={!activeEmailPreviewHtml}
-                className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
-              />
+              <div className="flex items-center gap-2">
+                <ActionIconButton
+                  icon={<Copy />}
+                  tooltip="Copy email HTML"
+                  aria-label="Copy email HTML"
+                  title="Copy email HTML"
+                  onClick={() => {
+                    void handleCopyEmailHtml();
+                  }}
+                  disabled={!activeEmailPreviewHtml}
+                  className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
+                />
+                <Button
+                  onClick={() => {
+                    void handleSendTrafficEmail();
+                  }}
+                  disabled={!canSendTrafficEmail}
+                >
+                  {isSendingEmail ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      Sending...
+                    </>
+                  ) : (
+                    <>
+                      <Send className="size-4" />
+                      Send
+                    </>
+                  )}
+                </Button>
+              </div>
             </div>
             <DialogDescription>
-              Offline preview using the current email workspace and traffic cache data.
+              Review recipients and final HTML before sending.
             </DialogDescription>
           </DialogHeader>
-          <div className="h-[calc(90vh-5.25rem)] overflow-y-auto bg-slate-100 p-4">
+          <div className="border-b border-slate-200 bg-white px-5 py-4">
+            {!activeDraft?.email ? (
+              <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
+                Email draft is unavailable for this traffic record.
+              </div>
+            ) : (
+              <div className="space-y-2">
+                <EmailChipsInput
+                  value={activeDraft.email.toEmails || []}
+                  placeholder="To emails"
+                  disabled={!canEditTradsphere || isSaving || isSendingEmail || isMarkingTrafficSent || isSentLocked}
+                  labelByEmail={contactNameByEmail}
+                  onChange={(nextEmails) => updateDraft((current) => ({
+                    ...current,
+                    email: current.email
+                      ? {
+                          ...current.email,
+                          toEmails: nextEmails,
+                        }
+                      : current.email,
+                  }))}
+                />
+                <div className="grid gap-2 md:grid-cols-2">
+                  <EmailChipsInput
+                    value={activeDraft.email.ccEmails || []}
+                    placeholder="CC emails"
+                    disabled={!canEditTradsphere || isSaving || isSendingEmail || isMarkingTrafficSent || isSentLocked}
+                    labelByEmail={contactNameByEmail}
+                    onChange={(nextEmails) => updateDraft((current) => ({
+                      ...current,
+                      email: current.email
+                        ? {
+                            ...current.email,
+                            ccEmails: nextEmails,
+                          }
+                        : current.email,
+                    }))}
+                  />
+                  <EmailChipsInput
+                    value={activeDraft.email.bccEmails || []}
+                    placeholder="BCC emails"
+                    disabled={!canEditTradsphere || isSaving || isSendingEmail || isMarkingTrafficSent || isSentLocked}
+                    labelByEmail={contactNameByEmail}
+                    onChange={(nextEmails) => updateDraft((current) => ({
+                      ...current,
+                      email: current.email
+                        ? {
+                            ...current.email,
+                            bccEmails: nextEmails,
+                          }
+                        : current.email,
+                    }))}
+                  />
+                </div>
+              </div>
+            )}
+            {activeTrafficId && isLocalTrafficId(activeTrafficId) ? (
+              <p className="mt-2 text-xs text-amber-700">
+                Save this traffic draft first. Sending is available after the record has a persisted traffic ID.
+              </p>
+            ) : null}
+          </div>
+          <div className="h-[calc(92vh-16.5rem)] overflow-y-auto bg-slate-100 p-4">
             <div className="mx-auto h-full w-full max-w-[980px] overflow-hidden rounded-xl border border-blue-100 bg-white shadow-sm">
               <iframe
                 title="Traffic email preview"
                 srcDoc={activeEmailPreviewHtml}
-                className="h-full min-h-[980px] w-full border-0 bg-white"
+                className="h-full min-h-[920px] w-full border-0 bg-white"
               />
             </div>
           </div>
@@ -6737,6 +7453,87 @@ export default function TrafficPage() {
               onClick={() => handleResolveLastFlightDelete(true)}
             >
               Clear All Stations
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={isSyncMissingStationsDialogOpen}
+        onOpenChange={(open) => {
+          if (!open) {
+            resolveSyncMissingStationsDialog([]);
+            return;
+          }
+          setIsSyncMissingStationsDialogOpen(true);
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Remove Non-Matching Stations?</DialogTitle>
+            <DialogDescription>
+              {pendingSyncMissingStationsCodes.length} existing station(s) are not in the synced schedule result.
+              Select which station(s) to remove from this traffic record.
+            </DialogDescription>
+          </DialogHeader>
+          {pendingSyncMissingStationsCodes.length > 0 ? (
+            <div className="space-y-2">
+              <div className="flex items-center justify-between gap-2 text-xs text-slate-600">
+                <span>{selectedSyncMissingStationsCodes.length} selected</span>
+                <div className="flex items-center gap-2">
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-7 px-2 text-xs"
+                    onClick={handleSelectAllSyncMissingStations}
+                  >
+                    Select All
+                  </Button>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-7 px-2 text-xs"
+                    onClick={handleClearSyncMissingStations}
+                  >
+                    Clear
+                  </Button>
+                </div>
+              </div>
+              <div className="max-h-52 space-y-2 overflow-y-auto rounded-md border border-slate-200 bg-slate-50 p-2">
+                {pendingSyncMissingStationsCodes.map((stationCode) => {
+                  const checked = selectedSyncMissingStationsCodes.includes(stationCode);
+                  return (
+                    <label
+                      key={stationCode}
+                      className={[
+                        "flex cursor-pointer items-center gap-2 rounded-md border px-2 py-2 text-sm",
+                        checked ? "border-rose-300 bg-rose-50 text-rose-900" : "border-slate-200 bg-white text-slate-700",
+                      ].join(" ")}
+                    >
+                      <input
+                        type="checkbox"
+                        className="h-4 w-4 rounded border-slate-300"
+                        checked={checked}
+                        onChange={() => {
+                          toggleSyncMissingStationSelection(stationCode);
+                        }}
+                      />
+                      <span className="font-medium">{stationCode}</span>
+                    </label>
+                  );
+                })}
+              </div>
+            </div>
+          ) : null}
+          <DialogFooter>
+            <Button variant="outline" onClick={() => resolveSyncMissingStationsDialog([])}>
+              Keep Existing
+            </Button>
+            <Button
+              className="bg-rose-600 text-white hover:bg-rose-700"
+              onClick={handleConfirmSyncMissingStationsRemoval}
+            >
+              Remove Selected ({selectedSyncMissingStationsCodes.length})
             </Button>
           </DialogFooter>
         </DialogContent>
@@ -7185,7 +7982,7 @@ export default function TrafficPage() {
       <Dialog
         open={isArchiveDialogOpen}
         onOpenChange={(open) => {
-          if (isDeletingTraffic) {
+          if (isArchiveTargetDeleting) {
             return;
           }
           setIsArchiveDialogOpen(open);
@@ -7205,15 +8002,15 @@ export default function TrafficPage() {
             </DialogDescription>
           </DialogHeader>
           <DialogFooter>
-            <Button variant="outline" disabled={isDeletingTraffic} onClick={() => setIsArchiveDialogOpen(false)}>
+            <Button variant="outline" disabled={isArchiveTargetDeleting} onClick={() => setIsArchiveDialogOpen(false)}>
               Cancel
             </Button>
             <Button
               className="border-rose-700 bg-rose-600 text-white hover:bg-rose-700"
-              disabled={isDeletingTraffic}
+              disabled={isArchiveTargetDeleting}
               onClick={() => void handleArchiveTraffic()}
             >
-              {isDeletingTraffic ? (
+              {isArchiveTargetDeleting ? (
                 <>
                   <Loader2 className="size-4 animate-spin" />
                   Processing...
@@ -7222,6 +8019,56 @@ export default function TrafficPage() {
                 archiveDialogMode === "delete" ? "Delete" : "Archive"
               )}
             </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={Boolean(emailSendSuccessPrompt)}
+        onOpenChange={(open) => {
+          if (isMarkingTrafficSent) {
+            return;
+          }
+          if (!open) {
+            setEmailSendSuccessPrompt(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Email sent successfully</DialogTitle>
+            <DialogDescription>
+              SMTP delivery succeeded for {emailSendSuccessPrompt?.recipientCount ?? 0} recipient(s).
+              {emailSendSuccessPrompt?.askMarkSent
+                ? " Do you want to mark this traffic status as Sent now?"
+                : ""}
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              disabled={isMarkingTrafficSent}
+              onClick={() => setEmailSendSuccessPrompt(null)}
+            >
+              {emailSendSuccessPrompt?.askMarkSent ? "Not now" : "Close"}
+            </Button>
+            {emailSendSuccessPrompt?.askMarkSent ? (
+              <Button
+                disabled={isMarkingTrafficSent}
+                onClick={() => {
+                  void handleMarkTrafficStatusSentAfterEmail();
+                }}
+              >
+                {isMarkingTrafficSent ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    Updating...
+                  </>
+                ) : (
+                  "Mark status as Sent"
+                )}
+              </Button>
+            ) : null}
           </DialogFooter>
         </DialogContent>
       </Dialog>

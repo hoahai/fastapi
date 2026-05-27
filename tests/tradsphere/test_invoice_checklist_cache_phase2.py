@@ -239,7 +239,7 @@ class InvoiceChecklistInvalidationTests(unittest.TestCase):
         self.assertEqual(mock_delete.call_args.kwargs["bucket"], "db_reads")
         self.assertEqual(
             mock_delete.call_args.kwargs["cache_key_prefix"],
-            "tradsphere_db_reads::inv_checklist_",
+            "tradsphere_db_reads::inv_checklist",
         )
 
     def test_row_invalidation_helper_uses_targeted_row_prefix(self):
@@ -1184,7 +1184,41 @@ class InvoiceChecklistBulkSaveFlowTests(unittest.TestCase):
         self.assertEqual(len(save_call_kwargs["station_updates"]), 1)
         self.assertEqual(len(save_call_kwargs["note_updates"]), 1)
 
-    def test_bulk_save_rejects_missing_checklist_before_write(self):
+    def test_bulk_save_ignores_missing_checklist_delete_before_write(self):
+        save_call_kwargs: dict = {}
+
+        def _safe_db_side_effect(func, *args, **kwargs):
+            if func is inv.list_inv_checklist_rows_by_ids:
+                return []
+            if func is inv.save_inv_checklist_bulk_changes:
+                save_call_kwargs.update(kwargs)
+                return {"checklistIds": {}, "stationIds": {}, "noteIds": {}}
+            raise AssertionError(f"Unexpected db helper call: {getattr(func, '__name__', func)}")
+
+        payload = {
+            "year": 2026,
+            "month": 4,
+            "createChecklists": [],
+            "checklistUpdates": [],
+            "deleteChecklistIds": ["missing-checklist-id"],
+            "createStations": [],
+            "stationUpdates": [],
+            "deleteStationIds": [],
+            "createNotes": [],
+            "noteUpdates": [],
+            "deleteNoteIds": [],
+        }
+
+        with patch.object(inv, "_safe_db_call", side_effect=_safe_db_side_effect), patch.object(
+            inv, "list_invoice_checklists_data", return_value=[]
+        ):
+            result = inv.bulk_save_invoice_checklists_data(payload=payload)
+
+        self.assertEqual(result["deleted"]["checklistIds"], [])
+        self.assertEqual(result["summary"]["deletedChecklistsCount"], 0)
+        self.assertEqual(save_call_kwargs["checklist_deletes"], [])
+
+    def test_bulk_save_rejects_missing_checklist_update_before_write(self):
         def _safe_db_side_effect(func, *args, **kwargs):
             if func is inv.list_inv_checklist_rows_by_ids:
                 return []
@@ -1196,8 +1230,8 @@ class InvoiceChecklistBulkSaveFlowTests(unittest.TestCase):
             "year": 2026,
             "month": 4,
             "createChecklists": [],
-            "checklistUpdates": [],
-            "deleteChecklistIds": ["missing-checklist-id"],
+            "checklistUpdates": [{"checklistId": "missing-checklist-id", "status": "DONE"}],
+            "deleteChecklistIds": [],
             "createStations": [],
             "stationUpdates": [],
             "deleteStationIds": [],
@@ -1261,6 +1295,103 @@ class InvoiceChecklistBulkSaveFlowTests(unittest.TestCase):
         with patch.object(inv, "_safe_db_call", side_effect=_safe_db_side_effect):
             with self.assertRaisesRegex(inv.NotFoundError, "Checklist note not found: 9992"):
                 inv.bulk_save_invoice_checklists_data(payload=payload)
+
+
+class InvoiceChecklistUiLoadRecoveryTests(unittest.TestCase):
+    def test_ui_load_recovers_from_stale_selected_checklist_id(self):
+        stale_rows = [
+            {
+                "id": "stale-id",
+                "accountCode": "TAAA",
+                "year": 2026,
+                "month": 5,
+                "status": "OPEN",
+                "note": "",
+                "dateCreated": None,
+                "dateUpdated": None,
+                "stationCount": 0,
+            }
+        ]
+        fresh_rows = [
+            {
+                "id": "fresh-id",
+                "accountCode": "TAAA",
+                "year": 2026,
+                "month": 5,
+                "status": "OPEN",
+                "note": "",
+                "dateCreated": None,
+                "dateUpdated": None,
+                "stationCount": 0,
+            }
+        ]
+        stale_phase = {"enabled": True}
+
+        def _list_side_effect(*, account_code=None, year=None, month=None, status=None):
+            del account_code, status
+            if year == 2026 and month == 5:
+                return stale_rows if stale_phase["enabled"] else fresh_rows
+            if year is None and month is None:
+                return stale_rows if stale_phase["enabled"] else fresh_rows
+            return []
+
+        def _detail_side_effect(
+            *,
+            checklist_id=None,
+            account_code=None,
+            year=None,
+            month=None,
+            status=None,
+            include_stations=False,
+            include_notes=False,
+            include_attachments=False,
+        ):
+            del account_code, year, month, status, include_stations, include_notes, include_attachments
+            if checklist_id == "stale-id":
+                raise inv.NotFoundError("Checklist not found: stale-id")
+            if checklist_id == "fresh-id":
+                return {
+                    "id": "fresh-id",
+                    "accountCode": "TAAA",
+                    "year": 2026,
+                    "month": 5,
+                    "status": "OPEN",
+                    "note": "",
+                    "stations": [],
+                }
+            raise AssertionError(f"Unexpected checklist_id: {checklist_id}")
+
+        def _invalidate_side_effect():
+            stale_phase["enabled"] = False
+            return 1
+
+        with patch.object(inv, "list_invoice_checklists_data", side_effect=_list_side_effect), patch.object(
+            inv, "get_invoice_checklists_data", side_effect=_detail_side_effect
+        ), patch.object(
+            inv, "_build_account_names_map", return_value={"TAAA": "Alpha Motors"}
+        ), patch.object(
+            inv, "_build_checklist_station_search_map", return_value={}
+        ), patch.object(
+            inv, "_build_expected_schedule_pairs_by_account", return_value={}
+        ), patch.object(
+            inv, "_build_mismatch_rows_for_period", return_value=[]
+        ), patch.object(
+            inv, "_build_station_metadata", return_value={}
+        ), patch.object(
+            inv, "invalidate_inv_checklist_related_cache_for_bulk_write", side_effect=_invalidate_side_effect
+        ) as mock_invalidate:
+            result = inv.get_invoice_checklists_ui_load_data(
+                year=2026,
+                month=5,
+                checklist_id="stale-id",
+                include_selected_detail=True,
+            )
+
+        self.assertEqual(mock_invalidate.call_count, 1)
+        self.assertEqual(result["selectedChecklistId"], "fresh-id")
+        self.assertEqual([row["id"] for row in result["checklists"]], ["fresh-id"])
+        selected = result.get("selectedChecklist") or {}
+        self.assertEqual(selected.get("id"), "fresh-id")
 
 
 class InvoiceChecklistBulkSaveDbTests(unittest.TestCase):

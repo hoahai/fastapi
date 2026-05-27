@@ -42,6 +42,7 @@ from apps.tradsphere.api.v1.helpers.dbQueries import (
     insert_inv_checklist_station,
     insert_inv_checklist_stations_for_sync,
     insert_inv_note_attachment,
+    list_inv_checklist_periods,
     list_inv_checklists,
     list_inv_note_attachments,
     list_schedule_invoice_checklist_expected_rows,
@@ -1468,24 +1469,47 @@ def bulk_save_invoice_checklists_data(*, payload: dict) -> dict:
         checklist_updates.append(update_row)
         checklist_ids_for_lookup.append(checklist_id)
 
-    checklist_ids_to_validate = [
+    checklist_update_ids_to_validate = [
         checklist_id
-        for checklist_id in _normalized_text_values(delete_checklist_ids + checklist_ids_for_lookup)
+        for checklist_id in _normalized_text_values(checklist_ids_for_lookup)
         if checklist_id not in checklist_id_map.values()
     ]
-    if checklist_ids_to_validate:
+    if checklist_update_ids_to_validate:
         existing_checklists = _safe_db_call(
             list_inv_checklist_rows_by_ids,
-            checklist_ids=checklist_ids_to_validate,
+            checklist_ids=checklist_update_ids_to_validate,
         )
         existing_checklist_ids = {
             str((row or {}).get("id") or "").strip()
             for row in (existing_checklists or [])
             if str((row or {}).get("id") or "").strip()
         }
-        for checklist_id in checklist_ids_to_validate:
+        for checklist_id in checklist_update_ids_to_validate:
             if checklist_id not in existing_checklist_ids:
                 raise NotFoundError(f"Checklist not found: {checklist_id}")
+
+    normalized_delete_checklist_ids = _normalized_text_values(delete_checklist_ids)
+    delete_checklist_ids_to_lookup = [
+        checklist_id
+        for checklist_id in normalized_delete_checklist_ids
+        if checklist_id not in checklist_id_map.values()
+    ]
+    existing_delete_checklist_ids: set[str] = set()
+    if delete_checklist_ids_to_lookup:
+        existing_delete_rows = _safe_db_call(
+            list_inv_checklist_rows_by_ids,
+            checklist_ids=delete_checklist_ids_to_lookup,
+        )
+        existing_delete_checklist_ids = {
+            str((row or {}).get("id") or "").strip()
+            for row in (existing_delete_rows or [])
+            if str((row or {}).get("id") or "").strip()
+        }
+    effective_delete_checklist_ids = [
+        checklist_id
+        for checklist_id in normalized_delete_checklist_ids
+        if checklist_id in existing_delete_checklist_ids
+    ]
 
     station_creates_raw = _ensure_object_list(payload.get("createStations"), field="createStations")
     station_updates_raw = _ensure_object_list(payload.get("stationUpdates"), field="stationUpdates")
@@ -1658,7 +1682,7 @@ def bulk_save_invoice_checklists_data(*, payload: dict) -> dict:
         save_inv_checklist_bulk_changes,
         checklist_creates=checklist_creates,
         checklist_updates=checklist_updates,
-        checklist_deletes=_normalized_text_values(delete_checklist_ids),
+        checklist_deletes=effective_delete_checklist_ids,
         station_creates=station_creates,
         station_updates=station_updates,
         station_deletes=_normalized_int_values(delete_station_ids),
@@ -1670,7 +1694,7 @@ def bulk_save_invoice_checklists_data(*, payload: dict) -> dict:
 
     selected_checklist_id_raw = str(payload.get("selectedChecklistId") or "").strip()
     selected_checklist_id = checklist_id_map.get(selected_checklist_id_raw, selected_checklist_id_raw)
-    deleted_checklist_ids_set = set(_normalized_text_values(delete_checklist_ids))
+    deleted_checklist_ids_set = set(effective_delete_checklist_ids)
     if selected_checklist_id in deleted_checklist_ids_set:
         selected_checklist_id = None
 
@@ -1691,11 +1715,27 @@ def bulk_save_invoice_checklists_data(*, payload: dict) -> dict:
         year=selected_year,
         month=selected_month,
     )
+    checklist_ids = [
+        str(row.get("id") or "").strip()
+        for row in checklist_rows
+        if str(row.get("id") or "").strip()
+    ]
+    station_rows_for_summary = _safe_db_call(
+        list_inv_checklist_station_rows_for_checklists,
+        checklist_ids=checklist_ids,
+    ) if checklist_ids else []
+    matched_count_by_checklist = _build_matched_station_count_by_checklist(station_rows_for_summary)
+    checklist_rows_with_matched_count: list[dict] = []
+    for row in checklist_rows:
+        row_copy = dict(row)
+        checklist_row_id = str(row_copy.get("id") or "").strip()
+        row_copy["matchedStationCount"] = matched_count_by_checklist.get(checklist_row_id, 0)
+        checklist_rows_with_matched_count.append(row_copy)
 
     return {
         "year": selected_year,
         "month": selected_month,
-        "checklists": checklist_rows,
+        "checklists": checklist_rows_with_matched_count,
         "selectedChecklistId": selected_checklist_id,
         "selectedChecklist": selected_checklist,
         "mappings": {
@@ -1704,14 +1744,14 @@ def bulk_save_invoice_checklists_data(*, payload: dict) -> dict:
             "noteIds": dict(result.get("noteIds") or {}),
         },
         "deleted": {
-            "checklistIds": _normalized_text_values(delete_checklist_ids),
+            "checklistIds": effective_delete_checklist_ids,
             "stationIds": _normalized_int_values(delete_station_ids),
             "noteIds": _normalized_int_values(delete_note_ids),
         },
         "summary": {
             "createdChecklistsCount": len(checklist_creates),
             "updatedChecklistsCount": len(checklist_updates),
-            "deletedChecklistsCount": len(delete_checklist_ids),
+            "deletedChecklistsCount": len(effective_delete_checklist_ids),
             "createdStationsCount": len(station_creates),
             "updatedStationsCount": len(station_updates),
             "deletedStationsCount": len(delete_station_ids),
@@ -1874,6 +1914,22 @@ def _build_checklist_station_search_map(checklist_ids: list[str]) -> dict[str, l
     return mapped
 
 
+def _status_starts_with_matched(status: object) -> bool:
+    return str(status or "").strip().lower().startswith("matched")
+
+
+def _build_matched_station_count_by_checklist(station_rows: list[dict]) -> dict[str, int]:
+    counts: dict[str, int] = {}
+    for row in station_rows:
+        checklist_id = str((row or {}).get("checklistId") or "").strip()
+        if not checklist_id:
+            continue
+        if not _status_starts_with_matched((row or {}).get("status")):
+            continue
+        counts[checklist_id] = counts.get(checklist_id, 0) + 1
+    return counts
+
+
 def _build_expected_schedule_pairs_by_account(
     *,
     year: int,
@@ -1899,6 +1955,7 @@ def _build_mismatch_rows_for_period(
     *,
     checklist_rows: list[dict],
     expected_pairs_by_account: dict[str, set[tuple[int, str]]],
+    station_rows: list[dict] | None = None,
 ) -> list[dict]:
     checklist_ids: list[str] = []
     checklist_by_id: dict[str, dict] = {}
@@ -1912,13 +1969,15 @@ def _build_mismatch_rows_for_period(
     if not checklist_ids:
         return []
 
-    station_rows = _safe_db_call(
-        list_inv_checklist_station_rows_for_checklists,
-        checklist_ids=checklist_ids,
-    )
+    resolved_station_rows = station_rows
+    if resolved_station_rows is None:
+        resolved_station_rows = _safe_db_call(
+            list_inv_checklist_station_rows_for_checklists,
+            checklist_ids=checklist_ids,
+        )
 
     mismatches: list[dict] = []
-    for station_row in station_rows:
+    for station_row in resolved_station_rows:
         checklist_id = str(station_row.get("checklistId") or "").strip()
         checklist = checklist_by_id.get(checklist_id)
         if not checklist:
@@ -2046,6 +2105,7 @@ def sync_invoice_checklists_for_period_data(
         mismatch_rows_preview = _build_mismatch_rows_for_period(
             checklist_rows=existing_before,
             expected_pairs_by_account=expected_pairs_by_account,
+            station_rows=station_rows_for_plan,
         )
         return {
             "action": "generate" if not had_existing_checklists else "update",
@@ -2175,13 +2235,10 @@ def sync_invoice_checklists_for_period_data(
     if created_checklists or created_station_rows:
         _safe_db_call(invalidate_inv_checklist_related_cache_for_bulk_write)
 
-    final_checklist_rows = list_invoice_checklists_data(
-        year=selected_year,
-        month=selected_month,
-    )
     mismatch_rows = _build_mismatch_rows_for_period(
-        checklist_rows=final_checklist_rows,
+        checklist_rows=checklist_rows,
         expected_pairs_by_account=expected_pairs_by_account,
+        station_rows=station_rows_after_insert,
     )
 
     return {
@@ -2215,6 +2272,7 @@ def get_invoice_checklists_ui_load_data(
     month: int | None = None,
     checklist_id: str | None = None,
     include_selected_detail: bool = True,
+    _allow_stale_retry: bool = True,
 ) -> dict:
     if (year is None) != (month is None):
         raise ValueError("year and month must be provided together")
@@ -2231,10 +2289,10 @@ def get_invoice_checklists_ui_load_data(
         if normalized_month < 1 or normalized_month > 12:
             raise ValueError("month must be between 1 and 12")
 
-    all_checklists = list_invoice_checklists_data()
+    period_rows = _safe_db_call(list_inv_checklist_periods)
     period_seen: set[str] = set()
     periods: list[dict] = []
-    for row in all_checklists:
+    for row in period_rows:
         row_year = _ensure_optional_unsigned_int(row.get("year"), field="year")
         row_month = _ensure_optional_unsigned_int(row.get("month"), field="month")
         if row_year is None or row_month is None:
@@ -2286,12 +2344,22 @@ def get_invoice_checklists_ui_load_data(
         year=selected_year,
         month=selected_month,
     )
+    checklist_ids = [
+        str(item.get("id") or "").strip()
+        for item in selected_checklists
+        if str(item.get("id") or "").strip()
+    ]
     account_name_by_code = _build_account_names_map(
         [str(item.get("accountCode") or "") for item in selected_checklists]
     )
     checklist_station_search_map = _build_checklist_station_search_map(
-        [str(item.get("id") or "").strip() for item in selected_checklists]
+        checklist_ids
     )
+    station_rows_for_period = _safe_db_call(
+        list_inv_checklist_station_rows_for_checklists,
+        checklist_ids=checklist_ids,
+    ) if checklist_ids else []
+    matched_count_by_checklist = _build_matched_station_count_by_checklist(station_rows_for_period)
     expected_pairs_by_account = _build_expected_schedule_pairs_by_account(
         year=selected_year,
         month=selected_month,
@@ -2299,6 +2367,7 @@ def get_invoice_checklists_ui_load_data(
     mismatch_rows_for_period = _build_mismatch_rows_for_period(
         checklist_rows=selected_checklists,
         expected_pairs_by_account=expected_pairs_by_account,
+        station_rows=station_rows_for_period,
     )
     mismatch_count_by_checklist: dict[str, int] = {}
     for row in mismatch_rows_for_period:
@@ -2316,6 +2385,7 @@ def get_invoice_checklists_ui_load_data(
         row["accountName"] = account_name_by_code.get(account_code, "")
         row["quarter"] = _quarter_for_month(_ensure_optional_unsigned_int(row.get("month"), field="month"))
         row["searchStations"] = checklist_station_search_map.get(checklist_row_id, [])
+        row["matchedStationCount"] = matched_count_by_checklist.get(checklist_row_id, 0)
         row["expectedStationCount"] = len(expected_pairs_by_account.get(account_code, set()))
         row["mismatchStationCount"] = mismatch_count_by_checklist.get(checklist_row_id, 0)
         row["hasScheduleMismatch"] = row["mismatchStationCount"] > 0
@@ -2328,63 +2398,79 @@ def get_invoice_checklists_ui_load_data(
 
     selected_checklist: dict | None = None
     if selected_checklist_id and include_selected_detail:
-        detail = get_invoice_checklists_data(
-            checklist_id=selected_checklist_id,
-            include_stations=True,
-            include_notes=True,
-            include_attachments=True,
-        )
-        if not isinstance(detail, dict):
+        try:
+            detail = get_invoice_checklists_data(
+                checklist_id=selected_checklist_id,
+                include_stations=True,
+                include_notes=True,
+                include_attachments=True,
+            )
+        except NotFoundError:
+            # UI load endpoint should recover from stale checklist selections (for example
+            # when cached checklist summaries include a recently deleted checklist id).
+            if _allow_stale_retry:
+                invalidate_inv_checklist_related_cache_for_bulk_write()
+                return get_invoice_checklists_ui_load_data(
+                    year=selected_year,
+                    month=selected_month,
+                    checklist_id=None,
+                    include_selected_detail=include_selected_detail,
+                    _allow_stale_retry=False,
+                )
+            selected_checklist_id = None
+            detail = None
+        if detail is not None and not isinstance(detail, dict):
             raise SafeDatabaseError("Failed to load checklist detail")
-        selected_checklist = dict(detail)
+        selected_checklist = dict(detail) if isinstance(detail, dict) else None
 
-        account_code = str(selected_checklist.get("accountCode") or "").strip().upper()
-        selected_checklist["accountCode"] = account_code
-        selected_checklist["accountName"] = account_name_by_code.get(
-            account_code,
-            _build_account_names_map([account_code]).get(account_code, ""),
-        )
-        selected_checklist["quarter"] = _quarter_for_month(
-            _ensure_optional_unsigned_int(selected_checklist.get("month"), field="month")
-        )
+        if selected_checklist is not None:
+            account_code = str(selected_checklist.get("accountCode") or "").strip().upper()
+            selected_checklist["accountCode"] = account_code
+            selected_checklist["accountName"] = account_name_by_code.get(
+                account_code,
+                _build_account_names_map([account_code]).get(account_code, ""),
+            )
+            selected_checklist["quarter"] = _quarter_for_month(
+                _ensure_optional_unsigned_int(selected_checklist.get("month"), field="month")
+            )
 
-        station_codes = [
-            str(item.get("stationCode") or "").strip().upper()
-            for item in (selected_checklist.get("stations") or [])
-            if isinstance(item, dict)
-        ]
-        station_metadata = _build_station_metadata(station_codes)
-        stations: list[dict] = []
-        expected_pairs_for_selected_checklist = expected_pairs_by_account.get(account_code, set())
-        selected_checklist_mismatch_count = 0
-        for station_row in (selected_checklist.get("stations") or []):
-            if not isinstance(station_row, dict):
-                continue
-            station = dict(station_row)
-            station_est_num = _ensure_optional_unsigned_int(station.get("estNum"), field="estNum")
-            station_code = str(station.get("stationCode") or "").strip().upper()
-            meta = station_metadata.get(station_code, {})
-            station["stationCode"] = station_code
-            station["stationName"] = str(meta.get("stationName") or "").strip()
-            station["mediaType"] = str(meta.get("mediaType") or "").strip().upper()
-            station["repContacts"] = meta.get("repContacts") if isinstance(meta.get("repContacts"), list) else []
-            in_current_schedule = bool(
-                station_est_num is not None
-                and station_code
-                and (int(station_est_num), station_code) in expected_pairs_for_selected_checklist
-            )
-            station["inCurrentSchedule"] = in_current_schedule
-            station["scheduleMismatch"] = not in_current_schedule
-            station["scheduleMismatchReason"] = (
-                "NOT_IN_CURRENT_PERIOD_SCHEDULE" if not in_current_schedule else None
-            )
-            if not in_current_schedule:
-                selected_checklist_mismatch_count += 1
-            stations.append(station)
-        selected_checklist["stations"] = stations
-        selected_checklist["expectedStationCount"] = len(expected_pairs_for_selected_checklist)
-        selected_checklist["mismatchStationCount"] = selected_checklist_mismatch_count
-        selected_checklist["hasScheduleMismatch"] = selected_checklist_mismatch_count > 0
+            station_codes = [
+                str(item.get("stationCode") or "").strip().upper()
+                for item in (selected_checklist.get("stations") or [])
+                if isinstance(item, dict)
+            ]
+            station_metadata = _build_station_metadata(station_codes)
+            stations: list[dict] = []
+            expected_pairs_for_selected_checklist = expected_pairs_by_account.get(account_code, set())
+            selected_checklist_mismatch_count = 0
+            for station_row in (selected_checklist.get("stations") or []):
+                if not isinstance(station_row, dict):
+                    continue
+                station = dict(station_row)
+                station_est_num = _ensure_optional_unsigned_int(station.get("estNum"), field="estNum")
+                station_code = str(station.get("stationCode") or "").strip().upper()
+                meta = station_metadata.get(station_code, {})
+                station["stationCode"] = station_code
+                station["stationName"] = str(meta.get("stationName") or "").strip()
+                station["mediaType"] = str(meta.get("mediaType") or "").strip().upper()
+                station["repContacts"] = meta.get("repContacts") if isinstance(meta.get("repContacts"), list) else []
+                in_current_schedule = bool(
+                    station_est_num is not None
+                    and station_code
+                    and (int(station_est_num), station_code) in expected_pairs_for_selected_checklist
+                )
+                station["inCurrentSchedule"] = in_current_schedule
+                station["scheduleMismatch"] = not in_current_schedule
+                station["scheduleMismatchReason"] = (
+                    "NOT_IN_CURRENT_PERIOD_SCHEDULE" if not in_current_schedule else None
+                )
+                if not in_current_schedule:
+                    selected_checklist_mismatch_count += 1
+                stations.append(station)
+            selected_checklist["stations"] = stations
+            selected_checklist["expectedStationCount"] = len(expected_pairs_for_selected_checklist)
+            selected_checklist["mismatchStationCount"] = selected_checklist_mismatch_count
+            selected_checklist["hasScheduleMismatch"] = selected_checklist_mismatch_count > 0
 
     return {
         "periods": periods,

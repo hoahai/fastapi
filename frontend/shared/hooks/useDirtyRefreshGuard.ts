@@ -12,7 +12,10 @@ type DeferredApply = {
 export function useDirtyRefreshGuard(isDirty: boolean) {
   const requestIdRef = useRef(0);
   const deferredApplyRef = useRef<DeferredApply | null>(null);
+  const isDirtyRef = useRef(isDirty);
   const [hasDeferredUpdate, setHasDeferredUpdate] = useState(false);
+
+  isDirtyRef.current = isDirty;
 
   const clearDeferredUpdate = useCallback(() => {
     deferredApplyRef.current = null;
@@ -39,7 +42,7 @@ export function useDirtyRefreshGuard(isDirty: boolean) {
       if (!isLatestRequest(requestId)) {
         return "stale";
       }
-      if (options?.deferWhenDirty !== false && isDirty) {
+      if (options?.deferWhenDirty !== false && isDirtyRef.current) {
         deferredApplyRef.current = { requestId, apply };
         setHasDeferredUpdate(true);
         return "deferred";
@@ -48,12 +51,12 @@ export function useDirtyRefreshGuard(isDirty: boolean) {
       apply();
       return "applied";
     },
-    [clearDeferredUpdate, isDirty, isLatestRequest],
+    [clearDeferredUpdate, isLatestRequest],
   );
 
   const applyOrDefer = useCallback(
     (apply: () => void, options?: GuardApplyOptions): "applied" | "deferred" => {
-      if (options?.deferWhenDirty !== false && isDirty) {
+      if (options?.deferWhenDirty !== false && isDirtyRef.current) {
         deferredApplyRef.current = { requestId: requestIdRef.current, apply };
         setHasDeferredUpdate(true);
         return "deferred";
@@ -62,7 +65,7 @@ export function useDirtyRefreshGuard(isDirty: boolean) {
       apply();
       return "applied";
     },
-    [clearDeferredUpdate, isDirty],
+    [clearDeferredUpdate],
   );
 
   useEffect(() => {

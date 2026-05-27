@@ -28,6 +28,7 @@ _DB_READ_TTL_DEFAULT_OVERRIDES = {
     # Station-matched invoice checklist notes are read-heavy in UI.
     "db_invoice_checklist_notes_ttl_time": 43200,
 }
+_DEFAULT_SMTP_TIMEOUT_SECONDS = 20.0
 
 _DEFAULT_DB_TABLES = {
     "ACCOUNTS": "TradSphere_Accounts",
@@ -93,6 +94,35 @@ _ENUM_KEYS = {
     "media_type": "MEDIA_TYPE",
     "contacttype": "CONTACT_TYPE",
     "contact_type": "CONTACT_TYPE",
+}
+_SMTP_KEYS = {
+    "host": "host",
+    "server": "host",
+    "smtp_host": "host",
+    "port": "port",
+    "smtp_port": "port",
+    "username": "username",
+    "user": "username",
+    "smtp_username": "username",
+    "password": "password",
+    "pass": "password",
+    "smtp_password": "password",
+    "from": "from_email",
+    "fromemail": "from_email",
+    "from_email": "from_email",
+    "email_from": "from_email",
+    "fromname": "from_name",
+    "from_name": "from_name",
+    "replyto": "reply_to",
+    "reply_to": "reply_to",
+    "usetls": "use_tls",
+    "use_tls": "use_tls",
+    "starttls": "use_tls",
+    "usessl": "use_ssl",
+    "use_ssl": "use_ssl",
+    "timeout": "timeout_seconds",
+    "timeoutseconds": "timeout_seconds",
+    "timeout_seconds": "timeout_seconds",
 }
 
 _VALIDATED_TENANTS: set[str] = set()
@@ -228,6 +258,130 @@ def get_default_contact_type() -> str:
     return values[0]
 
 
+def _normalize_bool(value: object, *, field: str) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = str(value or "").strip().lower()
+    if text in {"1", "true", "yes", "y", "on"}:
+        return True
+    if text in {"0", "false", "no", "n", "off"}:
+        return False
+    raise TenantConfigValidationError(
+        app_name=APP_NAME,
+        invalid=[f"tradsphere.smtp.{field}"],
+    )
+
+
+def _normalize_port(value: object, *, field: str = "port") -> int:
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError) as exc:
+        raise TenantConfigValidationError(
+            app_name=APP_NAME,
+            invalid=[f"tradsphere.smtp.{field}"],
+        ) from exc
+    if parsed < 1 or parsed > 65535:
+        raise TenantConfigValidationError(
+            app_name=APP_NAME,
+            invalid=[f"tradsphere.smtp.{field}"],
+        )
+    return parsed
+
+
+def _normalize_timeout(value: object, *, field: str = "timeout_seconds") -> float:
+    try:
+        parsed = float(str(value).strip())
+    except (TypeError, ValueError) as exc:
+        raise TenantConfigValidationError(
+            app_name=APP_NAME,
+            invalid=[f"tradsphere.smtp.{field}"],
+        ) from exc
+    if parsed <= 0:
+        raise TenantConfigValidationError(
+            app_name=APP_NAME,
+            invalid=[f"tradsphere.smtp.{field}"],
+        )
+    return parsed
+
+
+def get_smtp_settings(*, required: bool = False) -> dict[str, object] | None:
+    raw = _get_scoped_env("SMTP")
+    if raw is None or str(raw).strip() == "":
+        if required:
+            raise TenantConfigValidationError(
+                app_name=APP_NAME,
+                missing=["tradsphere.smtp"],
+            )
+        return None
+
+    parsed = _parse_raw_value(str(raw), "TRADSPHERE_SMTP", dict)
+    canonical: dict[str, object] = {}
+    for key, value in parsed.items():
+        canonical_key = _SMTP_KEYS.get(str(key).strip().lower().replace("-", "_"))
+        if not canonical_key:
+            raise TenantConfigValidationError(
+                app_name=APP_NAME,
+                invalid=[f"tradsphere.smtp.{key}"],
+            )
+        canonical[canonical_key] = value
+
+    host = str(canonical.get("host") or "").strip()
+    from_email = str(canonical.get("from_email") or "").strip()
+    username = str(canonical.get("username") or "").strip() or None
+    password = str(canonical.get("password") or "").strip() or None
+    from_name = str(canonical.get("from_name") or "").strip() or None
+    reply_to = str(canonical.get("reply_to") or "").strip() or None
+    use_ssl = _normalize_bool(canonical.get("use_ssl"), field="use_ssl") if "use_ssl" in canonical else False
+    use_tls = _normalize_bool(canonical.get("use_tls"), field="use_tls") if "use_tls" in canonical else (not use_ssl)
+    timeout_seconds = (
+        _normalize_timeout(canonical.get("timeout_seconds"), field="timeout_seconds")
+        if "timeout_seconds" in canonical
+        else _DEFAULT_SMTP_TIMEOUT_SECONDS
+    )
+    if "port" in canonical:
+        port = _normalize_port(canonical.get("port"), field="port")
+    else:
+        port = 465 if use_ssl else 587
+
+    missing_fields: list[str] = []
+    invalid_fields: list[str] = []
+    if not host:
+        missing_fields.append("tradsphere.smtp.host")
+    if not from_email:
+        missing_fields.append("tradsphere.smtp.from_email")
+    elif "@" not in from_email:
+        invalid_fields.append("tradsphere.smtp.from_email")
+    if username and not password:
+        missing_fields.append("tradsphere.smtp.password")
+    if password and not username:
+        missing_fields.append("tradsphere.smtp.username")
+    if reply_to and "@" not in reply_to:
+        invalid_fields.append("tradsphere.smtp.reply_to")
+    if use_ssl and use_tls:
+        invalid_fields.append("tradsphere.smtp.use_ssl")
+        invalid_fields.append("tradsphere.smtp.use_tls")
+
+    if missing_fields or invalid_fields:
+        raise TenantConfigValidationError(
+            app_name=APP_NAME,
+            missing=missing_fields,
+            invalid=invalid_fields,
+        )
+
+    return {
+        "host": host,
+        "port": int(port),
+        "username": username,
+        "password": password,
+        "from_email": from_email,
+        "from_name": from_name,
+        "reply_to": reply_to,
+        "use_tls": bool(use_tls),
+        "use_ssl": bool(use_ssl),
+        "timeout_seconds": float(timeout_seconds),
+    }
+
+
 def get_validation_cache_ttl_seconds() -> int:
     return get_shared_cache_ttl_seconds(
         key="db_validation_ttl_time",
@@ -287,6 +441,11 @@ def validate_tenant_config(tenant_id: str | None = None) -> None:
                 _ = get_db_read_cache_ttl_seconds()
             except Exception:
                 invalid.append("tradsphere.CACHE.db_read_ttl_time")
+            try:
+                _ = get_smtp_settings(required=False)
+            except TenantConfigValidationError as exc:
+                missing.extend(exc.missing)
+                invalid.extend(exc.invalid)
 
         if missing or invalid:
             raise TenantConfigValidationError(

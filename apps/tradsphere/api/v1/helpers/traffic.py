@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import json
+import re
 import uuid
 
 import mysql.connector
@@ -13,6 +14,7 @@ from apps.tradsphere.api.v1.helpers.accountValidation import (
     ensure_tradsphere_account_codes_exist,
     require_account_code,
 )
+from apps.tradsphere.api.v1.helpers.config import get_smtp_settings
 from apps.tradsphere.api.v1.helpers.dbQueries import (
     delete_traffic_flight,
     delete_traffic_station,
@@ -35,6 +37,7 @@ from apps.tradsphere.api.v1.helpers.dbQueries import (
     upsert_traffic_email,
 )
 from apps.tradsphere.api.v1.helpers.stations import list_stations_data
+from shared.smtp import SmtpSendError, SmtpSettings, send_smtp_email
 from shared.tenant import get_tenant_id
 from shared.utils import run_parallel
 
@@ -73,6 +76,10 @@ class InvalidReferenceError(ValueError):
 
 
 class SafeDatabaseError(RuntimeError):
+    pass
+
+
+class EmailSendError(RuntimeError):
     pass
 
 
@@ -314,6 +321,36 @@ def _normalize_email_list(value: object, *, field: str, required: bool) -> list[
     if required and not normalized:
         raise ValueError(f"{field} is required")
     return normalized
+
+
+def _html_to_plain_text(value: object) -> str:
+    text = str(value or "")
+    if not text.strip():
+        return ""
+    output = re.sub(r"(?i)<\s*br\s*/?>", "\n", text)
+    output = re.sub(r"(?i)</\s*p\s*>", "\n", output)
+    output = re.sub(r"(?is)<style[\s\S]*?</style>", " ", output)
+    output = re.sub(r"(?is)<script[\s\S]*?</script>", " ", output)
+    output = re.sub(r"(?is)<[^>]+>", " ", output)
+    output = (
+        output.replace("&nbsp;", " ")
+        .replace("&amp;", "&")
+        .replace("&lt;", "<")
+        .replace("&gt;", ">")
+        .replace("&quot;", '"')
+        .replace("&#39;", "'")
+    )
+    output = re.sub(r"[ \t]+\n", "\n", output)
+    output = re.sub(r"\n{3,}", "\n\n", output)
+    output = re.sub(r"[ \t]{2,}", " ", output)
+    return output.strip()
+
+
+def _looks_like_html(value: object) -> bool:
+    text = str(value or "").strip()
+    if not text:
+        return False
+    return bool(re.search(r"</?[a-z][\s\S]*>", text, re.IGNORECASE))
 
 
 def _safe_decimal(value: object) -> Decimal:
@@ -646,6 +683,7 @@ def list_station_candidates_for_flight_range_data(
     flight_end: str,
     est_nums: list[int] | None = None,
     languages: list[str] | None = None,
+    media_types: list[str] | None = None,
 ) -> dict:
     normalized_account_code = require_account_code(account_code, field="accountCode")
     ensure_tradsphere_account_codes_exist([normalized_account_code])
@@ -656,6 +694,13 @@ def list_station_candidates_for_flight_range_data(
         {
             _normalize_flight_language(item)
             for item in (languages or [])
+            if str(item or "").strip()
+        }
+    )
+    normalized_media_types = sorted(
+        {
+            _normalize_flight_medium(item)
+            for item in (media_types or [])
             if str(item or "").strip()
         }
     )
@@ -672,6 +717,7 @@ def list_station_candidates_for_flight_range_data(
         flight_end=normalized_flight_end,
         est_nums=normalized_est_nums,
         languages=normalized_languages,
+        media_types=normalized_media_types,
     )
 
     station_codes: list[str] = []
@@ -1272,6 +1318,132 @@ def upsert_traffic_email_data(*, traffic_id: str, payload: dict, sent_by_user_id
 
     row = _safe_db_call(get_traffic_email_row, traffic_id=normalized_traffic_id)
     return _serialize_email_row(row)
+
+
+def send_traffic_email_data(*, traffic_id: str, payload: dict, sent_by_user_id: str | None = None) -> dict:
+    normalized_traffic_id = _require_uuid4(traffic_id, field="trafficId")
+    if not isinstance(payload, dict):
+        raise ValueError("Payload must be an object")
+
+    traffic_row = _ensure_traffic_exists(normalized_traffic_id)
+    _ensure_not_archived(traffic_row, action="send email")
+
+    to_emails = _normalize_email_list(
+        payload.get("toEmails"),
+        field="toEmails",
+        required=True,
+    )
+    cc_emails = _normalize_email_list(
+        payload.get("ccEmails") or [],
+        field="ccEmails",
+        required=False,
+    )
+    bcc_emails = _normalize_email_list(
+        payload.get("bccEmails") or [],
+        field="bccEmails",
+        required=False,
+    )
+    subject = _normalize_required_text(payload.get("subject"), field="subject", max_length=500)
+    body_text = str(payload.get("body") or "").strip()
+    if not body_text:
+        raise ValueError("body is required")
+
+    try:
+        smtp_config = get_smtp_settings(required=True)
+    except Exception as exc:
+        raise ValueError(str(exc)) from exc
+    if not smtp_config:
+        raise ValueError("TradSphere SMTP config is required")
+
+    smtp_settings = SmtpSettings(
+        host=str(smtp_config["host"]),
+        port=int(smtp_config["port"]),
+        username=(
+            str(smtp_config.get("username") or "").strip()
+            or None
+        ),
+        password=(
+            str(smtp_config.get("password") or "").strip()
+            or None
+        ),
+        from_email=str(smtp_config["from_email"]),
+        from_name=(
+            str(smtp_config.get("from_name") or "").strip()
+            or None
+        ),
+        reply_to=(
+            str(smtp_config.get("reply_to") or "").strip()
+            or None
+        ),
+        use_tls=bool(smtp_config.get("use_tls")),
+        use_ssl=bool(smtp_config.get("use_ssl")),
+        timeout_seconds=float(smtp_config.get("timeout_seconds") or 20.0),
+    )
+
+    now_iso = datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    sent_by_value = _normalize_optional_text(
+        payload.get("sentByUserId") or sent_by_user_id,
+        field="sentByUserId",
+        max_length=128,
+    )
+
+    try:
+        smtp_result = send_smtp_email(
+            settings=smtp_settings,
+            to_addresses=to_emails,
+            cc_addresses=cc_emails,
+            bcc_addresses=bcc_emails,
+            subject=subject,
+            text_body=_html_to_plain_text(body_text) or body_text,
+            html_body=body_text if _looks_like_html(body_text) else None,
+        )
+    except (SmtpSendError, ValueError) as exc:
+        _safe_db_call(
+            upsert_traffic_email,
+            {
+                "trafficId": normalized_traffic_id,
+                "toEmails": json.dumps(to_emails),
+                "ccEmails": json.dumps(cc_emails) if cc_emails else None,
+                "bccEmails": json.dumps(bcc_emails) if bcc_emails else None,
+                "subject": subject,
+                "body": body_text,
+                "sentStatus": "failed",
+                "sentAt": None,
+                "sentByUserId": sent_by_value,
+                "smtpMessageId": None,
+                "lastSendAttemptAt": now_iso,
+                "lastSendError": str(exc)[:8192],
+            },
+        )
+        raise EmailSendError(str(exc) or "SMTP send failed") from exc
+
+    smtp_message_id = _normalize_optional_text(
+        smtp_result.get("message_id"),
+        field="smtpMessageId",
+        max_length=500,
+    )
+    _safe_db_call(
+        upsert_traffic_email,
+        {
+            "trafficId": normalized_traffic_id,
+            "toEmails": json.dumps(to_emails),
+            "ccEmails": json.dumps(cc_emails) if cc_emails else None,
+            "bccEmails": json.dumps(bcc_emails) if bcc_emails else None,
+            "subject": subject,
+            "body": body_text,
+            "sentStatus": "sent",
+            "sentAt": now_iso,
+            "sentByUserId": sent_by_value,
+            "smtpMessageId": smtp_message_id,
+            "lastSendAttemptAt": now_iso,
+            "lastSendError": None,
+        },
+    )
+    row = _safe_db_call(get_traffic_email_row, traffic_id=normalized_traffic_id)
+    return {
+        "trafficId": normalized_traffic_id,
+        "email": _serialize_email_row(row),
+    }
 
 
 def bulk_save_traffic_data(*, payload: dict, sent_by_user_id: str | None = None) -> dict:

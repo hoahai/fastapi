@@ -24,7 +24,13 @@ from apps.tradsphere.api.v1.helpers.config import (
 _IDENTIFIER_RE = re.compile(r"^[A-Za-z0-9_]+$")
 _DB_READ_CACHE_BUCKET = "db_reads"
 _DB_READ_CACHE_PREFIX = "tradsphere_db_reads::"
-_INV_CHECKLIST_READ_CACHE_PREFIX = _DB_READ_CACHE_PREFIX + "inv_checklist_"
+# Prefix shared by checklist read-cache scopes:
+# - inv_checklists
+# - inv_checklist_row
+# - inv_checklist_stations
+# - inv_checklist_station_rows
+# - inv_checklist_station_search
+_INV_CHECKLIST_READ_CACHE_PREFIX = _DB_READ_CACHE_PREFIX + "inv_checklist"
 _INV_CHECKLIST_NOTE_DETAIL_CACHE_SCOPE = "inv_checklist_note_detail"
 _INV_CHECKLIST_NOTE_DETAIL_CACHE_PREFIX = _DB_READ_CACHE_PREFIX + _INV_CHECKLIST_NOTE_DETAIL_CACHE_SCOPE + "::"
 _SCHEDULE_EXISTS_CACHE_BUCKET = "db_reads"
@@ -151,6 +157,15 @@ def _normalized_text_cache_values(values: list[str]) -> list[str]:
         seen.add(text)
         normalized.append(text)
     return sorted(normalized)
+
+
+def _expand_tv_ca_media_types(values: list[str]) -> list[str]:
+    normalized = _normalized_text_cache_values([str(value or "").strip().upper() for value in values])
+    if "TV" in normalized or "CA" in normalized:
+        media_types = {item for item in normalized if item not in {"TV", "CA"}}
+        media_types.update({"TV", "CA"})
+        return sorted(media_types)
+    return normalized
 
 
 def _normalized_int_cache_values(values: list[int]) -> list[int]:
@@ -1534,6 +1549,7 @@ def list_schedule_station_candidates_for_account_range(
     flight_end: str,
     est_nums: list[int] | None = None,
     languages: list[str] | None = None,
+    media_types: list[str] | None = None,
 ) -> list[dict]:
     tables = get_db_tables()
     schedules_table = _quote_table_name(tables["SCHEDULES"])
@@ -1548,6 +1564,10 @@ def list_schedule_station_candidates_for_account_range(
         [str(item or "").strip().upper() for item in (languages or [])]
     )
     normalized_languages = [item for item in normalized_languages if item]
+    normalized_media_types = _expand_tv_ca_media_types(
+        [str(item or "").strip().upper() for item in (media_types or [])]
+    )
+    normalized_media_types = [item for item in normalized_media_types if item]
     if not normalized_account_code:
         raise ValueError("accountCode is required")
     if not normalized_flight_start:
@@ -1566,6 +1586,7 @@ def list_schedule_station_candidates_for_account_range(
         f"flight_end={normalized_flight_end}",
         "est_nums=" + (",".join(str(item) for item in normalized_est_nums) if normalized_est_nums else "*"),
         "languages=" + (",".join(normalized_languages) if normalized_languages else "*"),
+        "media_types=" + (",".join(normalized_media_types) if normalized_media_types else "*"),
     )
     cached_rows = _get_cached_list(
         cache_key,
@@ -1589,6 +1610,14 @@ def list_schedule_station_candidates_for_account_range(
         placeholders = _build_in_placeholders(normalized_languages)
         language_filter_sql = f" AND UPPER(COALESCE(st.language, '')) IN ({placeholders}) "
         params.extend(normalized_languages)
+    media_type_filter_sql = ""
+    if normalized_media_types:
+        placeholders = _build_in_placeholders(normalized_media_types)
+        media_type_filter_sql = (
+            " AND UPPER(COALESCE(en.mediaType, s.mediaType, '')) "
+            f"IN ({placeholders}) "
+        )
+        params.extend(normalized_media_types)
 
     query = (
         "SELECT DISTINCT "
@@ -1606,6 +1635,7 @@ def list_schedule_station_candidates_for_account_range(
         "AND s.startDate <= %s "
         + est_num_filter_sql
         + language_filter_sql
+        + media_type_filter_sql
         + "ORDER BY stationCode ASC"
     )
     rows = fetch_all(
@@ -4140,6 +4170,35 @@ def list_inv_checklists(
     query += " ORDER BY c.year DESC, c.month DESC, c.accountCode ASC, c.dateUpdated DESC"
 
     rows = fetch_all(query, tuple(params))
+    _set_cached_value(cache_key, rows)
+    return rows
+
+
+def list_inv_checklist_periods() -> list[dict]:
+    tables = get_db_tables()
+    checklist_table = _quote_table_name(tables["INVCHECKLISTS"])
+
+    cache_key = _build_db_read_cache_key(
+        "inv_checklist_periods",
+        "schema=v1",
+        f"checklist_table={checklist_table}",
+    )
+    cached_rows = _get_cached_list(
+        cache_key,
+        ttl_key="db_inv_checklists_ttl_time",
+    )
+    if cached_rows is not None:
+        return cached_rows
+
+    query = (
+        "SELECT DISTINCT "
+        "year, month "
+        f"FROM {checklist_table} "
+        "WHERE year IS NOT NULL "
+        "AND month IS NOT NULL "
+        "ORDER BY year DESC, month DESC"
+    )
+    rows = fetch_all(query)
     _set_cached_value(cache_key, rows)
     return rows
 

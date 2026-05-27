@@ -39,6 +39,7 @@ class TrafficRouteContractTests(unittest.TestCase):
             ("PUT", "/v1/traffic/station"),
             ("DELETE", "/v1/traffic/station"),
             ("PUT", "/v1/traffic/email"),
+            ("POST", "/v1/traffic/email/send"),
         }
 
         for route_key in expected_routes:
@@ -199,6 +200,16 @@ class TrafficMissingQueryParamTests(unittest.TestCase):
         request = SimpleNamespace(state=SimpleNamespace(auth_principal=None))
         self.assert_missing_param(
             trafficEmail.upsert_traffic_email_route,
+            request,
+            traffic_id=None,
+            payload={},
+            expected_detail="trafficId is required",
+        )
+
+    def test_missing_traffic_id_for_email_send(self):
+        request = SimpleNamespace(state=SimpleNamespace(auth_principal=None))
+        self.assert_missing_param(
+            trafficEmail.send_traffic_email_route,
             request,
             traffic_id=None,
             payload={},

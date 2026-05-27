@@ -539,6 +539,7 @@ def get_ui_invoice_checklists_load_route(
         - year must be between 1901 and 2155
         - month must be between 1 and 12
         - checklistId is optional; when omitted route selects first checklist in selected period
+        - stale/missing checklistId selections are auto-recovered by reloading latest period checklist list
         - includeSelectedDetail defaults to true to preserve existing behavior
         - includeSelectedDetail=false skips selected checklist detail assembly and returns selectedChecklist as null
         - Checklist summaries include lightweight station search metadata (`searchStations`) for client-side filtering
