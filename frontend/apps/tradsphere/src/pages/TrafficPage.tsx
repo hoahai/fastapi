@@ -2303,6 +2303,12 @@ export default function TrafficPage() {
   } = useDirtyRefreshGuard(hasUnsavedChanges);
 
   const activeAccountCode = asString(loadedAccountCode).toUpperCase();
+  const selectedAccountCodeNormalized = asString(selectedAccountCode).toUpperCase();
+  const hasPendingAccountSelectionAfterLoad = Boolean(
+    activeAccountCode
+    && selectedAccountCodeNormalized
+    && selectedAccountCodeNormalized !== activeAccountCode,
+  );
   useEffect(() => {
     trafficListRef.current = trafficList;
     selectedTrafficIdRef.current = selectedTrafficId;
@@ -4065,6 +4071,14 @@ export default function TrafficPage() {
     setSelectedAccountCode(nextAccountCode);
     setRefreshMessage(null);
   }, [selectedAccountCode, setSelectedAccountCode]);
+
+  const handleRestoreLoadedAccountSelection = useCallback(() => {
+    if (!activeAccountCode) {
+      return;
+    }
+    setSelectedAccountCode(activeAccountCode);
+    setRefreshMessage(null);
+  }, [activeAccountCode, setSelectedAccountCode]);
 
   const handleSelectTraffic = useCallback((trafficIdRaw: string) => {
     const trafficId = asString(trafficIdRaw);
@@ -6864,6 +6878,20 @@ export default function TrafficPage() {
             <SectionLoadingOverlay message="Deleting traffic..." />
           ) : null}
         </div>
+
+        {hasPendingAccountSelectionAfterLoad && !(isLoadActionOverlayVisible || isChipRefreshOverlayVisible || isSaving || isSendingEmail) ? (
+          <div className="absolute inset-0 z-20 rounded-2xl bg-slate-900/55 backdrop-blur-[1.5px]">
+            <div className="flex h-full w-full items-center justify-center p-4 sm:p-6">
+              <button
+                type="button"
+                onClick={handleRestoreLoadedAccountSelection}
+                className="rounded-full border border-slate-300/80 bg-slate-100/95 px-3 py-1.5 text-xs font-medium text-slate-800 shadow-md transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
+              >
+                Account selection changed. Click to restore previous selection.
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         {(isLoadActionOverlayVisible || isChipRefreshOverlayVisible || isSaving || isSendingEmail) ? (
           <SectionLoadingOverlay

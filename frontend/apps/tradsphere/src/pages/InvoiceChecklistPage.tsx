@@ -3136,6 +3136,9 @@ export default function InvoiceChecklistPage() {
     if (!selectedDraftPeriodValue) {
       return;
     }
+    const selectedChecklistIdForReload = isLocalChecklistId(selectedChecklistId)
+      ? null
+      : selectedChecklistId;
     clearDeferredUpdate();
     setRefreshMessage(null);
     setPendingPeriodSyncPreview(null);
@@ -3146,6 +3149,7 @@ export default function InvoiceChecklistPage() {
       await loadData({
         policy: "network-first",
         periodValue: selectedDraftPeriodValue,
+        checklistId: selectedChecklistIdForReload,
         includeSelectedDetail: true,
         deferWhenDirty: false,
         preserveLocalDrafts: false,
@@ -5075,6 +5079,28 @@ export default function InvoiceChecklistPage() {
     return years;
   }, []);
 
+  const handleRestoreLoadedPeriodSelection = useCallback(() => {
+    const loaded = parsePeriodInput(loadedPeriodValue || "");
+    if (!loaded) {
+      return;
+    }
+    const loadedValue = loaded.value;
+    const existsInRolling = rollingPeriods.some((item) => item.value === loadedValue);
+    if (existsInRolling) {
+      setPeriodSelectionValue(loadedValue);
+      return;
+    }
+    setCustomPeriodMonth(String(loaded.month));
+    setCustomPeriodYear(String(loaded.year));
+    setPeriodSelectionValue(CUSTOM_PERIOD_OPTION_VALUE);
+  }, [
+    loadedPeriodValue,
+    rollingPeriods,
+    setCustomPeriodMonth,
+    setCustomPeriodYear,
+    setPeriodSelectionValue,
+  ]);
+
   const canLoadSelectedPeriod = selectedDraftPeriodValue.length > 0;
   const loadedPeriod = useMemo(
     () => parsePeriodInput(loadedPeriodValue || ""),
@@ -5084,6 +5110,11 @@ export default function InvoiceChecklistPage() {
     loadedPeriod
     && selectedDraftPeriodValue
     && loadedPeriod.value === selectedDraftPeriodValue,
+  );
+  const hasPendingPeriodSelectionAfterLoad = Boolean(
+    loadedPeriod
+    && selectedDraftPeriodValue
+    && loadedPeriod.value !== selectedDraftPeriodValue,
   );
   const isLoadedPeriodChecklistEmpty = isSelectedPeriodLoaded && checklists.length === 0;
   const periodActionLabel = "Sync Checklist";
@@ -5954,6 +5985,20 @@ export default function InvoiceChecklistPage() {
             <SectionLoadingOverlay message="Deleting checklist account..." />
           ) : null}
         </div>
+
+        {hasPendingPeriodSelectionAfterLoad && !(isLoadActionOverlayVisible || isSyncingPeriod || isSavingAllChanges || isChipRefreshing) ? (
+          <div className="absolute inset-0 z-20 rounded-2xl bg-slate-900/55 backdrop-blur-[1.5px]">
+            <div className="flex h-full w-full items-center justify-center p-4 sm:p-6">
+              <button
+                type="button"
+                onClick={handleRestoreLoadedPeriodSelection}
+                className="rounded-full border border-slate-300/80 bg-slate-100/95 px-3 py-1.5 text-xs font-medium text-slate-800 shadow-md transition hover:bg-slate-50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 focus-visible:ring-offset-2 focus-visible:ring-offset-slate-900"
+              >
+                Period selection changed. Click to restore previous selection.
+              </button>
+            </div>
+          </div>
+        ) : null}
 
         {(isLoadActionOverlayVisible || isSyncingPeriod || isSavingAllChanges || isChipRefreshing) ? (
           <SectionLoadingOverlay
