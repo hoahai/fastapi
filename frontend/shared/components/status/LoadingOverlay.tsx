@@ -48,3 +48,25 @@ export function SectionLoadingOverlay({ message, className, panelClassName }: Se
     </div>
   );
 }
+
+export type PageLoadingLayerProps = PageLoadingOverlayProps & {
+  active: boolean;
+};
+
+export function PageLoadingLayer({ active, ...props }: PageLoadingLayerProps) {
+  if (!active) {
+    return null;
+  }
+  return <PageLoadingOverlay {...props} />;
+}
+
+export type SectionLoadingLayerProps = SectionLoadingOverlayProps & {
+  active: boolean;
+};
+
+export function SectionLoadingLayer({ active, ...props }: SectionLoadingLayerProps) {
+  if (!active) {
+    return null;
+  }
+  return <SectionLoadingOverlay {...props} />;
+}

@@ -1,6 +1,4 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import { AlertCircle } from "lucide-react";
-
 import { EstimateNumberResults } from "@/components/estnums/EstimateNumberResults";
 import {
   EstimateNumberSearch,
@@ -17,7 +15,6 @@ import { ScheduleModal } from "@/components/dashboard/ScheduleModal";
 import type { AccountSelection, EsnumItem } from "@/components/dashboard/types";
 import { PageBanner } from "@/components/layout/PageBanner";
 import { Button } from "@/components/ui/button";
-import { CacheStatusChip } from "@/components/ui/cache-status-chip";
 import { useToast } from "@/components/ui/toast";
 import { useApiRequest } from "@/hooks/useApiRequest";
 import { usePersistentState } from "@/hooks/usePersistentState";
@@ -34,7 +31,10 @@ import { buildAuthHeaders as buildSharedAuthHeaders } from "@shared/api/authHead
 import { useAuth } from "@shared/auth/useAuth";
 import { shouldProtectFrontendAuth } from "@shared/auth/guards";
 import { hasAppEditAccess } from "@shared/auth/permissions";
-import { PageLoadingOverlay } from "@shared/components/status/LoadingOverlay";
+import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
+import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
+import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
+import { PageMessageStack, SectionMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { hasAtLeastOneSearchCriterion, shouldFetchSubmittedSearchNetwork } from "@shared/search";
 
 const SEARCH_LIMIT = 50;
@@ -43,9 +43,6 @@ const SEARCH_TIMEZONE = "America/Chicago";
 const ESTNUMS_PAGE_CACHE_VERSION = "v4";
 const ESTNUMS_SEARCH_CACHE_COLLECTION_PREFIX = "estnums:form-search:";
 const ESTNUMS_SEARCH_CACHE_COLLECTION_LIMIT = 40;
-const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspace.sidebar.collapsed";
-const LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY = "tradsphere:ui:sidebarCollapsed:v1";
-const SIDEBAR_COLLAPSED_EVENT = "workspace-sidebar-collapsed-change";
 const ESTNUMS_SEARCH_DRAFT_STORAGE_KEY = "tradsphere.estnums.searchDraft.v1";
 const ESTNUMS_SUBMITTED_SEARCH_STORAGE_KEY = "tradsphere.estnums.submittedSearch.v1";
 
@@ -734,22 +731,6 @@ function applySavedEstimateToPage(
   };
 }
 
-function readSidebarCollapsedState(): boolean {
-  if (typeof window === "undefined") {
-    return false;
-  }
-
-  try {
-    const nextValue = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY);
-    if (nextValue !== null) {
-      return nextValue === "1";
-    }
-    return window.localStorage.getItem(LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
 function withDirectoryAccountNames(
   page: EstimateSearchPage | null,
   directoryByCode: Record<string, AccountDirectoryItem>,
@@ -1338,7 +1319,6 @@ export default function EstimateNumbersPage() {
 
   const [billingDirectory, setBillingDirectory] = useState<AccountDirectoryItem[]>([]);
   const [, setIsLoadingBillingDirectory] = useState(true);
-  const [sidebarVisuallyExpanded, setSidebarVisuallyExpanded] = useState<boolean>(() => !readSidebarCollapsedState());
 
   const [draft, setDraft] = usePersistentState<EstimateNumberSearchFormValues>(
     ESTNUMS_SEARCH_DRAFT_STORAGE_KEY,
@@ -1358,6 +1338,7 @@ export default function EstimateNumbersPage() {
   const [error, setError] = useState<string | null>(null);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
+  const [isChipRefreshOverlayVisible, setIsChipRefreshOverlayVisible] = useState(false);
   const [page, setPage] = useState<EstimateSearchPage | null>(() => resolveInitialEstimateSearchView(submittedSearch).page);
   const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(() => resolveInitialEstimateSearchView(submittedSearch).cacheStatus);
   const [backendSearchUnavailable, setBackendSearchUnavailable] = useState(false);
@@ -1441,45 +1422,41 @@ export default function EstimateNumbersPage() {
   const showCacheChip = Boolean(
     submittedSearch && !isAnyModalOpen && state === "ready" && (displayPage?.items.length ?? 0) > 0,
   );
-  const isPageBusy = state === "loading" || isLoadingMore;
-  const pageBusyMessage = isLoadingMore
+  const hasVisibleResults = (displayPage?.items.length ?? 0) > 0;
+  const isPageBusy = isChipRefreshOverlayVisible || (state === "loading" && !hasVisibleResults);
+  const pageBusyMessage = isChipRefreshOverlayVisible
+    ? "Refreshing estimate numbers..."
+    : "Loading estimate numbers...";
+  const isResultSectionBusy = !isChipRefreshOverlayVisible && (
+    isLoadingMore
+    || (state === "loading" && hasVisibleResults)
+    || isRefreshing
+  );
+  const resultSectionBusyMessage = isLoadingMore
     ? "Loading more estimate numbers..."
-    : "Searching estimate numbers...";
+    : isRefreshing
+      ? "Refreshing results..."
+      : "Searching estimate numbers...";
+  const pageMessages: StackMessage[] = [];
+  if (refreshMessage) {
+    pageMessages.push({
+      id: "estnums-refresh-message",
+      variant: refreshMessage.toLowerCase().includes("offline") ? "info" : "warning",
+      message: refreshMessage,
+    });
+  }
+  const resultSectionMessages: StackMessage[] = [];
+  if (backendSearchUnavailable && submittedSearch?.plan.type === "search") {
+    resultSectionMessages.push({
+      id: "estnums-backend-search-missing",
+      variant: "warning",
+      message: "Text search depends on backend endpoint `/api/tradsphere/v1/estNums/search`.",
+    });
+  }
 
   useEffect(() => {
     pageRef.current = page;
   }, [page]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const handleStorage = () => {
-      const collapsed = readSidebarCollapsedState();
-      setSidebarVisuallyExpanded(!collapsed);
-    };
-    const handleSidebarEvent = (event: Event) => {
-      const customEvent = event as CustomEvent<{ collapsed?: boolean; visuallyExpanded?: boolean }>;
-      if (typeof customEvent.detail?.visuallyExpanded === "boolean") {
-        setSidebarVisuallyExpanded(customEvent.detail.visuallyExpanded);
-        return;
-      }
-      if (typeof customEvent.detail?.collapsed === "boolean") {
-        setSidebarVisuallyExpanded(!customEvent.detail.collapsed);
-        return;
-      }
-      const collapsed = readSidebarCollapsedState();
-      setSidebarVisuallyExpanded(!collapsed);
-    };
-
-    window.addEventListener("storage", handleStorage);
-    window.addEventListener(SIDEBAR_COLLAPSED_EVENT, handleSidebarEvent as EventListener);
-    return () => {
-      window.removeEventListener("storage", handleStorage);
-      window.removeEventListener(SIDEBAR_COLLAPSED_EVENT, handleSidebarEvent as EventListener);
-    };
-  }, []);
 
   useEffect(() => {
     hasSelectionDirectoryRef.current = selectionBackedDirectory.length > 0;
@@ -1836,14 +1813,19 @@ export default function EstimateNumbersPage() {
     setIsLoadingMore(false);
   }
 
-  function handleRefreshSearch() {
+  async function handleRefreshSearch() {
     if (!submittedSearch) {
       return;
     }
-    void loadPageData({
-      policy: "network-only",
-      append: false,
-    });
+    setIsChipRefreshOverlayVisible(true);
+    try {
+      await loadPageData({
+        policy: "network-only",
+        append: false,
+      });
+    } finally {
+      setIsChipRefreshOverlayVisible(false);
+    }
   }
 
   function handleLoadMore() {
@@ -1929,21 +1911,37 @@ export default function EstimateNumbersPage() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5 pb-12">
-      <PageBanner
-        eyebrow="TradSphere"
-        title="Estimate Numbers"
-        description="Search estimate numbers and open schedules."
-        gradientVariant="app"
-        action={
-          <Button
-            onClick={handleOpenCreate}
-            disabled={!canEditTradsphere || !estimateModalAccountOptions.length}
-          >
-            Add Estimate
-          </Button>
-        }
-      />
+    <AppPageLayout
+      className="pb-5"
+      pageMessages={<PageMessageStack messages={pageMessages} />}
+      banner={(
+        <PageBanner
+          eyebrow="TradSphere"
+          title="Estimate Numbers"
+          description="Search estimate numbers and open schedules."
+          gradientVariant="app"
+          action={(
+            <Button
+              onClick={handleOpenCreate}
+              disabled={!canEditTradsphere || !estimateModalAccountOptions.length}
+            >
+              Add Estimate
+            </Button>
+          )}
+        />
+      )}
+      footer={showCacheChip ? (
+        <PageCacheFooter
+          text={cacheStatusText}
+          onRefresh={handleRefreshSearch}
+          disabled={isRefreshing || isLoadingMore || !isOnline}
+          refreshing={isRefreshing}
+          refreshLabel="Refresh estimate numbers"
+          tooltipText={isOnline ? "Click to refresh last submitted search" : "Offline. Reconnect to refresh estimate numbers."}
+          containerClassName="w-full"
+        />
+      ) : null}
+    >
 
       <EstimateNumberSearch
         value={draft}
@@ -1958,47 +1956,24 @@ export default function EstimateNumbersPage() {
         message={searchMessage}
       />
 
-      {refreshMessage ? (
-        <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">{refreshMessage}</p>
-      ) : null}
-
-      {backendSearchUnavailable && submittedSearch?.plan.type === "search" ? (
-        <p className="flex items-center gap-2 rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-          <AlertCircle className="size-4" />
-          Text search depends on backend endpoint `/api/tradsphere/v1/estNums/search`.
-        </p>
-      ) : null}
-
-      <EstimateNumberResults
-        state={state}
-        groups={groupedResults}
-        error={error}
-        minQueryLength={1}
-        loadMoreVisible={canLoadMore}
-        loadMoreLoading={isLoadingMore}
-        onLoadMore={handleLoadMore}
-        onViewSchedule={handleOpenSchedule}
-        onEditEstimate={handleOpenEdit}
-      />
-
-      {showCacheChip ? (
-        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40">
-          <div className={`mx-4 sm:mx-6 lg:mr-6 ${sidebarVisuallyExpanded ? "lg:ml-[18.75rem]" : "lg:ml-[6.5rem]"}`}>
-            <div className="mx-auto w-full max-w-[1600px]">
-              <CacheStatusChip
-                text={cacheStatusText}
-                onRefresh={handleRefreshSearch}
-                disabled={isRefreshing || isLoadingMore || !isOnline}
-                refreshing={isRefreshing}
-                refreshLabel="Refresh estimate numbers"
-                tooltipText={isOnline ? "Click to refresh last submitted search" : "Offline. Reconnect to refresh estimate numbers."}
-                containerClassName="pointer-events-auto"
-                className="max-w-[min(90vw,34rem)]"
-              />
-            </div>
-          </div>
-        </div>
-      ) : null}
+      <div className="relative">
+        <SectionMessageStack messages={resultSectionMessages} className="mb-3" />
+        <EstimateNumberResults
+          state={state}
+          groups={groupedResults}
+          error={error}
+          minQueryLength={1}
+          loadMoreVisible={canLoadMore}
+          loadMoreLoading={isLoadingMore}
+          onLoadMore={handleLoadMore}
+          onViewSchedule={handleOpenSchedule}
+          onEditEstimate={handleOpenEdit}
+        />
+        <SectionLoadingLayer
+          active={isResultSectionBusy}
+          message={resultSectionBusyMessage}
+        />
+      </div>
 
       <EstimateNumberModal
         open={isEstimateModalOpen}
@@ -2022,9 +1997,7 @@ export default function EstimateNumbersPage() {
         headers={requestHeaders}
       />
 
-      {isPageBusy ? (
-        <PageLoadingOverlay message={pageBusyMessage} />
-      ) : null}
-    </div>
+      <PageLoadingLayer active={isPageBusy} message={pageBusyMessage} />
+    </AppPageLayout>
   );
 }

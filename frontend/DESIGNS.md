@@ -70,6 +70,28 @@
 - Prefer responsive grid/flex layouts.
 - Keep content width bounded for readability.
 - Use reusable layout primitives before custom page-level overrides.
+- For pages using shared shell layouts, keep cache/footer controls in a viewport-fixed in-app footer layer, not in normal document flow.
+- Fixed page footer containers should be transparent; only chip controls carry visual styling.
+- Reserve bottom spacer height in shared page layout so fixed footer chips never cover actionable content.
+
+## Loading Overlay Rules
+- Use shared loading primitives (`PageLoadingLayer`, `SectionLoadingLayer`, `PageLoadingOverlay`, `SectionLoadingOverlay`) instead of page-local ad-hoc overlays.
+- Page-level overlays:
+  - show during page hydration/initialization and whole-page refresh flows
+  - show for cache-chip force refresh flows
+  - keep content visible behind the overlay
+  - stay above fixed footer controls and below modal/dialog layers
+- Section-level overlays:
+  - apply only to the affected section when data loading is section-scoped
+  - preserve unaffected sections and cached content when possible
+  - search pages should overlay result sections instead of blocking the full page when only results refresh
+
+## Message Stack Rules
+- Use shared message primitives (`PageMessageStack`, `SectionMessageStack`) for warning/info/error/success feedback.
+- Page-level state messages must render under the page banner/header.
+- Section-level state messages must render inside the affected section/card, below section title/actions and above section content.
+- Replace ad-hoc alert bars (for example cached/offline refresh warnings) with shared message stacks.
+- Message UI should remain soft and theme-consistent (subtle border, rounded corners, readable text), not browser-native alerts.
 
 ## Hybrid Route/Data Loading
 - Use one lightweight page/dashboard load route for core data that must be rendered together initially.

@@ -8,7 +8,7 @@ import {
   type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
-import { AlertCircle, AlertTriangle, Loader2, Monitor, Paperclip, Plus, Trash2, UploadCloud, X } from "lucide-react";
+import { AlertTriangle, Loader2, Monitor, Paperclip, Plus, Trash2, UploadCloud, X } from "lucide-react";
 
 import { ActionIconButton } from "@/components/dashboard/ActionIconButton";
 import { LabeledField } from "@/components/dashboard/FormFieldRow";
@@ -18,7 +18,6 @@ import { PageBanner } from "@/components/layout/PageBanner";
 import { UnsavedChangesDialog } from "@/components/ui/unsaved-changes-dialog";
 import { AppDropdown } from "@/components/ui/app-dropdown";
 import { Button } from "@/components/ui/button";
-import { CacheStatusChip } from "@/components/ui/cache-status-chip";
 import {
   Dialog,
   DialogClose,
@@ -51,8 +50,12 @@ import {
 import { useAuth } from "@shared/auth/useAuth";
 import { shouldProtectFrontendAuth } from "@shared/auth/guards";
 import { hasAppEditAccess } from "@shared/auth/permissions";
+import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
+import { LoadActionArea } from "@shared/components/layout/LoadActionArea";
+import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { SectionCard } from "@shared/components/layout/SectionCard";
-import { SectionLoadingOverlay } from "@shared/components/status/LoadingOverlay";
+import { PageLoadingLayer, SectionLoadingLayer, SectionLoadingOverlay } from "@shared/components/status/LoadingOverlay";
+import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import {
   buildPeriodValue,
   buildRollingPeriods,
@@ -320,9 +323,6 @@ const PAGE_PERIOD_STORAGE_KEY = "tradsphere.invoiceChecklist.period.v1";
 const PAGE_PERIOD_CUSTOM_MONTH_STORAGE_KEY = "tradsphere.invoiceChecklist.period.customMonth.v1";
 const PAGE_PERIOD_CUSTOM_YEAR_STORAGE_KEY = "tradsphere.invoiceChecklist.period.customYear.v1";
 const INVOICE_CHECKLIST_PAGE_STATE_CODE = "invoice-checklists";
-const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspace.sidebar.collapsed";
-const LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY = "tradsphere:ui:sidebarCollapsed:v1";
-const SIDEBAR_COLLAPSED_EVENT = "workspace-sidebar-collapsed-change";
 const CHECKLIST_STATUS_OPTIONS_BASE = [
   "Matched All",
   "No Applicable",
@@ -1435,22 +1435,6 @@ function buildChecklistCardSummaryOverride(
   };
 }
 
-function readSidebarCollapsedState(): boolean {
-  if (typeof window === "undefined") {
-    return false;
-  }
-
-  try {
-    const nextValue = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY);
-    if (nextValue !== null) {
-      return nextValue === "1";
-    }
-    return window.localStorage.getItem(LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
 function normalizePeriodSelectionValue(rawValue: string): string {
   const text = asString(rawValue);
   if (!text) {
@@ -1622,8 +1606,6 @@ export default function InvoiceChecklistPage() {
     };
   }, [auth.tenantSlug, auth.user?.email, auth.user?.id]);
 
-  const [sidebarVisuallyExpanded, setSidebarVisuallyExpanded] = useState<boolean>(() => !readSidebarCollapsedState());
-
   const [periodSelectionValue, setPeriodSelectionValue] = usePersistentState<string>(
     PAGE_PERIOD_STORAGE_KEY,
     DEFAULT_PREVIOUS_PERIOD_VALUE,
@@ -1661,6 +1643,7 @@ export default function InvoiceChecklistPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isChipRefreshing, setIsChipRefreshing] = useState(false);
+  const [isChecklistSelectionLoading, setIsChecklistSelectionLoading] = useState(false);
   const [isLoadActionOverlayVisible, setIsLoadActionOverlayVisible] = useState(false);
   const [isSyncingPeriod, setIsSyncingPeriod] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1691,7 +1674,6 @@ export default function InvoiceChecklistPage() {
   const pendingStationRestoreAfterChecklistSelectRef = useRef<number | null>(null);
   const generatedAttachmentImageUrlsRef = useRef<string[]>([]);
   const nextLocalIdRef = useRef(-1);
-  const hasAttemptedInitialLoadRef = useRef(false);
   const [isAddNoteModalOpen, setIsAddNoteModalOpen] = useState(false);
   const [isAddStationModalOpen, setIsAddStationModalOpen] = useState(false);
   const [isAddChecklistAccountModalOpen, setIsAddChecklistAccountModalOpen] = useState(false);
@@ -2233,37 +2215,6 @@ export default function InvoiceChecklistPage() {
     }
     return parsePeriodInput(normalizedPeriodSelectionValue)?.value || "";
   }, [customPeriod?.value, isCustomPeriodSelection, normalizedPeriodSelectionValue]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const handleStorage = () => {
-      const collapsed = readSidebarCollapsedState();
-      setSidebarVisuallyExpanded(!collapsed);
-    };
-    const handleSidebarEvent = (event: Event) => {
-      const customEvent = event as CustomEvent<{ collapsed?: boolean; visuallyExpanded?: boolean }>;
-      if (typeof customEvent.detail?.visuallyExpanded === "boolean") {
-        setSidebarVisuallyExpanded(customEvent.detail.visuallyExpanded);
-        return;
-      }
-      if (typeof customEvent.detail?.collapsed === "boolean") {
-        setSidebarVisuallyExpanded(!customEvent.detail.collapsed);
-        return;
-      }
-      const collapsed = readSidebarCollapsedState();
-      setSidebarVisuallyExpanded(!collapsed);
-    };
-
-    window.addEventListener("storage", handleStorage);
-    window.addEventListener(SIDEBAR_COLLAPSED_EVENT, handleSidebarEvent as EventListener);
-    return () => {
-      window.removeEventListener("storage", handleStorage);
-      window.removeEventListener(SIDEBAR_COLLAPSED_EVENT, handleSidebarEvent as EventListener);
-    };
-  }, []);
 
   useEffect(() => {
     if (periodSelectionValue !== normalizedPeriodSelectionValue) {
@@ -3056,39 +3007,6 @@ export default function InvoiceChecklistPage() {
     clearDeferredUpdate();
   }, [clearDeferredUpdate, hasUnsavedChanges, refreshMessage]);
 
-  useEffect(() => {
-    if (!hasHydratedPageState || hasAttemptedInitialLoadRef.current) {
-      return;
-    }
-    if (isLoading || isRefreshing || isSavingAllChanges) {
-      return;
-    }
-    if (hasUnsavedChanges) {
-      hasAttemptedInitialLoadRef.current = true;
-      return;
-    }
-    if (!selectedDraftPeriodValue) {
-      return;
-    }
-
-    hasAttemptedInitialLoadRef.current = true;
-    void loadData({
-      policy: "stale-while-revalidate",
-      periodValue: loadedPeriodValue || selectedDraftPeriodValue,
-      checklistId: selectedChecklistId,
-    });
-  }, [
-    hasHydratedPageState,
-    hasUnsavedChanges,
-    isLoading,
-    isRefreshing,
-    isSavingAllChanges,
-    loadData,
-    loadedPeriodValue,
-    selectedChecklistId,
-    selectedDraftPeriodValue,
-  ]);
-
   function updateChecklistInState(updater: (prev: ChecklistDetail) => ChecklistDetail) {
     setSelectedChecklist((current) => {
       if (!current) {
@@ -3651,7 +3569,16 @@ export default function InvoiceChecklistPage() {
         return;
       }
     }
-    await loadData({ policy: "cache-first", periodValue: targetPeriodValue, checklistId });
+    if (fromUserSelection) {
+      setIsChecklistSelectionLoading(true);
+    }
+    try {
+      await loadData({ policy: "cache-first", periodValue: targetPeriodValue, checklistId });
+    } finally {
+      if (fromUserSelection) {
+        setIsChecklistSelectionLoading(false);
+      }
+    }
   }
 
   function handleChecklistSelect(checklistId: string) {
@@ -5144,10 +5071,33 @@ export default function InvoiceChecklistPage() {
       : cacheStatus
         ? `Data source: ${cacheStatus.source}. Last updated ${formatRelativeTime(cacheStatus.fetchedAt)}.`
         : "No cached data yet";
+  const pageMessages: StackMessage[] = [];
+  if (visibleRefreshMessage) {
+    pageMessages.push({
+      id: "invoice-refresh-message",
+      variant: visibleRefreshMessage.toLowerCase().includes("offline") ? "info" : "warning",
+      message: visibleRefreshMessage,
+    });
+  }
+  if (error) {
+    pageMessages.push({
+      id: "invoice-load-error",
+      variant: "error",
+      message: error,
+    });
+  }
 
   const checklistSummaryDescription = normalizedAppliedSearch
     ? `${filteredChecklists.length} of ${checklists.length} checklist(s)`
     : `${checklists.length} checklist(s) in selected period`;
+  const isPageRefreshOverlayVisible = !hasHydratedPageState || isLoadActionOverlayVisible || isSyncingPeriod || isChipRefreshing;
+  const pageRefreshOverlayMessage = !hasHydratedPageState
+    ? "Preparing invoice checklist workspace..."
+    : isLoadActionOverlayVisible
+      ? "Loading checklist data..."
+      : isSyncingPeriod
+        ? (isLoadedPeriodChecklistEmpty ? "Generating checklist preview..." : "Updating checklist preview...")
+        : "Loading latest checklist data...";
 
   const applySearchKeyword = useCallback((rawValue: string) => {
     const normalized = asString(rawValue);
@@ -5293,16 +5243,41 @@ export default function InvoiceChecklistPage() {
   }, [appliedSearch, applySearchKeyword, draftSearch]);
 
   return (
-    <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5 pb-12 xl:min-h-[calc(100dvh-3.5rem)]">
-      <PageBanner
-        eyebrow="TradSphere"
-        title="Invoice Reconciliation Checklist"
-        description="Load a billing period, review checklist status by account and station, and track reconciliation notes with proof links."
-        gradientVariant="app"
-      />
+    <AppPageLayout
+      className="pb-5"
+      pageMessages={<PageMessageStack messages={pageMessages} />}
+      banner={(
+        <PageBanner
+          eyebrow="TradSphere"
+          title="Invoice Reconciliation Checklist"
+          description="Load a billing period, review checklist status by account and station, and track reconciliation notes with proof links."
+          gradientVariant="app"
+        />
+      )}
+      footer={cacheStatus ? (
+        <PageCacheFooter
+          text={cacheStatusText}
+          onRefresh={handleRefreshFromChip}
+          disabled={!isOnline || !loadedPeriodValue || isRefreshing || isChipRefreshing || isSavingAllChanges || isSyncingPeriod || hasUnsavedChanges || isDeletingChecklist}
+          refreshing={isRefreshing || isChipRefreshing || isDeletingChecklist}
+          refreshLabel="Refresh invoice checklist"
+          tooltipText={
+            isDeletingChecklist
+              ? "Checklist delete is in progress."
+              : hasUnsavedChanges
+                ? "Save or discard changes before refreshing checklist data."
+                : isOnline
+                  ? "Click to refresh selected checklist data"
+                  : "Offline. Reconnect to refresh checklist data."
+          }
+          containerClassName="w-full"
+        />
+      ) : null}
+    >
 
       <SectionCard title="Period & Load" divider={false} contentClassName="pt-1">
-          <div className="grid gap-3 md:grid-cols-[minmax(0,260px)_auto] md:items-end">
+        <LoadActionArea
+          controls={(
             <div className={isCustomPeriodSelection ? "space-y-2" : undefined}>
               <AppDropdown
                 value={normalizedPeriodSelectionValue}
@@ -5333,7 +5308,9 @@ export default function InvoiceChecklistPage() {
                 </div>
               ) : null}
             </div>
-            <div className="flex flex-wrap items-center gap-2">
+          )}
+          actions={(
+            <>
               <Button
                 onClick={handleLoadClick}
                 disabled={!canLoadSelectedPeriod || isLoading || isRefreshing || isSavingAllChanges || isSyncingPeriod}
@@ -5354,22 +5331,10 @@ export default function InvoiceChecklistPage() {
                   ) : periodActionLabel}
                 </Button>
               ) : null}
-            </div>
-          </div>
+            </>
+          )}
+        />
       </SectionCard>
-
-      {visibleRefreshMessage ? (
-        <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">{visibleRefreshMessage}</p>
-      ) : null}
-
-      {error ? (
-        <div className="rounded-2xl border border-rose-200 bg-rose-50 px-4 py-3 text-sm text-rose-700">
-          <div className="flex items-start gap-2">
-            <AlertCircle className="mt-0.5 size-4 shrink-0" />
-            <p>{error}</p>
-          </div>
-        </div>
-      ) : null}
 
       <div className="relative grid gap-4 xl:h-full xl:min-h-0 xl:flex-1 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)_minmax(0,1.1fr)] xl:grid-rows-[minmax(0,1fr)]">
         <SectionCard
@@ -5752,6 +5717,7 @@ export default function InvoiceChecklistPage() {
               </div>
             )}
         </SectionCard>
+          <SectionLoadingLayer active={isChecklistSelectionLoading} message="Loading checklist stations..." />
           {isDeletingSelectedChecklist ? (
             <SectionLoadingOverlay message="Deleting checklist account..." />
           ) : null}
@@ -5759,7 +5725,7 @@ export default function InvoiceChecklistPage() {
 
         <div className="relative space-y-4 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:gap-4 xl:space-y-0">
           <SectionCard
-            className="xl:max-h-[42%] xl:min-h-[180px] xl:flex-none"
+            className="relative xl:max-h-[42%] xl:min-h-[180px] xl:flex-none"
             contentClassName="xl:min-h-0 xl:overflow-y-auto xl:pr-1"
             title="Station Contacts"
             actions={(
@@ -5828,9 +5794,10 @@ export default function InvoiceChecklistPage() {
                 </div>
               )}
           </SectionCard>
+          <SectionLoadingLayer active={isHydratingSelectedStationContacts} message="Loading station contacts..." />
 
           <SectionCard
-            className="xl:min-h-0 xl:flex-1"
+            className="relative xl:min-h-0 xl:flex-1"
             contentClassName="xl:flex xl:min-h-0 xl:flex-1 xl:flex-col"
             title="Station Notes"
             actions={(
@@ -5981,6 +5948,7 @@ export default function InvoiceChecklistPage() {
                 </div>
               )}
           </SectionCard>
+          <SectionLoadingLayer active={isLoadingSelectedStationNotes} message="Loading station notes..." />
           {isDeletingSelectedChecklist ? (
             <SectionLoadingOverlay message="Deleting checklist account..." />
           ) : null}
@@ -6000,19 +5968,9 @@ export default function InvoiceChecklistPage() {
           </div>
         ) : null}
 
-        {(isLoadActionOverlayVisible || isSyncingPeriod || isSavingAllChanges || isChipRefreshing) ? (
+        {isSavingAllChanges ? (
           <SectionLoadingOverlay
-            message={
-              isSavingAllChanges
-                ? "Saving checklist changes..."
-                : isLoadActionOverlayVisible
-                ? "Loading checklist data..."
-                : isSyncingPeriod
-                ? (isLoadedPeriodChecklistEmpty ? "Generating checklist preview..." : "Updating checklist preview...")
-                : isChipRefreshing
-                ? "Loading latest checklist data..."
-                : "Working..."
-            }
+            message="Saving checklist changes..."
           />
         ) : null}
       </div>
@@ -6343,34 +6301,9 @@ export default function InvoiceChecklistPage() {
           </div>
         </DialogContent>
       </Dialog>
+      <PageLoadingLayer active={isPageRefreshOverlayVisible} message={pageRefreshOverlayMessage} />
 
-      {cacheStatus ? (
-        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40">
-          <div className={`mx-4 sm:mx-6 lg:mr-6 ${sidebarVisuallyExpanded ? "lg:ml-[18.75rem]" : "lg:ml-[6.5rem]"}`}>
-            <div className="mx-auto w-full max-w-[1600px]">
-              <CacheStatusChip
-                text={cacheStatusText}
-                onRefresh={handleRefreshFromChip}
-                disabled={!isOnline || !loadedPeriodValue || isRefreshing || isChipRefreshing || isSavingAllChanges || isSyncingPeriod || hasUnsavedChanges || isDeletingChecklist}
-                refreshing={isRefreshing || isChipRefreshing || isDeletingChecklist}
-                refreshLabel="Refresh invoice checklist"
-                tooltipText={
-                  isDeletingChecklist
-                    ? "Checklist delete is in progress."
-                    : hasUnsavedChanges
-                    ? "Save or discard changes before refreshing checklist data."
-                    : isOnline
-                      ? "Click to refresh selected checklist data"
-                      : "Offline. Reconnect to refresh checklist data."
-                }
-                containerClassName="pointer-events-auto"
-                className="max-w-[min(92vw,40rem)]"
-              />
-            </div>
-          </div>
-        </div>
-      ) : null}
-    </div>
+    </AppPageLayout>
   );
 }
 

@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { AlertCircle, AlertTriangle, Archive, Copy, Eye, Link2, Loader2, Pencil, Plus, RefreshCw, Send, Table2, Trash2, Unlink, X } from "lucide-react";
+import { AlertTriangle, Archive, Copy, Eye, Link2, Loader2, Pencil, Plus, RefreshCw, Send, Table2, Trash2, Unlink, X } from "lucide-react";
 
 import { ActionIconButton } from "@/components/dashboard/ActionIconButton";
 import { AccountSelector } from "@/components/dashboard/AccountSelector";
@@ -9,7 +9,6 @@ import type { EsnumItem } from "@/components/dashboard/types";
 import { PageBanner } from "@/components/layout/PageBanner";
 import { AppDropdown } from "@/components/ui/app-dropdown";
 import { Button } from "@/components/ui/button";
-import { CacheStatusChip } from "@/components/ui/cache-status-chip";
 import {
   Dialog,
   DialogClose,
@@ -49,9 +48,13 @@ import {
   TRADSPHERE_CACHE_TTL_MS,
   writeScopedPageState,
 } from "@shared/cache";
-import { SectionCard } from "@shared/components/layout/SectionCard";
 import { Tooltip } from "@shared/components/actions/Tooltip";
-import { SectionLoadingOverlay } from "@shared/components/status/LoadingOverlay";
+import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
+import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
+import { SectionCard } from "@shared/components/layout/SectionCard";
+import { ModalCacheFooter } from "@shared/components/modal/ModalCacheFooter";
+import { PageLoadingLayer, SectionLoadingLayer, SectionLoadingOverlay } from "@shared/components/status/LoadingOverlay";
+import { PageMessageStack, SectionMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 
 type CacheStatus = {
   source: "cache" | "network";
@@ -284,9 +287,6 @@ const FLIGHT_LANGUAGE_OPTIONS: Array<{ value: FlightLanguage; label: string }> =
 ];
 const DELIVERY_STATUS_OPTIONS = ["not_started", "needs_manual_upload", "ready_to_email", "sent", "skipped", "issue"];
 const CONFIRMED_STATUS_OPTIONS = ["pending", "confirmed", "issue", "not_required"];
-const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspace.sidebar.collapsed";
-const LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY = "tradsphere:ui:sidebarCollapsed:v1";
-const SIDEBAR_COLLAPSED_EVENT = "workspace-sidebar-collapsed-change";
 const LOCAL_TRAFFIC_ID_PREFIX = "local-traffic:";
 const EMAIL_WORKSPACE_TABS: Array<{ value: TrafficWorkspaceTab; label: string }> = [
   { value: "workflow", label: "Traffic Detail" },
@@ -2089,21 +2089,6 @@ function buildTrafficEmailWorkspaceFromDetail(detail: TrafficDetail): TrafficEma
   };
 }
 
-function readSidebarCollapsedState(): boolean {
-  if (typeof window === "undefined") {
-    return false;
-  }
-  try {
-    const nextValue = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY);
-    if (nextValue !== null) {
-      return nextValue === "1";
-    }
-    return window.localStorage.getItem(LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
 export default function TrafficPage() {
   const { requestJson } = useApiRequest();
   const auth = useAuth();
@@ -2252,7 +2237,6 @@ export default function TrafficPage() {
   const [isDeliveryMethodDialogOpen, setIsDeliveryMethodDialogOpen] = useState(false);
   const [selectedDeliveryStationCode, setSelectedDeliveryStationCode] = useState<string | null>(null);
   const [loadedAccountCode, setLoadedAccountCode] = useState("");
-  const [sidebarVisuallyExpanded, setSidebarVisuallyExpanded] = useState<boolean>(() => !readSidebarCollapsedState());
 
   const listRequestIdRef = useRef(0);
   const detailRequestIdRef = useRef(0);
@@ -2502,6 +2486,21 @@ export default function TrafficPage() {
     }
     return refreshMessage;
   }, [hasUnsavedChanges, refreshMessage]);
+  const pageMessages: StackMessage[] = [];
+  if (visibleRefreshMessage) {
+    pageMessages.push({
+      id: "traffic-refresh-message",
+      variant: visibleRefreshMessage.toLowerCase().includes("offline") ? "info" : "warning",
+      message: visibleRefreshMessage,
+    });
+  }
+  if (error) {
+    pageMessages.push({
+      id: "traffic-load-error",
+      variant: "error",
+      message: error,
+    });
+  }
 
   const upsertSelectedByAccount = useCallback((accountCode: string, trafficId: string | null) => {
     const normalizedAccount = asString(accountCode).toUpperCase();
@@ -2986,37 +2985,6 @@ export default function TrafficPage() {
       clearDeferredUpdate();
     }
   }, [clearDeferredUpdate, hasUnsavedChanges, refreshMessage]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const handleStorage = () => {
-      const collapsed = readSidebarCollapsedState();
-      setSidebarVisuallyExpanded(!collapsed);
-    };
-    const handleSidebarEvent = (event: Event) => {
-      const customEvent = event as CustomEvent<{ collapsed?: boolean; visuallyExpanded?: boolean }>;
-      if (typeof customEvent.detail?.visuallyExpanded === "boolean") {
-        setSidebarVisuallyExpanded(customEvent.detail.visuallyExpanded);
-        return;
-      }
-      if (typeof customEvent.detail?.collapsed === "boolean") {
-        setSidebarVisuallyExpanded(!customEvent.detail.collapsed);
-        return;
-      }
-      const collapsed = readSidebarCollapsedState();
-      setSidebarVisuallyExpanded(!collapsed);
-    };
-
-    window.addEventListener("storage", handleStorage);
-    window.addEventListener(SIDEBAR_COLLAPSED_EVENT, handleSidebarEvent as EventListener);
-    return () => {
-      window.removeEventListener("storage", handleStorage);
-      window.removeEventListener(SIDEBAR_COLLAPSED_EVENT, handleSidebarEvent as EventListener);
-    };
-  }, []);
 
   useEffect(() => {
     const handleBeforeRouteChange = (event: Event) => {
@@ -5980,13 +5948,53 @@ export default function TrafficPage() {
     };
   }, [appliedTrafficSearch, applyTrafficSearchKeyword, draftTrafficSearch]);
 
+  const isPageRefreshOverlayVisible = !hasHydratedPageState || isLoadActionOverlayVisible || isChipRefreshOverlayVisible;
+  const pageRefreshOverlayMessage = !hasHydratedPageState
+    ? "Preparing traffic workspace..."
+    : isLoadActionOverlayVisible
+      ? "Loading traffic data..."
+      : "Loading latest traffic data...";
+  const isGridActionOverlayVisible = isSaving || isSendingEmail;
+  const gridActionOverlayMessage = isSaving ? "Saving traffic changes..." : "Sending email...";
+
   return (
-    <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5 pb-12 xl:min-h-[calc(100dvh-3.5rem)]">
-      <PageBanner
-        eyebrow=""
-        title="Traffic"
-        description="Create and manage account-centered traffic records, flights, stations, and email drafts."
-      />
+    <AppPageLayout
+      className="pb-5"
+      pageMessages={<PageMessageStack messages={pageMessages} />}
+      banner={(
+        <PageBanner
+          eyebrow="TradSphere"
+          title="Traffic"
+          description="Create and manage account-centered traffic records, flights, stations, and email drafts."
+        />
+      )}
+      footer={(cacheStatus || isDeletingTraffic) ? (
+        <PageCacheFooter
+          text={cacheStatusText}
+          onRefresh={() => {
+            if (hasAnyUnsavedChanges) {
+              setPendingAction({ type: "refresh" });
+              setIsUnsavedDialogOpen(true);
+              return;
+            }
+            void handleRefreshFromChip();
+          }}
+          disabled={!activeAccountCode || !isOnline || isSaving || isDeletingTraffic || isLoadingAccountTraffic || isLoadingDetail}
+          refreshing={isDeletingTraffic || isRefreshingAccountTraffic || isLoadingDetail}
+          refreshLabel="Refresh traffic data"
+          tooltipText={
+            isDeletingTraffic
+              ? "Delete/archive is in progress."
+              : hasAnyUnsavedChanges
+                ? "Save or revert changes before refreshing traffic data."
+                : isOnline
+                  ? "Click to refresh traffic data"
+                  : "Offline. Reconnect to refresh traffic data."
+          }
+          containerClassName="w-full"
+        />
+      ) : null}
+    >
 
       <SectionCard
         title="Account"
@@ -6018,21 +6026,6 @@ export default function TrafficPage() {
           }}
         />
       </SectionCard>
-
-      {visibleRefreshMessage ? (
-        <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
-          {visibleRefreshMessage}
-        </p>
-      ) : null}
-
-      {error ? (
-        <div className="rounded-xl border border-rose-200 bg-rose-50 px-4 py-2 text-sm text-rose-700">
-          <div className="flex items-start gap-2">
-            <AlertCircle className="mt-0.5 size-4 shrink-0" />
-            <p>{error}</p>
-          </div>
-        </div>
-      ) : null}
 
       <div className="relative grid gap-4 xl:grid-cols-[minmax(18rem,26rem)_minmax(0,1fr)]">
         <SectionCard
@@ -6893,19 +6886,10 @@ export default function TrafficPage() {
           </div>
         ) : null}
 
-        {(isLoadActionOverlayVisible || isChipRefreshOverlayVisible || isSaving || isSendingEmail) ? (
-          <SectionLoadingOverlay
-            message={
-              isSendingEmail
-                ? "Sending email..."
-                : isLoadActionOverlayVisible
-                  ? "Loading traffic data..."
-                : isChipRefreshOverlayVisible
-                  ? "Loading latest traffic data..."
-                : (isSaving ? "Saving traffic changes..." : "Loading traffic data...")
-            }
-          />
-        ) : null}
+        <SectionLoadingLayer
+          active={isGridActionOverlayVisible}
+          message={gridActionOverlayMessage}
+        />
       </div>
 
       {shouldShowSaveActions ? (
@@ -6933,40 +6917,6 @@ export default function TrafficPage() {
                 "Save"
               )}
             </Button>
-          </div>
-        </div>
-      ) : null}
-
-      {(cacheStatus || isDeletingTraffic) ? (
-        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40">
-          <div className={`mx-4 sm:mx-6 lg:mr-6 ${sidebarVisuallyExpanded ? "lg:ml-[18.75rem]" : "lg:ml-[6.5rem]"}`}>
-            <div className="mx-auto w-full max-w-[1600px]">
-              <CacheStatusChip
-                text={cacheStatusText}
-                onRefresh={() => {
-                  if (hasAnyUnsavedChanges) {
-                    setPendingAction({ type: "refresh" });
-                    setIsUnsavedDialogOpen(true);
-                    return;
-                  }
-                  void handleRefreshFromChip();
-                }}
-                disabled={!activeAccountCode || !isOnline || isSaving || isDeletingTraffic || isLoadingAccountTraffic || isLoadingDetail}
-                refreshing={isDeletingTraffic || isRefreshingAccountTraffic || isLoadingDetail}
-                refreshLabel="Refresh traffic data"
-                tooltipText={
-                  isDeletingTraffic
-                    ? "Delete/archive is in progress."
-                    : hasAnyUnsavedChanges
-                    ? "Save or revert changes before refreshing traffic data."
-                    : isOnline
-                      ? "Click to refresh traffic data"
-                      : "Offline. Reconnect to refresh traffic data."
-                }
-                containerClassName="pointer-events-auto"
-                className="max-w-[min(92vw,40rem)]"
-              />
-            </div>
           </div>
         </div>
       ) : null}
@@ -7730,6 +7680,17 @@ export default function TrafficPage() {
               Update delivery workflow and confirmation tracking for this station row.
             </DialogDescription>
           </DialogHeader>
+          <SectionMessageStack
+            className="pt-1"
+            messages={[
+              ...(stationLookupError
+                ? [{ id: "traffic-station-lookup-error", variant: "error" as const, message: stationLookupError }]
+                : []),
+              ...(stationModalError
+                ? [{ id: "traffic-station-modal-error", variant: "error" as const, message: stationModalError }]
+                : []),
+            ]}
+          />
           <div className="space-y-6 pt-1">
             <section className="min-w-0 space-y-3">
               <div className="flex min-h-10 items-center justify-between gap-3 border-b border-slate-200 pb-2">
@@ -7882,8 +7843,6 @@ export default function TrafficPage() {
               </div>
             </section>
           </div>
-          {stationLookupError ? <p className="text-sm text-rose-600">{stationLookupError}</p> : null}
-          {stationModalError ? <p className="text-sm text-rose-600">{stationModalError}</p> : null}
           <DialogFooter>
             {canSubmitStationModal ? (
               <Button onClick={saveStationModal}>
@@ -7891,21 +7850,19 @@ export default function TrafficPage() {
               </Button>
             ) : null}
           </DialogFooter>
-          <footer className="shrink-0 border-t border-slate-100 bg-white px-0 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
-            <CacheStatusChip
-              text={stationLookupStatusText}
-              onRefresh={() => {
-                if (!stationLookupQueryCode || isStationLookupLoading) {
-                  return;
-                }
-                setStationLookupRefreshToken((current) => current + 1);
-              }}
-              disabled={!stationLookupQueryCode || isStationLookupLoading}
-              refreshing={isStationLookupLoading}
-              refreshLabel="Refresh station info"
-              tooltipText={stationLookupQueryCode ? "Click to refresh this data" : "Enter a station code to load station info."}
-            />
-          </footer>
+          <ModalCacheFooter
+            text={stationLookupStatusText}
+            onRefresh={() => {
+              if (!stationLookupQueryCode || isStationLookupLoading) {
+                return;
+              }
+              setStationLookupRefreshToken((current) => current + 1);
+            }}
+            disabled={!stationLookupQueryCode || isStationLookupLoading}
+            refreshing={isStationLookupLoading}
+            refreshLabel="Refresh station info"
+            tooltipText={stationLookupQueryCode ? "Click to refresh this data" : "Enter a station code to load station info."}
+          />
         </DialogContent>
       </Dialog>
 
@@ -8100,6 +8057,7 @@ export default function TrafficPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-    </div>
+      <PageLoadingLayer active={isPageRefreshOverlayVisible} message={pageRefreshOverlayMessage} />
+    </AppPageLayout>
   );
 }

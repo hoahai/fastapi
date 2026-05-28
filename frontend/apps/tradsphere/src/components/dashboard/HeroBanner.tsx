@@ -8,7 +8,7 @@ type HeroBannerProps = {
 export function HeroBanner({ action }: HeroBannerProps) {
   return (
     <PageBanner
-      eyebrow="tradsphere"
+      eyebrow="TradSphere"
       title="Accounts"
       description="Manage account-level schedules, stations, and estimate operations."
       action={action}

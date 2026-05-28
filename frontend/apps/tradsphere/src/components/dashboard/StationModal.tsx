@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Check, Loader2, Search, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
-import { CacheStatusChip } from "@/components/ui/cache-status-chip";
+import { AppDropdown } from "@/components/ui/app-dropdown";
 import {
   Dialog,
   DialogClose,
@@ -14,13 +14,13 @@ import {
 } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { canModalClose, shouldBlockOutsideClose } from "@/components/ui/modal-close-guard";
-import { Select } from "@/components/ui/select";
 import { Textarea } from "@/components/ui/textarea";
 import { UnsavedChangesDialog } from "@/components/ui/unsaved-changes-dialog";
 import { useToast } from "@/components/ui/toast";
 import { useApiRequest } from "@/hooks/useApiRequest";
 import { readBrowserCacheSnapshot, removeBrowserCache, writeBrowserCache } from "@/lib/browserCache";
 import { TRADSPHERE_CACHE_TTL_MS } from "@shared/cache";
+import { ModalCacheFooter } from "@shared/components/modal/ModalCacheFooter";
 
 import {
   StationBasicInfoSection,
@@ -2838,24 +2838,22 @@ export function StationModal({
           </DialogFooter>
 
           {detailStatusText ? (
-            <footer className="shrink-0 border-t border-slate-100 bg-white px-0 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
-              <CacheStatusChip
-                text={detailStatusText}
-                onRefresh={() => {
-                  if (!isLoadingDetail && !isSubmitting && isEditMode && !hasUnsavedChanges) {
-                    setDetailRefreshToken((current) => current + 1);
-                  }
-                }}
-                disabled={!isEditMode || isLoadingDetail || isSubmitting || hasUnsavedChanges}
-                refreshing={isRefreshingDetail}
-                refreshLabel="Refresh station detail"
-                tooltipText={
-                  hasUnsavedChanges
-                    ? "Save or discard your edits before refreshing station detail."
-                    : "Click to refresh this data"
+            <ModalCacheFooter
+              text={detailStatusText}
+              onRefresh={() => {
+                if (!isLoadingDetail && !isSubmitting && isEditMode && !hasUnsavedChanges) {
+                  setDetailRefreshToken((current) => current + 1);
                 }
-              />
-            </footer>
+              }}
+              disabled={!isEditMode || isLoadingDetail || isSubmitting || hasUnsavedChanges}
+              refreshing={isRefreshingDetail}
+              refreshLabel="Refresh station detail"
+              tooltipText={
+                hasUnsavedChanges
+                  ? "Save or discard your edits before refreshing station detail."
+                  : "Click to refresh this data"
+              }
+            />
           ) : null}
           {hasDeferredDetailUpdate ? (
             <p className="mt-2 text-sm text-amber-700">
@@ -3018,20 +3016,18 @@ export function StationModal({
             </div>
           </div>
 
-          <footer className="shrink-0 border-t border-slate-100 bg-white px-0 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
-            <CacheStatusChip
-              text={deliveryMethodsStatusText}
-              onRefresh={() => {
-                if (!isLoadingDeliveryMethods) {
-                  void loadDeliveryMethods(true);
-                }
-              }}
-              disabled={isLoadingDeliveryMethods}
-              refreshing={isLoadingDeliveryMethods}
-              refreshLabel="Refresh delivery methods"
-              tooltipText="Click to refresh this data"
-            />
-          </footer>
+          <ModalCacheFooter
+            text={deliveryMethodsStatusText}
+            onRefresh={() => {
+              if (!isLoadingDeliveryMethods) {
+                void loadDeliveryMethods(true);
+              }
+            }}
+            disabled={isLoadingDeliveryMethods}
+            refreshing={isLoadingDeliveryMethods}
+            refreshLabel="Refresh delivery methods"
+            tooltipText="Click to refresh this data"
+          />
         </DialogContent>
       </Dialog>
 
@@ -3210,20 +3206,18 @@ export function StationModal({
             </div>
           </div>
 
-          <footer className="shrink-0 border-t border-slate-100 bg-white px-0 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
-            <CacheStatusChip
-              text={deliveryMethodsStatusText}
-              onRefresh={() => {
-                if (!isLoadingDeliveryMethods) {
-                  void loadDeliveryMethods(true);
-                }
-              }}
-              disabled={isLoadingDeliveryMethods}
-              refreshing={isLoadingDeliveryMethods}
-              refreshLabel="Refresh delivery methods"
-              tooltipText="Click to refresh this data"
-            />
-          </footer>
+          <ModalCacheFooter
+            text={deliveryMethodsStatusText}
+            onRefresh={() => {
+              if (!isLoadingDeliveryMethods) {
+                void loadDeliveryMethods(true);
+              }
+            }}
+            disabled={isLoadingDeliveryMethods}
+            refreshing={isLoadingDeliveryMethods}
+            refreshLabel="Refresh delivery methods"
+            tooltipText="Click to refresh this data"
+          />
         </DialogContent>
       </Dialog>
 
@@ -3391,13 +3385,15 @@ export function StationModal({
                 </>
               }
             >
-              <Select
+              <AppDropdown
                 value={normalizeContactType(contactEditorForm.contactType)}
                 onValueChange={(value) => {
                   setContactEditorForm((current) => ({ ...current, contactType: normalizeContactType(value) }));
                   setContactEditorError(null);
                 }}
                 options={contactTypeOptions}
+                searchable={false}
+                placeholder=""
                 disabled={isReadOnly}
               />
             </LabeledField>
@@ -3532,13 +3528,15 @@ export function StationModal({
                 </>
               }
             >
-              <Select
+              <AppDropdown
                 value={normalizeContactType(selectedExistingContactType)}
                 onValueChange={(value) => {
                   setSelectedExistingContactType(normalizeContactType(value));
                   setExistingContactsError(null);
                 }}
                 options={contactTypeOptions}
+                searchable={false}
+                placeholder=""
                 disabled={isLoadingExistingContacts || isReadOnly}
               />
             </LabeledField>
@@ -3568,20 +3566,18 @@ export function StationModal({
             </div>
           </div>
 
-          <footer className="shrink-0 border-t border-slate-100 bg-white px-0 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
-            <CacheStatusChip
-              text={existingContactsStatusText}
-              onRefresh={() => {
-                if (!isLoadingExistingContacts) {
-                  void loadExistingContacts(true);
-                }
-              }}
-              disabled={isLoadingExistingContacts}
-              refreshing={isLoadingExistingContacts}
-              refreshLabel="Refresh contacts"
-              tooltipText="Click to refresh this data"
-            />
-          </footer>
+          <ModalCacheFooter
+            text={existingContactsStatusText}
+            onRefresh={() => {
+              if (!isLoadingExistingContacts) {
+                void loadExistingContacts(true);
+              }
+            }}
+            disabled={isLoadingExistingContacts}
+            refreshing={isLoadingExistingContacts}
+            refreshLabel="Refresh contacts"
+            tooltipText="Click to refresh this data"
+          />
         </DialogContent>
       </Dialog>
 

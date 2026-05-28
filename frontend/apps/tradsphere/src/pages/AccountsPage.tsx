@@ -6,7 +6,7 @@ import {
   getFilteredRowModel,
   useReactTable,
 } from "@tanstack/react-table";
-import { AlertCircle, CalendarDays, CloudUpload, Loader2, Monitor, Plus, X } from "lucide-react";
+import { CalendarDays, CloudUpload, Loader2, Monitor, Plus, X } from "lucide-react";
 
 import { AccountInformationCard } from "@/components/dashboard/AccountInformationCard";
 import { ActionIconButton } from "@/components/dashboard/ActionIconButton";
@@ -32,7 +32,6 @@ import {
 } from "@/components/dashboard/StationModal";
 import { LabeledField } from "@/components/dashboard/FormFieldRow";
 import { Button } from "@/components/ui/button";
-import { CacheStatusChip } from "@/components/ui/cache-status-chip";
 import {
   Dialog,
   DialogClose,
@@ -69,8 +68,11 @@ import { TRADSPHERE_CACHE_TTL_MS, shouldFetchNetwork, type CachePolicy } from "@
 import { useAuth } from "@shared/auth/useAuth";
 import { shouldProtectFrontendAuth } from "@shared/auth/guards";
 import { hasAppEditAccess } from "@shared/auth/permissions";
+import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
+import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { SectionCard } from "@shared/components/layout/SectionCard";
-import { PageLoadingOverlay } from "@shared/components/status/LoadingOverlay";
+import { PageLoadingLayer } from "@shared/components/status/LoadingOverlay";
+import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 
 const scheduleColumns: ColumnDef<EsnumItem>[] = [{ accessorKey: "estnum" }, { accessorKey: "name" }];
 
@@ -81,9 +83,6 @@ const SCHEDULE_IMPORT_URL = "/api/tradsphere/v1/schedules/import/file?skipBlankL
 const HOME_SELECTED_ACCOUNT_STORAGE_KEY = "tradsphere.home.selectedAccount";
 const HOME_SCHEDULE_SEARCH_STORAGE_KEY = "tradsphere.home.searchText.schedule";
 const HOME_STATION_SEARCH_STORAGE_KEY = "tradsphere.home.searchText.station";
-const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspace.sidebar.collapsed";
-const LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY = "tradsphere:ui:sidebarCollapsed:v1";
-const SIDEBAR_COLLAPSED_EVENT = "workspace-sidebar-collapsed-change";
 const ESTNUM_BATCH_SIZE = 25;
 const ESTNUM_SCROLL_END_THRESHOLD_PX = 24;
 
@@ -130,28 +129,11 @@ const stationFilterFn: FilterFn<StationItem> = (row, _columnId, filterValue) => 
   return [station.code, station.name ?? "", repText].join(" ").toLowerCase().includes(query);
 };
 
-function readSidebarCollapsedState(): boolean {
-  if (typeof window === "undefined") {
-    return false;
-  }
-
-  try {
-    const nextValue = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY);
-    if (nextValue !== null) {
-      return nextValue === "1";
-    }
-    return window.localStorage.getItem(LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
 function App() {
   const toast = useToast();
   const { requestJson } = useApiRequest();
   const auth = useAuth();
   const { isOnline } = useOnlineStatus();
-  const [sidebarVisuallyExpanded, setSidebarVisuallyExpanded] = useState<boolean>(() => !readSidebarCollapsedState());
   const [selectedAccountCode, setSelectedAccountCode] = usePersistentState<string>(
     HOME_SELECTED_ACCOUNT_STORAGE_KEY,
     "",
@@ -201,7 +183,6 @@ function App() {
   const [stationModalCode, setStationModalCode] = useState<string | null>(null);
   const [scheduleUploadSuccessMessage, setScheduleUploadSuccessMessage] = useState<string | null>(null);
   const [dashboardDeferredMessage, setDashboardDeferredMessage] = useState<string | null>(null);
-  const hasAttemptedDashboardRestoreRef = useRef(false);
   const requestHeaders = useMemo(
     () => buildSharedAuthHeaders(auth.session, auth.tenantSlug, false),
     [auth.session, auth.tenantSlug],
@@ -225,37 +206,6 @@ function App() {
     requestHeaders,
     loadErrorMessage: "Unable to load account selections.",
   });
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const handleStorage = () => {
-      const collapsed = readSidebarCollapsedState();
-      setSidebarVisuallyExpanded(!collapsed);
-    };
-    const handleSidebarEvent = (event: Event) => {
-      const customEvent = event as CustomEvent<{ collapsed?: boolean; visuallyExpanded?: boolean }>;
-      if (typeof customEvent.detail?.visuallyExpanded === "boolean") {
-        setSidebarVisuallyExpanded(customEvent.detail.visuallyExpanded);
-        return;
-      }
-      if (typeof customEvent.detail?.collapsed === "boolean") {
-        setSidebarVisuallyExpanded(!customEvent.detail.collapsed);
-        return;
-      }
-      const collapsed = readSidebarCollapsedState();
-      setSidebarVisuallyExpanded(!collapsed);
-    };
-
-    window.addEventListener("storage", handleStorage);
-    window.addEventListener(SIDEBAR_COLLAPSED_EVENT, handleSidebarEvent as EventListener);
-    return () => {
-      window.removeEventListener("storage", handleStorage);
-      window.removeEventListener(SIDEBAR_COLLAPSED_EVENT, handleSidebarEvent as EventListener);
-    };
-  }, []);
 
   const schedulesTable = useReactTable({
     data: esnums,
@@ -409,25 +359,6 @@ function App() {
     }
     setDashboardDeferredMessage(null);
   }, [hasBlockingLocalEdits, hasDeferredDashboardUpdate]);
-
-  useEffect(() => {
-    if (isLoadingSelections || hasAttemptedDashboardRestoreRef.current) {
-      return;
-    }
-
-    if (!selectedAccountCode || hasLoadedDashboard || isLoadingAccount || isSaving) {
-      return;
-    }
-    hasAttemptedDashboardRestoreRef.current = true;
-
-    const cacheSnapshot = readBrowserCacheSnapshot<unknown>(getLoadCacheKey(selectedAccountCode));
-    const cachedDashboard = normalizeCachedMainLoadResponse(cacheSnapshot?.data);
-    if (!cachedDashboard || !shouldUseCachedLoad(cachedDashboard, selectedAccountCode)) {
-      return;
-    }
-
-    void loadAccountDashboard("stale-while-revalidate");
-  }, [hasLoadedDashboard, isLoadingAccount, isLoadingSelections, isSaving, selectedAccountCode]);
 
   async function loadAccountDashboard(
     policy: CachePolicy,
@@ -849,23 +780,57 @@ function App() {
   const pageCacheStatusText = dashboardStatusText ?? selectionsStatusText;
   const shouldBlockForSelectionsLoad = isLoadingSelections && accountSelections.length === 0;
   const shouldBlockForAccountLoad = isLoadingAccount && !hasLoadedDashboard;
-  const isPageBusy = shouldBlockForSelectionsLoad || shouldBlockForAccountLoad || isSaving;
+  const isPageBusy = shouldBlockForSelectionsLoad || shouldBlockForAccountLoad || isSaving || isRefreshingAccount;
   const pageBusyMessage = isSaving
     ? "Saving account changes..."
+    : isRefreshingAccount
+      ? "Refreshing account dashboard..."
     : shouldBlockForAccountLoad
       ? "Loading account dashboard..."
     : "Loading account selections...";
-  const isAnyModalOpen = isScheduleModalOpen || isEstimateNumberModalOpen || isStationModalOpen || isScheduleUploadOpen;
+  const pageMessages: StackMessage[] = [];
+  if (loadError) {
+    pageMessages.push({
+      id: "account-load-error",
+      variant: "error",
+      message: loadError,
+    });
+  }
+  if (dashboardDeferredMessage) {
+    pageMessages.push({
+      id: "account-deferred-refresh",
+      variant: "warning",
+      message: dashboardDeferredMessage,
+    });
+  }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-6 pb-12">
-      <HeroBanner
-        action={
-          <Button onClick={openCreateAccountModal} className="min-w-40" disabled={!canEditTradsphere}>
-            Add Account
-          </Button>
-        }
-      />
+    <AppPageLayout
+      className="gap-6"
+      pageMessages={<PageMessageStack messages={pageMessages} />}
+      banner={(
+        <HeroBanner
+          action={(
+            <Button onClick={openCreateAccountModal} className="min-w-40" disabled={!canEditTradsphere}>
+              Add Account
+            </Button>
+          )}
+        />
+      )}
+      footer={pageCacheStatusText ? (
+        <PageCacheFooter
+          text={pageCacheStatusText}
+          onRefresh={() => {
+            void handleRefreshAccount();
+          }}
+          disabled={!selectedAccountCode || !isOnline || isLoadingAccount || isRefreshingAccount || isSaving}
+          refreshing={isRefreshingAccount}
+          refreshLabel="Refresh data"
+          tooltipText={isOnline ? "Click to refresh data" : "Offline. Reconnect to refresh data."}
+          containerClassName="w-full"
+        />
+      ) : null}
+    >
 
       <SectionCard title="Account & Load" divider={false} contentClassName="pt-1">
         <AccountSelector
@@ -880,18 +845,6 @@ function App() {
           onLoad={handleLoadAccount}
         />
       </SectionCard>
-
-      {loadError ? (
-        <p className="flex items-center gap-2 text-sm text-rose-600">
-          <AlertCircle className="size-4" />
-          {loadError}
-        </p>
-      ) : null}
-      {dashboardDeferredMessage ? (
-        <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">
-          {dashboardDeferredMessage}
-        </p>
-      ) : null}
 
       {hasLoadedDashboard ? (
         <>
@@ -1022,29 +975,6 @@ function App() {
             </div>
           </main>
         </>
-      ) : null}
-
-      {pageCacheStatusText && !isAnyModalOpen ? (
-        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40">
-          <div
-            className={`mx-4 sm:mx-6 lg:mr-6 ${sidebarVisuallyExpanded ? "lg:ml-[18.75rem]" : "lg:ml-[6.5rem]"}`}
-          >
-            <div className="mx-auto w-full max-w-[1600px]">
-              <CacheStatusChip
-                text={pageCacheStatusText}
-                onRefresh={() => {
-                  void handleRefreshAccount();
-                }}
-                disabled={!selectedAccountCode || !isOnline || isLoadingAccount || isRefreshingAccount || isSaving}
-                refreshing={isRefreshingAccount}
-                refreshLabel="Refresh data"
-                tooltipText={isOnline ? "Click to refresh data" : "Offline. Reconnect to refresh data."}
-                containerClassName="pointer-events-auto"
-                className="max-w-[min(90vw,32rem)]"
-              />
-            </div>
-          </div>
-        </div>
       ) : null}
 
       <ScheduleUploadDialog
@@ -1225,10 +1155,8 @@ function App() {
         invalidatedEstnum={invalidatedScheduleEstnum}
       />
 
-      {isPageBusy ? (
-        <PageLoadingOverlay message={pageBusyMessage} />
-      ) : null}
-    </div>
+      <PageLoadingLayer active={isPageBusy} message={pageBusyMessage} />
+    </AppPageLayout>
   );
 }
 
