@@ -19,14 +19,14 @@ function isAccessResolutionPending(
   return !accessProfile && (accessLoading || !accessError);
 }
 
-export function shouldProtectTradsphereFrontend(): boolean {
+export function shouldProtectFrontendAuth(): boolean {
   const value = String(import.meta.env.VITE_AUTH_PROTECT_TRADSPHERE || "false").trim().toLowerCase();
   return value === "1" || value === "true" || value === "yes" || value === "on";
 }
 
 export function RequireAuth({ children, fallback }: { children: ReactNode; fallback: ReactNode }) {
   const auth = useAuth();
-  if (!shouldProtectTradsphereFrontend()) {
+  if (!shouldProtectFrontendAuth()) {
     return <>{children}</>;
   }
   if (auth.status === "loading") {
@@ -40,7 +40,7 @@ export function RequireAuth({ children, fallback }: { children: ReactNode; fallb
 
 export function RequireTenantAccess({ children, fallback }: { children: ReactNode; fallback: ReactNode }) {
   const auth = useAuth();
-  if (!shouldProtectTradsphereFrontend()) {
+  if (!shouldProtectFrontendAuth()) {
     return <>{children}</>;
   }
   if (auth.status === "loading") {
@@ -68,7 +68,7 @@ export function RequirePermission({
   fallback: ReactNode;
 }) {
   const auth = useAuth();
-  if (!shouldProtectTradsphereFrontend()) {
+  if (!shouldProtectFrontendAuth()) {
     return <>{children}</>;
   }
   if (auth.status === "loading") {

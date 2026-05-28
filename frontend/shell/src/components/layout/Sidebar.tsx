@@ -34,7 +34,7 @@ import {
   tenantChipClass,
   type NormalizedAccessAssignment,
 } from "@shared/auth/accessAssignments";
-import { shouldProtectTradsphereFrontend } from "@shared/auth/guards";
+import { shouldProtectFrontendAuth } from "@shared/auth/guards";
 import { canAccessAppRoute } from "@shared/auth/pagePermissions";
 import { hasAppAdminAccess, hasSuperAdminAccess } from "@shared/auth/permissions";
 import type { AccessProfile } from "@shared/auth/types";
@@ -73,7 +73,7 @@ export function Sidebar({
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
   const isCompact = !visuallyExpanded;
   const isSignedIn = auth.status === "authenticated" && Boolean(auth.user);
-  const protectionEnabled = shouldProtectTradsphereFrontend();
+  const protectionEnabled = shouldProtectFrontendAuth();
   const isSuperAdmin = isSignedIn && (!protectionEnabled || hasSuperAdminAccess(auth.accessProfile));
   const hasAdminPermission = isSignedIn && isSuperAdmin;
   const navGroups = useMemo<AppNavGroup[]>(

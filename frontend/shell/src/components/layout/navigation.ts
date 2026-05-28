@@ -38,7 +38,7 @@ export const HOME_ROUTE = "/";
 export const APP_NAV_ITEMS: AppNavItem[] = [
   {
     id: "tradsphere",
-    label: "Tradsphere",
+    label: "TradSphere",
     description: "Broadcast schedule workspace",
     route: "/tradsphere/home",
     icon: RadioTower,
@@ -85,7 +85,7 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
   },
   {
     id: "spendsphere",
-    label: "Spendsphere",
+    label: "SpendSphere",
     description: "Coming soon",
     route: "/spendsphere/home",
     icon: WalletCards,
@@ -93,7 +93,7 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
   },
   {
     id: "fundsphere",
-    label: "Fundsphere",
+    label: "FundSphere",
     description: "Coming soon",
     route: "/fundsphere/home",
     icon: LayoutDashboard,
@@ -101,7 +101,7 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
   },
   {
     id: "opssphere",
-    label: "Opssphere",
+    label: "OpsSphere",
     description: "Coming soon",
     route: "/opssphere/home",
     icon: Wrench,

@@ -32,7 +32,7 @@ import {
 import { type CachePolicy } from "@shared/cache";
 import { buildAuthHeaders as buildSharedAuthHeaders } from "@shared/api/authHeaders";
 import { useAuth } from "@shared/auth/useAuth";
-import { shouldProtectTradsphereFrontend } from "@shared/auth/guards";
+import { shouldProtectFrontendAuth } from "@shared/auth/guards";
 import { hasAppEditAccess } from "@shared/auth/permissions";
 import { PageLoadingOverlay } from "@shared/components/status/LoadingOverlay";
 import { hasAtLeastOneSearchCriterion, shouldFetchSubmittedSearchNetwork } from "@shared/search";
@@ -1330,7 +1330,7 @@ export default function EstimateNumbersPage() {
     [],
   );
   const canEditTradsphere = useMemo(() => {
-    if (!shouldProtectTradsphereFrontend()) {
+    if (!shouldProtectFrontendAuth()) {
       return true;
     }
     return hasAppEditAccess(auth.accessProfile, "tradsphere");

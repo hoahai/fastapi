@@ -5,7 +5,7 @@ import { APP_NAV_ITEMS, HOME_ROUTE } from "@shell/components/layout/navigation";
 import { ToastProvider } from "@shell/components/ui/toast";
 import { useRouteScrollRestoration } from "@shell/hooks/useRouteScrollRestoration";
 import { AuthProvider } from "@shared/auth/AuthProvider";
-import { AuthLoadingFallback, RequirePermission, RequireTenantAccess, shouldProtectTradsphereFrontend } from "@shared/auth/guards";
+import { AuthLoadingFallback, RequirePermission, RequireTenantAccess, shouldProtectFrontendAuth } from "@shared/auth/guards";
 import { canAccessAppRoute } from "@shared/auth/pagePermissions";
 import { hasAppViewAccess, hasSuperAdminAccess } from "@shared/auth/permissions";
 import { AuthCallbackPage, InviteAcceptPage, LoginPage, PendingInvitePage, UnauthorizedPage, UpdatePasswordPage } from "@shared/auth/pages";
@@ -232,7 +232,7 @@ function RequireAppView({
   fallback: ReactNode;
 }) {
   const auth = useAuth();
-  if (!shouldProtectTradsphereFrontend()) {
+  if (!shouldProtectFrontendAuth()) {
     return <>{children}</>;
   }
   if (auth.status === "loading") {
@@ -262,7 +262,7 @@ function RequireAppPageRoute({
   fallback: ReactNode;
 }) {
   const auth = useAuth();
-  if (!shouldProtectTradsphereFrontend()) {
+  if (!shouldProtectFrontendAuth()) {
     return <>{children}</>;
   }
   if (auth.status === "loading") {
@@ -291,7 +291,7 @@ function RequireAppPageRoute({
 
 function RequireAdminScope({ children, fallback }: { children: ReactNode; fallback: ReactNode }) {
   const auth = useAuth();
-  if (!shouldProtectTradsphereFrontend()) {
+  if (!shouldProtectFrontendAuth()) {
     return <>{children}</>;
   }
   if (auth.status === "loading") {

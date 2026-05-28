@@ -5,7 +5,7 @@ import { PageBanner } from "@/components/layout/PageBanner";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
-import { shouldProtectTradsphereFrontend } from "@shared/auth/guards";
+import { shouldProtectFrontendAuth } from "@shared/auth/guards";
 import { useAuth } from "@shared/auth/useAuth";
 
 function normalizeAuthError(error: unknown, fallback: string): string {
@@ -82,7 +82,7 @@ export function LoginPage() {
   const normalizedEmail = useMemo(() => email.trim().toLowerCase(), [email]);
   const postLoginPath = useMemo(() => resolvePostLoginPath(), []);
   const tenantLabel = auth.tenantSlug || String(import.meta.env.VITE_DEFAULT_TENANT_SLUG || "").trim().toLowerCase();
-  const authProtectionEnabled = shouldProtectTradsphereFrontend();
+  const authProtectionEnabled = shouldProtectFrontendAuth();
   const resolvedAccessError = normalizeAccessErrorMessage(auth.accessError);
   const hasNoAppAccessError = String(auth.accessError || "").toLowerCase().includes("does not have access to this app");
   const accessValidationResolved = !authProtectionEnabled

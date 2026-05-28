@@ -49,7 +49,7 @@ import {
   writeScopedPageState,
 } from "@shared/cache";
 import { useAuth } from "@shared/auth/useAuth";
-import { shouldProtectTradsphereFrontend } from "@shared/auth/guards";
+import { shouldProtectFrontendAuth } from "@shared/auth/guards";
 import { hasAppEditAccess } from "@shared/auth/permissions";
 import { SectionCard } from "@shared/components/layout/SectionCard";
 import { SectionLoadingOverlay } from "@shared/components/status/LoadingOverlay";
@@ -1606,7 +1606,7 @@ export default function InvoiceChecklistPage() {
     [auth.session, auth.tenantSlug],
   );
   const canEditTradsphere = useMemo(() => {
-    if (!shouldProtectTradsphereFrontend()) {
+    if (!shouldProtectFrontendAuth()) {
       return true;
     }
     return hasAppEditAccess(auth.accessProfile, "tradsphere");

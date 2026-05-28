@@ -27,7 +27,7 @@ import {
 import { buildAuthHeaders as buildSharedAuthHeaders } from "@shared/api/authHeaders";
 import { shouldFetchNetwork, type CachePolicy } from "@shared/cache";
 import { useAuth } from "@shared/auth/useAuth";
-import { shouldProtectTradsphereFrontend } from "@shared/auth/guards";
+import { shouldProtectFrontendAuth } from "@shared/auth/guards";
 import { hasAppEditAccess } from "@shared/auth/permissions";
 import { SectionLoadingOverlay } from "@shared/components/status/LoadingOverlay";
 import { hasAtLeastOneSearchCriterion, shouldFetchSubmittedSearchNetwork } from "@shared/search";
@@ -1118,7 +1118,7 @@ export default function ContactsPage() {
     [auth.session, auth.tenantSlug],
   );
   const canEditTradsphere = useMemo(() => {
-    if (!shouldProtectTradsphereFrontend()) {
+    if (!shouldProtectFrontendAuth()) {
       return true;
     }
     return hasAppEditAccess(auth.accessProfile, "tradsphere");

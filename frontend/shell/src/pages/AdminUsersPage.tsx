@@ -264,6 +264,16 @@ const APP_CHIP_STYLES = [
   "border-teal-200 bg-teal-50 text-teal-700",
   "border-orange-200 bg-orange-50 text-orange-700",
 ] as const;
+const APP_OPTION_CODE_PREFIX = "app-code::";
+const EXTRA_APP_CODES = ["fundsphere", "leavesphere", "opssphere"] as const;
+const APP_NAME_BY_CODE: Record<string, string> = {
+  tradsphere: "TradSphere",
+  spendsphere: "SpendSphere",
+  fundsphere: "FundSphere",
+  leavesphere: "LeaveSphere",
+  opssphere: "OpsSphere",
+  shiftzy: "Shiftzy",
+};
 
 function assignmentIdentity(item: { tenantId: string; appId: string; role: string }) {
   return `${item.tenantId}::${item.appId}::${item.role}`;
@@ -500,7 +510,8 @@ function tenantDisplayName(tenant: TenantItem): string {
 }
 
 function appDisplayName(app: AppItem): string {
-  return app.name || app.code || app.id;
+  const normalizedCode = String(app.code || "").trim().toLowerCase();
+  return APP_NAME_BY_CODE[normalizedCode] || app.name || app.code || app.id;
 }
 
 function isRoleItem(value: unknown): value is RoleItem {
@@ -565,13 +576,30 @@ function buildTenantDropdownOptions(tenants: TenantItem[]): Array<{ value: strin
 }
 
 function buildAppDropdownOptions(apps: AppItem[]): Array<{ value: string; label: string; keywords?: string }> {
-  return apps
+  const options = apps
     .map((app) => ({
       value: app.id,
       label: appDisplayName(app),
-      keywords: `${app.code} ${app.id}`,
+      keywords: `${app.code} ${app.id} ${appDisplayName(app)}`,
     }))
     .sort((a, b) => a.label.localeCompare(b.label));
+
+  const existingCodes = new Set(
+    apps.map((app) => String(app.code || "").trim().toLowerCase()).filter(Boolean),
+  );
+  for (const appCode of EXTRA_APP_CODES) {
+    if (existingCodes.has(appCode)) {
+      continue;
+    }
+    options.push({
+      value: `${APP_OPTION_CODE_PREFIX}${appCode}`,
+      label: APP_NAME_BY_CODE[appCode] || appCode,
+      keywords: appCode,
+    });
+  }
+
+  options.sort((a, b) => a.label.localeCompare(b.label));
+  return options;
 }
 
 export default function AdminUsersPage() {
@@ -699,6 +727,13 @@ export default function AdminUsersPage() {
     }
     return map;
   }, [apps]);
+  const appCodeById = useMemo(() => {
+    const map: Record<string, string> = {};
+    for (const app of apps) {
+      map[app.id] = String(app.code || "").trim().toLowerCase();
+    }
+    return map;
+  }, [apps]);
 
   const tenantDropdownOptions = useMemo(
     () => buildTenantDropdownOptions(tenants),
@@ -770,7 +805,7 @@ export default function AdminUsersPage() {
         .join(" ");
       const assignmentLabels = user.appAssignments
         .map((item) => {
-          const appLabel = item.appName || item.appCode || appNameById[item.appId] || item.appId;
+          const appLabel = appNameById[item.appId] || item.appName || item.appCode || item.appId;
           const tenantLabel = item.tenantName || item.tenantSlug || tenantNameById[item.tenantId] || item.tenantId;
           const roleLabel = displayRole(item.role, roleLabels);
           return `${tenantLabel} ${appLabel} ${roleLabel}`;
@@ -956,9 +991,6 @@ export default function AdminUsersPage() {
   }
 
   function openEditUser(user: AdminUser) {
-    if (currentUserId && user.userId === currentUserId) {
-      return;
-    }
     const isSuperAdminMember = summarizeUserRole(user) === "super_admin" || Boolean(user.isSuperAdmin);
     if (isSuperAdminMember && !scope?.isSuperAdmin) {
       return;
@@ -1089,14 +1121,20 @@ export default function AdminUsersPage() {
     const validAssignments = editDraft.assignments
       .map((item) => {
         const tenantId = String(item.tenantId || "").trim();
-        const appId = String(item.appId || "").trim();
+        const appSelection = String(item.appId || "").trim();
+        const appCode = appSelection.startsWith(APP_OPTION_CODE_PREFIX)
+          ? appSelection.slice(APP_OPTION_CODE_PREFIX.length).trim().toLowerCase()
+          : "";
+        const appId = appCode ? "" : appSelection;
+        const mappedAppCode = appCode || appCodeById[appId] || "";
         return {
           tenantId,
           appId,
+          appCode: mappedAppCode || undefined,
           role: String(item.role || "").trim(),
         };
       })
-      .filter((item) => item.tenantId && item.appId && item.role);
+      .filter((item) => item.tenantId && (item.appId || item.appCode) && item.role);
 
     setSavingEdit(true);
     try {
@@ -1126,18 +1164,29 @@ export default function AdminUsersPage() {
     }
     const normalizedEmail = inviteEmail.trim().toLowerCase();
     const normalizedAssignments = inviteAssignments
-      .map((item) => ({
-        tenantId: String(item.tenantId || "").trim(),
-        appId: String(item.appId || "").trim(),
-        role: normalizeRoleKey(String(item.role || "").trim()),
-      }))
-      .filter((item) => item.tenantId && item.appId && item.role);
+      .map((item) => {
+        const tenantId = String(item.tenantId || "").trim();
+        const appSelection = String(item.appId || "").trim();
+        const appCode = appSelection.startsWith(APP_OPTION_CODE_PREFIX)
+          ? appSelection.slice(APP_OPTION_CODE_PREFIX.length).trim().toLowerCase()
+          : "";
+        const appId = appCode ? "" : appSelection;
+        const mappedAppCode = appCode || appCodeById[appId] || "";
+        return {
+          tenantId,
+          appId,
+          appCode: mappedAppCode || undefined,
+          role: normalizeRoleKey(String(item.role || "").trim()),
+        };
+      })
+      .filter((item) => item.tenantId && (item.appId || item.appCode) && item.role);
     if (!normalizedEmail || normalizedAssignments.length === 0) {
       return;
     }
     const seenAssignments = new Set<string>();
     for (const item of normalizedAssignments) {
-      const key = `${item.tenantId}::${item.appId}`;
+      const appIdentity = item.appId || `${APP_OPTION_CODE_PREFIX}${item.appCode || ""}`;
+      const key = `${item.tenantId}::${appIdentity}`;
       if (seenAssignments.has(key)) {
         return;
       }
@@ -1281,6 +1330,10 @@ export default function AdminUsersPage() {
       const tenantId = String(row.tenantId || "").trim();
       const appId = String(row.appId || "").trim();
       const role = String(row.role || "").trim();
+      const isBlankRow = !tenantId && !appId && role.length === 0;
+      if (isBlankRow) {
+        continue;
+      }
       if (!tenantId || !appId || role.length === 0) {
         return "Complete all app assignment fields before saving.";
       }
@@ -1309,8 +1362,7 @@ export default function AdminUsersPage() {
     return Boolean(normalizedEmail || normalizedExpirationHours !== "72" || normalizedAssignments.length > 0);
   }, [inviteAssignments, inviteEmail, inviteExpirationHours]);
 
-  const isEditingSelf = Boolean(editingUser && currentUserId && editingUser.userId === currentUserId);
-  const canSubmitEdit = Boolean(editingUser && editDraft && hasEditChanges && !editValidationError && !isEditingSelf);
+  const canSubmitEdit = Boolean(editingUser && editDraft && hasEditChanges && !editValidationError);
   const shouldShowSaveButton = canSubmitEdit || savingEdit;
   const canSubmitInvite = Boolean(
     hasInviteChanges &&
@@ -1445,7 +1497,7 @@ export default function AdminUsersPage() {
                 {Array.isArray(invite.assignments) && invite.assignments.length > 0 ? (
                   invite.assignments.map((assignment) => {
                     const tenantLabel = assignment.tenantName || assignment.tenantSlug || assignment.tenantId || "-";
-                    const appLabel = assignment.appName || assignment.appCode || assignment.appId || "-";
+                    const appLabel = appNameById[assignment.appId] || assignment.appName || assignment.appCode || assignment.appId || "-";
                     const roleLabel = displayRole(assignment.role || null, roleLabels);
                     return (
                       <span key={`${invite.id}-${tenantLabel}-${appLabel}-${roleLabel}`} className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
@@ -1455,7 +1507,7 @@ export default function AdminUsersPage() {
                   })
                 ) : (
                   <span className="rounded-full border border-slate-200 bg-white px-2 py-0.5 text-xs text-slate-600">
-                    {(invite.tenantName || invite.tenantSlug || invite.tenantId)}: {(invite.appName || invite.appCode || invite.appId)} ({displayRole(invite.role, roleLabels)})
+                    {(invite.tenantName || invite.tenantSlug || invite.tenantId)}: {(appNameById[invite.appId] || invite.appName || invite.appCode || invite.appId)} ({displayRole(invite.role, roleLabels)})
                   </span>
                 )}
               </div>
@@ -1545,10 +1597,10 @@ export default function AdminUsersPage() {
                           const isSuperAdminMember = resolvedRole === "super_admin" || Boolean(user.isSuperAdmin);
                           const isSelfMember = Boolean(currentUserId && user.userId === currentUserId);
                           const canEditMember = !isSuperAdminMember || Boolean(scope?.isSuperAdmin);
-                          const canEditMemberAccess = canEditMember && !isSelfMember;
+                          const canEditMemberAccess = canEditMember;
                           const assignmentLabels = unique(
                             user.appAssignments.map((item) => {
-                              const appLabel = item.appName || item.appCode || appNameById[item.appId] || item.appId;
+                              const appLabel = appNameById[item.appId] || item.appName || item.appCode || item.appId;
                               const roleLabel = displayRole(item.role, roleLabels);
                               const tenantLabel = item.tenantName || item.tenantSlug || tenantNameById[item.tenantId] || item.tenantId;
                               return `${tenantLabel}: ${appLabel} (${roleLabel})`;
@@ -1723,7 +1775,7 @@ export default function AdminUsersPage() {
                             value={row.tenantId}
                             onValueChange={(value) => updateEditAssignmentRow(row.id, { tenantId: value })}
                             options={tenantDropdownOptions}
-                            placeholder="tenant"
+                            placeholder="Tenant"
                             searchable={false}
                             size="sm"
                           />
@@ -1733,7 +1785,7 @@ export default function AdminUsersPage() {
                             value={row.appId}
                             onValueChange={(value) => updateEditAssignmentRow(row.id, { appId: value })}
                             options={appDropdownOptions}
-                            placeholder="app"
+                            placeholder="App"
                             searchable={false}
                             size="sm"
                           />
@@ -1743,7 +1795,7 @@ export default function AdminUsersPage() {
                             value={row.role}
                             onValueChange={(value) => updateEditAssignmentRow(row.id, { role: value })}
                             options={roleDropdownOptions}
-                            placeholder="role"
+                            placeholder="Role"
                             searchable={false}
                             size="sm"
                           />

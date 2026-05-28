@@ -27,7 +27,7 @@ import {
 } from "@/lib/browserCache";
 import { buildAuthHeaders as buildSharedAuthHeaders } from "@shared/api/authHeaders";
 import { useAuth } from "@shared/auth/useAuth";
-import { shouldProtectTradsphereFrontend } from "@shared/auth/guards";
+import { shouldProtectFrontendAuth } from "@shared/auth/guards";
 import { hasAppEditAccess } from "@shared/auth/permissions";
 import { SectionLoadingOverlay } from "@shared/components/status/LoadingOverlay";
 import { shouldFetchSubmittedSearchNetwork } from "@shared/search";
@@ -729,7 +729,7 @@ export default function StationsPage() {
     [auth.session, auth.tenantSlug],
   );
   const canEditTradsphere = useMemo(() => {
-    if (!shouldProtectTradsphereFrontend()) {
+    if (!shouldProtectFrontendAuth()) {
       return true;
     }
     return hasAppEditAccess(auth.accessProfile, "tradsphere");
