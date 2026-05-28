@@ -255,6 +255,8 @@ def _resolve_api_app_code(path: str) -> str | None:
     normalized = _normalize_path(path)
     if normalized == "/api/tradsphere" or normalized.startswith("/api/tradsphere/"):
         return "tradsphere"
+    if normalized == "/api/leavesphere" or normalized.startswith("/api/leavesphere/"):
+        return "leavesphere"
     if normalized == "/api/spendsphere" or normalized.startswith("/api/spendsphere/"):
         return "spendsphere"
     if normalized == "/spendsphere/api" or normalized.startswith("/spendsphere/api/"):

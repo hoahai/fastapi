@@ -217,6 +217,10 @@ def enforce_tradsphere_permission(request: Request) -> None:
     _enforce_page_permission_for_app(request, app_code="tradsphere")
 
 
+def enforce_leavesphere_permission(request: Request) -> None:
+    _enforce_route_permission_for_app(request, app_code="leavesphere")
+
+
 def enforce_spendsphere_permission(request: Request) -> None:
     _enforce_route_permission_for_app(request, app_code="spendsphere")
 

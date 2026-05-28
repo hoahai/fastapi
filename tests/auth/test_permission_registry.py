@@ -1,6 +1,9 @@
 import unittest
 
-from shared.auth.permission_registry import resolve_required_permissions
+from shared.auth.permission_registry import (
+    default_role_permissions_for_app,
+    resolve_required_permissions,
+)
 
 
 class PermissionRegistryTests(unittest.TestCase):
@@ -35,6 +38,33 @@ class PermissionRegistryTests(unittest.TestCase):
             path="/api/fundsphere/v1/masterBudgetControl/settings/accounts",
         )
         self.assertEqual(permissions, ("fundsphere.editor",))
+
+    def test_leavesphere_defaults_to_app_viewer_for_reads(self):
+        permissions = resolve_required_permissions(
+            app_code="leavesphere",
+            method="GET",
+            path="/api/leavesphere/v1/ptoTransactions",
+        )
+        self.assertEqual(permissions, ("leavesphere.viewer",))
+
+    def test_leavesphere_defaults_to_app_editor_for_writes(self):
+        permissions = resolve_required_permissions(
+            app_code="leavesphere",
+            method="POST",
+            path="/api/leavesphere/v1/ptoTransactions",
+        )
+        self.assertEqual(permissions, ("leavesphere.editor",))
+
+    def test_leavesphere_default_role_permissions_are_expected(self):
+        viewer = default_role_permissions_for_app(role="viewer", app_code="leavesphere")
+        editor = default_role_permissions_for_app(role="editor", app_code="leavesphere")
+        admin = default_role_permissions_for_app(role="admin", app_code="leavesphere")
+        self.assertEqual(viewer, {"leavesphere.viewer"})
+        self.assertEqual(editor, {"leavesphere.viewer", "leavesphere.editor"})
+        self.assertEqual(
+            admin,
+            {"leavesphere.viewer", "leavesphere.editor", "leavesphere.admin"},
+        )
 
 
 if __name__ == "__main__":

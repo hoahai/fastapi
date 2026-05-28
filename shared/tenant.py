@@ -101,6 +101,7 @@ _APP_SCOPED_ENV_SECTIONS = {
     "shiftzy",
     "fundsphere",
     "tradsphere",
+    "leavesphere",
     "opssphere",
 }
 

@@ -3,7 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 READ_METHODS = {"GET", "HEAD", "OPTIONS"}
-APP_CODES = ("tradsphere", "spendsphere", "fundsphere", "shiftzy", "opssphere")
+APP_CODES = ("tradsphere", "spendsphere", "fundsphere", "shiftzy", "leavesphere", "opssphere")
 
 # Explicit route exemptions used by permission guards.
 PUBLIC_PATHS_EXACT = {
@@ -125,4 +125,3 @@ def resolve_required_permissions(*, app_code: str, method: str, path: str) -> tu
         if is_read_method(method)
         else (f"{normalized_app_code}.editor",)
     )
-
