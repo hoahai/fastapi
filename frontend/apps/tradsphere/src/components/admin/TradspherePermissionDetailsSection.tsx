@@ -45,6 +45,8 @@ type CacheStatus = {
 type TradspherePermissionDetailsSectionProps = {
   appCode: string;
   appLabel: string;
+  removedUserId?: string | null;
+  syncNonce?: number;
 };
 
 function unwrap<T>(payload: unknown, fallback: T): T {
@@ -141,6 +143,8 @@ const PAGE_PERMISSIONS_CACHE_TTL_MS = 2 * 60 * 1000;
 export function TradspherePermissionDetailsSection({
   appCode,
   appLabel,
+  removedUserId = null,
+  syncNonce = 0,
 }: TradspherePermissionDetailsSectionProps) {
   const { requestJson } = useApiRequest();
   const auth = useAuth();
@@ -279,6 +283,26 @@ export function TradspherePermissionDetailsSection({
   useEffect(() => {
     void loadPagePermissions(false);
   }, [loadPagePermissions]);
+
+  useEffect(() => {
+    const normalizedRemovedUserId = String(removedUserId || "").trim();
+    if (!normalizedRemovedUserId) {
+      return;
+    }
+    setUsers((current) => current.filter((item) => String(item.userId || "").trim() !== normalizedRemovedUserId));
+    setDraftsByUserId((current) => {
+      const next = { ...current };
+      delete next[normalizedRemovedUserId];
+      return next;
+    });
+  }, [removedUserId]);
+
+  useEffect(() => {
+    if (syncNonce <= 0) {
+      return;
+    }
+    void loadPagePermissions(true);
+  }, [loadPagePermissions, syncNonce]);
 
   const sortedUsers = useMemo(() => {
     return [...users].sort((left, right) => {

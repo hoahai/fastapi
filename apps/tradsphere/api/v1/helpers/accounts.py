@@ -55,6 +55,27 @@ def _normalize_optional_text(
     return text
 
 
+def _normalize_active(
+    value: object | None,
+    *,
+    required: bool,
+) -> int | None:
+    if value is None:
+        return 1 if required else None
+    if isinstance(value, bool):
+        return 1 if value else 0
+    if isinstance(value, (int, float)):
+        return 1 if bool(value) else 0
+    normalized = str(value).strip().lower()
+    if not normalized:
+        return 1 if required else None
+    if normalized in {"1", "true", "yes", "y", "on"}:
+        return 1
+    if normalized in {"0", "false", "no", "n", "off"}:
+        return 0
+    raise ValueError("active must be boolean-like")
+
+
 def _find_duplicate_account_codes(values: list[str]) -> list[str]:
     seen: set[str] = set()
     duplicates: set[str] = set()
@@ -120,6 +141,10 @@ def create_accounts(payload: list[dict] | dict) -> dict[str, int]:
                     field="note",
                     max_length=2048,
                 ),
+                "active": _normalize_active(
+                    row.get("active"),
+                    required=True,
+                ),
             }
         )
         requested_codes.append(account_code)
@@ -180,6 +205,11 @@ def modify_accounts(payload: list[dict] | dict) -> dict[str, int]:
                 row.get("note"),
                 field="note",
                 max_length=2048,
+            )
+        if "active" in row:
+            item["active"] = _normalize_active(
+                row.get("active"),
+                required=False,
             )
 
         if len(item) == 1:

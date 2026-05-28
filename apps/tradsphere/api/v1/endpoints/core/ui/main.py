@@ -181,8 +181,8 @@ def get_ui_main_selections_route():
         {
           "meta": {"timestamp": "2026-04-29T09:00:00+07:00", "duration_ms": 2},
           "data": [
-            {"code": "TAAA", "name": "Alpha Motors"},
-            {"code": "TBBB", "name": "Beta Auto Group"}
+            {"code": "TAAA", "name": "Alpha Motors", "active": 1},
+            {"code": "TBBB", "name": "Beta Auto Group", "active": 0}
           ]
         }
 
@@ -190,17 +190,27 @@ def get_ui_main_selections_route():
         - Requires X-Tenant-Id header
         - Requires valid API key
         - Returns TradSphere accounts only
-        - Uses active master accounts only
+        - Includes active and inactive rows
+        - Sorted by active DESC, then account code ASC
     """
     try:
-        rows = list_accounts(active=True)
+        rows = list_accounts(active=False)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+    rows = sorted(
+        rows,
+        key=lambda row: (
+            -int(row.get("active") or 0),
+            str(row.get("accountCode") or "").strip().upper(),
+        ),
+    )
 
     return [
         {
             "code": str(row.get("accountCode") or "").strip(),
             "name": str(row.get("name") or "").strip(),
+            "active": int(row.get("active") or 0),
         }
         for row in rows
         if str(row.get("accountCode") or "").strip()
@@ -333,6 +343,7 @@ def _build_ui_accounts_load_payload(account_code: str) -> dict:
             "billingType": account_row.get("billingType"),
             "market": account_row.get("market"),
             "note": account_row.get("note"),
+            "active": int(account_row.get("active") or 0),
         },
         "esnums": estnums,
         "stations": stations,
@@ -359,7 +370,8 @@ def get_ui_accounts_load_route(
               "logoUrl": "https://cdn.example.com/logos/taaa.png",
               "billingType": "Calendar",
               "market": "Los Angeles",
-              "note": "Primary west-coast account"
+              "note": "Primary west-coast account",
+              "active": 1
             },
             "esnums": [
               {"estnum": 26001, "name": "Q3'26 TV", "hasSchedule": true, "note": "Prime time package"}
@@ -413,7 +425,8 @@ def get_ui_main_load_route(
               "logoUrl": "https://cdn.example.com/logos/taaa.png",
               "billingType": "Calendar",
               "market": "Los Angeles",
-              "note": "Primary west-coast account"
+              "note": "Primary west-coast account",
+              "active": 1
             },
             "esnums": [
               {"estnum": 26001, "name": "Q3'26 TV", "hasSchedule": true, "note": "Prime time package"}

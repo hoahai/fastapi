@@ -56,7 +56,7 @@ def get_accounts_route(
         - accountCodes/accountCode accept comma-separated values
         - Blank accountCodes/accountCode values return all rows
         - active defaults to true
-        - active=true filters by master Accounts.active = 1
+        - active=true filters by TradSphere_Accounts.active = 1
         - active=false disables the active filter and returns all TradSphere accounts
     """
     normalized_codes = parse_csv_values(account_codes, account_code, uppercase=True)
@@ -99,7 +99,7 @@ def get_accounts_directory_route(
         - Requires valid API key
         - accountCodes/accountCode accept comma-separated values
         - active defaults to true
-        - active=true filters by master Accounts.active = 1
+        - active=true filters by TradSphere_Accounts.active = 1
         - active=false disables active filter and returns all TradSphere accounts
         - Lightweight directory payload; full account metadata remains on `/accounts`
     """
@@ -124,7 +124,8 @@ def create_accounts_route(
             "accountCode": "TAAA",
             "billingType": "Calendar",
             "market": "Los Angeles",
-            "note": "Primary west-coast account"
+            "note": "Primary west-coast account",
+            "active": true
           },
           {
             "accountCode": "TBBB",
@@ -159,6 +160,7 @@ def create_accounts_route(
         - billingType accepts Broadcast or Calendar (default Calendar)
         - market max length is 255
         - note max length is 2048
+        - active accepts boolean-like values (default true)
     """
     try:
         return create_accounts(payload)
@@ -180,7 +182,8 @@ def update_accounts_route(
             "accountCode": "TAAA",
             "billingType": "Broadcast",
             "market": "San Diego",
-            "note": "Moved to regional team"
+            "note": "Moved to regional team",
+            "active": false
           }
         ]
 
@@ -205,10 +208,11 @@ def update_accounts_route(
         - Payload accepts object or array of objects
         - accountCode is required per item
         - accountCode must already exist in TradSphere_Accounts
-        - At least one updatable field is required: billingType, market, note
+        - At least one updatable field is required: billingType, market, note, active
         - billingType accepts Broadcast or Calendar
         - market max length is 255
         - note max length is 2048
+        - active accepts boolean-like values
     """
     try:
         return modify_accounts(payload)

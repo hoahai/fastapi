@@ -738,7 +738,7 @@ def get_accounts(
         params.extend(normalized_codes)
 
     if active_only:
-        where_clauses.append("COALESCE(m.active, 0) = 1")
+        where_clauses.append("COALESCE(t.active, 1) = 1")
 
     cache_key = _build_db_read_cache_key(
         "accounts",
@@ -762,14 +762,14 @@ def get_accounts(
         "t.note AS note, "
         "m.name AS name, "
         "m.logoUrl AS logoUrl, "
-        "COALESCE(m.active, 0) AS active "
+        "COALESCE(t.active, 1) AS active "
         f"FROM {accounts_table} t "
         f"LEFT JOIN {master_accounts_table} m "
         "ON UPPER(m.code) = UPPER(t.accountCode)"
     )
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
-    query += " ORDER BY t.accountCode ASC"
+    query += " ORDER BY COALESCE(t.active, 1) DESC, t.accountCode ASC"
     rows = fetch_all(query, tuple(params))
     _set_cached_value(cache_key, rows)
     return rows
@@ -797,7 +797,7 @@ def get_accounts_directory(
         params.extend(normalized_codes)
 
     if active_only:
-        where_clauses.append("COALESCE(m.active, 0) = 1")
+        where_clauses.append("COALESCE(t.active, 1) = 1")
 
     cache_key = _build_db_read_cache_key(
         "accounts_directory",
@@ -818,14 +818,14 @@ def get_accounts_directory(
         "t.accountCode AS accountCode, "
         "m.name AS accountName, "
         "t.billingType AS billingType, "
-        "COALESCE(m.active, 0) AS active "
+        "COALESCE(t.active, 1) AS active "
         f"FROM {accounts_table} t "
         f"LEFT JOIN {master_accounts_table} m "
         "ON UPPER(m.code) = UPPER(t.accountCode)"
     )
     if where_clauses:
         query += " WHERE " + " AND ".join(where_clauses)
-    query += " ORDER BY t.accountCode ASC"
+    query += " ORDER BY COALESCE(t.active, 1) DESC, t.accountCode ASC"
     rows = fetch_all(query, tuple(params))
     _set_cached_value(cache_key, rows)
     return rows
@@ -844,11 +844,12 @@ def insert_accounts(items: list[dict]) -> int:
         billing_type = _normalize_input_text(item.get("billingType") or "Calendar") or "Calendar"
         market = _normalize_optional_input_text(item.get("market"))
         note = _normalize_optional_input_text(item.get("note"))
-        values.append((account_code, billing_type, market, note))
+        active = _normalize_bool(item.get("active"), default=True)
+        values.append((account_code, billing_type, market, note, active))
 
     query = (
-        f"INSERT INTO {accounts_table} (accountCode, billingType, market, note) "
-        "VALUES (%s, %s, %s, %s)"
+        f"INSERT INTO {accounts_table} (accountCode, billingType, market, note, active) "
+        "VALUES (%s, %s, %s, %s, %s)"
     )
     inserted = execute_many(query, values)
     if int(inserted or 0) > 0:
@@ -887,6 +888,10 @@ def update_accounts(items: list[dict]) -> int:
             note = _normalize_optional_input_text(item.get("note"))
             fields.append("note = %s")
             params.append(note)
+
+        if "active" in item:
+            fields.append("active = %s")
+            params.append(_normalize_bool(item.get("active"), default=True))
 
         if not fields:
             raise ValueError(

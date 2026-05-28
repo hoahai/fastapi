@@ -44,6 +44,7 @@ export function AccountSelector({
             value: option.accountCode,
             label: option.label,
             keywords: option.name,
+            muted: option.active === false,
           }))}
           placeholder={isLoadingSelections ? "Loading accounts..." : "Select account"}
           searchable

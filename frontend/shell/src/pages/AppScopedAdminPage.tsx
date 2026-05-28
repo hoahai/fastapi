@@ -41,6 +41,11 @@ type ScopedUsersResponse = {
   items?: ScopedUser[];
 };
 
+type GrantScopedAccessResponse = {
+  status?: string;
+  user?: ScopedUser;
+};
+
 type ScopedUsersCacheSnapshot = {
   items: ScopedUser[];
 };
@@ -66,6 +71,14 @@ type RemoveAccessTarget = {
   fullName: string | null;
 };
 
+type RoleChangeTarget = {
+  userId: string;
+  fullName: string | null;
+  email: string | null;
+  currentRole: RoleOption["value"];
+  nextRole: RoleOption["value"];
+};
+
 const ROLE_OPTIONS: RoleOption[] = [
   { value: "viewer", label: "Viewer" },
   { value: "editor", label: "Editor" },
@@ -81,14 +94,6 @@ function unwrap<T>(payload: unknown, fallback: T): T {
     return ((payload as { data?: T }).data ?? fallback);
   }
   return (payload as T) ?? fallback;
-}
-
-function isEmailValid(value: string): boolean {
-  const normalized = String(value || "").trim();
-  if (!normalized) {
-    return false;
-  }
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized);
 }
 
 function statusChipClass(status: string): string {
@@ -137,6 +142,17 @@ function formatRelativeTime(timestamp: number): string {
 
 function normalizeRoleKey(role: string | null | undefined): string {
   return String(role || "").trim().toLowerCase();
+}
+
+function normalizeScopedRole(role: string | null | undefined): RoleOption["value"] {
+  const normalized = normalizeRoleKey(role);
+  if (normalized === "admin") {
+    return "admin";
+  }
+  if (normalized === "editor") {
+    return "editor";
+  }
+  return "viewer";
 }
 
 function roleRank(role: string | null | undefined): number {
@@ -231,17 +247,21 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
   const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null);
   const [sidebarVisuallyExpanded, setSidebarVisuallyExpanded] = useState<boolean>(() => !readSidebarCollapsedState());
 
-  const [lookupEmail, setLookupEmail] = useState("");
-  const [selectedRole, setSelectedRole] = useState<RoleOption["value"]>("viewer");
-  const [lookupResult, setLookupResult] = useState<ScopedUser | null>(null);
+  const [lookupQuery, setLookupQuery] = useState("");
+  const [lookupResults, setLookupResults] = useState<ScopedUser[]>([]);
+  const [lookupRoleByUserId, setLookupRoleByUserId] = useState<Record<string, RoleOption["value"]>>({});
   const [lookupMessage, setLookupMessage] = useState<string | null>(null);
   const [lookingUp, setLookingUp] = useState(false);
-  const [addingAccess, setAddingAccess] = useState(false);
+  const [addingAccessByUserId, setAddingAccessByUserId] = useState<Record<string, boolean>>({});
+  const [savingUserRoleByUserId, setSavingUserRoleByUserId] = useState<Record<string, boolean>>({});
   const [memberSearch, setMemberSearch] = useState("");
   const [memberRoleFilter, setMemberRoleFilter] = useState<string>("all");
   const [memberStatusFilter, setMemberStatusFilter] = useState<string>("all");
   const [removingUserId, setRemovingUserId] = useState<string | null>(null);
   const [removeTarget, setRemoveTarget] = useState<RemoveAccessTarget | null>(null);
+  const [roleChangeTarget, setRoleChangeTarget] = useState<RoleChangeTarget | null>(null);
+  const [permissionSyncNonce, setPermissionSyncNonce] = useState(0);
+  const [lastRemovedUserId, setLastRemovedUserId] = useState<string | null>(null);
 
   const normalizedAppCode = String(appCode || "").trim().toLowerCase();
   const enabledSections = useMemo(() => resolveAppScopedAdminSections(normalizedAppCode), [normalizedAppCode]);
@@ -397,9 +417,14 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
     };
   }, []);
 
-  const normalizedLookupEmail = lookupEmail.trim().toLowerCase();
-  const canLookup = isEmailValid(normalizedLookupEmail) && !lookingUp && !addingAccess;
-  const canAdd = Boolean(lookupResult && !lookupResult.assignedInScope && !addingAccess && !lookingUp);
+  const normalizedLookupQuery = lookupQuery.trim();
+  const canLookup = normalizedLookupQuery.length >= 2 && !lookingUp;
+  const assignableRoleOptions = useMemo(
+    () => ROLE_OPTIONS.filter((option) => (
+      actorIsSuperAdmin || roleRank(option.value) >= roleRank(actorRole)
+    )),
+    [actorIsSuperAdmin, actorRole],
+  );
   const roleFilterOptions = useMemo(
     () => [
       { value: "all", label: "All roles" },
@@ -458,7 +483,7 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
     setLookupMessage(null);
     try {
       const payload = await requestJson(
-        `/api/auth/v1/invitations/users/lookup?email=${encodeURIComponent(normalizedLookupEmail)}`,
+        `/api/auth/v1/invitations/users/lookup?query=${encodeURIComponent(normalizedLookupQuery)}`,
         {
           headers: {
             "X-App-Code": normalizedAppCode,
@@ -468,76 +493,145 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
         },
       );
       const data = unwrap<ScopedUsersResponse>(payload, {});
-      const first = Array.isArray(data.items) && data.items.length > 0 ? data.items[0] : null;
-      if (!first) {
-        setLookupResult(null);
-        setLookupMessage("No active existing user found for that email.");
+      const matchedItems = (Array.isArray(data.items) ? data.items : [])
+        .filter((item) => !item.assignedInScope)
+        .filter((item) => !item.isSuperAdmin || actorIsSuperAdmin);
+      setLookupResults(matchedItems);
+      setLookupRoleByUserId((current) => matchedItems.reduce<Record<string, RoleOption["value"]>>((acc, item) => {
+        const userId = String(item.userId || "").trim();
+        if (!userId) {
+          return acc;
+        }
+        acc[userId] = current[userId] || normalizeScopedRole(item.role);
+        return acc;
+      }, {}));
+      if (matchedItems.length === 0) {
+        setLookupMessage("No active existing user found for that search.");
         return;
       }
-      setLookupResult(first);
-      setLookupMessage(first.assignedInScope
-        ? `This user already has ${appLabel} access in the current tenant.`
-        : `Active existing user found. Choose a role to add ${appLabel} access.`);
+      setLookupMessage(`Found ${matchedItems.length} active user(s).`);
     } catch (error) {
       const message = error instanceof Error ? error.message : "Unable to lookup user.";
-      setLookupResult(null);
+      setLookupResults([]);
       setLookupMessage(message);
     } finally {
       setLookingUp(false);
     }
   }
 
-  async function handleAddAccess() {
-    if (!lookupResult || !canAdd) {
+  async function handleAddAccess(targetUser: ScopedUser) {
+    if (lookingUp) {
       return;
     }
-    const targetEmail = String(lookupResult.email || "").trim().toLowerCase();
-    if (!targetEmail) {
-      setLookupMessage("Selected user email is unavailable.");
+    const targetUserId = String(targetUser.userId || "").trim();
+    if (!targetUserId) {
+      setLookupMessage("Selected user is unavailable.");
+      return;
+    }
+    const roleForUser = lookupRoleByUserId[targetUserId] || normalizeScopedRole(targetUser.role);
+    if (addingAccessByUserId[targetUserId]) {
+      return;
+    }
+    if (targetUser.assignedInScope) {
+      setLookupMessage("This user already has access in the current tenant.");
       return;
     }
 
-    setAddingAccess(true);
+    setAddingAccessByUserId((current) => ({ ...current, [targetUserId]: true }));
     try {
-      await requestJson("/api/auth/v1/invitations", {
+      const payload = await requestJson("/api/auth/v1/invitations/users/access", {
         method: "POST",
         headers: {
           "X-App-Code": normalizedAppCode,
         },
         body: {
-          email: targetEmail,
-          appCode: normalizedAppCode,
-          role: selectedRole,
+          userId: targetUserId,
+          role: roleForUser,
         },
         successToast: {
-          title: "Access updated",
-          message: `${appLabel} access was added for this tenant.`,
+          title: "Access granted",
+          message: `${appLabel} access was granted for this tenant.`,
         },
       });
-      setLookupEmail("");
-      setSelectedRole("viewer");
-      setLookupResult(null);
-      setLookupMessage(`${appLabel} access added successfully.`);
-      const normalizedLookupUserId = String(lookupResult.userId || "").trim();
-      if (normalizedLookupUserId) {
-        const optimisticUser: ScopedUser = {
-          ...lookupResult,
-          role: selectedRole,
-          assignedInScope: true,
-        };
-        const nextUsers = users.some((item) => String(item.userId || "").trim() === normalizedLookupUserId)
-          ? users.map((item) => (String(item.userId || "").trim() === normalizedLookupUserId
+      const data = unwrap<GrantScopedAccessResponse>(payload, {});
+      const grantedUser = data.user && typeof data.user === "object" ? data.user : null;
+      setLookupMessage(`${appLabel} access granted successfully.`);
+      if (grantedUser && String(grantedUser.userId || "").trim()) {
+        const normalizedGrantedUserId = String(grantedUser.userId || "").trim();
+        setLookupResults((current) => current.filter((item) => String(item.userId || "").trim() !== normalizedGrantedUserId));
+        setLookupRoleByUserId((current) => ({
+          ...current,
+          [normalizedGrantedUserId]: normalizeScopedRole(grantedUser.role),
+        }));
+        const nextUsers = users.some((item) => String(item.userId || "").trim() === normalizedGrantedUserId)
+          ? users.map((item) => (String(item.userId || "").trim() === normalizedGrantedUserId
             ? {
               ...item,
-              ...optimisticUser,
+              ...grantedUser,
+              assignedInScope: true,
             }
             : item))
-          : [optimisticUser, ...users];
+          : [{ ...grantedUser, assignedInScope: true }, ...users];
         persistScopedUsersCache(nextUsers);
+      } else {
+        await loadScopedUsers(true);
       }
-      await loadScopedUsers(true);
+      setLastRemovedUserId(null);
+      setPermissionSyncNonce((current) => current + 1);
     } finally {
-      setAddingAccess(false);
+      setAddingAccessByUserId((current) => ({ ...current, [targetUserId]: false }));
+    }
+  }
+
+  async function handleUpdateUserRole(user: ScopedUser, nextRole: RoleOption["value"]) {
+    const userId = String(user.userId || "").trim();
+    if (!userId) {
+      return;
+    }
+    if (!canManageUserAccess(user)) {
+      return;
+    }
+    const currentRole = normalizeScopedRole(user.role);
+    if (nextRole === currentRole) {
+      return;
+    }
+    if (savingUserRoleByUserId[userId]) {
+      return;
+    }
+
+    setSavingUserRoleByUserId((current) => ({ ...current, [userId]: true }));
+    try {
+      const payload = await requestJson("/api/auth/v1/invitations/users/access", {
+        method: "POST",
+        headers: {
+          "X-App-Code": normalizedAppCode,
+        },
+        body: {
+          userId,
+          role: nextRole,
+        },
+        successToast: {
+          title: "Role updated",
+          message: `${appLabel} role was updated for this user.`,
+        },
+      });
+      const data = unwrap<GrantScopedAccessResponse>(payload, {});
+      const updatedUser = data.user && typeof data.user === "object" ? data.user : null;
+      if (updatedUser && String(updatedUser.userId || "").trim() === userId) {
+        const nextUsers = users.map((item) => (String(item.userId || "").trim() === userId
+          ? {
+            ...item,
+            ...updatedUser,
+            assignedInScope: true,
+          }
+          : item));
+        persistScopedUsersCache(nextUsers);
+      } else {
+        await loadScopedUsers(true);
+      }
+      setPermissionSyncNonce((current) => current + 1);
+    } finally {
+      setSavingUserRoleByUserId((current) => ({ ...current, [userId]: false }));
     }
   }
 
@@ -569,6 +663,37 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
     });
   }
 
+  function handleRequestRoleChange(user: ScopedUser, nextRole: RoleOption["value"]) {
+    const userId = String(user.userId || "").trim();
+    if (!userId || !canManageUserAccess(user) || savingUserRoleByUserId[userId]) {
+      return;
+    }
+    const currentRole = normalizeScopedRole(user.role);
+    if (currentRole === nextRole) {
+      return;
+    }
+    setRoleChangeTarget({
+      userId,
+      fullName: user.fullName || null,
+      email: user.email || null,
+      currentRole,
+      nextRole,
+    });
+  }
+
+  async function handleConfirmRoleChange() {
+    if (!roleChangeTarget) {
+      return;
+    }
+    const target = users.find((item) => String(item.userId || "").trim() === roleChangeTarget.userId);
+    if (!target) {
+      setRoleChangeTarget(null);
+      return;
+    }
+    await handleUpdateUserRole(target, roleChangeTarget.nextRole);
+    setRoleChangeTarget(null);
+  }
+
   async function handleRemoveAccessConfirmed() {
     if (!removeTarget) {
       return;
@@ -589,13 +714,19 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
       if (normalizedTargetUserId) {
         const nextUsers = users.filter((item) => String(item.userId || "").trim() !== normalizedTargetUserId);
         persistScopedUsersCache(nextUsers);
+        setLastRemovedUserId(normalizedTargetUserId);
       }
+      setPermissionSyncNonce((current) => current + 1);
       setRemoveTarget(null);
       await loadScopedUsers(true);
     } finally {
       setRemovingUserId(null);
     }
   }
+
+  const roleChangeSaving = Boolean(
+    roleChangeTarget?.userId && savingUserRoleByUserId[roleChangeTarget.userId],
+  );
 
   return (
     <div className="mx-auto flex min-h-[100dvh] w-full max-w-[1680px] flex-col gap-6">
@@ -621,14 +752,25 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
             </div>
             <div className="mt-2 grid gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
               <Input
-                value={lookupEmail}
+                value={lookupQuery}
+                disabled={lookingUp}
                 onChange={(event) => {
-                  setLookupEmail(event.target.value);
-                  setLookupResult(null);
+                  setLookupQuery(event.target.value);
+                  setLookupResults([]);
                   setLookupMessage(null);
                 }}
-                placeholder="Enter user email"
-                type="email"
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter") {
+                    return;
+                  }
+                  event.preventDefault();
+                  if (!canLookup) {
+                    return;
+                  }
+                  void handleLookup();
+                }}
+                placeholder="Enter user email or name"
+                type="text"
                 autoComplete="off"
               />
               <Button
@@ -645,41 +787,59 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
           </div>
 
           {lookupMessage ? (
-            <p className="mt-3 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-600">{lookupMessage}</p>
+            <p className="mt-3 text-sm text-slate-600">{lookupMessage}</p>
           ) : null}
 
-          {lookupResult ? (
-            <div className="mt-3 rounded-xl border border-slate-200 bg-slate-50/70 p-3">
-              <div className="flex flex-wrap items-start justify-between gap-2">
-                <div>
-                  <p className="text-sm font-semibold text-slate-900">{lookupResult.fullName || lookupResult.email || lookupResult.userId}</p>
-                  <p className="text-xs text-slate-600">{lookupResult.email || lookupResult.userId}</p>
-                </div>
-                <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${statusChipClass(lookupResult.status)}`}>
-                  {formatStatusChipLabel(lookupResult.status)}
-                </span>
-              </div>
-
-              <div className="mt-3 grid gap-2 sm:grid-cols-[minmax(0,220px)_auto] sm:items-center">
-                <AppDropdown
-                  value={selectedRole}
-                  onValueChange={(value) => setSelectedRole(value as RoleOption["value"])}
-                  options={ROLE_OPTIONS.map((role) => ({ value: role.value, label: role.label }))}
-                  searchable={false}
-                  ariaLabel={`Select ${appLabel} role`}
-                />
-                {canAdd ? (
-                  <Button
-                    type="button"
-                    disabled={addingAccess}
-                    onClick={() => void handleAddAccess()}
-                    className="sm:justify-self-end"
-                  >
-                    {addingAccess ? <Spinner className="size-4" /> : <UserPlus className="size-4" />}
-                    Add user access
-                  </Button>
-                ) : null}
-              </div>
+          {lookupResults.length > 0 ? (
+              <div className="mt-3 grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+                {lookupResults.map((user) => {
+                  const userId = String(user.userId || "").trim();
+                  const selectedCardRole = lookupRoleByUserId[userId] || normalizeScopedRole(user.role);
+                  const saving = Boolean(addingAccessByUserId[userId]);
+                  return (
+                    <article key={user.userId} className="rounded-xl border border-slate-200 bg-white p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div>
+                          <p className="text-sm font-semibold text-slate-900">{user.fullName || user.email || user.userId}</p>
+                          <p className="text-xs text-slate-600">{user.email || user.userId}</p>
+                        </div>
+                        <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${statusChipClass(user.status)}`}>
+                          {formatStatusChipLabel(user.status)}
+                        </span>
+                      </div>
+                      <div className="mt-2 flex flex-wrap items-center gap-2">
+                        {user.isSuperAdmin ? (
+                          <span className="inline-flex rounded-full border border-indigo-200 bg-indigo-50 px-2 py-0.5 text-[11px] font-medium text-indigo-700">
+                            Super Admin
+                          </span>
+                        ) : null}
+                      </div>
+                      <div className="mt-3">
+                        <AppDropdown
+                          value={selectedCardRole}
+                          onValueChange={(value) => setLookupRoleByUserId((current) => ({
+                            ...current,
+                            [userId]: value as RoleOption["value"],
+                          }))}
+                          options={assignableRoleOptions.map((role) => ({ value: role.value, label: role.label }))}
+                          searchable={false}
+                          ariaLabel={`Select ${appLabel} role for ${user.fullName || user.email || user.userId}`}
+                        />
+                      </div>
+                      <div className="mt-3 flex justify-end">
+                        <Button
+                          type="button"
+                          disabled={saving || lookingUp}
+                          onClick={() => void handleAddAccess(user)}
+                          className="h-8 px-3 text-xs"
+                        >
+                          {saving ? <Spinner className="size-3.5" /> : <UserPlus className="size-3.5" />}
+                          Add user access
+                        </Button>
+                      </div>
+                    </article>
+                  );
+                })}
             </div>
           ) : null}
         </SectionCard>
@@ -762,42 +922,70 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
 
           {filteredUsers.length > 0 ? (
             <div className="mt-4 grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-              {filteredUsers.map((user) => (
-                <article key={user.userId} className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-semibold text-slate-900">{user.fullName || user.email || user.userId}</p>
-                      <p className="truncate text-xs text-slate-600">{user.email || user.userId}</p>
-                    </div>
-                    <div className="flex items-center gap-2">
-                      {canManageUserAccess(user) ? (
-                        <RemoveAccessIconButton
-                          onRemove={() => handleRemoveAccess(user)}
-                          disabled={removingUserId === user.userId}
-                        />
-                      ) : null}
-                      <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${statusChipClass(user.status)}`}>
-                        {formatStatusChipLabel(user.status)}
-                      </span>
-                    </div>
-                  </div>
-                  <div className="mt-3 space-y-2">
-                    <div>
-                      <p className="mb-1 text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">Assignment</p>
-                      <div className="flex flex-wrap gap-1">
-                        <span className="rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-[11px] font-medium text-blue-700">
-                          {currentTenantSlug}: {appLabel} ({roleLabel(user.role || "viewer")})
-                        </span>
+              {filteredUsers.map((user) => {
+                const userId = String(user.userId || "").trim();
+                const canManage = canManageUserAccess(user);
+                const persistedRole = normalizeScopedRole(user.role);
+                const savingRole = Boolean(savingUserRoleByUserId[userId]);
+                return (
+                  <article key={user.userId} className="flex h-full flex-col overflow-hidden rounded-xl border border-slate-200 bg-white shadow-sm">
+                    <div className="flex-1 p-4">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="truncate text-sm font-semibold text-slate-900">{user.fullName || user.email || user.userId}</p>
+                          <p className="truncate text-xs text-slate-600">{user.email || user.userId}</p>
+                        </div>
+                        <div className="flex items-center gap-2">
+                          {canManage ? (
+                            <RemoveAccessIconButton
+                              onRemove={() => handleRemoveAccess(user)}
+                              disabled={removingUserId === user.userId || savingRole}
+                            />
+                          ) : null}
+                          <span className={`inline-flex rounded-full border px-2 py-0.5 text-xs font-semibold ${statusChipClass(user.status)}`}>
+                            {formatStatusChipLabel(user.status)}
+                          </span>
+                        </div>
                       </div>
                     </div>
-                    {!canManageUserAccess(user) ? (
-                      <div className="flex items-center justify-end">
-                        <span className="text-[11px] text-slate-500">Protected user access</span>
+                    {canManage ? (
+                      <div className="flex h-[56px] items-center px-3">
+                        <div
+                          className="inline-flex w-full flex-wrap items-center gap-1 rounded-lg border border-slate-200 bg-white p-0.5"
+                          role="group"
+                          aria-label={`Change ${appLabel} role for ${user.fullName || user.email || user.userId}`}
+                        >
+                          {assignableRoleOptions.map((roleOption) => {
+                            const isActive = persistedRole === roleOption.value;
+                            return (
+                              <button
+                                key={`${userId}-${roleOption.value}`}
+                                type="button"
+                                disabled={savingRole}
+                                onClick={() => handleRequestRoleChange(user, roleOption.value)}
+                                className={
+                                  `h-7 flex-1 rounded-md px-2 text-xs font-semibold transition-colors ${
+                                    isActive
+                                      ? "border border-blue-200 bg-blue-50 text-blue-800"
+                                      : "border border-transparent bg-transparent text-slate-400 hover:bg-slate-50 hover:text-slate-700"
+                                  }`
+                                }
+                                aria-pressed={isActive}
+                              >
+                                {roleOption.label}
+                              </button>
+                            );
+                          })}
+                        </div>
                       </div>
-                    ) : null}
-                  </div>
-                </article>
-              ))}
+                    ) : (
+                      <div className="mt-auto flex h-[56px] items-center justify-end px-3">
+                        <p className="text-right text-[11px] leading-none text-slate-500">Protected user access</p>
+                      </div>
+                    )}
+                  </article>
+                );
+              })}
             </div>
           ) : null}
         </SectionCard>
@@ -807,6 +995,8 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
         <TradspherePermissionDetailsSection
           appCode={normalizedAppCode}
           appLabel={appLabel}
+          removedUserId={lastRemovedUserId}
+          syncNonce={permissionSyncNonce}
         />
       ) : null}
 
@@ -848,6 +1038,63 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
             >
               {Boolean(removingUserId) ? <Spinner className="size-4" /> : null}
               {Boolean(removingUserId) ? "Removing..." : "Remove access"}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog open={Boolean(roleChangeTarget)} onOpenChange={(open) => !open && !roleChangeSaving && setRoleChangeTarget(null)}>
+        <DialogContent
+          className="max-w-[560px]"
+          onEscapeKeyDown={(event) => {
+            if (roleChangeSaving) {
+              event.preventDefault();
+            }
+          }}
+          onInteractOutside={(event) => {
+            if (roleChangeSaving) {
+              event.preventDefault();
+            }
+          }}
+        >
+          <DialogClose
+            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
+            aria-label="Close role change modal"
+            disabled={roleChangeSaving}
+          >
+            <X className="size-4" />
+          </DialogClose>
+          <DialogHeader>
+            <DialogTitle>Confirm role change</DialogTitle>
+          </DialogHeader>
+
+          <p className="text-sm text-slate-700">
+            Change role for{" "}
+            <span className="font-semibold">
+              {roleChangeTarget?.fullName || roleChangeTarget?.email || roleChangeTarget?.userId}
+            </span>{" "}
+            from{" "}
+            <span className="font-semibold">{roleLabel(roleChangeTarget?.currentRole || "viewer")}</span>{" "}
+            to{" "}
+            <span className="font-semibold">{roleLabel(roleChangeTarget?.nextRole || "viewer")}</span>?
+          </p>
+
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setRoleChangeTarget(null)}
+              disabled={roleChangeSaving}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => void handleConfirmRoleChange()}
+              disabled={roleChangeSaving}
+            >
+              {roleChangeSaving ? (
+                <Spinner className="size-4" />
+              ) : null}
+              {roleChangeSaving ? "Updating..." : "Confirm"}
             </Button>
           </DialogFooter>
         </DialogContent>

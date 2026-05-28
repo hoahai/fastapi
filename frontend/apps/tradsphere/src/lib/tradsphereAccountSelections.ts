@@ -1,7 +1,7 @@
 import type { AccountSelection } from "@/components/dashboard/types";
 import { TRADSPHERE_CACHE_TTL_MS } from "@shared/cache";
 
-export const TRADSPHERE_SELECTIONS_CACHE_KEY = "tradsphere:main:selections:v2";
+export const TRADSPHERE_SELECTIONS_CACHE_KEY = "tradsphere:main:selections:v3";
 export const TRADSPHERE_SELECTIONS_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.SELECTIONS;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -23,6 +23,25 @@ function asString(value: unknown): string {
     return String(value);
   }
   return "";
+}
+
+function asActiveFlag(value: unknown): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "y", "on"].includes(normalized)) {
+      return true;
+    }
+    if (["0", "false", "no", "n", "off"].includes(normalized)) {
+      return false;
+    }
+  }
+  return true;
 }
 
 function buildSelectionLabel(accountCode: string, name: string): string {
@@ -55,8 +74,19 @@ export function normalizeTradsphereAccountSelections(payload: unknown): AccountS
     }
 
     seen.add(accountCode);
-    output.push({ accountCode, label, name: name || undefined });
+    output.push({
+      accountCode,
+      label,
+      name: name || undefined,
+      active: asActiveFlag(item.active),
+    });
   }
 
-  return output;
+  return output.sort((a, b) => {
+    const activeDiff = Number(Boolean(b.active)) - Number(Boolean(a.active));
+    if (activeDiff !== 0) {
+      return activeDiff;
+    }
+    return a.accountCode.localeCompare(b.accountCode);
+  });
 }

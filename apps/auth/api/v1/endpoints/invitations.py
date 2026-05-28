@@ -7,6 +7,7 @@ from fastapi import APIRouter, Body, HTTPException, Query, Request
 from shared.auth.admin_repo import (
     find_user_id_by_email,
     is_auth_user_active,
+    is_user_super_admin,
     list_tenant_users_with_app_role,
     remove_tenant_app_role,
 )
@@ -99,6 +100,14 @@ def _parse_invitation_expiry(value: str) -> datetime:
         return datetime.fromisoformat(value.replace("Z", "+00:00"))
     except ValueError as exc:
         raise HTTPException(status_code=400, detail="Invitation expiration is invalid") from exc
+
+
+def _is_missing_profile_column_error(exc: Exception, *, column: str) -> bool:
+    message = str(exc).lower()
+    return (
+        f"column profiles.{column} does not exist" in message
+        or f'column "{column}" of relation "profiles" does not exist' in message
+    )
 
 
 def _serialize_scoped_user_row(
@@ -273,6 +282,123 @@ def create_invitation_route(
     }
 
 
+@router.post("/users/access")
+def grant_scoped_user_access_route(
+    request: Request,
+    payload: dict = Body(...),
+):
+    """
+    Grant tenant+app access immediately for an existing active user.
+
+    Example request:
+        POST /api/auth/v1/invitations/users/access
+
+    Example request body:
+        {
+          "userId": "762fec4b-1da3-4ba7-80e2-dd21622b6e0d",
+          "role": "editor"
+        }
+
+    Example response:
+        {
+          "status": "assigned",
+          "user": {
+            "userId": "762fec4b-1da3-4ba7-80e2-dd21622b6e0d",
+            "email": "alex@example.com",
+            "fullName": "Alex Johnson",
+            "firstName": "Alex",
+            "lastName": "Johnson",
+            "status": "active",
+            "role": "editor",
+            "isSuperAdmin": false,
+            "assignedInScope": true
+          }
+        }
+
+    Requirements:
+        - Requires Authorization: Bearer <Supabase JWT>
+        - Requires X-Tenant-Id
+        - Requires current app admin permission or workspace.super_admin
+        - Target user must already exist and be active in auth/profile
+        - Role must be one of: viewer, editor, admin
+        - super_admin cannot be assigned from this endpoint
+        - Actor cannot grant/modify their own scoped access
+    """
+    payload_app_code = _normalize_app_code(payload.get("appCode"))
+    actor_user_id, tenant_id, _, app_id, _, actor_is_super_admin, actor_role = _require_admin(
+        request,
+        app_code=payload_app_code or None,
+    )
+
+    normalized_user_id = str(payload.get("userId") or "").strip()
+    normalized_email = str(payload.get("email") or "").strip().lower()
+    role = normalize_role_key(str(payload.get("role") or "").strip())
+
+    if role not in VALID_SCOPED_ROLE_KEYS:
+        raise HTTPException(status_code=400, detail="Invalid role")
+    if not actor_is_super_admin and _role_rank(role) < _role_rank(actor_role):
+        raise HTTPException(status_code=403, detail="You cannot assign a higher role than your own.")
+    if not normalized_user_id:
+        if not normalized_email or "@" not in normalized_email:
+            raise HTTPException(status_code=400, detail="userId or valid email is required")
+        normalized_user_id = str(find_user_id_by_email(email=normalized_email) or "").strip()
+    if not normalized_user_id:
+        raise HTTPException(status_code=404, detail="Existing user not found")
+    if normalized_user_id == actor_user_id:
+        raise HTTPException(status_code=403, detail="You cannot update your own access.")
+    if not is_auth_user_active(user_id=normalized_user_id):
+        raise HTTPException(status_code=403, detail="Target user is not active.")
+
+    target_super_admin = is_user_super_admin(user_id=normalized_user_id)
+    if target_super_admin and not actor_is_super_admin:
+        raise HTTPException(status_code=403, detail="You cannot update a Super Admin.")
+
+    scoped_users = _scoped_users_by_user_id(tenant_id=tenant_id, app_id=app_id)
+    existing_user = scoped_users.get(normalized_user_id)
+    if existing_user:
+        _assert_actor_can_manage_target(
+            actor_user_id=actor_user_id,
+            actor_role=actor_role,
+            actor_is_super_admin=actor_is_super_admin,
+            target_user=existing_user,
+            action_label="update",
+        )
+
+    try:
+        activate_tenant_user(tenant_id=tenant_id, user_id=normalized_user_id)
+        upsert_tenant_app_role(
+            tenant_id=tenant_id,
+            user_id=normalized_user_id,
+            app_id=app_id,
+            role=role,
+        )
+    except SupabaseClientError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+    permission_cache.invalidate(user_id=normalized_user_id)
+    refreshed_user = _scoped_users_by_user_id(tenant_id=tenant_id, app_id=app_id).get(normalized_user_id)
+    if not refreshed_user:
+        profile = select_profile_for_user(provider=get_auth_provider(), user_id=normalized_user_id) or {}
+        full_name = str(profile.get("full_name") or "").strip() or None
+        first_name, last_name = split_full_name(full_name)
+        refreshed_user = {
+            "userId": normalized_user_id,
+            "email": str(profile.get("email") or normalized_email).strip().lower() or None,
+            "fullName": full_name,
+            "firstName": first_name,
+            "lastName": last_name,
+            "status": "active",
+            "role": role,
+            "isSuperAdmin": target_super_admin,
+            "assignedInScope": True,
+        }
+
+    return {
+        "status": "assigned",
+        "user": refreshed_user,
+    }
+
+
 @router.get("/users")
 def list_scoped_invitation_users_route(
     request: Request,
@@ -350,13 +476,17 @@ def list_scoped_invitation_users_route(
 @router.get("/users/lookup")
 def lookup_active_existing_user_route(
     request: Request,
-    email: str = Query(...),
+    query: str | None = Query(default=None),
+    email: str | None = Query(default=None),
 ):
     """
-    Lookup an active existing user by email for app-scoped access-add flows.
+    Lookup active existing users by email or name for app-scoped access-add flows.
 
     Example request:
-        GET /api/auth/v1/invitations/users/lookup?email=alex@example.com
+        GET /api/auth/v1/invitations/users/lookup?query=alex@example.com
+
+    Example request (name search):
+        GET /api/auth/v1/invitations/users/lookup?query=alex
 
     Example response:
         {
@@ -384,42 +514,74 @@ def lookup_active_existing_user_route(
         - Requires X-Tenant-Id
         - Requires current app admin permission or workspace.super_admin
         - Returns only active existing users
+        - `query` supports email or name search (case-insensitive contains)
     """
-    _, tenant_id, _, app_id, app_code, _, _ = _require_admin(request)
-    normalized_email = str(email or "").strip().lower()
-    if not normalized_email or "@" not in normalized_email:
-        raise HTTPException(status_code=400, detail="Valid email is required")
+    _, tenant_id, _, app_id, app_code, actor_is_super_admin, _ = _require_admin(request)
+    normalized_query = str(query or email or "").strip().lower()
+    if len(normalized_query) < 2:
+        raise HTTPException(status_code=400, detail="query must be at least 2 characters")
 
-    user_id = find_user_id_by_email(email=normalized_email)
-    if not user_id or not is_auth_user_active(user_id=user_id):
-        return {
-            "items": [],
-            "scope": {
-                "tenantId": tenant_id,
-                "appCode": app_code,
-            },
-        }
+    scoped_users_by_id = _scoped_users_by_user_id(tenant_id=tenant_id, app_id=app_id)
+    provider = get_auth_provider()
 
-    scoped_rows = list_tenant_users_with_app_role(tenant_id=tenant_id, app_id=app_id)
-    for row in scoped_rows:
-        if not isinstance(row, dict):
+    matched_user_ids: list[str] = []
+    if "@" in normalized_query:
+        by_email_user_id = str(find_user_id_by_email(email=normalized_query) or "").strip()
+        if by_email_user_id:
+            matched_user_ids.append(by_email_user_id)
+    try:
+        profile_rows = provider.select_many(
+            table="profiles",
+            filters={},
+            select="user_id,email,full_name",
+        )
+        profile_user_id_key = "user_id"
+    except SupabaseClientError as exc:
+        if not _is_missing_profile_column_error(exc, column="user_id"):
+            raise
+        profile_rows = provider.select_many(
+            table="profiles",
+            filters={},
+            select="id,email,full_name",
+        )
+        profile_user_id_key = "id"
+    for row in profile_rows:
+        user_id = str(row.get(profile_user_id_key) or "").strip()
+        if not user_id:
             continue
-        scoped_item = _serialize_scoped_user_row(row=row, tenant_id=tenant_id, app_id=app_id)
-        if scoped_item and str(scoped_item.get("userId") or "").strip() == user_id:
-            return {
-                "items": [scoped_item],
-                "scope": {
-                    "tenantId": tenant_id,
-                    "appCode": app_code,
-                },
-            }
+        profile_email = str(row.get("email") or "").strip().lower()
+        profile_name = str(row.get("full_name") or "").strip().lower()
+        haystack = " ".join([profile_email, profile_name, user_id]).strip()
+        if normalized_query and normalized_query not in haystack:
+            continue
+        matched_user_ids.append(user_id)
 
-    profile = select_profile_for_user(provider=get_auth_provider(), user_id=user_id) or {}
-    full_name = str(profile.get("full_name") or "").strip() or None
-    first_name, last_name = split_full_name(full_name)
-    profile_email = str(profile.get("email") or "").strip().lower() or normalized_email
-    return {
-        "items": [
+    deduped_user_ids: list[str] = []
+    seen_user_ids: set[str] = set()
+    for user_id in matched_user_ids:
+        if not user_id or user_id in seen_user_ids:
+            continue
+        seen_user_ids.add(user_id)
+        deduped_user_ids.append(user_id)
+        if len(deduped_user_ids) >= 60:
+            break
+
+    items: list[dict[str, object]] = []
+    for user_id in deduped_user_ids:
+        if not is_auth_user_active(user_id=user_id):
+            continue
+        existing_scoped_user = scoped_users_by_id.get(user_id)
+        if existing_scoped_user:
+            continue
+        target_super_admin = is_user_super_admin(user_id=user_id)
+        if target_super_admin and not actor_is_super_admin:
+            continue
+
+        profile = select_profile_for_user(provider=provider, user_id=user_id) or {}
+        full_name = str(profile.get("full_name") or "").strip() or None
+        first_name, last_name = split_full_name(full_name)
+        profile_email = str(profile.get("email") or "").strip().lower() or None
+        items.append(
             {
                 "userId": user_id,
                 "email": profile_email,
@@ -428,10 +590,23 @@ def lookup_active_existing_user_route(
                 "lastName": last_name,
                 "status": "active",
                 "role": None,
-                "isSuperAdmin": False,
+                "isSuperAdmin": target_super_admin,
                 "assignedInScope": False,
             }
-        ],
+        )
+        if len(items) >= 24:
+            break
+
+    items.sort(
+        key=lambda item: (
+            0 if normalized_query and normalized_query in str(item.get("fullName") or "").strip().lower() else 1,
+            0 if normalized_query and str(item.get("fullName") or "").strip().lower().startswith(normalized_query) else 1,
+            str(item.get("fullName") or item.get("email") or item.get("userId") or "").strip().lower(),
+        )
+    )
+
+    return {
+        "items": items,
         "scope": {
             "tenantId": tenant_id,
             "appCode": app_code,

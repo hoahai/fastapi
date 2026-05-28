@@ -1337,7 +1337,7 @@ export default function EstimateNumbersPage() {
   }, [auth.accessProfile]);
 
   const [billingDirectory, setBillingDirectory] = useState<AccountDirectoryItem[]>([]);
-  const [isLoadingBillingDirectory, setIsLoadingBillingDirectory] = useState(true);
+  const [, setIsLoadingBillingDirectory] = useState(true);
   const [sidebarVisuallyExpanded, setSidebarVisuallyExpanded] = useState<boolean>(() => !readSidebarCollapsedState());
 
   const [draft, setDraft] = usePersistentState<EstimateNumberSearchFormValues>(
@@ -1378,7 +1378,6 @@ export default function EstimateNumbersPage() {
   const hasSelectionDirectoryRef = useRef(false);
   const {
     accountSelections,
-    isLoadingSelections,
     selectionsError,
   } = useTradsphereAccountSelections({
     requestJson,
@@ -1394,8 +1393,6 @@ export default function EstimateNumbersPage() {
     () => mergeDirectoryWithBillingTypes(selectionBackedDirectory, billingDirectory),
     [billingDirectory, selectionBackedDirectory],
   );
-  const isLoadingAccountSelections = isLoadingSelections || isLoadingBillingDirectory;
-
   const accountDirectoryByCode = useMemo(() => {
     return accountDirectory.reduce<Record<string, AccountDirectoryItem>>((map, item) => {
       map[item.accountCode] = item;
@@ -1444,12 +1441,10 @@ export default function EstimateNumbersPage() {
   const showCacheChip = Boolean(
     submittedSearch && !isAnyModalOpen && state === "ready" && (displayPage?.items.length ?? 0) > 0,
   );
-  const isPageBusy = isLoadingAccountSelections || state === "loading" || isLoadingMore;
-  const pageBusyMessage = isLoadingAccountSelections
-    ? "Loading account selections..."
-    : isLoadingMore
-      ? "Loading more estimate numbers..."
-      : "Searching estimate numbers...";
+  const isPageBusy = state === "loading" || isLoadingMore;
+  const pageBusyMessage = isLoadingMore
+    ? "Loading more estimate numbers..."
+    : "Searching estimate numbers...";
 
   useEffect(() => {
     pageRef.current = page;
@@ -1943,7 +1938,7 @@ export default function EstimateNumbersPage() {
         action={
           <Button
             onClick={handleOpenCreate}
-            disabled={!canEditTradsphere || isLoadingAccountSelections || !estimateModalAccountOptions.length}
+            disabled={!canEditTradsphere || !estimateModalAccountOptions.length}
           >
             Add Estimate
           </Button>
@@ -1957,7 +1952,7 @@ export default function EstimateNumbersPage() {
         onClear={handleClearDraft}
         canClear={canClearDraft}
         searching={state === "loading"}
-        disabled={isLoadingMore || isRefreshing || isLoadingAccountSelections}
+        disabled={isLoadingMore || isRefreshing}
         resultText={resultText}
         canSubmit={canSubmitSearch}
         message={searchMessage}

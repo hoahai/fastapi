@@ -11,6 +11,7 @@ export type AppDropdownOption = {
   value: string;
   label: string;
   keywords?: string;
+  muted?: boolean;
 };
 
 interface AppDropdownProps {
@@ -252,6 +253,7 @@ export function AppDropdown({
         ? selectedOptions.map((option) => option.label).join(", ")
         : `${selectedOptions[0]?.label || ""}, +${selectedOptions.length - 1}`
     : (selectedOption?.label || value || placeholder);
+  const isTriggerMuted = !multiple && Boolean(selectedOption?.muted);
 
   return (
     <div ref={containerRef} data-app-dropdown-root="true" className={cn("relative w-full", className)}>
@@ -269,7 +271,7 @@ export function AppDropdown({
           )}
           onClick={() => setIsOpen((current) => !current)}
         >
-          <span className="truncate text-left">{triggerLabel}</span>
+          <span className={cn("truncate text-left", isTriggerMuted && "text-slate-400")}>{triggerLabel}</span>
           {loading ? (
             <Spinner className={cn("ml-2 shrink-0", isCompact ? "size-3.5" : "size-4")} />
           ) : (
@@ -322,6 +324,7 @@ export function AppDropdown({
                     ? selectedValues.includes(option.value)
                     : option.value === value;
                   const isHighlighted = index === highlightedIndex;
+                  const isMuted = Boolean(option.muted);
                   return (
                     <li key={`${option.value}:${index}`}>
                       <button
@@ -335,7 +338,7 @@ export function AppDropdown({
                         onMouseEnter={() => setHighlightedIndex(index)}
                         onClick={() => selectValue(option.value)}
                       >
-                        <span className="truncate">{option.label}</span>
+                        <span className={cn("truncate", isMuted && "text-slate-400")}>{option.label}</span>
                         <Check
                           className={cn(
                             "text-blue-600",

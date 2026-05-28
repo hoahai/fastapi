@@ -318,7 +318,8 @@ function App() {
       accountForm &&
       (accountOriginal.billingType !== accountForm.billingType ||
         (accountOriginal.market ?? "") !== (accountForm.market ?? "") ||
-        (accountOriginal.note ?? "") !== (accountForm.note ?? "")),
+        (accountOriginal.note ?? "") !== (accountForm.note ?? "") ||
+        Boolean(accountOriginal.active) !== Boolean(accountForm.active)),
   );
   const hasBlockingLocalEdits = hasEditableChanges || isEstimateNumberModalOpen || isStationModalOpen || isCreateAccountModalOpen;
   const {
@@ -917,6 +918,9 @@ function App() {
               onNoteChange={(note) =>
                 setAccountForm((current) => (current ? { ...current, note } : current))
               }
+              onActiveChange={(active) =>
+                setAccountForm((current) => (current ? { ...current, active } : current))
+              }
               onSave={handleSaveAccount}
             />
 
@@ -1253,6 +1257,25 @@ function asNumber(value: unknown): number | null {
   return null;
 }
 
+function asBoolean(value: unknown, defaultValue = false): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "number") {
+    return value !== 0;
+  }
+  if (typeof value === "string") {
+    const normalized = value.trim().toLowerCase();
+    if (["1", "true", "yes", "y", "on"].includes(normalized)) {
+      return true;
+    }
+    if (["0", "false", "no", "n", "off"].includes(normalized)) {
+      return false;
+    }
+  }
+  return defaultValue;
+}
+
 function normalizeMainLoadResponse(payload: unknown): MainLoadResponse | null {
   const apiResponse = parseApiMainLoadResponse(payload);
   if (!apiResponse) {
@@ -1267,6 +1290,7 @@ function normalizeMainLoadResponse(payload: unknown): MainLoadResponse | null {
       billingType: apiResponse.data.account.billingType || "Calendar",
       market: apiResponse.data.account.market ?? undefined,
       note: apiResponse.data.account.note ?? undefined,
+      active: asBoolean(apiResponse.data.account.active, true),
     },
     esnums: apiResponse.data.esnums ?? [],
     stations: apiResponse.data.stations ?? [],
@@ -1349,6 +1373,7 @@ function normalizeCachedMainLoadResponse(payload: unknown): MainLoadResponse | n
       billingType: asNullableString(accountRow.billingType) || "Calendar",
       market: asNullableString(accountRow.market),
       note: asNullableString(accountRow.note),
+      active: asBoolean(accountRow.active, true),
     },
     esnums,
     stations,
@@ -1458,6 +1483,7 @@ function parseApiMainLoadResponse(payload: unknown): ApiMainLoadResponse | null 
         billingType: asNullableString(accountRow.billingType),
         market: asNullableString(accountRow.market),
         note: asNullableString(accountRow.note),
+        active: asBoolean(accountRow.active, true),
       },
       esnums,
       stations,
@@ -1474,7 +1500,7 @@ function asNullableString(value: unknown): string | null {
 }
 
 function getLoadCacheKey(accountCode: string): string {
-  return `tradsphere:main:load:${accountCode.toUpperCase()}:v2`;
+  return `tradsphere:main:load:${accountCode.toUpperCase()}:v3`;
 }
 
 function formatRelativeTime(timestamp: number): string {
@@ -1518,6 +1544,7 @@ async function saveAccountChanges(
     billingType: account.billingType || "Calendar",
     market: account.market ?? "",
     note: account.note ?? "",
+    active: Boolean(account.active),
   };
 
   await requestJson("/api/tradsphere/v1/accounts", {

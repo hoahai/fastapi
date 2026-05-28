@@ -2,6 +2,7 @@ export type AccountSelection = {
   accountCode: string;
   label: string;
   name?: string;
+  active?: boolean;
 };
 
 export type AccountInfo = {
@@ -11,6 +12,7 @@ export type AccountInfo = {
   billingType?: string | null;
   market?: string | null;
   note?: string | null;
+  active?: boolean;
 };
 
 export type EsnumItem = {

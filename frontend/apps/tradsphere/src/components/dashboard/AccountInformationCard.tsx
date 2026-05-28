@@ -23,6 +23,7 @@ interface AccountInformationCardProps {
   onBillingTypeChange: (value: string) => void;
   onMarketChange: (value: string) => void;
   onNoteChange: (value: string) => void;
+  onActiveChange: (value: boolean) => void;
   onSave: () => void;
 }
 
@@ -35,6 +36,7 @@ export function AccountInformationCard({
   onBillingTypeChange,
   onMarketChange,
   onNoteChange,
+  onActiveChange,
   onSave,
 }: AccountInformationCardProps) {
   const editableDisabled = !account || isSaving || !canEdit;
@@ -65,9 +67,11 @@ export function AccountInformationCard({
             billingType={account?.billingType ?? ""}
             market={account?.market ?? ""}
             note={account?.note ?? ""}
+            active={Boolean(account?.active)}
             onBillingTypeChange={onBillingTypeChange}
             onMarketChange={onMarketChange}
             onNoteChange={onNoteChange}
+            onActiveChange={onActiveChange}
             disabled={editableDisabled}
             billingAriaLabel="Billing type"
           />
