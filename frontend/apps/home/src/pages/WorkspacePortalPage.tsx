@@ -4,25 +4,25 @@ import { APP_NAV_ITEMS } from "@shell/components/layout/navigation";
 import { PageBanner } from "@shell/components/layout/PageBanner";
 import { Button } from "@tradsphere/components/ui/button";
 import { Section, SectionHeader } from "@shared/components";
-import { CacheStatusChip } from "@shared/components/status/CacheStatusChip";
+import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
+import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
+import { PageLoadingLayer } from "@shared/components/status/LoadingOverlay";
+import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
+import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
 import { getAccessAssignments, roleChipClass, roleLabel, rolePriority, tenantChipClass } from "@shared/auth/accessAssignments";
 import { hasSuperAdminAccess } from "@shared/auth/permissions";
 import { useAuth } from "@shared/auth/useAuth";
-import { useEffect, useMemo, useState } from "react";
+import { useMemo, useState } from "react";
 
 type WorkspacePortalPageProps = {
   onNavigate: (route: string) => void;
 };
 
-const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspace.sidebar.collapsed";
-const LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY = "tradsphere:ui:sidebarCollapsed:v1";
-const SIDEBAR_COLLAPSED_EVENT = "workspace-sidebar-collapsed-change";
-
 export function WorkspacePortalPage({ onNavigate }: WorkspacePortalPageProps) {
   const auth = useAuth();
+  const [isChipRefreshOverlayVisible, setIsChipRefreshOverlayVisible] = useState(false);
   const isSignedIn = auth.status === "authenticated" && Boolean(auth.user);
   const isSuperAdmin = hasSuperAdminAccess(auth.accessProfile);
-  const [sidebarVisuallyExpanded, setSidebarVisuallyExpanded] = useState<boolean>(() => !readSidebarCollapsedState());
   const appMetaByCode = useMemo(
     () => new Map(APP_NAV_ITEMS.map((item) => [item.id.toLowerCase(), item])),
     [],
@@ -106,37 +106,6 @@ export function WorkspacePortalPage({ onNavigate }: WorkspacePortalPageProps) {
 
   const launchableAssignments = assignmentCards.filter((item) => item.available);
 
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const handleStorage = () => {
-      const collapsed = readSidebarCollapsedState();
-      setSidebarVisuallyExpanded(!collapsed);
-    };
-    const handleSidebarEvent = (event: Event) => {
-      const customEvent = event as CustomEvent<{ collapsed?: boolean; visuallyExpanded?: boolean }>;
-      if (typeof customEvent.detail?.visuallyExpanded === "boolean") {
-        setSidebarVisuallyExpanded(customEvent.detail.visuallyExpanded);
-        return;
-      }
-      if (typeof customEvent.detail?.collapsed === "boolean") {
-        setSidebarVisuallyExpanded(!customEvent.detail.collapsed);
-        return;
-      }
-      const collapsed = readSidebarCollapsedState();
-      setSidebarVisuallyExpanded(!collapsed);
-    };
-
-    window.addEventListener("storage", handleStorage);
-    window.addEventListener(SIDEBAR_COLLAPSED_EVENT, handleSidebarEvent as EventListener);
-    return () => {
-      window.removeEventListener("storage", handleStorage);
-      window.removeEventListener(SIDEBAR_COLLAPSED_EVENT, handleSidebarEvent as EventListener);
-    };
-  }, []);
-
   const footerCacheStatusText = useMemo(() => {
     if (!isSignedIn) {
       return null;
@@ -155,33 +124,78 @@ export function WorkspacePortalPage({ onNavigate }: WorkspacePortalPageProps) {
     }
     return "Loading...";
   }, [auth.accessCacheStatus, auth.accessError, auth.accessLoading, auth.accessProfile, isSignedIn]);
+  const pageMessages: StackMessage[] = [];
+  if (auth.accessError) {
+    pageMessages.push({
+      id: "workspace-portal-refresh-error",
+      variant: "warning",
+      message: "Showing cached data. Could not refresh access profile.",
+    });
+  }
+  const loadingContract = resolveSharedLoadingContract(
+    {
+      pageInitializing: isSignedIn && auth.accessLoading && !auth.accessProfile,
+      pageRefreshing: isSignedIn && auth.accessLoading && Boolean(auth.accessProfile),
+      cacheChipRefreshing: isChipRefreshOverlayVisible,
+    },
+    {
+      pageInitializing: "Preparing workspace home...",
+      pageRefreshing: "Refreshing workspace access...",
+      cacheChipRefreshing: "Refreshing workspace access...",
+    },
+  );
+
+  async function handleRefreshAccessProfileFromChip() {
+    setIsChipRefreshOverlayVisible(true);
+    try {
+      await auth.refreshAccessProfile();
+    } finally {
+      setIsChipRefreshOverlayVisible(false);
+    }
+  }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-6 pb-12">
-      <PageBanner
-        eyebrow="TheSphereWorks"
-        title="Workspace Home"
-        description="Select an app to continue. Access is invite-only."
-        gradientVariant="workspace"
-        action={
-          !isSignedIn ? (
-            <Button onClick={() => onNavigate("/auth/login")}>
-              <LogIn className="size-4" />
-              Sign in
-            </Button>
-          ) : launchableAssignments.length > 0 ? (
-            <Button
-              onClick={() => {
-                const next = launchableAssignments[0];
-                auth.setTenantSlug(next.tenantSlug);
-                onNavigate(next.route);
-              }}
-            >
-              Open {launchableAssignments[0].appName}
-            </Button>
-          ) : undefined
-        }
-      />
+    <AppPageLayout
+      className="gap-6 pb-5"
+      pageMessages={<PageMessageStack messages={pageMessages} />}
+      banner={(
+        <PageBanner
+          eyebrow="TheSphereWorks"
+          title="Workspace Home"
+          description="Select an app to continue. Access is invite-only."
+          gradientVariant="workspace"
+          action={
+            !isSignedIn ? (
+              <Button onClick={() => onNavigate("/auth/login")}>
+                <LogIn className="size-4" />
+                Sign in
+              </Button>
+            ) : launchableAssignments.length > 0 ? (
+              <Button
+                onClick={() => {
+                  const next = launchableAssignments[0];
+                  auth.setTenantSlug(next.tenantSlug);
+                  onNavigate(next.route);
+                }}
+              >
+                Open {launchableAssignments[0].appName}
+              </Button>
+            ) : undefined
+          }
+        />
+      )}
+      footer={footerCacheStatusText ? (
+        <PageCacheFooter
+          text={footerCacheStatusText}
+          onRefresh={handleRefreshAccessProfileFromChip}
+          disabled={auth.accessLoading || isChipRefreshOverlayVisible}
+          refreshing={auth.accessLoading || isChipRefreshOverlayVisible}
+          refreshLabel="Refresh workspace access cache"
+          tooltipText="Click to refresh workspace access profile"
+          containerClassName="w-full"
+        />
+      ) : null}
+    >
 
       {!isSignedIn ? (
         <Section className="rounded-2xl border border-blue-100 bg-white/90 p-5 shadow-soft">
@@ -280,25 +294,11 @@ export function WorkspacePortalPage({ onNavigate }: WorkspacePortalPageProps) {
         </Section>
       ) : null}
 
-      {footerCacheStatusText ? (
-        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40">
-          <div className={`mx-4 sm:mx-6 lg:mr-6 ${sidebarVisuallyExpanded ? "lg:ml-[18.75rem]" : "lg:ml-[6.5rem]"}`}>
-            <div className="mx-auto w-full max-w-[1600px]">
-              <CacheStatusChip
-                text={footerCacheStatusText}
-                onRefresh={auth.refreshAccessProfile}
-                disabled={auth.accessLoading}
-                refreshing={auth.accessLoading}
-                refreshLabel="Refresh workspace access cache"
-                tooltipText="Click to refresh workspace access profile"
-                containerClassName="pointer-events-auto"
-                className="max-w-[min(90vw,38rem)]"
-              />
-            </div>
-          </div>
-        </div>
-      ) : null}
-    </div>
+      <PageLoadingLayer
+        active={loadingContract.pageOverlayActive}
+        message={loadingContract.pageOverlayMessage}
+      />
+    </AppPageLayout>
   );
 }
 
@@ -308,22 +308,6 @@ function toTitleCase(value: string): string {
     return "Workspace";
   }
   return normalized.charAt(0).toUpperCase() + normalized.slice(1);
-}
-
-function readSidebarCollapsedState(): boolean {
-  if (typeof window === "undefined") {
-    return false;
-  }
-
-  try {
-    const nextValue = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY);
-    if (nextValue !== null) {
-      return nextValue === "1";
-    }
-    return window.localStorage.getItem(LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY) === "1";
-  } catch {
-    return false;
-  }
 }
 
 function formatRelativeTime(timestamp: number): string {

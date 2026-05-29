@@ -17,8 +17,11 @@ import {
   type CacheSource,
   type ScopedPageState,
 } from "@shared/cache";
-import { CacheStatusChip } from "@shared/components/status/CacheStatusChip";
-import { PageLoadingOverlay } from "@shared/components/status/LoadingOverlay";
+import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
+import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
+import { PageLoadingLayer } from "@shared/components/status/LoadingOverlay";
+import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
+import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
 import {
   createShiftzyEmployees,
   deleteShiftzyEmployees,
@@ -216,6 +219,7 @@ export default function ShiftzyEmployeesPage() {
   const [loadingPage, setLoadingPage] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [backgroundRefreshing, setBackgroundRefreshing] = useState(false);
+  const [isChipRefreshOverlayVisible, setIsChipRefreshOverlayVisible] = useState(false);
   const [searching, setSearching] = useState(false);
   const [saving, setSaving] = useState(false);
   const [processingDeactivate, setProcessingDeactivate] = useState(false);
@@ -291,6 +295,26 @@ export default function ShiftzyEmployeesPage() {
     }
     return `Data source: ${cacheStatus.source}. Last updated ${formatRelativeTime(cacheStatus.fetchedAt)}.`;
   }, [backgroundRefreshing, cacheStatus, refreshing]);
+  const pageMessages: StackMessage[] = [];
+  if (refreshMessage) {
+    pageMessages.push({
+      id: "shiftzy-employees-refresh-message",
+      variant: refreshMessage.toLowerCase().includes("offline") ? "info" : "warning",
+      message: refreshMessage,
+    });
+  }
+  const loadingContract = resolveSharedLoadingContract(
+    {
+      pageInitializing: loadingPage,
+      pageRefreshing: refreshing || backgroundRefreshing,
+      cacheChipRefreshing: isChipRefreshOverlayVisible,
+    },
+    {
+      pageInitializing: "Preparing Shiftzy employees workspace...",
+      pageRefreshing: "Refreshing Shiftzy employees...",
+      cacheChipRefreshing: "Refreshing Shiftzy employees...",
+    },
+  );
 
   const pageStateScope = useMemo<ScopedPageState | null>(() => {
     if (!canRestorePageState) {
@@ -664,20 +688,49 @@ export default function ShiftzyEmployeesPage() {
     }
   }
 
+  async function handleRefreshFromChip() {
+    setIsChipRefreshOverlayVisible(true);
+    try {
+      await loadData({
+        refreshing: true,
+        networkOnly: true,
+        criteria: submittedSearch,
+      });
+    } finally {
+      setIsChipRefreshOverlayVisible(false);
+    }
+  }
+
   return (
-    <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5 pb-12">
-      <PageBanner
-        eyebrow="Shiftzy"
-        title="Employees"
-        description="Search and manage Shiftzy employees used by schedule workflows."
-        gradientVariant="shiftzy"
-        action={(
-          <Button onClick={handleOpenCreate} disabled={!canEditShiftzy || loadingPage || refreshing || saving}>
-            <Plus className="size-4" />
-            Add Employee
-          </Button>
-        )}
-      />
+    <AppPageLayout
+      className="pb-5"
+      pageMessages={<PageMessageStack messages={pageMessages} />}
+      banner={(
+        <PageBanner
+          eyebrow="Shiftzy"
+          title="Employees"
+          description="Search and manage Shiftzy employees used by schedule workflows."
+          gradientVariant="shiftzy"
+          action={(
+            <Button onClick={handleOpenCreate} disabled={!canEditShiftzy || loadingPage || refreshing || saving}>
+              <Plus className="size-4" />
+              Add Employee
+            </Button>
+          )}
+        />
+      )}
+      footer={(
+        <PageCacheFooter
+          text={cacheStatusText}
+          onRefresh={handleRefreshFromChip}
+          disabled={loadingPage || refreshing || saving || processingDeactivate || isChipRefreshOverlayVisible}
+          refreshing={refreshing || backgroundRefreshing || isChipRefreshOverlayVisible}
+          refreshLabel="Refresh Shiftzy employees"
+          tooltipText="Click to refresh Shiftzy employees"
+          containerClassName="w-full"
+        />
+      )}
+    >
 
       <ShiftzyEmployeeSearch
         value={draft}
@@ -692,10 +745,6 @@ export default function ShiftzyEmployeesPage() {
         sectionOptions={sectionOptions}
         positionOptions={positionOptions}
       />
-
-      {refreshMessage ? (
-        <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">{refreshMessage}</p>
-      ) : null}
 
       <ShiftzyEmployeeResults
         state={resultsState}
@@ -747,30 +796,7 @@ export default function ShiftzyEmployeesPage() {
         </DialogContent>
       </Dialog>
 
-      <div className="pointer-events-none fixed inset-x-0 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40">
-        <div className="mx-4 sm:mx-6 lg:mx-8">
-          <div className="mx-auto w-full max-w-[1600px]">
-            <CacheStatusChip
-              text={cacheStatusText}
-              onRefresh={() => void loadData({
-                refreshing: true,
-                networkOnly: true,
-                criteria: submittedSearch,
-              })}
-              disabled={loadingPage || refreshing || saving || processingDeactivate}
-              refreshing={refreshing || backgroundRefreshing}
-              refreshLabel="Refresh Shiftzy employees"
-              tooltipText="Click to refresh Shiftzy employees"
-              containerClassName="pointer-events-auto"
-              className="max-w-[min(90vw,34rem)]"
-            />
-          </div>
-        </div>
-      </div>
-
-      {loadingPage ? (
-        <PageLoadingOverlay message="Loading Shiftzy employees..." />
-      ) : null}
-    </div>
+      <PageLoadingLayer active={loadingContract.pageOverlayActive} message={loadingContract.pageOverlayMessage} />
+    </AppPageLayout>
   );
 }

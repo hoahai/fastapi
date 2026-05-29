@@ -33,7 +33,6 @@ import { Textarea } from "@/components/ui/textarea";
 import { useApiRequest } from "@/hooks/useApiRequest";
 import { useDirtyRefreshGuard } from "@/hooks/useDirtyRefreshGuard";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
-import { usePersistentState } from "@/hooks/usePersistentState";
 import {
   readBrowserCacheSnapshot,
   removeBrowserCache,
@@ -50,12 +49,14 @@ import {
 import { useAuth } from "@shared/auth/useAuth";
 import { shouldProtectFrontendAuth } from "@shared/auth/guards";
 import { hasAppEditAccess } from "@shared/auth/permissions";
+import { useScopedPersistentState } from "@shared/hooks/useScopedPersistentState";
 import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
 import { LoadActionArea } from "@shared/components/layout/LoadActionArea";
 import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { SectionCard } from "@shared/components/layout/SectionCard";
 import { PageLoadingLayer, SectionLoadingLayer, SectionLoadingOverlay } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
+import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
 import {
   buildPeriodValue,
   buildRollingPeriods,
@@ -319,10 +320,10 @@ type BeforeRouteChangeEventDetail = {
 type PendingUnsavedActionType = "load" | "route";
 
 const LOAD_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.MAIN_LOAD;
-const PAGE_PERIOD_STORAGE_KEY = "tradsphere.invoiceChecklist.period.v1";
-const PAGE_PERIOD_CUSTOM_MONTH_STORAGE_KEY = "tradsphere.invoiceChecklist.period.customMonth.v1";
-const PAGE_PERIOD_CUSTOM_YEAR_STORAGE_KEY = "tradsphere.invoiceChecklist.period.customYear.v1";
 const INVOICE_CHECKLIST_PAGE_STATE_CODE = "invoice-checklists";
+const PAGE_PERIOD_STATE_KEY = "periodSelectionValue";
+const PAGE_PERIOD_CUSTOM_MONTH_STATE_KEY = "customPeriodMonth";
+const PAGE_PERIOD_CUSTOM_YEAR_STATE_KEY = "customPeriodYear";
 const CHECKLIST_STATUS_OPTIONS_BASE = [
   "Matched All",
   "No Applicable",
@@ -1606,20 +1607,32 @@ export default function InvoiceChecklistPage() {
     };
   }, [auth.tenantSlug, auth.user?.email, auth.user?.id]);
 
-  const [periodSelectionValue, setPeriodSelectionValue] = usePersistentState<string>(
-    PAGE_PERIOD_STORAGE_KEY,
+  const [periodSelectionValue, setPeriodSelectionValue] = useScopedPersistentState<string>(
+    {
+      appCode: "tradsphere",
+      pageCode: INVOICE_CHECKLIST_PAGE_STATE_CODE,
+      stateKey: PAGE_PERIOD_STATE_KEY,
+    },
     DEFAULT_PREVIOUS_PERIOD_VALUE,
-    { storage: "session", validate: (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 },
+    { validate: (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 },
   );
-  const [customPeriodMonth, setCustomPeriodMonth] = usePersistentState<string>(
-    PAGE_PERIOD_CUSTOM_MONTH_STORAGE_KEY,
+  const [customPeriodMonth, setCustomPeriodMonth] = useScopedPersistentState<string>(
+    {
+      appCode: "tradsphere",
+      pageCode: INVOICE_CHECKLIST_PAGE_STATE_CODE,
+      stateKey: PAGE_PERIOD_CUSTOM_MONTH_STATE_KEY,
+    },
     String(PREVIOUS_MONTH_ANCHOR.getMonth() + 1),
-    { storage: "session", validate: (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 },
+    { validate: (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 },
   );
-  const [customPeriodYear, setCustomPeriodYear] = usePersistentState<string>(
-    PAGE_PERIOD_CUSTOM_YEAR_STORAGE_KEY,
+  const [customPeriodYear, setCustomPeriodYear] = useScopedPersistentState<string>(
+    {
+      appCode: "tradsphere",
+      pageCode: INVOICE_CHECKLIST_PAGE_STATE_CODE,
+      stateKey: PAGE_PERIOD_CUSTOM_YEAR_STATE_KEY,
+    },
     String(PREVIOUS_MONTH_ANCHOR.getFullYear()),
-    { storage: "session", validate: (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 },
+    { validate: (value: unknown): value is string => typeof value === "string" && value.trim().length > 0 },
   );
   const [loadedPeriodValue, setLoadedPeriodValue] = useState<string | null>(null);
   const [checklists, setChecklists] = useState<ChecklistSummary[]>([]);
@@ -5090,14 +5103,20 @@ export default function InvoiceChecklistPage() {
   const checklistSummaryDescription = normalizedAppliedSearch
     ? `${filteredChecklists.length} of ${checklists.length} checklist(s)`
     : `${checklists.length} checklist(s) in selected period`;
-  const isPageRefreshOverlayVisible = !hasHydratedPageState || isLoadActionOverlayVisible || isSyncingPeriod || isChipRefreshing;
-  const pageRefreshOverlayMessage = !hasHydratedPageState
-    ? "Preparing invoice checklist workspace..."
-    : isLoadActionOverlayVisible
-      ? "Loading checklist data..."
-      : isSyncingPeriod
-        ? (isLoadedPeriodChecklistEmpty ? "Generating checklist preview..." : "Updating checklist preview...")
-        : "Loading latest checklist data...";
+  const loadingContract = resolveSharedLoadingContract(
+    {
+      pageInitializing: !hasHydratedPageState,
+      pageRefreshing: isLoadActionOverlayVisible || isSyncingPeriod,
+      cacheChipRefreshing: isChipRefreshing,
+    },
+    {
+      pageInitializing: "Preparing invoice checklist workspace...",
+      pageRefreshing: isLoadActionOverlayVisible
+        ? "Loading checklist data..."
+        : (isLoadedPeriodChecklistEmpty ? "Generating checklist preview..." : "Updating checklist preview..."),
+      cacheChipRefreshing: "Loading latest checklist data...",
+    },
+  );
 
   const applySearchKeyword = useCallback((rawValue: string) => {
     const normalized = asString(rawValue);
@@ -6301,7 +6320,10 @@ export default function InvoiceChecklistPage() {
           </div>
         </DialogContent>
       </Dialog>
-      <PageLoadingLayer active={isPageRefreshOverlayVisible} message={pageRefreshOverlayMessage} />
+      <PageLoadingLayer
+        active={loadingContract.pageOverlayActive}
+        message={loadingContract.pageOverlayMessage}
+      />
 
     </AppPageLayout>
   );

@@ -9,6 +9,7 @@ import { getAccessAssignments, roleLabel } from "@shared/auth/accessAssignments"
 import { useApiRequest } from "@shared/hooks/useApiRequest";
 import { MIN_PASSWORD_LENGTH, PASSWORD_RULE_MESSAGE, validatePasswordAgainstPolicy } from "@shared/auth/passwordRules";
 import { useAuth } from "@shared/auth/useAuth";
+import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
 
 type ProfileDraft = {
   firstName: string;
@@ -241,14 +242,18 @@ export default function ProfilePage() {
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1040px] flex-col gap-6">
-      <PageBanner
-        eyebrow="TheSphereWorks"
-        title="My Profile"
-        description="Manage your personal profile and account security for workspace access."
-        gradientVariant="workspace"
-        className="[&>div.relative]:min-h-[132px] [&>div.relative]:py-6 md:[&>div.relative]:min-h-[156px] md:[&>div.relative]:py-8"
-      />
+    <AppPageLayout
+      className="max-w-[1040px] gap-6 pb-5"
+      banner={(
+        <PageBanner
+          eyebrow="TheSphereWorks"
+          title="My Profile"
+          description="Manage your personal profile and account security for workspace access."
+          gradientVariant="workspace"
+          className="[&>div.relative]:min-h-[132px] [&>div.relative]:py-6 md:[&>div.relative]:min-h-[156px] md:[&>div.relative]:py-8"
+        />
+      )}
+    >
 
       <section className="rounded-3xl border border-blue-100/90 bg-white/95 p-5 shadow-soft md:p-6">
         <div className="flex items-center gap-2">
@@ -426,6 +431,6 @@ export default function ProfilePage() {
           ) : null}
         </section>
       </div>
-    </div>
+    </AppPageLayout>
   );
 }

@@ -15,7 +15,6 @@ import type {
   StationSearchFormValues,
 } from "@/components/stations/types";
 import { Button } from "@/components/ui/button";
-import { CacheStatusChip } from "@/components/ui/cache-status-chip";
 import { useApiRequest } from "@/hooks/useApiRequest";
 import { usePersistentState } from "@/hooks/usePersistentState";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
@@ -29,7 +28,11 @@ import { buildAuthHeaders as buildSharedAuthHeaders } from "@shared/api/authHead
 import { useAuth } from "@shared/auth/useAuth";
 import { shouldProtectFrontendAuth } from "@shared/auth/guards";
 import { hasAppEditAccess } from "@shared/auth/permissions";
-import { SectionLoadingOverlay } from "@shared/components/status/LoadingOverlay";
+import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
+import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
+import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
+import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
+import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
 import { shouldFetchSubmittedSearchNetwork } from "@shared/search";
 import { hasAtLeastOneSearchCriterion } from "@shared/search";
 import { type CachePolicy } from "@shared/cache";
@@ -37,9 +40,6 @@ import { type CachePolicy } from "@shared/cache";
 const STATIONS_SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
 const STATIONS_SEARCH_COLLECTION_PREFIX = "stations:search:";
 const STATIONS_SEARCH_COLLECTION_LIMIT = 40;
-const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspace.sidebar.collapsed";
-const LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY = "tradsphere:ui:sidebarCollapsed:v1";
-const SIDEBAR_COLLAPSED_EVENT = "workspace-sidebar-collapsed-change";
 const STATIONS_SEARCH_DRAFT_STORAGE_KEY = "tradsphere.stations.searchDraft.v1";
 const STATIONS_SUBMITTED_SEARCH_STORAGE_KEY = "tradsphere.stations.submittedSearch.v1";
 const STATIONS_GROUP_OPEN_STORAGE_KEY = "tradsphere.stations.groupOpen.v1";
@@ -577,22 +577,6 @@ function getErrorMessage(error: unknown, fallback: string): string {
   return fallback;
 }
 
-function readSidebarCollapsedState(): boolean {
-  if (typeof window === "undefined") {
-    return false;
-  }
-
-  try {
-    const nextValue = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY);
-    if (nextValue !== null) {
-      return nextValue === "1";
-    }
-    return window.localStorage.getItem(LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
 function chunkStrings(values: string[], size: number): string[][] {
   if (values.length === 0 || size <= 0) {
     return [];
@@ -757,15 +741,15 @@ export default function StationsPage() {
 
   const [state, setState] = useState<SearchUiState>(() => resolveInitialStationsSearchView(submittedSearch).state);
   const [error, setError] = useState<string | null>(null);
+  const [hasHydratedPageState, setHasHydratedPageState] = useState(() => !submittedSearch);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isChipRefreshOverlayVisible, setIsChipRefreshOverlayVisible] = useState(false);
   const [stations, setStations] = useState<StationRecord[]>(() => resolveInitialStationsSearchView(submittedSearch).stations);
   const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(() => resolveInitialStationsSearchView(submittedSearch).cacheStatus);
 
   const [isStationModalOpen, setIsStationModalOpen] = useState(false);
   const [stationModalMode, setStationModalMode] = useState<StationModalMode>("create");
   const [stationModalCode, setStationModalCode] = useState<string | null>(null);
-
-  const [sidebarVisuallyExpanded, setSidebarVisuallyExpanded] = useState<boolean>(() => !readSidebarCollapsedState());
 
   const requestTokenRef = useRef(0);
   const inFlightRef = useRef<Record<string, Promise<StationRecord[]>>>({});
@@ -776,8 +760,6 @@ export default function StationsPage() {
   const canClearDraft = useMemo(() => hasAtLeastOneSearchCriterion(normalizedDraft), [normalizedDraft]);
   const draftSearchResult = useMemo(() => buildSearchSubmission(draft), [draft]);
   const canSubmitSearch = draftSearchResult.ok;
-  const shouldShowBlockingResultsOverlay = state === "loading" && stations.length === 0;
-
   const cacheStatusText = isRefreshing
     ? "Refreshing..."
     : !isOnline && cacheStatus
@@ -787,6 +769,26 @@ export default function StationsPage() {
       : "No cached data yet";
 
   const showCacheChip = Boolean(submittedSearch && !isStationModalOpen);
+  const loadingContract = resolveSharedLoadingContract(
+    {
+      pageInitializing: !hasHydratedPageState,
+      cacheChipRefreshing: isChipRefreshOverlayVisible,
+      searchLoading: state === "loading" || isRefreshing,
+    },
+    {
+      pageInitializing: "Preparing stations workspace...",
+      cacheChipRefreshing: "Refreshing stations...",
+      searchLoading: isRefreshing ? "Refreshing results..." : "Searching stations...",
+    },
+  );
+  const pageMessages: StackMessage[] = [];
+  if (refreshMessage) {
+    pageMessages.push({
+      id: "stations-refresh-message",
+      variant: refreshMessage.toLowerCase().includes("offline") ? "info" : "warning",
+      message: refreshMessage,
+    });
+  }
 
   useEffect(() => {
     if (!groups.length) {
@@ -806,38 +808,6 @@ export default function StationsPage() {
       return changed ? next : current;
     });
   }, [groups, setGroupOpenState]);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const handleStorage = () => {
-      const collapsed = readSidebarCollapsedState();
-      setSidebarVisuallyExpanded(!collapsed);
-    };
-
-    const handleSidebarEvent = (event: Event) => {
-      const customEvent = event as CustomEvent<{ collapsed?: boolean; visuallyExpanded?: boolean }>;
-      if (typeof customEvent.detail?.visuallyExpanded === "boolean") {
-        setSidebarVisuallyExpanded(customEvent.detail.visuallyExpanded);
-        return;
-      }
-      if (typeof customEvent.detail?.collapsed === "boolean") {
-        setSidebarVisuallyExpanded(!customEvent.detail.collapsed);
-        return;
-      }
-      const collapsed = readSidebarCollapsedState();
-      setSidebarVisuallyExpanded(!collapsed);
-    };
-
-    window.addEventListener("storage", handleStorage);
-    window.addEventListener(SIDEBAR_COLLAPSED_EVENT, handleSidebarEvent as EventListener);
-    return () => {
-      window.removeEventListener("storage", handleStorage);
-      window.removeEventListener(SIDEBAR_COLLAPSED_EVENT, handleSidebarEvent as EventListener);
-    };
-  }, []);
 
   async function fetchStationCodesByContactQuery(contactQuery: string): Promise<string[]> {
     const normalizedQuery = asString(contactQuery);
@@ -1023,6 +993,7 @@ export default function StationsPage() {
       setStations([]);
       setCacheStatus(null);
       setRefreshMessage(null);
+      setHasHydratedPageState(true);
       return;
     }
 
@@ -1059,6 +1030,7 @@ export default function StationsPage() {
 
     const shouldFetch = shouldFetchSubmittedSearchNetwork(options.policy, effectiveSnapshot);
     if (!shouldFetch) {
+      setHasHydratedPageState(true);
       return;
     }
 
@@ -1066,11 +1038,13 @@ export default function StationsPage() {
       if (localCacheResult.stations.length > 0) {
         setRefreshMessage("You're offline. Showing cached stations.");
         setIsRefreshing(false);
+        setHasHydratedPageState(true);
         return;
       }
       setState("error");
       setError("You're offline. Connect to the internet to load stations.");
       setIsRefreshing(false);
+      setHasHydratedPageState(true);
       return;
     }
 
@@ -1125,6 +1099,7 @@ export default function StationsPage() {
       }
       if (requestToken === requestTokenRef.current) {
         setIsRefreshing(false);
+        setHasHydratedPageState(true);
       }
     }
   }
@@ -1198,11 +1173,16 @@ export default function StationsPage() {
     setIsRefreshing(false);
   }
 
-  function handleRefreshSearch() {
+  async function handleRefreshSearch() {
     if (!submittedSearch) {
       return;
     }
-    void loadSearchData({ policy: "network-only" }, submittedSearch);
+    setIsChipRefreshOverlayVisible(true);
+    try {
+      await loadSearchData({ policy: "network-only" }, submittedSearch);
+    } finally {
+      setIsChipRefreshOverlayVisible(false);
+    }
   }
 
   function openCreateStationModal() {
@@ -1246,14 +1226,30 @@ export default function StationsPage() {
   );
 
   return (
-    <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5 pb-12">
-      <PageBanner
-        eyebrow="TradSphere"
-        title="Stations"
-        description="Search stations, manage delivery methods, and review contacts."
-        gradientVariant="app"
-        action={<Button onClick={openCreateStationModal} disabled={!canEditTradsphere}>Add Station</Button>}
-      />
+    <AppPageLayout
+      className="pb-5"
+      pageMessages={<PageMessageStack messages={pageMessages} />}
+      banner={(
+        <PageBanner
+          eyebrow="TradSphere"
+          title="Stations"
+          description="Search stations, manage delivery methods, and review contacts."
+          gradientVariant="app"
+          action={<Button onClick={openCreateStationModal} disabled={!canEditTradsphere}>Add Station</Button>}
+        />
+      )}
+      footer={showCacheChip ? (
+        <PageCacheFooter
+          text={cacheStatusText}
+          onRefresh={handleRefreshSearch}
+          disabled={isRefreshing || isChipRefreshOverlayVisible || !isOnline}
+          refreshing={isRefreshing || isChipRefreshOverlayVisible}
+          refreshLabel="Refresh stations"
+          tooltipText={isOnline ? "Click to refresh last submitted search" : "Offline. Reconnect to refresh stations."}
+          containerClassName="w-full"
+        />
+      ) : null}
+    >
 
       <StationSearchForm
         value={draft}
@@ -1267,10 +1263,6 @@ export default function StationsPage() {
         resultText={resultText}
         message={searchMessage}
       />
-
-      {refreshMessage ? (
-        <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">{refreshMessage}</p>
-      ) : null}
 
       <div className="relative">
         <StationResults
@@ -1287,29 +1279,11 @@ export default function StationsPage() {
           onEdit={openEditStationModal}
         />
 
-        {shouldShowBlockingResultsOverlay ? (
-          <SectionLoadingOverlay message="Searching stations..." />
-        ) : null}
+        <SectionLoadingLayer
+          active={loadingContract.sectionOverlayActive}
+          message={loadingContract.sectionOverlayMessage}
+        />
       </div>
-
-      {showCacheChip ? (
-        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40">
-          <div className={`mx-4 sm:mx-6 lg:mr-6 ${sidebarVisuallyExpanded ? "lg:ml-[18.75rem]" : "lg:ml-[6.5rem]"}`}>
-            <div className="mx-auto w-full max-w-[1600px]">
-              <CacheStatusChip
-                text={cacheStatusText}
-                onRefresh={handleRefreshSearch}
-                disabled={isRefreshing || !isOnline}
-                refreshing={isRefreshing}
-                refreshLabel="Refresh stations"
-                tooltipText={isOnline ? "Click to refresh last submitted search" : "Offline. Reconnect to refresh stations."}
-                containerClassName="pointer-events-auto"
-                className="max-w-[min(90vw,34rem)]"
-              />
-            </div>
-          </div>
-        </div>
-      ) : null}
 
       <StationModal
         open={isStationModalOpen}
@@ -1327,6 +1301,11 @@ export default function StationsPage() {
         headers={requestHeaders}
         onSuccess={handleStationSaved}
       />
-    </div>
+
+      <PageLoadingLayer
+        active={loadingContract.pageOverlayActive}
+        message={loadingContract.pageOverlayMessage}
+      />
+    </AppPageLayout>
   );
 }

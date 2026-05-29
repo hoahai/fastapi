@@ -39,8 +39,11 @@ import {
 } from "@shiftzy/lib/shiftzyApi";
 import { hasAppEditAccess } from "@shared/auth/permissions";
 import { useAuth } from "@shared/auth/useAuth";
-import { CacheStatusChip } from "@shared/components/status/CacheStatusChip";
-import { PageLoadingOverlay } from "@shared/components/status/LoadingOverlay";
+import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
+import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
+import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
+import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
+import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
 import { FormRow } from "@shared/components/form/FormRow";
 import { readCacheSnapshot, setCacheData, type CacheSource } from "@shared/cache";
 
@@ -67,28 +70,10 @@ type WeekDay = {
 };
 
 const WEEKDAY_SHORT = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"] as const;
-const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspace.sidebar.collapsed";
-const LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY = "tradsphere:ui:sidebarCollapsed:v1";
-const SIDEBAR_COLLAPSED_EVENT = "workspace-sidebar-collapsed-change";
 const SHIFTZY_CACHE_NAMESPACE = "shiftzy:cache:";
 const SHIFTZY_BOARD_CACHE_KEY = "board:weekly:v1";
 const SHIFTZY_WEEK_SCHEDULE_CACHE_KEY_PREFIX = "schedules:week:";
 const SHIFTZY_BOARD_CACHE_TTL_MS = 10 * 60 * 1000;
-
-function readSidebarCollapsedState(): boolean {
-  if (typeof window === "undefined") {
-    return false;
-  }
-  try {
-    const nextValue = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY);
-    if (nextValue !== null) {
-      return nextValue === "1";
-    }
-    return window.localStorage.getItem(LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
 
 function parseIsoDate(value: string): Date {
   return new Date(`${value}T00:00:00`);
@@ -248,6 +233,7 @@ export default function ShiftzySchedulePage() {
   const [loadingPage, setLoadingPage] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [backgroundRefreshing, setBackgroundRefreshing] = useState(false);
+  const [isChipRefreshOverlayVisible, setIsChipRefreshOverlayVisible] = useState(false);
   const [savingChanges, setSavingChanges] = useState(false);
   const [draggingScheduleId, setDraggingScheduleId] = useState<string | null>(null);
   const [dropTargetDate, setDropTargetDate] = useState<string | null>(null);
@@ -265,7 +251,6 @@ export default function ShiftzySchedulePage() {
   const [duplicateToWeekNo, setDuplicateToWeekNo] = useState<number | null>(null);
   const [duplicatingSchedules, setDuplicatingSchedules] = useState(false);
   const [exportingSchedulesPdf, setExportingSchedulesPdf] = useState(false);
-  const [sidebarVisuallyExpanded, setSidebarVisuallyExpanded] = useState<boolean>(() => !readSidebarCollapsedState());
   const baseSchedulesByIdRef = useRef<Record<string, ShiftzySchedule>>({});
   const schedulesRef = useRef<ShiftzySchedule[]>([]);
   const pendingScheduleIdsRef = useRef<Record<string, true>>({});
@@ -713,31 +698,6 @@ export default function ShiftzySchedulePage() {
     void loadInitialData();
   }, [auth.status, auth.tenantSlug, hasSessionToken]);
 
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    const handleStorage = () => setSidebarVisuallyExpanded(!readSidebarCollapsedState());
-    const handleSidebarEvent = (event: Event) => {
-      const customEvent = event as CustomEvent<{ collapsed?: boolean; visuallyExpanded?: boolean }>;
-      if (typeof customEvent.detail?.visuallyExpanded === "boolean") {
-        setSidebarVisuallyExpanded(customEvent.detail.visuallyExpanded);
-        return;
-      }
-      if (typeof customEvent.detail?.collapsed === "boolean") {
-        setSidebarVisuallyExpanded(!customEvent.detail.collapsed);
-        return;
-      }
-      setSidebarVisuallyExpanded(!readSidebarCollapsedState());
-    };
-    window.addEventListener("storage", handleStorage);
-    window.addEventListener(SIDEBAR_COLLAPSED_EVENT, handleSidebarEvent as EventListener);
-    return () => {
-      window.removeEventListener("storage", handleStorage);
-      window.removeEventListener(SIDEBAR_COLLAPSED_EVENT, handleSidebarEvent as EventListener);
-    };
-  }, []);
-
   useEffect(() => () => {
     if (topActionMenuCloseTimeoutRef.current !== null) {
       window.clearTimeout(topActionMenuCloseTimeoutRef.current);
@@ -1071,15 +1031,65 @@ export default function ShiftzySchedulePage() {
     }
     return `Data source: ${cacheStatus.source}. Last updated ${formatRelativeTime(cacheStatus.fetchedAt)}.`;
   }, [backgroundRefreshing, cacheStatus, refreshing]);
+  const pageMessages: StackMessage[] = [];
+  if (refreshMessage) {
+    pageMessages.push({
+      id: "shiftzy-schedule-refresh-message",
+      variant: refreshMessage.toLowerCase().includes("offline") ? "info" : "warning",
+      message: refreshMessage,
+    });
+  }
+  const loadingContract = resolveSharedLoadingContract(
+    {
+      pageInitializing: !hasSessionToken || loadingPage,
+      pageRefreshing: refreshing || backgroundRefreshing,
+      cacheChipRefreshing: isChipRefreshOverlayVisible,
+    },
+    {
+      pageInitializing: !hasSessionToken
+        ? "Preparing authenticated session..."
+        : "Preparing Shiftzy schedule workspace...",
+      pageRefreshing: "Refreshing Shiftzy board...",
+      cacheChipRefreshing: "Refreshing Shiftzy board...",
+    },
+  );
+
+  async function handleRefreshFromChip() {
+    if (!selectedWeekNo) {
+      return;
+    }
+    setIsChipRefreshOverlayVisible(true);
+    try {
+      await loadSchedulesForWeek(selectedWeekNo, true);
+    } finally {
+      setIsChipRefreshOverlayVisible(false);
+    }
+  }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5 pb-12">
-      <PageBanner
-        eyebrow="Shiftzy"
-        title="Schedules"
-        description="Manage weekly workforce schedules by day, then update any shift card in-place."
-        gradientVariant="shiftzy"
-      />
+    <AppPageLayout
+      className="pb-5"
+      pageMessages={<PageMessageStack messages={pageMessages} />}
+      banner={(
+        <PageBanner
+          eyebrow="Shiftzy"
+          title="Schedules"
+          description="Manage weekly workforce schedules by day, then update any shift card in-place."
+          gradientVariant="shiftzy"
+        />
+      )}
+      footer={selectedWeekNo ? (
+        <PageCacheFooter
+          text={cacheStatusText}
+          onRefresh={handleRefreshFromChip}
+          disabled={refreshing || loadingPage || savingChanges || hasPendingChanges || isChipRefreshOverlayVisible}
+          refreshing={refreshing || savingChanges || isChipRefreshOverlayVisible}
+          refreshLabel="Refresh Shiftzy board"
+          tooltipText="Reload schedules for selected week"
+          containerClassName="w-full"
+        />
+      ) : null}
+    >
       <FloatingActionMenu
         open={topActionMenuOpen}
         align="left"
@@ -1184,10 +1194,6 @@ export default function ShiftzySchedulePage() {
         </div>
 
         <div className="mt-4 border-t border-slate-200/80 pt-4">
-          {refreshMessage ? (
-            <p className="mb-3 rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">{refreshMessage}</p>
-          ) : null}
-
           {state === "error" ? (
             <EmptyPanel
               icon={<AlertCircle className="size-5 text-rose-500" />}
@@ -1400,34 +1406,8 @@ export default function ShiftzySchedulePage() {
             icon={<Users className="size-4 text-blue-600" />}
           />
         </div>
-        {(loadingPage || refreshing || backgroundRefreshing) ? (
-          <div className="absolute inset-0 z-10 flex items-center justify-center rounded-2xl bg-white/70 backdrop-blur-[1px]">
-            <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-medium text-slate-700 shadow-soft">
-              <Loader2 className="size-4 animate-spin text-blue-600" />
-              <span>Refreshing summary...</span>
-            </div>
-          </div>
-        ) : null}
+        <SectionLoadingLayer active={loadingContract.sectionOverlayActive} message={loadingContract.sectionOverlayMessage} />
       </section>
-
-      {selectedWeekNo ? (
-        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40">
-          <div className={`mx-4 sm:mx-6 lg:mr-6 ${sidebarVisuallyExpanded ? "lg:ml-[18.75rem]" : "lg:ml-[6.5rem]"}`}>
-            <div className="mx-auto w-full max-w-[1600px]">
-              <CacheStatusChip
-                text={cacheStatusText}
-                onRefresh={() => void loadSchedulesForWeek(selectedWeekNo, true)}
-                disabled={refreshing || loadingPage || savingChanges || hasPendingChanges}
-                refreshing={refreshing || savingChanges}
-                refreshLabel="Refresh Shiftzy board"
-                tooltipText="Reload schedules for selected week"
-                containerClassName="pointer-events-auto"
-                className="max-w-[min(90vw,34rem)]"
-              />
-            </div>
-          </div>
-        </div>
-      ) : null}
 
       <ShiftzyScheduleEditModal
         open={isEditModalOpen}
@@ -1515,25 +1495,12 @@ export default function ShiftzySchedulePage() {
         </DialogContent>
       </Dialog>
 
-      {loadingPage ? (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-slate-950/25 backdrop-blur-[1.5px]">
-          <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-medium text-slate-700 shadow-soft">
-            <Loader2 className="size-4 animate-spin text-blue-600" />
-            <span>Loading Shiftzy board...</span>
-          </div>
-        </div>
-      ) : null}
-
-      {!hasSessionToken ? (
-        <div className="fixed inset-0 z-30 flex items-center justify-center bg-slate-950/25 backdrop-blur-[1.5px]">
-          <div className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-medium text-slate-700 shadow-soft">
-            <Loader2 className="size-4 animate-spin text-blue-600" />
-            <span>Preparing authenticated session...</span>
-          </div>
-        </div>
-      ) : null}
-      {exportingSchedulesPdf ? <PageLoadingOverlay className="z-40" message="Generating PDF preview..." /> : null}
-    </div>
+      <PageLoadingLayer
+        active={loadingContract.pageOverlayActive}
+        message={loadingContract.pageOverlayMessage}
+      />
+      <PageLoadingLayer active={exportingSchedulesPdf} className="z-40" message="Generating PDF preview..." />
+    </AppPageLayout>
   );
 }
 

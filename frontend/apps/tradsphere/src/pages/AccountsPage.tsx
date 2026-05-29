@@ -53,7 +53,6 @@ import type {
 import { UnsavedChangesDialog } from "@/components/ui/unsaved-changes-dialog";
 import { useToast } from "@/components/ui/toast";
 import { useApiRequest, type ApiRequestOptions } from "@/hooks/useApiRequest";
-import { usePersistentState } from "@/hooks/usePersistentState";
 import { useTradsphereAccountSelections } from "@/hooks/useTradsphereAccountSelections";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { useDirtyRefreshGuard } from "@/hooks/useDirtyRefreshGuard";
@@ -68,11 +67,13 @@ import { TRADSPHERE_CACHE_TTL_MS, shouldFetchNetwork, type CachePolicy } from "@
 import { useAuth } from "@shared/auth/useAuth";
 import { shouldProtectFrontendAuth } from "@shared/auth/guards";
 import { hasAppEditAccess } from "@shared/auth/permissions";
+import { useScopedPersistentState } from "@shared/hooks/useScopedPersistentState";
 import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
 import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { SectionCard } from "@shared/components/layout/SectionCard";
 import { PageLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
+import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
 
 const scheduleColumns: ColumnDef<EsnumItem>[] = [{ accessorKey: "estnum" }, { accessorKey: "name" }];
 
@@ -80,9 +81,11 @@ const stationColumns: ColumnDef<StationItem>[] = [{ accessorKey: "code" }, { acc
 
 const LOAD_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.MAIN_LOAD;
 const SCHEDULE_IMPORT_URL = "/api/tradsphere/v1/schedules/import/file?skipBlankLines=false";
-const HOME_SELECTED_ACCOUNT_STORAGE_KEY = "tradsphere.home.selectedAccount";
-const HOME_SCHEDULE_SEARCH_STORAGE_KEY = "tradsphere.home.searchText.schedule";
-const HOME_STATION_SEARCH_STORAGE_KEY = "tradsphere.home.searchText.station";
+const TRADSPHERE_ACCOUNTS_PAGE_CODE = "home";
+const HOME_SELECTED_ACCOUNT_STATE_KEY = "selectedAccountCode";
+const HOME_SCHEDULE_SEARCH_STATE_KEY = "scheduleSearch";
+const HOME_STATION_SEARCH_STATE_KEY = "stationSearch";
+const HOME_HAS_LOADED_DASHBOARD_STATE_KEY = "hasLoadedDashboard";
 const ESTNUM_BATCH_SIZE = 25;
 const ESTNUM_SCROLL_END_THRESHOLD_PX = 24;
 
@@ -134,16 +137,30 @@ function App() {
   const { requestJson } = useApiRequest();
   const auth = useAuth();
   const { isOnline } = useOnlineStatus();
-  const [selectedAccountCode, setSelectedAccountCode] = usePersistentState<string>(
-    HOME_SELECTED_ACCOUNT_STORAGE_KEY,
+  const [selectedAccountCode, setSelectedAccountCode] = useScopedPersistentState<string>(
+    {
+      appCode: "tradsphere",
+      pageCode: TRADSPHERE_ACCOUNTS_PAGE_CODE,
+      stateKey: HOME_SELECTED_ACCOUNT_STATE_KEY,
+    },
     "",
-    { storage: "session", validate: (value: unknown): value is string => typeof value === "string" },
+    { validate: (value: unknown): value is string => typeof value === "string" },
   );
 
   const [isLoadingAccount, setIsLoadingAccount] = useState(false);
   const [isRefreshingAccount, setIsRefreshingAccount] = useState(false);
+  const [isLoadActionOverlayVisible, setIsLoadActionOverlayVisible] = useState(false);
+  const [isChipRefreshOverlayVisible, setIsChipRefreshOverlayVisible] = useState(false);
   const [loadError, setLoadError] = useState<string | null>(null);
-  const [hasLoadedDashboard, setHasLoadedDashboard] = useState(false);
+  const [hasLoadedDashboard, setHasLoadedDashboard] = useScopedPersistentState<boolean>(
+    {
+      appCode: "tradsphere",
+      pageCode: TRADSPHERE_ACCOUNTS_PAGE_CODE,
+      stateKey: HOME_HAS_LOADED_DASHBOARD_STATE_KEY,
+    },
+    false,
+    { validate: (value: unknown): value is boolean => typeof value === "boolean" },
+  );
   const [dashboardCacheStatus, setDashboardCacheStatus] = useState<CacheStatus | null>(null);
 
   const [accountOriginal, setAccountOriginal] = useState<AccountInfo | null>(null);
@@ -152,15 +169,23 @@ function App() {
   const [esnums, setEsnums] = useState<EsnumItem[]>([]);
   const [stations, setStations] = useState<StationItem[]>([]);
 
-  const [scheduleSearch, setScheduleSearch] = usePersistentState<string>(
-    HOME_SCHEDULE_SEARCH_STORAGE_KEY,
+  const [scheduleSearch, setScheduleSearch] = useScopedPersistentState<string>(
+    {
+      appCode: "tradsphere",
+      pageCode: TRADSPHERE_ACCOUNTS_PAGE_CODE,
+      stateKey: HOME_SCHEDULE_SEARCH_STATE_KEY,
+    },
     "",
-    { storage: "session", validate: (value: unknown): value is string => typeof value === "string" },
+    { validate: (value: unknown): value is string => typeof value === "string" },
   );
-  const [stationSearch, setStationSearch] = usePersistentState<string>(
-    HOME_STATION_SEARCH_STORAGE_KEY,
+  const [stationSearch, setStationSearch] = useScopedPersistentState<string>(
+    {
+      appCode: "tradsphere",
+      pageCode: TRADSPHERE_ACCOUNTS_PAGE_CODE,
+      stateKey: HOME_STATION_SEARCH_STATE_KEY,
+    },
     "",
-    { storage: "session", validate: (value: unknown): value is string => typeof value === "string" },
+    { validate: (value: unknown): value is string => typeof value === "string" },
   );
 
   const [isSaving, setIsSaving] = useState(false);
@@ -305,6 +330,8 @@ function App() {
     setSaveError(null);
     setDashboardCacheStatus(null);
     setIsRefreshingAccount(false);
+    setIsLoadActionOverlayVisible(false);
+    setIsChipRefreshOverlayVisible(false);
     setIsEstimateNumberModalOpen(false);
     setEstimateModalMode("create");
     setEstimateModalInitialData(null);
@@ -347,6 +374,24 @@ function App() {
     }
     applySelections(accountSelections);
   }, [accountSelections, isLoadingSelections, selectedAccountCode]);
+
+  useEffect(() => {
+    if (!selectedAccountCode || !hasLoadedDashboard || accountOriginal) {
+      return;
+    }
+    const loadCacheKey = getLoadCacheKey(selectedAccountCode);
+    const cacheSnapshot = readBrowserCacheSnapshot<unknown>(loadCacheKey);
+    const cachedDashboard = normalizeCachedMainLoadResponse(cacheSnapshot?.data);
+    if (!cachedDashboard || !shouldUseCachedLoad(cachedDashboard, selectedAccountCode)) {
+      setHasLoadedDashboard(false);
+      return;
+    }
+    applyLoadedData(cachedDashboard);
+    setDashboardCacheStatus({
+      source: "cache",
+      fetchedAt: cacheSnapshot?.fetchedAt ?? Date.now(),
+    });
+  }, [accountOriginal, hasLoadedDashboard, selectedAccountCode, setHasLoadedDashboard]);
 
   useEffect(() => {
     if (!hasDeferredDashboardUpdate) {
@@ -461,17 +506,22 @@ function App() {
   }
 
   async function handleLoadAccount() {
+    setIsLoadActionOverlayVisible(true);
     const isSameLoadedAccount =
       hasLoadedDashboard &&
       accountOriginal?.code?.trim().toUpperCase() === selectedAccountCode.trim().toUpperCase();
-    const result = await loadAccountDashboard(isSameLoadedAccount ? "network-only" : "cache-first");
-    if (result.success && selectedAccountCode) {
-      if (isSameLoadedAccount) {
-        toast.success("Dashboard refreshed", `Fetched fresh data for ${selectedAccountCode}.`);
-      } else {
-        const suffix = result.source === "cache" ? " from cache." : ".";
-        toast.success("Account loaded", `Loaded dashboard for ${selectedAccountCode}${suffix}`);
+    try {
+      const result = await loadAccountDashboard(isSameLoadedAccount ? "network-only" : "cache-first");
+      if (result.success && selectedAccountCode) {
+        if (isSameLoadedAccount) {
+          toast.success("Dashboard refreshed", `Fetched fresh data for ${selectedAccountCode}.`);
+        } else {
+          const suffix = result.source === "cache" ? " from cache." : ".";
+          toast.success("Account loaded", `Loaded dashboard for ${selectedAccountCode}${suffix}`);
+        }
       }
+    } finally {
+      setIsLoadActionOverlayVisible(false);
     }
   }
 
@@ -479,9 +529,14 @@ function App() {
     if (!selectedAccountCode) {
       return;
     }
-    const result = await loadAccountDashboard("network-only");
-    if (result.success) {
-      toast.success("Dashboard refreshed", `Fetched fresh data for ${selectedAccountCode}.`);
+    setIsChipRefreshOverlayVisible(true);
+    try {
+      const result = await loadAccountDashboard("network-only");
+      if (result.success) {
+        toast.success("Dashboard refreshed", `Fetched fresh data for ${selectedAccountCode}.`);
+      }
+    } finally {
+      setIsChipRefreshOverlayVisible(false);
     }
   }
 
@@ -780,14 +835,22 @@ function App() {
   const pageCacheStatusText = dashboardStatusText ?? selectionsStatusText;
   const shouldBlockForSelectionsLoad = isLoadingSelections && accountSelections.length === 0;
   const shouldBlockForAccountLoad = isLoadingAccount && !hasLoadedDashboard;
-  const isPageBusy = shouldBlockForSelectionsLoad || shouldBlockForAccountLoad || isSaving || isRefreshingAccount;
-  const pageBusyMessage = isSaving
-    ? "Saving account changes..."
-    : isRefreshingAccount
-      ? "Refreshing account dashboard..."
-    : shouldBlockForAccountLoad
-      ? "Loading account dashboard..."
-    : "Loading account selections...";
+  const pageLoadingContract = resolveSharedLoadingContract(
+    {
+      pageInitializing: shouldBlockForSelectionsLoad || shouldBlockForAccountLoad,
+      pageRefreshing: isSaving || isLoadActionOverlayVisible || isRefreshingAccount || isLoadingAccount,
+      cacheChipRefreshing: isChipRefreshOverlayVisible,
+    },
+    {
+      pageInitializing: shouldBlockForAccountLoad
+        ? "Loading account dashboard..."
+        : "Loading account selections...",
+      pageRefreshing: isSaving
+        ? "Saving account changes..."
+        : "Refreshing account dashboard...",
+      cacheChipRefreshing: "Refreshing account dashboard...",
+    },
+  );
   const pageMessages: StackMessage[] = [];
   if (loadError) {
     pageMessages.push({
@@ -1155,7 +1218,7 @@ function App() {
         invalidatedEstnum={invalidatedScheduleEstnum}
       />
 
-      <PageLoadingLayer active={isPageBusy} message={pageBusyMessage} />
+      <PageLoadingLayer active={pageLoadingContract.pageOverlayActive} message={pageLoadingContract.pageOverlayMessage} />
     </AppPageLayout>
   );
 }

@@ -13,10 +13,8 @@ import type {
 } from "@/components/contacts/types";
 import { PageBanner } from "@/components/layout/PageBanner";
 import { Button } from "@/components/ui/button";
-import { CacheStatusChip } from "@/components/ui/cache-status-chip";
 import { useToast } from "@/components/ui/toast";
 import { useApiRequest } from "@/hooks/useApiRequest";
-import { usePersistentState } from "@/hooks/usePersistentState";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import {
   listBrowserCacheSnapshotsByPrefix,
@@ -29,18 +27,21 @@ import { shouldFetchNetwork, type CachePolicy } from "@shared/cache";
 import { useAuth } from "@shared/auth/useAuth";
 import { shouldProtectFrontendAuth } from "@shared/auth/guards";
 import { hasAppEditAccess } from "@shared/auth/permissions";
-import { SectionLoadingOverlay } from "@shared/components/status/LoadingOverlay";
+import { useScopedPersistentState } from "@shared/hooks/useScopedPersistentState";
+import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
+import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
+import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
+import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
+import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
 import { hasAtLeastOneSearchCriterion, shouldFetchSubmittedSearchNetwork } from "@shared/search";
 
 const CONTACTS_SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
 const CONTACT_DETAIL_CACHE_TTL_MS = 5 * 60 * 1000;
 const CONTACTS_SEARCH_COLLECTION_PREFIX = "contacts:search:";
 const CONTACTS_SEARCH_COLLECTION_LIMIT = 40;
-const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspace.sidebar.collapsed";
-const LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY = "tradsphere:ui:sidebarCollapsed:v1";
-const SIDEBAR_COLLAPSED_EVENT = "workspace-sidebar-collapsed-change";
-const CONTACTS_SEARCH_DRAFT_STORAGE_KEY = "tradsphere.contacts.searchDraft.v1";
-const CONTACTS_SUBMITTED_SEARCH_STORAGE_KEY = "tradsphere.contacts.submittedSearch.v1";
+const CONTACTS_PAGE_CODE = "contacts";
+const CONTACTS_SEARCH_DRAFT_STATE_KEY = "searchDraft";
+const CONTACTS_SUBMITTED_SEARCH_STATE_KEY = "submittedSearch";
 
 type SearchUiState = "idle" | "loading" | "ready" | "empty" | "error";
 
@@ -207,9 +208,16 @@ function encodeKeyPart(value: string): string {
   return encodeURIComponent(value.trim().toLowerCase());
 }
 
-function buildSearchCacheKey(params: ContactSearchFormValues): string {
+function buildSearchScopeKey(userKey: string, tenantSlug: string): string {
+  const normalizedUserKey = encodeKeyPart(String(userKey || "").trim().toLowerCase() || "anonymous");
+  const normalizedTenantSlug = encodeKeyPart(String(tenantSlug || "").trim().toLowerCase() || "default");
+  return `tenant=${normalizedTenantSlug}:user=${normalizedUserKey}`;
+}
+
+function buildSearchCacheKey(params: ContactSearchFormValues, scopeKey: string): string {
   return [
     "contacts:search",
+    scopeKey || "tenant=default:user=anonymous",
     `name=${encodeKeyPart(params.name)}`,
     `email=${encodeKeyPart(params.email)}`,
     `phone=${encodeKeyPart(params.phone)}`,
@@ -320,7 +328,7 @@ function normalizeContactRecords(items: unknown): ContactRecord[] {
   return normalized;
 }
 
-function buildSearchSubmission(draft: ContactSearchFormValues): BuildSearchResult {
+function buildSearchSubmission(draft: ContactSearchFormValues, scopeKey: string): BuildSearchResult {
   const normalized = normalizeSearchForm(draft);
   const hasAnyInput = hasAtLeastOneSearchCriterion(normalized);
 
@@ -336,7 +344,7 @@ function buildSearchSubmission(draft: ContactSearchFormValues): BuildSearchResul
     ok: true,
     submitted: {
       params: normalized,
-      cacheKey: buildSearchCacheKey(normalized),
+      cacheKey: buildSearchCacheKey(normalized, scopeKey),
     },
   };
 }
@@ -540,22 +548,6 @@ function getErrorMessage(error: unknown, fallback: string): string {
     return error.message.trim();
   }
   return fallback;
-}
-
-function readSidebarCollapsedState(): boolean {
-  if (typeof window === "undefined") {
-    return false;
-  }
-
-  try {
-    const nextValue = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY);
-    if (nextValue !== null) {
-      return nextValue === "1";
-    }
-    return window.localStorage.getItem(LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY) === "1";
-  } catch {
-    return false;
-  }
 }
 
 function buildContactFullName(contact: {
@@ -1123,16 +1115,28 @@ export default function ContactsPage() {
     }
     return hasAppEditAccess(auth.accessProfile, "tradsphere");
   }, [auth.accessProfile]);
-
-  const [draft, setDraft] = usePersistentState<ContactSearchFormValues>(
-    CONTACTS_SEARCH_DRAFT_STORAGE_KEY,
-    INITIAL_SEARCH_FORM,
-    { storage: "session", validate: isContactSearchFormValues },
+  const searchScopeKey = useMemo(
+    () => buildSearchScopeKey(auth.user?.id || auth.user?.email || "", auth.tenantSlug || ""),
+    [auth.tenantSlug, auth.user?.email, auth.user?.id],
   );
-  const [submittedSearch, setSubmittedSearch] = usePersistentState<SubmittedSearch | null>(
-    CONTACTS_SUBMITTED_SEARCH_STORAGE_KEY,
+
+  const [draft, setDraft] = useScopedPersistentState<ContactSearchFormValues>(
+    {
+      appCode: "tradsphere",
+      pageCode: CONTACTS_PAGE_CODE,
+      stateKey: CONTACTS_SEARCH_DRAFT_STATE_KEY,
+    },
+    INITIAL_SEARCH_FORM,
+    { validate: isContactSearchFormValues },
+  );
+  const [submittedSearch, setSubmittedSearch] = useScopedPersistentState<SubmittedSearch | null>(
+    {
+      appCode: "tradsphere",
+      pageCode: CONTACTS_PAGE_CODE,
+      stateKey: CONTACTS_SUBMITTED_SEARCH_STATE_KEY,
+    },
     null,
-    { storage: "session", validate: (value): value is SubmittedSearch | null => value === null || isSubmittedSearch(value) },
+    { validate: (value): value is SubmittedSearch | null => value === null || isSubmittedSearch(value) },
   );
   const [submissionVersion, setSubmissionVersion] = useState(0);
   const [searchMessage, setSearchMessage] = useState<string | null>(null);
@@ -1140,7 +1144,9 @@ export default function ContactsPage() {
 
   const [state, setState] = useState<SearchUiState>(() => resolveInitialContactsSearchView(submittedSearch).state);
   const [error, setError] = useState<string | null>(null);
+  const [hasHydratedPageState, setHasHydratedPageState] = useState(() => !submittedSearch);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [isChipRefreshOverlayVisible, setIsChipRefreshOverlayVisible] = useState(false);
   const [contacts, setContacts] = useState<ContactRecord[]>(() => resolveInitialContactsSearchView(submittedSearch).contacts);
   const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(() => resolveInitialContactsSearchView(submittedSearch).cacheStatus);
   const [modalDetailCacheStatus, setModalDetailCacheStatus] = useState<CacheStatus | null>(null);
@@ -1151,8 +1157,6 @@ export default function ContactsPage() {
   const [modalContact, setModalContact] = useState<ContactRecord | null>(null);
   const [focusUsageToken, setFocusUsageToken] = useState(0);
 
-  const [sidebarVisuallyExpanded, setSidebarVisuallyExpanded] = useState<boolean>(() => !readSidebarCollapsedState());
-
   const requestTokenRef = useRef(0);
   const modalDetailRequestTokenRef = useRef(0);
   const inFlightRef = useRef<Record<string, Promise<ContactRecord[]>>>({});
@@ -1161,10 +1165,8 @@ export default function ContactsPage() {
   const resultText = contacts.length ? formatResultText(contacts.length) : null;
   const normalizedDraft = useMemo(() => normalizeSearchForm(draft), [draft]);
   const canClearDraft = useMemo(() => hasAtLeastOneSearchCriterion(normalizedDraft), [normalizedDraft]);
-  const draftSearchResult = useMemo(() => buildSearchSubmission(draft), [draft]);
+  const draftSearchResult = useMemo(() => buildSearchSubmission(draft, searchScopeKey), [draft, searchScopeKey]);
   const canSubmitSearch = draftSearchResult.ok;
-  const shouldShowBlockingResultsOverlay = state === "loading" && contacts.length === 0;
-
   const cacheStatusText = isRefreshing
     ? "Refreshing..."
     : !isOnline && cacheStatus
@@ -1179,38 +1181,26 @@ export default function ContactsPage() {
       : "No cached data yet";
 
   const showCacheChip = Boolean(submittedSearch && !isModalOpen);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const handleStorage = () => {
-      const collapsed = readSidebarCollapsedState();
-      setSidebarVisuallyExpanded(!collapsed);
-    };
-
-    const handleSidebarEvent = (event: Event) => {
-      const customEvent = event as CustomEvent<{ collapsed?: boolean; visuallyExpanded?: boolean }>;
-      if (typeof customEvent.detail?.visuallyExpanded === "boolean") {
-        setSidebarVisuallyExpanded(customEvent.detail.visuallyExpanded);
-        return;
-      }
-      if (typeof customEvent.detail?.collapsed === "boolean") {
-        setSidebarVisuallyExpanded(!customEvent.detail.collapsed);
-        return;
-      }
-      const collapsed = readSidebarCollapsedState();
-      setSidebarVisuallyExpanded(!collapsed);
-    };
-
-    window.addEventListener("storage", handleStorage);
-    window.addEventListener(SIDEBAR_COLLAPSED_EVENT, handleSidebarEvent as EventListener);
-    return () => {
-      window.removeEventListener("storage", handleStorage);
-      window.removeEventListener(SIDEBAR_COLLAPSED_EVENT, handleSidebarEvent as EventListener);
-    };
-  }, []);
+  const loadingContract = resolveSharedLoadingContract(
+    {
+      pageInitializing: !hasHydratedPageState,
+      cacheChipRefreshing: isChipRefreshOverlayVisible,
+      searchLoading: state === "loading" || isRefreshing,
+    },
+    {
+      pageInitializing: "Preparing contacts workspace...",
+      cacheChipRefreshing: "Refreshing contacts...",
+      searchLoading: isRefreshing ? "Refreshing results..." : "Searching contacts...",
+    },
+  );
+  const pageMessages: StackMessage[] = [];
+  if (refreshMessage) {
+    pageMessages.push({
+      id: "contacts-refresh-message",
+      variant: refreshMessage.toLowerCase().includes("offline") ? "info" : "warning",
+      message: refreshMessage,
+    });
+  }
 
 async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactRecord[]> {
     const params = new URLSearchParams();
@@ -1353,6 +1343,7 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
       setContacts([]);
       setCacheStatus(null);
       setRefreshMessage(null);
+      setHasHydratedPageState(true);
       return;
     }
 
@@ -1390,6 +1381,7 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
 
     const shouldFetch = shouldFetchSubmittedSearchNetwork(options.policy, effectiveSnapshot);
     if (!shouldFetch) {
+      setHasHydratedPageState(true);
       return;
     }
 
@@ -1397,11 +1389,13 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
       if (localCacheResult.contacts.length > 0) {
         setRefreshMessage("You're offline. Showing cached contacts.");
         setIsRefreshing(false);
+        setHasHydratedPageState(true);
         return;
       }
       setState("error");
       setError("You're offline. Connect to the internet to load contacts.");
       setIsRefreshing(false);
+      setHasHydratedPageState(true);
       return;
     }
 
@@ -1456,6 +1450,7 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
       }
       if (requestToken === requestTokenRef.current) {
         setIsRefreshing(false);
+        setHasHydratedPageState(true);
       }
     }
   }
@@ -1508,7 +1503,7 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
   }
 
   function handleClearSearch() {
-    const draftCacheKey = buildSearchCacheKey(normalizedDraft);
+    const draftCacheKey = buildSearchCacheKey(normalizedDraft, searchScopeKey);
     const shouldClearSubmittedResults = Boolean(submittedSearch && submittedSearch.cacheKey === draftCacheKey);
 
     setDraft(INITIAL_SEARCH_FORM);
@@ -1528,11 +1523,16 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
     setIsRefreshing(false);
   }
 
-  function handleRefreshSearch() {
+  async function handleRefreshSearch() {
     if (!submittedSearch) {
       return;
     }
-    void loadSearchData({ policy: "network-only" }, submittedSearch);
+    setIsChipRefreshOverlayVisible(true);
+    try {
+      await loadSearchData({ policy: "network-only" }, submittedSearch);
+    } finally {
+      setIsChipRefreshOverlayVisible(false);
+    }
   }
 
   async function handleCopyContact(contact: ContactRecord) {
@@ -1668,14 +1668,30 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
   }
 
   return (
-    <div className="mx-auto flex w-full max-w-[1600px] flex-col gap-5 pb-12">
-      <PageBanner
-        eyebrow="TradSphere"
-        title="Contacts"
-        description="Find contacts, update contact details, and review station usage."
-        gradientVariant="app"
-        action={<Button onClick={handleAddContact} disabled={!canEditTradsphere}>Add Contact</Button>}
-      />
+    <AppPageLayout
+      className="pb-5"
+      pageMessages={<PageMessageStack messages={pageMessages} />}
+      banner={(
+        <PageBanner
+          eyebrow="TradSphere"
+          title="Contacts"
+          description="Find contacts, update contact details, and review station usage."
+          gradientVariant="app"
+          action={<Button onClick={handleAddContact} disabled={!canEditTradsphere}>Add Contact</Button>}
+        />
+      )}
+      footer={showCacheChip ? (
+        <PageCacheFooter
+          text={cacheStatusText}
+          onRefresh={handleRefreshSearch}
+          disabled={isRefreshing || isChipRefreshOverlayVisible || !isOnline}
+          refreshing={isRefreshing || isChipRefreshOverlayVisible}
+          refreshLabel="Refresh contacts"
+          tooltipText={isOnline ? "Click to refresh last submitted search" : "Offline. Reconnect to refresh contacts."}
+          containerClassName="w-full"
+        />
+      ) : null}
+    >
 
       <ContactSearchForm
         value={draft}
@@ -1690,10 +1706,6 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
         message={searchMessage}
       />
 
-      {refreshMessage ? (
-        <p className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-2 text-sm text-amber-800">{refreshMessage}</p>
-      ) : null}
-
       <div className="relative">
         <ContactResults
           state={state}
@@ -1704,29 +1716,11 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
           onViewUsage={handleViewUsage}
         />
 
-        {shouldShowBlockingResultsOverlay ? (
-          <SectionLoadingOverlay message="Searching contacts..." />
-        ) : null}
+        <SectionLoadingLayer
+          active={loadingContract.sectionOverlayActive}
+          message={loadingContract.sectionOverlayMessage}
+        />
       </div>
-
-      {showCacheChip ? (
-        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40">
-          <div className={`mx-4 sm:mx-6 lg:mr-6 ${sidebarVisuallyExpanded ? "lg:ml-[18.75rem]" : "lg:ml-[6.5rem]"}`}>
-            <div className="mx-auto w-full max-w-[1600px]">
-              <CacheStatusChip
-                text={cacheStatusText}
-                onRefresh={handleRefreshSearch}
-                disabled={isRefreshing || !isOnline}
-                refreshing={isRefreshing}
-                refreshLabel="Refresh contacts"
-                tooltipText={isOnline ? "Click to refresh last submitted search" : "Offline. Reconnect to refresh contacts."}
-                containerClassName="pointer-events-auto"
-                className="max-w-[min(90vw,34rem)]"
-              />
-            </div>
-          </div>
-        </div>
-      ) : null}
 
       <ContactModal
         open={isModalOpen}
@@ -1747,6 +1741,11 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
         onRefreshDetailCache={handleRefreshModalContactDetail}
         onSubmit={handleModalSubmit}
       />
-    </div>
+
+      <PageLoadingLayer
+        active={loadingContract.pageOverlayActive}
+        message={loadingContract.pageOverlayMessage}
+      />
+    </AppPageLayout>
   );
 }

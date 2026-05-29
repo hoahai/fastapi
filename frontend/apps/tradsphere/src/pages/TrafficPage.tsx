@@ -55,6 +55,7 @@ import { SectionCard } from "@shared/components/layout/SectionCard";
 import { ModalCacheFooter } from "@shared/components/modal/ModalCacheFooter";
 import { PageLoadingLayer, SectionLoadingLayer, SectionLoadingOverlay } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, SectionMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
+import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
 
 type CacheStatus = {
   source: "cache" | "network";
@@ -5948,14 +5949,22 @@ export default function TrafficPage() {
     };
   }, [appliedTrafficSearch, applyTrafficSearchKeyword, draftTrafficSearch]);
 
-  const isPageRefreshOverlayVisible = !hasHydratedPageState || isLoadActionOverlayVisible || isChipRefreshOverlayVisible;
-  const pageRefreshOverlayMessage = !hasHydratedPageState
-    ? "Preparing traffic workspace..."
-    : isLoadActionOverlayVisible
-      ? "Loading traffic data..."
-      : "Loading latest traffic data...";
   const isGridActionOverlayVisible = isSaving || isSendingEmail;
   const gridActionOverlayMessage = isSaving ? "Saving traffic changes..." : "Sending email...";
+  const loadingContract = resolveSharedLoadingContract(
+    {
+      pageInitializing: !hasHydratedPageState,
+      pageRefreshing: isLoadActionOverlayVisible,
+      cacheChipRefreshing: isChipRefreshOverlayVisible,
+      sectionLoading: isGridActionOverlayVisible,
+    },
+    {
+      pageInitializing: "Preparing traffic workspace...",
+      pageRefreshing: "Loading traffic data...",
+      cacheChipRefreshing: "Loading latest traffic data...",
+      sectionLoading: gridActionOverlayMessage,
+    },
+  );
 
   return (
     <AppPageLayout
@@ -6887,8 +6896,8 @@ export default function TrafficPage() {
         ) : null}
 
         <SectionLoadingLayer
-          active={isGridActionOverlayVisible}
-          message={gridActionOverlayMessage}
+          active={loadingContract.sectionOverlayActive}
+          message={loadingContract.sectionOverlayMessage}
         />
       </div>
 
@@ -8057,7 +8066,10 @@ export default function TrafficPage() {
           </DialogFooter>
         </DialogContent>
       </Dialog>
-      <PageLoadingLayer active={isPageRefreshOverlayVisible} message={pageRefreshOverlayMessage} />
+      <PageLoadingLayer
+        active={loadingContract.pageOverlayActive}
+        message={loadingContract.pageOverlayMessage}
+      />
     </AppPageLayout>
   );
 }

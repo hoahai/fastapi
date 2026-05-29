@@ -46,6 +46,12 @@ This file defines the default page/layout baseline for new TradSphere pages.
 
 ## 8) Empty/Loading States
 - Use consistent empty cards (`border-dashed`, subtle background) for no-data states.
+- Shared loading contract state keys:
+  - `pageInitializing`
+  - `pageRefreshing`
+  - `cacheChipRefreshing`
+  - `sectionLoading`
+  - `searchLoading`
 - Page-level overlay rules:
   - Use `PageLoadingLayer` for initial page hydration/checking cached state.
   - Use `PageLoadingLayer` when whole-page data is refreshing.
@@ -62,3 +68,10 @@ This file defines the default page/layout baseline for new TradSphere pages.
 - Section messages must appear below section title/actions and above section content.
 - Use variants (`info`, `success`, `warning`, `error`) instead of one-off alert bars.
 - Cache/offline refresh fallbacks (for example `Showing cached results. Could not refresh.`) must use shared message stacks.
+
+## 10) Page Stage Persistence
+- Normal authenticated pages should restore practical stage when users navigate away and return.
+- Use shared scoped persistence (`useScopedPersistentState` + shared page-state helpers), not one-off storage keys in page files.
+- Scope persisted page state by user + tenant + app + page.
+- Persist only safe stage: filters/search input, selected rows/ids, submitted criteria, cache references, and explicit loaded-stage markers.
+- Do not persist sensitive/auth fields, destructive confirmation state, or unsafe unsaved modal drafts unless a page already has an explicit safe draft model.

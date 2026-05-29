@@ -49,8 +49,9 @@
 - On valid submit, show matching cached results immediately when present.
 - After showing cache, always run a background network refresh for the submitted params.
 - Keep cached results visible while refreshing; do not blank result areas during revalidation.
-- Do not show blocking page-level busy overlays while cache-backed content is visible and only a refresh is running.
-- Blocking overlays are reserved for initial/no-cache loading states.
+- Enter/init cache-check should use page-level overlay so load state is consistent across pages.
+- Manual cache-chip refresh should use page-level overlay for that page.
+- Search/criteria submits should use section-level overlay when only result sections reload.
 - Manual refresh actions (if present) should use network-only for the current submitted search context.
 - Ignore stale/out-of-order responses from older submissions so results always match the latest valid submit.
 - If refresh fails and cache exists, keep cached results visible and show a small non-blocking cached-data message.
@@ -70,12 +71,20 @@
 - Prefer responsive grid/flex layouts.
 - Keep content width bounded for readability.
 - Use reusable layout primitives before custom page-level overrides.
+- Normal authenticated workspace/app/admin pages should use shared `AppPageLayout` as the default page shell.
 - For pages using shared shell layouts, keep cache/footer controls in a viewport-fixed in-app footer layer, not in normal document flow.
 - Fixed page footer containers should be transparent; only chip controls carry visual styling.
 - Reserve bottom spacer height in shared page layout so fixed footer chips never cover actionable content.
+- If a page has no cache/data-refresh concept, omit the footer chip instead of forcing a placeholder cache footer.
 
 ## Loading Overlay Rules
 - Use shared loading primitives (`PageLoadingLayer`, `SectionLoadingLayer`, `PageLoadingOverlay`, `SectionLoadingOverlay`) instead of page-local ad-hoc overlays.
+- Shared loading contract keys:
+  - `pageInitializing`
+  - `pageRefreshing`
+  - `cacheChipRefreshing`
+  - `sectionLoading`
+  - `searchLoading`
 - Page-level overlays:
   - show during page hydration/initialization and whole-page refresh flows
   - show for cache-chip force refresh flows
@@ -166,6 +175,9 @@
 
 ## Page State Persistence
 - Preserve useful UI state across frontend route navigation so returning users keep context.
+- Normal authenticated workspace/app/admin pages should remember stage when users navigate away and back.
+- Use shared `useScopedPersistentState` (and shared page-state utilities) for page stage persistence instead of one-off `localStorage`/`sessionStorage` logic in page files.
+- Persist page stage with user + tenant + app + page scoping so one tenant/user context never restores into another context.
 - Use `localStorage` for durable user preferences that should survive browser restarts.
 - Use `sessionStorage` for page-scoped navigation state that should reset when the browser session ends.
 - Persist compact primitives/IDs and simple UI preferences; avoid persisting full backend records when IDs are sufficient.

@@ -6,7 +6,6 @@ import { LabeledField, ReadOnlyValue } from "@tradsphere/components/dashboard/Fo
 import { PageBanner } from "@shell/components/layout/PageBanner";
 import { AppDropdown } from "@tradsphere/components/ui/app-dropdown";
 import { Button } from "@tradsphere/components/ui/button";
-import { CacheStatusChip } from "@tradsphere/components/ui/cache-status-chip";
 import {
   DialogClose,
   Dialog,
@@ -25,7 +24,11 @@ import { useOnlineStatus } from "@shared/hooks/useOnlineStatus";
 import { readBrowserCacheSnapshot, writeBrowserCache } from "@shared/lib/browserCache";
 import { SectionCard } from "@shared/components";
 import { Tooltip } from "@shared/components/actions/Tooltip";
-import { PageLoadingOverlay } from "@shared/components/status/LoadingOverlay";
+import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
+import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
+import { PageLoadingLayer } from "@shared/components/status/LoadingOverlay";
+import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
+import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
 import { useAuth } from "@shared/auth/useAuth";
 
 type RoleItem = {
@@ -184,9 +187,6 @@ const ROLE_GROUP_LABEL: Record<(typeof ROLE_GROUP_ORDER)[number], string> = {
 const ADMIN_PAGE_CACHE_KEY = "admin-users:page:v1";
 const ADMIN_PAGE_CACHE_TTL_MS = 2 * 60 * 1000;
 const EDIT_MODAL_CLEAR_DELAY_MS = 360;
-const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspace.sidebar.collapsed";
-const LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY = "tradsphere:ui:sidebarCollapsed:v1";
-const SIDEBAR_COLLAPSED_EVENT = "workspace-sidebar-collapsed-change";
 
 let adminUsersLoadInFlight: Promise<AdminUsersLoadResponse> | null = null;
 
@@ -240,22 +240,6 @@ function unique(values: string[]): string[] {
     results.push(normalized);
   }
   return results;
-}
-
-function readSidebarCollapsedState(): boolean {
-  if (typeof window === "undefined") {
-    return false;
-  }
-
-  try {
-    const nextValue = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY);
-    if (nextValue !== null) {
-      return nextValue === "1";
-    }
-    return window.localStorage.getItem(LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY) === "1";
-  } catch {
-    return false;
-  }
 }
 
 const APP_CHIP_STYLES = [
@@ -613,6 +597,7 @@ export default function AdminUsersPage() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [backgroundRefreshing, setBackgroundRefreshing] = useState(false);
+  const [isChipRefreshOverlayVisible, setIsChipRefreshOverlayVisible] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null);
 
@@ -647,7 +632,6 @@ export default function AdminUsersPage() {
 
   const [disableTarget, setDisableTarget] = useState<DisableTarget | null>(null);
   const [processingDisable, setProcessingDisable] = useState(false);
-  const [sidebarVisuallyExpanded, setSidebarVisuallyExpanded] = useState<boolean>(() => !readSidebarCollapsedState());
 
   const applyLoadedData = useCallback((
     payload: {
@@ -950,37 +934,6 @@ export default function AdminUsersPage() {
 
   useEffect(() => {
     void loadDataRef.current(false);
-  }, []);
-
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const handleStorage = () => {
-      const collapsed = readSidebarCollapsedState();
-      setSidebarVisuallyExpanded(!collapsed);
-    };
-    const handleSidebarEvent = (event: Event) => {
-      const customEvent = event as CustomEvent<{ collapsed?: boolean; visuallyExpanded?: boolean }>;
-      if (typeof customEvent.detail?.visuallyExpanded === "boolean") {
-        setSidebarVisuallyExpanded(customEvent.detail.visuallyExpanded);
-        return;
-      }
-      if (typeof customEvent.detail?.collapsed === "boolean") {
-        setSidebarVisuallyExpanded(!customEvent.detail.collapsed);
-        return;
-      }
-      const collapsed = readSidebarCollapsedState();
-      setSidebarVisuallyExpanded(!collapsed);
-    };
-
-    window.addEventListener("storage", handleStorage);
-    window.addEventListener(SIDEBAR_COLLAPSED_EVENT, handleSidebarEvent as EventListener);
-    return () => {
-      window.removeEventListener("storage", handleStorage);
-      window.removeEventListener(SIDEBAR_COLLAPSED_EVENT, handleSidebarEvent as EventListener);
-    };
   }, []);
 
   function resetInviteDraft() {
@@ -1299,8 +1252,27 @@ export default function AdminUsersPage() {
       ? `Data source: ${cacheStatus.source}. Last updated ${formatRelativeTime(cacheStatus.fetchedAt)}.`
       : "No cached data yet";
   const hasLoadedAnyData = users.length > 0 || pendingInvitations.length > 0 || tenants.length > 0 || apps.length > 0;
-  const shouldShowRefreshingOverlay = refreshing && hasLoadedAnyData;
   const showCacheChip = !loading && !error && !isEditModalOpen && !disableTarget;
+  const loadingContract = resolveSharedLoadingContract(
+    {
+      pageInitializing: loading && !hasLoadedAnyData,
+      pageRefreshing: refreshing || backgroundRefreshing,
+      cacheChipRefreshing: isChipRefreshOverlayVisible,
+    },
+    {
+      pageInitializing: "Preparing admin workspace...",
+      pageRefreshing: "Refreshing admin data...",
+      cacheChipRefreshing: "Refreshing admin data...",
+    },
+  );
+  const pageMessages: StackMessage[] = [];
+  if (error) {
+    pageMessages.push({
+      id: "admin-users-load-error",
+      variant: "error",
+      message: error,
+    });
+  }
   const inviteValidationError = useMemo(() => {
     const seen = new Set<string>();
     for (const row of inviteAssignments) {
@@ -1407,35 +1379,58 @@ export default function AdminUsersPage() {
     setIsInviteModalOpen(nextOpen);
   }
 
-  return (
-    <div className="mx-auto flex min-h-[100dvh] w-full max-w-[1680px] flex-col gap-6">
-      <PageBanner
-        eyebrow="TheSphereWorks"
-        title="Admin Users"
-        description="Manage app assignments, roles, and invitations."
-        gradientVariant="admin"
-        className="[&>div.relative]:min-h-[136px] [&>div.relative]:py-6 md:[&>div.relative]:min-h-[168px] md:[&>div.relative]:py-8"
-        action={(
-          <Button
-            className="min-w-36"
-            onClick={() => {
-              setIsInviteUnsavedDialogOpen(false);
-              if (inviteAssignments.length === 0) {
-                setInviteAssignments([buildEmptyInviteAssignmentRow("invite-row-initial")]);
-              }
-              setIsInviteModalOpen(true);
-            }}
-          >
-            Invite User
-          </Button>
-        )}
-      />
+  async function handleRefreshFromChip() {
+    setIsChipRefreshOverlayVisible(true);
+    try {
+      await loadData(true);
+    } finally {
+      setIsChipRefreshOverlayVisible(false);
+    }
+  }
 
-      {error ? (
-        <section className="rounded-2xl border border-rose-200 bg-rose-50 px-5 py-4 text-sm text-rose-700">
-          {error}
-        </section>
+  return (
+    <AppPageLayout
+      className="max-w-[1680px] gap-6 pb-5"
+      pageMessages={<PageMessageStack messages={pageMessages} />}
+      banner={(
+        <PageBanner
+          eyebrow="TheSphereWorks"
+          title="Admin Users"
+          description="Manage app assignments, roles, and invitations."
+          gradientVariant="admin"
+          className="[&>div.relative]:min-h-[136px] [&>div.relative]:py-6 md:[&>div.relative]:min-h-[168px] md:[&>div.relative]:py-8"
+          action={(
+            <Button
+              className="min-w-36"
+              onClick={() => {
+                setIsInviteUnsavedDialogOpen(false);
+                if (inviteAssignments.length === 0) {
+                  setInviteAssignments([buildEmptyInviteAssignmentRow("invite-row-initial")]);
+                }
+                setIsInviteModalOpen(true);
+              }}
+            >
+              Invite User
+            </Button>
+          )}
+        />
+      )}
+      footer={showCacheChip ? (
+        <PageCacheFooter
+          text={cacheStatusText}
+          onRefresh={handleRefreshFromChip}
+          disabled={refreshing || backgroundRefreshing || loading || isChipRefreshOverlayVisible || !isOnline}
+          refreshing={refreshing || backgroundRefreshing || isChipRefreshOverlayVisible}
+          refreshLabel="Refresh admin data"
+          tooltipText={
+            isOnline
+              ? "Click to refresh admin users, invitations, tenants, apps, and roles"
+              : "Offline. Reconnect to refresh admin data."
+          }
+          containerClassName="w-full"
+        />
       ) : null}
+    >
 
       <SectionCard
         title="Invitations"
@@ -2082,32 +2077,10 @@ export default function AdminUsersPage() {
         }}
       />
 
-      {shouldShowRefreshingOverlay ? (
-        <PageLoadingOverlay message="Refreshing admin data..." />
-      ) : null}
-
-      {showCacheChip ? (
-        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40">
-          <div className={`mx-4 sm:mx-6 lg:mr-6 ${sidebarVisuallyExpanded ? "lg:ml-[18.75rem]" : "lg:ml-[6.5rem]"}`}>
-            <div className="mx-auto w-full max-w-[1600px]">
-              <CacheStatusChip
-                text={cacheStatusText}
-                onRefresh={() => void loadData(true)}
-                disabled={refreshing || backgroundRefreshing || loading || !isOnline}
-                refreshing={refreshing || backgroundRefreshing}
-                refreshLabel="Refresh admin data"
-                tooltipText={
-                  isOnline
-                    ? "Click to refresh admin users, invitations, tenants, apps, and roles"
-                    : "Offline. Reconnect to refresh admin data."
-                }
-                containerClassName="pointer-events-auto"
-                className="max-w-[min(90vw,38rem)]"
-              />
-            </div>
-          </div>
-        </div>
-      ) : null}
-    </div>
+      <PageLoadingLayer
+        active={loadingContract.pageOverlayActive}
+        message={loadingContract.pageOverlayMessage}
+      />
+    </AppPageLayout>
   );
 }

@@ -17,7 +17,6 @@ import { PageBanner } from "@/components/layout/PageBanner";
 import { Button } from "@/components/ui/button";
 import { useToast } from "@/components/ui/toast";
 import { useApiRequest } from "@/hooks/useApiRequest";
-import { usePersistentState } from "@/hooks/usePersistentState";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { useTradsphereAccountSelections } from "@/hooks/useTradsphereAccountSelections";
 import {
@@ -31,10 +30,12 @@ import { buildAuthHeaders as buildSharedAuthHeaders } from "@shared/api/authHead
 import { useAuth } from "@shared/auth/useAuth";
 import { shouldProtectFrontendAuth } from "@shared/auth/guards";
 import { hasAppEditAccess } from "@shared/auth/permissions";
+import { useScopedPersistentState } from "@shared/hooks/useScopedPersistentState";
 import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
 import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, SectionMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
+import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
 import { hasAtLeastOneSearchCriterion, shouldFetchSubmittedSearchNetwork } from "@shared/search";
 
 const SEARCH_LIMIT = 50;
@@ -43,8 +44,9 @@ const SEARCH_TIMEZONE = "America/Chicago";
 const ESTNUMS_PAGE_CACHE_VERSION = "v4";
 const ESTNUMS_SEARCH_CACHE_COLLECTION_PREFIX = "estnums:form-search:";
 const ESTNUMS_SEARCH_CACHE_COLLECTION_LIMIT = 40;
-const ESTNUMS_SEARCH_DRAFT_STORAGE_KEY = "tradsphere.estnums.searchDraft.v1";
-const ESTNUMS_SUBMITTED_SEARCH_STORAGE_KEY = "tradsphere.estnums.submittedSearch.v1";
+const ESTNUMS_PAGE_CODE = "estnums";
+const ESTNUMS_SEARCH_DRAFT_STATE_KEY = "searchDraft";
+const ESTNUMS_SUBMITTED_SEARCH_STATE_KEY = "submittedSearch";
 
 type SearchUiState = "idle" | "loading" | "ready" | "empty" | "error";
 
@@ -560,10 +562,17 @@ function encodeKeyPart(value: string): string {
   return encodeURIComponent(value.trim().toLowerCase());
 }
 
-function buildSearchCacheKey(params: EstimateNumberSearchFormValues): string {
+function buildSearchScopeKey(userKey: string, tenantSlug: string): string {
+  const normalizedUserKey = encodeKeyPart(String(userKey || "").trim().toLowerCase() || "anonymous");
+  const normalizedTenantSlug = encodeKeyPart(String(tenantSlug || "").trim().toLowerCase() || "default");
+  return `tenant=${normalizedTenantSlug}:user=${normalizedUserKey}`;
+}
+
+function buildSearchCacheKey(params: EstimateNumberSearchFormValues, scopeKey: string): string {
   const normalizedMonths = [...params.months].map((value) => value.trim()).filter(Boolean).sort((a, b) => Number(a) - Number(b));
   return [
     "estnums:form-search",
+    scopeKey || "tenant=default:user=anonymous",
     `estnum=${encodeKeyPart(params.estimateNumber)}`,
     `account=${encodeKeyPart(params.account)}`,
     `buyer=${encodeKeyPart(params.buyer)}`,
@@ -993,7 +1002,7 @@ function getTodayIsoInTimezone(timeZone: string): string {
   return new Date().toISOString().slice(0, 10);
 }
 
-function buildSearchPlan(draft: EstimateNumberSearchFormValues): BuildSearchPlanResult {
+function buildSearchPlan(draft: EstimateNumberSearchFormValues, scopeKey: string): BuildSearchPlanResult {
   const normalized = normalizeDraft(draft);
   const selectedMonths = Array.from(
     new Set(
@@ -1149,7 +1158,7 @@ function buildSearchPlan(draft: EstimateNumberSearchFormValues): BuildSearchPlan
       ok: true,
       submitted: {
         params: normalized,
-        cacheKey: buildSearchCacheKey(normalized),
+        cacheKey: buildSearchCacheKey(normalized, scopeKey),
         plan: {
           type: "list",
           query: params.toString(),
@@ -1193,7 +1202,7 @@ function buildSearchPlan(draft: EstimateNumberSearchFormValues): BuildSearchPlan
       ok: true,
       submitted: {
         params: normalized,
-        cacheKey: buildSearchCacheKey(normalized),
+        cacheKey: buildSearchCacheKey(normalized, scopeKey),
         plan: {
           type: "search",
           query: params.toString(),
@@ -1237,7 +1246,7 @@ function buildSearchPlan(draft: EstimateNumberSearchFormValues): BuildSearchPlan
       ok: true,
       submitted: {
         params: normalized,
-        cacheKey: buildSearchCacheKey(normalized),
+        cacheKey: buildSearchCacheKey(normalized, scopeKey),
         plan: {
           type: "search",
           query: params.toString(),
@@ -1266,7 +1275,7 @@ function buildSearchPlan(draft: EstimateNumberSearchFormValues): BuildSearchPlan
       ok: true,
       submitted: {
         params: normalized,
-        cacheKey: buildSearchCacheKey(normalized),
+        cacheKey: buildSearchCacheKey(normalized, scopeKey),
         plan: {
           type: "search",
           query: params.toString(),
@@ -1288,7 +1297,7 @@ function buildSearchPlan(draft: EstimateNumberSearchFormValues): BuildSearchPlan
     ok: true,
     submitted: {
       params: normalized,
-      cacheKey: buildSearchCacheKey(normalized),
+        cacheKey: buildSearchCacheKey(normalized, scopeKey),
       plan: {
         type: "list",
         query: listParams.toString(),
@@ -1316,19 +1325,31 @@ export default function EstimateNumbersPage() {
     }
     return hasAppEditAccess(auth.accessProfile, "tradsphere");
   }, [auth.accessProfile]);
+  const searchScopeKey = useMemo(
+    () => buildSearchScopeKey(auth.user?.id || auth.user?.email || "", auth.tenantSlug || ""),
+    [auth.tenantSlug, auth.user?.email, auth.user?.id],
+  );
 
   const [billingDirectory, setBillingDirectory] = useState<AccountDirectoryItem[]>([]);
   const [, setIsLoadingBillingDirectory] = useState(true);
 
-  const [draft, setDraft] = usePersistentState<EstimateNumberSearchFormValues>(
-    ESTNUMS_SEARCH_DRAFT_STORAGE_KEY,
+  const [draft, setDraft] = useScopedPersistentState<EstimateNumberSearchFormValues>(
+    {
+      appCode: "tradsphere",
+      pageCode: ESTNUMS_PAGE_CODE,
+      stateKey: ESTNUMS_SEARCH_DRAFT_STATE_KEY,
+    },
     INITIAL_SEARCH_FORM,
-    { storage: "session", validate: isEstimateNumberSearchFormValues },
+    { validate: isEstimateNumberSearchFormValues },
   );
-  const [submittedSearch, setSubmittedSearch] = usePersistentState<SubmittedSearch | null>(
-    ESTNUMS_SUBMITTED_SEARCH_STORAGE_KEY,
+  const [submittedSearch, setSubmittedSearch] = useScopedPersistentState<SubmittedSearch | null>(
+    {
+      appCode: "tradsphere",
+      pageCode: ESTNUMS_PAGE_CODE,
+      stateKey: ESTNUMS_SUBMITTED_SEARCH_STATE_KEY,
+    },
     null,
-    { storage: "session", validate: (value): value is SubmittedSearch | null => value === null || isSubmittedSearch(value) },
+    { validate: (value): value is SubmittedSearch | null => value === null || isSubmittedSearch(value) },
   );
   const [submissionVersion, setSubmissionVersion] = useState(0);
   const [searchMessage, setSearchMessage] = useState<string | null>(null);
@@ -1336,6 +1357,7 @@ export default function EstimateNumbersPage() {
 
   const [state, setState] = useState<SearchUiState>(() => resolveInitialEstimateSearchView(submittedSearch).state);
   const [error, setError] = useState<string | null>(null);
+  const [hasHydratedPageState, setHasHydratedPageState] = useState(() => !submittedSearch);
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [isLoadingMore, setIsLoadingMore] = useState(false);
   const [isChipRefreshOverlayVisible, setIsChipRefreshOverlayVisible] = useState(false);
@@ -1390,7 +1412,7 @@ export default function EstimateNumbersPage() {
   const resultText = useMemo(() => formatResultText(displayPage), [displayPage]);
   const normalizedDraft = useMemo(() => normalizeDraft(draft), [draft]);
   const canClearDraft = useMemo(() => hasAtLeastOneSearchCriterion(normalizedDraft), [normalizedDraft]);
-  const draftSearchPlan = useMemo(() => buildSearchPlan(draft), [draft]);
+  const draftSearchPlan = useMemo(() => buildSearchPlan(draft, searchScopeKey), [draft, searchScopeKey]);
   const canSubmitSearch = draftSearchPlan.ok;
 
   const estimateModalAccountOptions = useMemo(
@@ -1422,21 +1444,20 @@ export default function EstimateNumbersPage() {
   const showCacheChip = Boolean(
     submittedSearch && !isAnyModalOpen && state === "ready" && (displayPage?.items.length ?? 0) > 0,
   );
-  const hasVisibleResults = (displayPage?.items.length ?? 0) > 0;
-  const isPageBusy = isChipRefreshOverlayVisible || (state === "loading" && !hasVisibleResults);
-  const pageBusyMessage = isChipRefreshOverlayVisible
-    ? "Refreshing estimate numbers..."
-    : "Loading estimate numbers...";
-  const isResultSectionBusy = !isChipRefreshOverlayVisible && (
-    isLoadingMore
-    || (state === "loading" && hasVisibleResults)
-    || isRefreshing
+  const loadingContract = resolveSharedLoadingContract(
+    {
+      pageInitializing: !hasHydratedPageState,
+      cacheChipRefreshing: isChipRefreshOverlayVisible,
+      sectionLoading: isLoadingMore,
+      searchLoading: state === "loading" || isRefreshing,
+    },
+    {
+      pageInitializing: "Preparing estimate numbers workspace...",
+      cacheChipRefreshing: "Refreshing estimate numbers...",
+      sectionLoading: "Loading more estimate numbers...",
+      searchLoading: isRefreshing ? "Refreshing results..." : "Searching estimate numbers...",
+    },
   );
-  const resultSectionBusyMessage = isLoadingMore
-    ? "Loading more estimate numbers..."
-    : isRefreshing
-      ? "Refreshing results..."
-      : "Searching estimate numbers...";
   const pageMessages: StackMessage[] = [];
   if (refreshMessage) {
     pageMessages.push({
@@ -1588,6 +1609,7 @@ export default function EstimateNumbersPage() {
         setPage(null);
         setCacheStatus(null);
         setRefreshMessage(null);
+        setHasHydratedPageState(true);
       }
       return;
     }
@@ -1617,6 +1639,9 @@ export default function EstimateNumbersPage() {
 
     const shouldFetch = options.append ? true : shouldFetchSubmittedSearchNetwork(options.policy, snapshot);
     if (!shouldFetch) {
+      if (!options.append) {
+        setHasHydratedPageState(true);
+      }
       return;
     }
 
@@ -1624,6 +1649,7 @@ export default function EstimateNumbersPage() {
       if (!options.append && localCacheResult?.page) {
         setRefreshMessage("You're offline. Showing cached estimate numbers.");
         setIsRefreshing(false);
+        setHasHydratedPageState(true);
         return;
       }
       if (options.append) {
@@ -1634,6 +1660,7 @@ export default function EstimateNumbersPage() {
       setState("error");
       setError("You're offline. Connect to the internet to load estimate numbers.");
       setIsRefreshing(false);
+      setHasHydratedPageState(true);
       return;
     }
 
@@ -1730,6 +1757,9 @@ export default function EstimateNumbersPage() {
       if (requestToken === requestTokenRef.current) {
         setIsRefreshing(false);
         setIsLoadingMore(false);
+        if (!options.append) {
+          setHasHydratedPageState(true);
+        }
       }
     }
   }
@@ -1791,7 +1821,7 @@ export default function EstimateNumbersPage() {
   }
 
   function handleClearDraft() {
-    const draftCacheKey = buildSearchCacheKey(normalizedDraft);
+    const draftCacheKey = buildSearchCacheKey(normalizedDraft, searchScopeKey);
     const shouldClearSubmittedResults = Boolean(submittedSearch && submittedSearch.cacheKey === draftCacheKey);
 
     setDraft(INITIAL_SEARCH_FORM);
@@ -1934,8 +1964,8 @@ export default function EstimateNumbersPage() {
         <PageCacheFooter
           text={cacheStatusText}
           onRefresh={handleRefreshSearch}
-          disabled={isRefreshing || isLoadingMore || !isOnline}
-          refreshing={isRefreshing}
+          disabled={isRefreshing || isLoadingMore || isChipRefreshOverlayVisible || !isOnline}
+          refreshing={isRefreshing || isChipRefreshOverlayVisible}
           refreshLabel="Refresh estimate numbers"
           tooltipText={isOnline ? "Click to refresh last submitted search" : "Offline. Reconnect to refresh estimate numbers."}
           containerClassName="w-full"
@@ -1970,8 +2000,8 @@ export default function EstimateNumbersPage() {
           onEditEstimate={handleOpenEdit}
         />
         <SectionLoadingLayer
-          active={isResultSectionBusy}
-          message={resultSectionBusyMessage}
+          active={loadingContract.sectionOverlayActive}
+          message={loadingContract.sectionOverlayMessage}
         />
       </div>
 
@@ -1997,7 +2027,10 @@ export default function EstimateNumbersPage() {
         headers={requestHeaders}
       />
 
-      <PageLoadingLayer active={isPageBusy} message={pageBusyMessage} />
+      <PageLoadingLayer
+        active={loadingContract.pageOverlayActive}
+        message={loadingContract.pageOverlayMessage}
+      />
     </AppPageLayout>
   );
 }

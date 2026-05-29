@@ -4,7 +4,6 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageBanner } from "@shell/components/layout/PageBanner";
 import { AppDropdown } from "@tradsphere/components/ui/app-dropdown";
 import { Button } from "@tradsphere/components/ui/button";
-import { CacheStatusChip } from "@tradsphere/components/ui/cache-status-chip";
 import {
   DialogClose,
   Dialog,
@@ -21,9 +20,15 @@ import { readBrowserCacheSnapshot, writeBrowserCache } from "@shared/lib/browser
 import { TradspherePermissionDetailsSection } from "@tradsphere/components/admin/TradspherePermissionDetailsSection";
 import { resolveAppScopedAdminSections } from "@shell/admin/appScopedAdminConfig";
 import { SectionCard } from "@shared/components";
+import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
+import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
+import { PageLoadingLayer } from "@shared/components/status/LoadingOverlay";
+import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
+import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
 import { Tooltip } from "@shared/components/actions/Tooltip";
 import { roleLabel } from "@shared/auth/accessAssignments";
 import { useAuth } from "@shared/auth/useAuth";
+import { useScopedPersistentState } from "@shared/hooks/useScopedPersistentState";
 
 type ScopedUser = {
   userId: string;
@@ -85,9 +90,11 @@ const ROLE_OPTIONS: RoleOption[] = [
   { value: "admin", label: "Admin" },
 ];
 const APP_SCOPED_ADMIN_CACHE_TTL_MS = 2 * 60 * 1000;
-const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspace.sidebar.collapsed";
-const LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY = "tradsphere:ui:sidebarCollapsed:v1";
-const SIDEBAR_COLLAPSED_EVENT = "workspace-sidebar-collapsed-change";
+const APP_SCOPED_ADMIN_PAGE_CODE = "admin";
+const APP_SCOPED_ADMIN_LOOKUP_QUERY_STATE_KEY = "lookupQuery";
+const APP_SCOPED_ADMIN_MEMBER_SEARCH_STATE_KEY = "memberSearch";
+const APP_SCOPED_ADMIN_MEMBER_ROLE_FILTER_STATE_KEY = "memberRoleFilter";
+const APP_SCOPED_ADMIN_MEMBER_STATUS_FILTER_STATE_KEY = "memberStatusFilter";
 
 function unwrap<T>(payload: unknown, fallback: T): T {
   if (payload && typeof payload === "object" && "data" in (payload as Record<string, unknown>)) {
@@ -172,22 +179,6 @@ function roleRank(role: string | null | undefined): number {
   return 99;
 }
 
-function readSidebarCollapsedState(): boolean {
-  if (typeof window === "undefined") {
-    return false;
-  }
-
-  try {
-    const nextValue = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY);
-    if (nextValue !== null) {
-      return nextValue === "1";
-    }
-    return window.localStorage.getItem(LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY) === "1";
-  } catch {
-    return false;
-  }
-}
-
 function buildScopedAdminCacheKey(params: { userId: string; appCode: string; tenantSlug: string }): string {
   const userKey = String(params.userId || "anonymous").trim() || "anonymous";
   const appKey = String(params.appCode || "app").trim().toLowerCase() || "app";
@@ -243,20 +234,58 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
   const [loadingUsers, setLoadingUsers] = useState(true);
   const [refreshingUsers, setRefreshingUsers] = useState(false);
   const [backgroundRefreshingUsers, setBackgroundRefreshingUsers] = useState(false);
+  const [isChipRefreshOverlayVisible, setIsChipRefreshOverlayVisible] = useState(false);
   const [usersError, setUsersError] = useState<string | null>(null);
   const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null);
-  const [sidebarVisuallyExpanded, setSidebarVisuallyExpanded] = useState<boolean>(() => !readSidebarCollapsedState());
 
-  const [lookupQuery, setLookupQuery] = useState("");
+  const [lookupQuery, setLookupQuery] = useScopedPersistentState<string>(
+    {
+      appCode: String(appCode || "").trim().toLowerCase() || "workspace",
+      pageCode: APP_SCOPED_ADMIN_PAGE_CODE,
+      stateKey: APP_SCOPED_ADMIN_LOOKUP_QUERY_STATE_KEY,
+    },
+    "",
+    { validate: (value: unknown): value is string => typeof value === "string" },
+  );
   const [lookupResults, setLookupResults] = useState<ScopedUser[]>([]);
   const [lookupRoleByUserId, setLookupRoleByUserId] = useState<Record<string, RoleOption["value"]>>({});
   const [lookupMessage, setLookupMessage] = useState<string | null>(null);
   const [lookingUp, setLookingUp] = useState(false);
   const [addingAccessByUserId, setAddingAccessByUserId] = useState<Record<string, boolean>>({});
   const [savingUserRoleByUserId, setSavingUserRoleByUserId] = useState<Record<string, boolean>>({});
-  const [memberSearch, setMemberSearch] = useState("");
-  const [memberRoleFilter, setMemberRoleFilter] = useState<string>("all");
-  const [memberStatusFilter, setMemberStatusFilter] = useState<string>("all");
+  const [memberSearch, setMemberSearch] = useScopedPersistentState<string>(
+    {
+      appCode: String(appCode || "").trim().toLowerCase() || "workspace",
+      pageCode: APP_SCOPED_ADMIN_PAGE_CODE,
+      stateKey: APP_SCOPED_ADMIN_MEMBER_SEARCH_STATE_KEY,
+    },
+    "",
+    { validate: (value: unknown): value is string => typeof value === "string" },
+  );
+  const [memberRoleFilter, setMemberRoleFilter] = useScopedPersistentState<string>(
+    {
+      appCode: String(appCode || "").trim().toLowerCase() || "workspace",
+      pageCode: APP_SCOPED_ADMIN_PAGE_CODE,
+      stateKey: APP_SCOPED_ADMIN_MEMBER_ROLE_FILTER_STATE_KEY,
+    },
+    "all",
+    {
+      validate: (value: unknown): value is string =>
+        typeof value === "string" && ["all", "viewer", "editor", "admin"].includes(value),
+    },
+  );
+  const [memberStatusFilter, setMemberStatusFilter] = useScopedPersistentState<string>(
+    {
+      appCode: String(appCode || "").trim().toLowerCase() || "workspace",
+      pageCode: APP_SCOPED_ADMIN_PAGE_CODE,
+      stateKey: APP_SCOPED_ADMIN_MEMBER_STATUS_FILTER_STATE_KEY,
+    },
+    "all",
+    {
+      validate: (value: unknown): value is string =>
+        typeof value === "string" && ["all", "active", "pending", "disabled"].includes(value),
+    },
+  );
   const [removingUserId, setRemovingUserId] = useState<string | null>(null);
   const [removeTarget, setRemoveTarget] = useState<RemoveAccessTarget | null>(null);
   const [roleChangeTarget, setRoleChangeTarget] = useState<RoleChangeTarget | null>(null);
@@ -385,38 +414,6 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
     void loadScopedUsers(false);
   }, [loadScopedUsers, needsUserDirectory]);
 
-  useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-
-    const handleStorage = () => {
-      const collapsed = readSidebarCollapsedState();
-      setSidebarVisuallyExpanded(!collapsed);
-    };
-
-    const handleSidebarEvent = (event: Event) => {
-      const customEvent = event as CustomEvent<{ collapsed?: boolean; visuallyExpanded?: boolean }>;
-      if (typeof customEvent.detail?.visuallyExpanded === "boolean") {
-        setSidebarVisuallyExpanded(customEvent.detail.visuallyExpanded);
-        return;
-      }
-      if (typeof customEvent.detail?.collapsed === "boolean") {
-        setSidebarVisuallyExpanded(!customEvent.detail.collapsed);
-        return;
-      }
-      const collapsed = readSidebarCollapsedState();
-      setSidebarVisuallyExpanded(!collapsed);
-    };
-
-    window.addEventListener("storage", handleStorage);
-    window.addEventListener(SIDEBAR_COLLAPSED_EVENT, handleSidebarEvent as EventListener);
-    return () => {
-      window.removeEventListener("storage", handleStorage);
-      window.removeEventListener(SIDEBAR_COLLAPSED_EVENT, handleSidebarEvent as EventListener);
-    };
-  }, []);
-
   const normalizedLookupQuery = lookupQuery.trim();
   const canLookup = normalizedLookupQuery.length >= 2 && !lookingUp;
   const assignableRoleOptions = useMemo(
@@ -473,6 +470,26 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
         ? `Data source: ${cacheStatus.source}. Last updated ${formatRelativeTime(cacheStatus.fetchedAt)}.`
         : "No cached data yet";
   const showCacheChip = needsUserDirectory && !loadingUsers && !usersError;
+  const loadingContract = resolveSharedLoadingContract(
+    {
+      pageInitializing: needsUserDirectory && loadingUsers && users.length === 0,
+      pageRefreshing: needsUserDirectory && (refreshingUsers || backgroundRefreshingUsers),
+      cacheChipRefreshing: needsUserDirectory && isChipRefreshOverlayVisible,
+    },
+    {
+      pageInitializing: `Preparing ${appLabel} admin workspace...`,
+      pageRefreshing: `Refreshing ${appLabel} users...`,
+      cacheChipRefreshing: `Refreshing ${appLabel} users...`,
+    },
+  );
+  const pageMessages: StackMessage[] = [];
+  if (usersError) {
+    pageMessages.push({
+      id: "app-scoped-admin-load-error",
+      variant: "error",
+      message: usersError,
+    });
+  }
 
   async function handleLookup() {
     if (!canLookup) {
@@ -728,15 +745,40 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
     roleChangeTarget?.userId && savingUserRoleByUserId[roleChangeTarget.userId],
   );
 
+  async function handleRefreshFromChip() {
+    setIsChipRefreshOverlayVisible(true);
+    try {
+      await loadScopedUsers(true);
+    } finally {
+      setIsChipRefreshOverlayVisible(false);
+    }
+  }
+
   return (
-    <div className="mx-auto flex min-h-[100dvh] w-full max-w-[1680px] flex-col gap-6">
-      <PageBanner
-        eyebrow={appLabel}
-        title="Admin"
-        description={`Manage who can access ${appLabel} for the current tenant.`}
-        gradientVariant="admin"
-        className="[&>div.relative]:min-h-[136px] [&>div.relative]:py-6 md:[&>div.relative]:min-h-[164px] md:[&>div.relative]:py-8"
-      />
+    <AppPageLayout
+      className="max-w-[1680px] gap-6 pb-5"
+      pageMessages={<PageMessageStack messages={pageMessages} />}
+      banner={(
+        <PageBanner
+          eyebrow={appLabel}
+          title="Admin"
+          description={`Manage who can access ${appLabel} for the current tenant.`}
+          gradientVariant="admin"
+          className="[&>div.relative]:min-h-[136px] [&>div.relative]:py-6 md:[&>div.relative]:min-h-[164px] md:[&>div.relative]:py-8"
+        />
+      )}
+      footer={showCacheChip ? (
+        <PageCacheFooter
+          text={cacheStatusText}
+          onRefresh={handleRefreshFromChip}
+          disabled={refreshingUsers || backgroundRefreshingUsers || loadingUsers || isChipRefreshOverlayVisible || !isOnline}
+          refreshing={refreshingUsers || backgroundRefreshingUsers || isChipRefreshOverlayVisible}
+          refreshLabel={`Refresh ${appLabel} users`}
+          tooltipText={isOnline ? "Click to refresh current scoped users" : "Offline. Reconnect to refresh users."}
+          containerClassName="w-full"
+        />
+      ) : null}
+    >
 
       {showUserAccessSection ? (
         <SectionCard
@@ -1100,24 +1142,10 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
         </DialogContent>
       </Dialog>
 
-      {showCacheChip ? (
-        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(1rem+env(safe-area-inset-bottom))] z-40">
-          <div className={`mx-4 sm:mx-6 lg:mr-6 ${sidebarVisuallyExpanded ? "lg:ml-[18.75rem]" : "lg:ml-[6.5rem]"}`}>
-            <div className="mx-auto w-full max-w-[1600px]">
-              <CacheStatusChip
-                text={cacheStatusText}
-                onRefresh={() => void loadScopedUsers(true)}
-                disabled={refreshingUsers || backgroundRefreshingUsers || loadingUsers || !isOnline}
-                refreshing={refreshingUsers || backgroundRefreshingUsers}
-                refreshLabel={`Refresh ${appLabel} users`}
-                tooltipText={isOnline ? "Click to refresh current scoped users" : "Offline. Reconnect to refresh users."}
-                containerClassName="pointer-events-auto"
-                className="max-w-[min(90vw,38rem)]"
-              />
-            </div>
-          </div>
-        </div>
-      ) : null}
-    </div>
+      <PageLoadingLayer
+        active={loadingContract.pageOverlayActive}
+        message={loadingContract.pageOverlayMessage}
+      />
+    </AppPageLayout>
   );
 }
