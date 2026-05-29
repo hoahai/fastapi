@@ -1234,7 +1234,6 @@ export default function StationsPage() {
           eyebrow="TradSphere"
           title="Stations"
           description="Search stations, manage delivery methods, and review contacts."
-          gradientVariant="app"
           action={<Button onClick={openCreateStationModal} disabled={!canEditTradsphere}>Add Station</Button>}
         />
       )}

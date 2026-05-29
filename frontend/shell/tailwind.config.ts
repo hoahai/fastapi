@@ -13,34 +13,34 @@ const config: Config = {
   theme: {
     extend: {
       colors: {
-        border: "hsl(214 32% 90%)",
-        input: "hsl(214 32% 90%)",
-        ring: "hsl(218 92% 56%)",
-        background: "hsl(210 29% 98%)",
-        foreground: "hsl(221 39% 11%)",
+        border: "hsl(223 30% 84%)",
+        input: "hsl(223 30% 84%)",
+        ring: "hsl(226 85% 58%)",
+        background: "hsl(221 45% 97%)",
+        foreground: "hsl(224 42% 14%)",
         primary: {
-          DEFAULT: "hsl(218 92% 56%)",
+          DEFAULT: "hsl(224 82% 56%)",
           foreground: "hsl(210 40% 98%)",
         },
         secondary: {
-          DEFAULT: "hsl(214 80% 95%)",
-          foreground: "hsl(221 39% 11%)",
+          DEFAULT: "hsl(223 86% 95%)",
+          foreground: "hsl(224 42% 14%)",
         },
         muted: {
-          DEFAULT: "hsl(214 50% 96%)",
-          foreground: "hsl(215 20% 38%)",
+          DEFAULT: "hsl(223 40% 94%)",
+          foreground: "hsl(219 20% 40%)",
         },
         card: {
           DEFAULT: "hsl(0 0% 100%)",
-          foreground: "hsl(221 39% 11%)",
+          foreground: "hsl(224 42% 14%)",
         },
       },
       boxShadow: {
-        soft: "0 10px 30px -18px rgba(30, 64, 175, 0.35)",
+        soft: "0 28px 54px -34px rgba(37, 69, 150, 0.48)",
       },
       borderRadius: {
-        xl: "1rem",
-        "2xl": "1.25rem",
+        xl: "1.1rem",
+        "2xl": "1.45rem",
       },
     },
   },

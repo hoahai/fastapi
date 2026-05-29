@@ -235,49 +235,47 @@ export function Sidebar({
 
   return (
     <>
-      <header className="sticky top-0 z-30 rounded-2xl border border-blue-100/80 bg-white/90 p-3 shadow-soft backdrop-blur lg:hidden">
+      <header className="sticky top-0 z-30 rounded-2xl border border-blue-100/90 bg-white/95 p-3 shadow-soft backdrop-blur lg:hidden">
         <div className="flex items-center justify-between gap-3">
           <Button
             variant="outline"
             size="icon"
-            className="border-blue-200/80 bg-white text-blue-700 hover:border-blue-300 hover:bg-blue-50"
+            className="border-blue-200/90 bg-white text-blue-700 hover:border-blue-300 hover:bg-blue-50/80"
             onClick={onToggleMobile}
             aria-label="Open navigation"
           >
             <Menu className="size-4" />
           </Button>
-          <p className="text-sm font-semibold text-slate-800">Workspace Navigation</p>
+          <p className="text-sm font-semibold tracking-[-0.01em] text-slate-800">Workspace Navigation</p>
           <div className="size-8" />
         </div>
       </header>
 
       {mobileOpen ? (
-        <div className="fixed inset-0 z-40 bg-slate-950/35 backdrop-blur-[1px] lg:hidden" onClick={onCloseMobile} />
+        <div className="fixed inset-0 z-40 bg-slate-950/36 backdrop-blur-[1.5px] lg:hidden" onClick={onCloseMobile} />
       ) : null}
 
       <aside
         className={cn(
-          "fixed left-0 top-0 z-50 flex h-screen w-72 flex-col overflow-y-auto border-r border-blue-100/80 bg-[linear-gradient(186deg,rgba(255,255,255,0.96)_0%,rgba(242,248,255,0.96)_56%,rgba(236,248,255,0.96)_100%)] p-4 transition-[width,transform] duration-200 lg:left-4 lg:top-4 lg:bottom-4 lg:h-auto lg:w-[260px] lg:rounded-3xl lg:border lg:border-blue-100/90 lg:shadow-soft lg:backdrop-blur lg:translate-x-0",
+          "fixed left-0 top-0 z-50 flex h-screen w-72 flex-col overflow-y-auto border-r border-blue-100/95 bg-[rgba(238,246,255,0.84)] p-4 shadow-[0_16px_34px_-24px_rgba(59,130,246,0.5)] backdrop-blur-sm transition-[width,transform] duration-200 lg:left-4 lg:top-4 lg:bottom-4 lg:h-auto lg:w-[270px] lg:rounded-[1.9rem] lg:border lg:border-blue-100/95 lg:shadow-[0_22px_44px_-26px_rgba(59,130,246,0.52)] lg:backdrop-blur-sm lg:translate-x-0",
           mobileOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
-          isCompact ? "lg:w-[72px]" : "lg:w-[260px]",
+          isCompact ? "lg:w-[76px]" : "lg:w-[270px]",
         )}
         onMouseEnter={handleSidebarMouseEnter}
         onMouseLeave={handleSidebarMouseLeave}
         onFocusCapture={handleSidebarFocusCapture}
         onBlurCapture={handleSidebarBlurCapture}
       >
-        <div className="pointer-events-none absolute left-3 right-3 top-3 h-20 rounded-2xl bg-gradient-to-r from-blue-500/9 via-cyan-400/8 to-emerald-300/7" />
-
-        <div className="relative z-10 flex items-center justify-between gap-2 px-1 py-1">
-          <div className={cn("min-w-0", isCompact && "lg:hidden")}>
-            <p className="text-[10px] font-bold uppercase tracking-[0.26em] text-blue-700">{currentAppLabel}</p>
-            <h2 className="mt-1 text-base font-extrabold text-slate-900">Workspace</h2>
-          </div>
-          <div className="flex items-center gap-1">
+        <div className={cn("relative z-10 px-1 pt-1", isCompact ? "pb-2" : "border-b border-blue-100/85 pb-3")}>
+          <div className={cn("flex items-center gap-2", isCompact ? "justify-center" : "justify-between")}>
+            <div className={cn("min-w-0", isCompact && "lg:hidden")}>
+              <p className="text-[10px] font-semibold uppercase tracking-[0.22em] text-blue-700/95">{currentAppLabel}</p>
+              <h2 className="mt-1 text-[17px] font-semibold tracking-[-0.012em] text-slate-900">Workspace</h2>
+            </div>
             <Button
               variant="ghost"
               size="icon"
-              className="hidden text-slate-500 hover:bg-blue-100/50 hover:text-blue-700 lg:inline-flex"
+              className="hidden text-slate-500 hover:bg-blue-100/55 hover:text-blue-700 lg:inline-flex"
               onClick={onToggleCollapsed}
               aria-label={collapsed ? "Expand sidebar" : "Collapse sidebar"}
             >
@@ -286,7 +284,7 @@ export function Sidebar({
             <Button
               variant="ghost"
               size="icon"
-              className="text-slate-500 hover:bg-blue-100/50 hover:text-blue-700 lg:hidden"
+              className="text-slate-500 hover:bg-blue-100/55 hover:text-blue-700 lg:hidden"
               onClick={onCloseMobile}
               aria-label="Close navigation"
             >
@@ -297,13 +295,13 @@ export function Sidebar({
 
         {!isCompact ? (
           <div className="relative z-10 mt-4 flex items-center gap-2 px-1">
-            <span className="h-px flex-1 bg-gradient-to-r from-blue-200/80 to-transparent" />
-            <p className="text-[10px] font-semibold uppercase tracking-[0.26em] text-slate-500">Apps</p>
-            <span className="h-px flex-1 bg-gradient-to-l from-blue-200/80 to-transparent" />
+            <span className="h-px flex-1 bg-gradient-to-r from-blue-300/85 to-transparent" />
+            <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-slate-500">Apps</p>
+            <span className="h-px flex-1 bg-gradient-to-l from-blue-300/85 to-transparent" />
           </div>
         ) : null}
 
-        <nav className="relative z-10 mt-3 flex-1 space-y-2">
+        <nav className="relative z-10 mt-3.5 flex-1 space-y-2.5">
           <SidebarItem
             icon={LayoutDashboard}
             label="Portal / Workspace Home"
@@ -355,10 +353,7 @@ export function Sidebar({
             return (
               <div
                 key={topLevel.id}
-                className={cn(
-                  "space-y-1 rounded-2xl p-1",
-                  hasChildren && expanded && "bg-blue-50/40",
-                )}
+                className={cn("space-y-1 rounded-2xl p-1", hasChildren && expanded && "border border-blue-100/85 bg-white/55 backdrop-blur-sm")}
               >
                 <SidebarParentItem
                   icon={topLevel.icon}
@@ -374,23 +369,23 @@ export function Sidebar({
                 />
                 {hasChildren && expanded ? (
                   hasMultipleTenants ? (
-                    <div className="space-y-2 border-l border-blue-100 pl-4">
+                    <div className="space-y-2 border-l border-blue-200/75 pl-4">
                       {tenantAssignments.map((tenantAssignment) => (
                         <div
                           key={`${topLevel.id}::${tenantAssignment.tenantSlug}`}
                           className={cn(
-                            "rounded-xl border border-blue-100/70 bg-white/65 p-2",
-                            auth.tenantSlug === tenantAssignment.tenantSlug && "border-blue-200 bg-blue-50/65",
+                            "rounded-xl border border-blue-100/85 bg-white/60 p-2 backdrop-blur-sm",
+                            auth.tenantSlug === tenantAssignment.tenantSlug && "border-blue-200 bg-blue-50/65 shadow-[0_14px_28px_-24px_rgba(59,130,246,0.48)]",
                           )}
                         >
                           <button
                             type="button"
                             onClick={() => handleSelectTenantRoute(tenantAssignment.tenantSlug, topLevel.route)}
-                            className="flex w-full items-center justify-between gap-2 rounded-lg px-1.5 py-1 text-left transition hover:bg-blue-50/80 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1"
+                            className="flex w-full items-center justify-between gap-2 rounded-lg px-1.5 py-1.5 text-left transition hover:bg-blue-50/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1"
                             aria-current={auth.tenantSlug === tenantAssignment.tenantSlug && parentActive ? "page" : undefined}
                           >
                             <span
-                              className={`inline-flex max-w-[72%] items-center truncate rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] ${tenantChipClass(tenantAssignment.tenantSlug)}`}
+                              className={`inline-flex max-w-[72%] items-center truncate rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] ${tenantChipClass(tenantAssignment.tenantSlug)}`}
                             >
                               {tenantAssignment.tenantName || tenantAssignment.tenantSlug}
                             </span>
@@ -431,7 +426,7 @@ export function Sidebar({
                       ))}
                     </div>
                   ) : (
-                    <div className="space-y-1 border-l border-blue-100 pl-4">
+                    <div className="space-y-1 border-l border-blue-200/75 pl-4">
                       {visibleMainChildren.map((child) => (
                         <SidebarChildItem
                           key={child.id}
@@ -444,7 +439,7 @@ export function Sidebar({
                         />
                       ))}
                       {visibleMainChildren.length > 0 && visibleAdminChildren.length > 0 ? (
-                        <div className="mx-2 my-1 h-px rounded-full bg-blue-200/80" />
+                        <div className="mx-2 my-1 h-px rounded-full bg-blue-200/90" />
                       ) : null}
                       {visibleAdminChildren.map((child) => (
                         <SidebarChildItem
@@ -465,7 +460,12 @@ export function Sidebar({
           })}
         </nav>
 
-        <div className="relative z-10 mt-4 rounded-2xl bg-gradient-to-r from-blue-100/35 via-cyan-100/25 to-transparent p-2">
+        <div
+          className={cn(
+            "relative z-10 mt-6 rounded-2xl border p-2.5 backdrop-blur-sm",
+            isCompact ? "border-blue-100/90 bg-white/56" : "border-blue-100/95 bg-white/62",
+          )}
+        >
           <div className="pt-3">
           {isSignedIn ? (
             <div
@@ -487,7 +487,7 @@ export function Sidebar({
                 aria-label="Account menu"
                 className={cn(
                   "group flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
-                  "text-slate-700 hover:bg-white/70 hover:text-slate-900",
+                  "text-slate-700 hover:bg-white/80 hover:text-slate-900",
                   isCompact && "lg:justify-center",
                 )}
                 title={isCompact ? "Account" : undefined}
@@ -495,7 +495,7 @@ export function Sidebar({
                 <UserRound className="size-4 shrink-0 text-blue-700 transition-colors group-hover:text-blue-800" />
                 {!isCompact ? (
                   <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold text-slate-800">{accountDisplayName}</p>
+                    <p className="truncate text-sm font-semibold tracking-[-0.01em] text-slate-800">{accountDisplayName}</p>
                     <p className="truncate text-xs text-slate-500">{auth.user?.email || "-"}</p>
                   </div>
                 ) : null}
@@ -512,8 +512,8 @@ export function Sidebar({
 	                  />
 	                  <div
 	                    className={cn(
-	                      "absolute z-20 rounded-xl border border-blue-100/85 bg-white/95 p-1 shadow-soft backdrop-blur",
-	                      isCompact ? "bottom-0 left-full ml-2 w-44" : "bottom-full left-0 right-0 mb-2",
+	                      "absolute z-20 rounded-xl border border-blue-100/90 bg-white/95 p-1.5 shadow-soft backdrop-blur",
+	                      isCompact ? "bottom-0 left-full ml-2 w-48" : "bottom-full left-0 right-0 mb-2",
 	                    )}
 	                  >
 	                    <button
@@ -523,7 +523,7 @@ export function Sidebar({
 	                        onNavigate("/profile");
 	                        onCloseMobile();
 	                      }}
-	                      className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-blue-50/80 hover:text-blue-800"
+	                      className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-blue-50/85 hover:text-blue-800"
 	                    >
 	                      <UserRound className="size-4" />
 	                      <span>My profile</span>
@@ -534,7 +534,7 @@ export function Sidebar({
 	                        setAccountMenuOpen(false);
 	                        handleSignOut();
 	                      }}
-	                      className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm font-medium text-rose-700 transition hover:bg-rose-50/70 hover:text-rose-800"
+	                      className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm font-medium text-rose-700 transition hover:bg-rose-50/75 hover:text-rose-800"
 	                    >
 	                      <LogOut className="size-4" />
 	                      <span>Sign out</span>
@@ -551,7 +551,7 @@ export function Sidebar({
                 onCloseMobile();
               }}
               className={cn(
-                "flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-white/70 hover:text-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
+                "flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-white/80 hover:text-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
                 isCompact && "lg:justify-center",
               )}
               title={isCompact ? "Sign in" : undefined}
@@ -603,17 +603,19 @@ function SidebarItem({
       disabled={!available}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "group flex w-full items-center gap-2.5 rounded-2xl px-2.5 py-2 text-left text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
+        "group relative flex w-full items-center gap-2.5 rounded-2xl px-2.5 py-2.5 text-left text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
         active
-          ? "bg-gradient-to-r from-blue-100/85 via-cyan-50/70 to-white/80 text-blue-900"
-          : "text-slate-700 hover:bg-white/70 hover:text-slate-900",
+          ? collapsed
+            ? "bg-blue-200/48 text-blue-950 shadow-[0_14px_22px_-20px_rgba(59,130,246,0.46)]"
+            : "bg-blue-200/42 text-blue-950 shadow-[0_14px_22px_-20px_rgba(59,130,246,0.48)] backdrop-blur-sm"
+          : "text-slate-700 hover:bg-blue-100/58 hover:text-slate-900",
         !available && "cursor-not-allowed text-slate-500 opacity-70 hover:bg-transparent",
         collapsed && "lg:justify-center lg:px-1.5",
       )}
       title={collapsed ? label : undefined}
     >
       <NavIcon icon={Icon} tone={iconTone} />
-      {!collapsed ? <span className="truncate font-medium">{label}</span> : null}
+      {!collapsed ? <span className="truncate font-medium tracking-[-0.01em]">{label}</span> : null}
       {!available && !collapsed ? <SoonBadge className="ml-auto" /> : null}
     </button>
   );
@@ -666,17 +668,19 @@ function SidebarParentItem({
       disabled={!available}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "group flex w-full items-center gap-2.5 rounded-2xl px-2.5 py-2 text-left text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
+        "group relative flex w-full items-center gap-2.5 rounded-2xl px-2.5 py-2.5 text-left text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
         active
-          ? "bg-gradient-to-r from-blue-100/85 via-cyan-50/70 to-white/80 text-blue-900"
-          : "text-slate-700 hover:bg-white/70 hover:text-slate-900",
+          ? collapsed
+            ? "bg-blue-200/48 text-blue-950 shadow-[0_14px_22px_-20px_rgba(59,130,246,0.46)]"
+            : "bg-blue-200/42 text-blue-950 shadow-[0_14px_22px_-20px_rgba(59,130,246,0.48)] backdrop-blur-sm"
+          : "text-slate-700 hover:bg-blue-100/58 hover:text-slate-900",
         !available && "cursor-not-allowed text-slate-500 opacity-70 hover:bg-transparent",
         collapsed && "lg:justify-center lg:px-1.5",
       )}
       title={collapsed ? label : undefined}
     >
       <NavIcon icon={Icon} tone={iconTone} />
-      {!collapsed ? <span className="truncate font-medium">{label}</span> : null}
+      {!collapsed ? <span className="truncate font-medium tracking-[-0.01em]">{label}</span> : null}
       {!collapsed && hasChildren ? (
         <ChevronDown
           className={cn(
@@ -752,10 +756,10 @@ function SidebarChildItem({ child, currentPath, tenantSlug, activeTenantSlug, ac
       disabled={!child.available}
       aria-current={active ? "page" : undefined}
       className={cn(
-        "group flex w-full items-center gap-2 rounded-xl px-2.5 py-1.5 text-left text-[13px] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
+        "group flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[13px] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
         active
-          ? "bg-blue-50/80 text-blue-900"
-          : "text-slate-600 hover:bg-white/70 hover:text-slate-800",
+          ? "bg-blue-200/48 text-blue-950"
+          : "text-slate-600 hover:bg-blue-100/58 hover:text-slate-800",
         !child.available && "cursor-not-allowed text-slate-500 opacity-70 hover:bg-transparent",
       )}
     >

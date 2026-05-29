@@ -22,16 +22,16 @@ export function EstimateNumberResultGroup({
   const totalItems = group.years.reduce((sum, yearGroup) => sum + yearGroup.items.length, 0);
 
   return (
-    <details open className="group rounded-2xl border border-blue-100 bg-white shadow-soft">
-      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-2xl px-5 py-4">
+    <details open className="group rounded-2xl border border-blue-100/90 bg-white shadow-soft">
+      <summary className="flex cursor-pointer list-none items-center justify-between gap-3 rounded-2xl bg-gradient-to-r from-blue-50/55 to-indigo-50/35 px-5 py-[1.125rem]">
         <div>
-          <h3 className="text-lg font-bold text-blue-900 md:text-xl">{title}</h3>
-          <p className="mt-1 text-xs text-slate-500">{totalItems} matches</p>
+          <h3 className="text-lg font-semibold tracking-[-0.012em] text-blue-900 md:text-xl">{title}</h3>
+          <p className="mt-1 text-xs font-medium text-slate-500">{totalItems} matches</p>
         </div>
         <ChevronDown className="size-4 text-slate-500 transition-transform group-open:rotate-180" />
       </summary>
 
-      <div className="space-y-3 px-3 pb-4">
+      <div className="space-y-3 px-3 pb-[1.125rem] pt-1">
         {group.years.map((yearGroup) => (
           <YearBucket
             key={yearGroup.key}
@@ -60,12 +60,12 @@ function YearBucket({
   onEditEstimate,
 }: YearBucketProps) {
   return (
-    <section className="overflow-hidden rounded-xl border border-slate-100 bg-slate-50/70">
-      <header className="border-b border-blue-100 bg-blue-50/70 px-4 py-2.5">
-        <p className="text-sm font-bold uppercase tracking-[0.14em] text-blue-800">{yearGroup.label}</p>
+    <section className="overflow-hidden rounded-xl border border-blue-100/90 bg-slate-50/75 shadow-[0_16px_26px_-24px_rgba(37,99,235,0.5)]">
+      <header className="border-b border-blue-100/90 bg-gradient-to-r from-blue-50/85 to-indigo-50/35 px-4 py-2.5">
+        <p className="text-sm font-semibold uppercase tracking-[0.12em] text-blue-800">{yearGroup.label}</p>
       </header>
 
-      <div className="grid gap-3 p-3 sm:grid-cols-2 xl:grid-cols-3">
+      <div className="grid gap-3.5 p-3 sm:grid-cols-2 xl:grid-cols-3">
         {yearGroup.items.map((item) => {
           const canOpenEdit = !disabled;
           const canOpenSchedule = Boolean(item.hasSchedule && !disabled);
@@ -92,16 +92,16 @@ function YearBucket({
                 }
               }}
               className={cn(
-                "rounded-xl p-4 shadow-sm transition",
+                "rounded-xl p-4 shadow-[0_16px_26px_-24px_rgba(30,64,175,0.45)] transition",
                 item.hasSchedule
-                  ? "border border-emerald-200/90 bg-emerald-50/35"
-                  : "border border-slate-200 bg-white",
-                canOpenEdit ? "cursor-pointer hover:border-blue-200 hover:bg-blue-50/40" : "cursor-default",
+                  ? "border border-emerald-200/90 bg-emerald-50/40"
+                  : "border border-blue-100/90 bg-white",
+                canOpenEdit ? "cursor-pointer hover:-translate-y-0.5 hover:border-blue-200 hover:bg-blue-50/45" : "cursor-default",
               )}
             >
               <div className="min-w-0">
                 <div className="flex flex-wrap items-center justify-between gap-2">
-                  <p className="text-base font-semibold text-slate-900">EstNum {item.estNum}</p>
+                  <p className="text-base font-semibold tracking-[-0.01em] text-slate-900">EstNum {item.estNum}</p>
                   <StatusPill
                     hasSchedule={item.hasSchedule}
                     clickable={canOpenSchedule}
@@ -109,7 +109,7 @@ function YearBucket({
                   />
                 </div>
 
-                <div className="mt-2 grid grid-cols-2 gap-x-3 gap-y-2 text-sm text-slate-700">
+                <div className="mt-2.5 grid grid-cols-2 gap-x-3 gap-y-2 text-sm text-slate-700">
                   <MetaLine label="Account Code" value={item.accountCode} />
                   <MetaLine label="Media" value={toText(item.mediaType)} />
                   <MetaLine className="col-span-2" label="Flight Dates" value={flightDates} />

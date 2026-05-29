@@ -60,9 +60,9 @@ export function ContactResults({
   return (
     <SectionCard title="Results" contentClassName="space-y-4">
         {groups.map((group) => (
-          <details key={group.key} open className="group overflow-hidden rounded-2xl border border-blue-100 bg-slate-50/70">
-            <summary className="flex cursor-pointer list-none items-center justify-between gap-2 border-b border-blue-100 bg-blue-50/70 px-4 py-3">
-              <p className="text-sm font-bold uppercase tracking-[0.14em] text-blue-800">{group.label}</p>
+          <details key={group.key} open className="group overflow-hidden rounded-2xl border border-blue-100/90 bg-slate-50/75 shadow-[0_18px_30px_-26px_rgba(37,99,235,0.5)]">
+            <summary className="flex cursor-pointer list-none items-center justify-between gap-2 border-b border-blue-100/90 bg-gradient-to-r from-blue-50/85 to-indigo-50/45 px-4 py-3.5">
+              <p className="text-sm font-semibold uppercase tracking-[0.12em] text-blue-800">{group.label}</p>
               <span className="inline-flex items-center gap-2 text-slate-500" aria-hidden="true">
                 <span className="text-xs">{group.items.length} contacts</span>
                 <ChevronDown className="size-4 transition-transform group-open:rotate-180" />
@@ -91,7 +91,7 @@ export function ContactResults({
 
 function EmptyPanel({ icon, message }: { icon: JSX.Element; message: string }) {
   return (
-    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-6 py-10 text-center">
+    <div className="rounded-2xl border border-dashed border-blue-200/90 bg-gradient-to-b from-blue-50/45 to-white px-6 py-11 text-center">
       <div className="inline-flex items-center gap-2 text-sm text-slate-600">
         {icon}
         <span>{message}</span>

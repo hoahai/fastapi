@@ -106,7 +106,7 @@ function LogoBlock({ account }: { account: AccountInfo | null }) {
 
   return (
     <>
-      <div className="relative h-40 overflow-hidden rounded-xl border border-slate-200 bg-slate-50">
+      <div className="relative h-40 overflow-hidden rounded-xl border border-blue-100/85 bg-slate-50/75">
         {hasLogo ? (
           <button
             type="button"

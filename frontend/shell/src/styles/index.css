@@ -6,6 +6,8 @@
 
 :root {
   font-family: "Manrope", "Avenir Next", "Nunito Sans", sans-serif;
+  color: hsl(224 42% 14%);
+  background-color: hsl(221 45% 97%);
 }
 
 * {
@@ -14,13 +16,36 @@
 
 body {
   margin: 0;
-  color: hsl(221 39% 11%);
+  min-height: 100dvh;
+  color: hsl(224 42% 14%);
+  background:
+    radial-gradient(circle at 4% 10%, rgba(37, 99, 235, 0.2), transparent 34%),
+    radial-gradient(circle at 92% 10%, rgba(79, 70, 229, 0.18), transparent 36%),
+    radial-gradient(circle at 62% 4%, rgba(56, 189, 248, 0.14), transparent 36%),
+    linear-gradient(180deg, #f3f7ff 0%, #eef3ff 48%, #f4f7ff 100%);
+  font-variant-numeric: tabular-nums;
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+body::before {
+  content: "";
+  position: fixed;
+  inset: 0;
+  z-index: -1;
+  pointer-events: none;
+  opacity: 0.5;
+  background-image:
+    linear-gradient(rgba(71, 85, 105, 0.05) 1px, transparent 1px),
+    linear-gradient(90deg, rgba(71, 85, 105, 0.05) 1px, transparent 1px);
+  background-size: 34px 34px;
+  mask-image: radial-gradient(circle at 50% 30%, rgba(0, 0, 0, 0.6), transparent 74%);
 }
 
 .bg-app-gradient {
   background:
-    radial-gradient(circle at 16% 14%, rgba(96, 165, 250, 0.12), transparent 36%),
-    radial-gradient(circle at 78% 18%, rgba(251, 146, 60, 0.1), transparent 36%),
-    radial-gradient(circle at 50% 8%, rgba(167, 139, 250, 0.09), transparent 30%),
-    linear-gradient(135deg, #f8fafc 0%, #eff6ff 48%, #fff7ed 100%);
+    radial-gradient(circle at 10% 12%, rgba(56, 189, 248, 0.14), transparent 40%),
+    radial-gradient(circle at 88% 14%, rgba(99, 102, 241, 0.16), transparent 40%),
+    radial-gradient(circle at 52% 10%, rgba(129, 140, 248, 0.12), transparent 38%),
+    linear-gradient(148deg, #f7faff 0%, #ecf2ff 46%, #f3f6ff 100%);
 }

@@ -42,7 +42,7 @@ function focusAndInteractionClasses(as: AnimatedHoverCardProps["as"]): string {
 export function AnimatedHoverCard(props: AnimatedHoverCardProps) {
   const commonRootClassName = cn(
     "group relative isolate overflow-visible rounded-xl bg-transparent",
-    "before:pointer-events-none before:absolute before:inset-x-4 before:inset-y-2 before:z-0 before:rounded-2xl before:bg-blue-500/12 before:opacity-0 before:blur-md before:content-[''] before:transition-opacity before:duration-200 group-hover:before:opacity-100",
+    "before:pointer-events-none before:absolute before:inset-x-3 before:inset-y-2 before:z-0 before:rounded-2xl before:bg-indigo-500/10 before:opacity-0 before:blur-md before:content-[''] before:transition-opacity before:duration-200 group-hover:before:opacity-100",
     "transition-transform duration-200 ease-out hover:-translate-y-0.5",
     "motion-reduce:transition-none motion-reduce:hover:translate-y-0",
     focusAndInteractionClasses(props.as),

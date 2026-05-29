@@ -18,7 +18,7 @@ export function LoadActionArea({
   actionsClassName,
 }: LoadActionAreaProps) {
   return (
-    <div className={cn("grid gap-3 md:grid-cols-[minmax(0,260px)_auto] md:items-end", className)}>
+    <div className={cn("grid gap-3 rounded-xl bg-slate-50/70 p-3 md:grid-cols-[minmax(0,260px)_auto] md:items-end", className)}>
       <div className={controlsClassName}>{controls}</div>
       <div className={cn("flex flex-wrap items-center gap-2", actionsClassName)}>{actions}</div>
     </div>

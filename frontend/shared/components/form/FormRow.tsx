@@ -20,11 +20,11 @@ export function FormRow({
   return (
     <div
       className={cn(
-        "grid grid-cols-1 gap-2 sm:grid-cols-[110px_minmax(0,1fr)] sm:gap-4",
+        "grid grid-cols-1 gap-2.5 sm:grid-cols-[124px_minmax(0,1fr)] sm:gap-[1.125rem]",
         alignStart ? "items-start" : "items-center",
       )}
     >
-      <p className={cn("text-sm text-slate-600", alignStart && "sm:pt-2", labelClassName)}>{label}</p>
+      <p className={cn("text-sm font-semibold tracking-[-0.01em] text-slate-600", alignStart && "sm:pt-2", labelClassName)}>{label}</p>
       <div className={cn("min-w-0", valueClassName)}>{children}</div>
     </div>
   );

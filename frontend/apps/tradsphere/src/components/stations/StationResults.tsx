@@ -57,13 +57,13 @@ export function StationResults({
         {groups.map((group) => {
           const isOpen = groupOpenState[group.key] ?? true;
           return (
-            <section key={group.key} className="group overflow-hidden rounded-2xl border border-blue-100 bg-slate-50/70">
+            <section key={group.key} className="group overflow-hidden rounded-2xl border border-blue-100/90 bg-slate-50/75 shadow-[0_18px_30px_-26px_rgba(37,99,235,0.5)]">
               <button
                 type="button"
                 onClick={() => onToggleGroup(group.key)}
-                className="flex w-full items-center justify-between gap-2 border-b border-blue-100 bg-blue-50/70 px-4 py-3 text-left"
+                className="flex w-full items-center justify-between gap-2 border-b border-blue-100/90 bg-gradient-to-r from-blue-50/85 to-indigo-50/45 px-4 py-3.5 text-left"
               >
-                <p className="text-sm font-bold uppercase tracking-[0.14em] text-blue-800">{group.label}</p>
+                <p className="text-sm font-semibold uppercase tracking-[0.12em] text-blue-800">{group.label}</p>
                 <span className="inline-flex items-center text-slate-500" aria-hidden="true">
                   <span className="mr-2 text-xs">{group.items.length} stations</span>
                   <ChevronDown className={`size-4 transition-transform ${isOpen ? "rotate-180" : "rotate-0"}`} />
@@ -93,7 +93,7 @@ export function StationResults({
 
 function EmptyPanel({ icon, message }: { icon: JSX.Element; message: string }) {
   return (
-    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-6 py-10 text-center">
+    <div className="rounded-2xl border border-dashed border-blue-200/90 bg-gradient-to-b from-blue-50/45 to-white px-6 py-11 text-center">
       <div className="inline-flex items-center gap-2 text-sm text-slate-600">
         {icon}
         <span>{message}</span>

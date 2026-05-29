@@ -26,11 +26,12 @@ export function SectionCard({
   return (
     <section
       className={cn(
-        "flex min-h-0 flex-col rounded-2xl border border-blue-100 bg-white/95 p-4 shadow-soft",
+        "relative flex min-h-0 flex-col overflow-hidden rounded-[1.45rem] border border-blue-100/90 bg-white/95 p-5 shadow-soft",
         className,
       )}
       {...props}
     >
+      <div className="pointer-events-none absolute inset-x-5 top-0 h-px bg-gradient-to-r from-transparent via-blue-200/80 to-transparent" />
       <SectionHeader
         title={title}
         description={description}
@@ -38,7 +39,7 @@ export function SectionCard({
         divider={divider}
         className={headerClassName}
       />
-      <div className={cn("mt-3 min-h-0 flex-1", contentClassName)}>{children}</div>
+      <div className={cn("mt-5 min-h-0 flex-1", contentClassName)}>{children}</div>
     </section>
   );
 }

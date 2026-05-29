@@ -1949,7 +1949,6 @@ export default function EstimateNumbersPage() {
           eyebrow="TradSphere"
           title="Estimate Numbers"
           description="Search estimate numbers and open schedules."
-          gradientVariant="app"
           action={(
             <Button
               onClick={handleOpenCreate}

@@ -36,7 +36,7 @@ export function EntityItemCard({
     <>
       <HoverCircle
         className={cn(
-          "mx-auto mb-3 size-20 overflow-visible rounded-full bg-blue-50 text-blue-600 shadow-[0_0_0_0_rgba(59,130,246,0)] transition-[background-color,box-shadow,color] duration-200 group-hover:bg-blue-100 group-hover:shadow-[0_0_18px_4px_rgba(59,130,246,0.2)]",
+          "mx-auto mb-3 size-20 overflow-visible rounded-full border border-blue-100/85 bg-blue-50/85 text-blue-600 shadow-[0_0_0_0_rgba(59,130,246,0)] transition-[background-color,box-shadow,color] duration-200 group-hover:bg-blue-100 group-hover:shadow-[0_0_18px_4px_rgba(59,130,246,0.2)]",
           !isInteractive && "transition-none group-hover:scale-100 group-hover:bg-blue-50 group-hover:shadow-none",
           circleClassName,
         )}
@@ -46,7 +46,7 @@ export function EntityItemCard({
           {circleContent}
         </span>
       </HoverCircle>
-      <p className="text-base font-medium text-slate-700">{title}</p>
+      <p className="text-base font-semibold text-slate-700">{title}</p>
       {subtitle !== undefined ? (
         <p className={cn("mt-2 min-h-5 text-xs italic text-slate-500", subtitleClassName)}>{subtitle}</p>
       ) : null}

@@ -20,17 +20,17 @@ export function SectionHeader({
   return (
     <div
       className={cn(
-        "flex min-h-10 items-center justify-between gap-3",
-        divider && "border-b border-slate-200 pb-2",
+        "flex min-h-11 items-center justify-between gap-3",
+        divider && "border-b border-blue-100/90 pb-3.5",
         className,
       )}
       {...props}
     >
       <div className="min-w-0">
-        <h3 className="text-sm font-semibold text-slate-800">{title}</h3>
-        {description ? <p className="mt-1 text-xs text-slate-500">{description}</p> : null}
+        <h3 className="text-[15px] font-semibold tracking-[-0.014em] text-slate-800">{title}</h3>
+        {description ? <p className="mt-1.5 text-xs leading-5 text-slate-500">{description}</p> : null}
       </div>
-      {actions ? <div className="flex flex-wrap items-center justify-end gap-1">{actions}</div> : null}
+      {actions ? <div className="flex flex-wrap items-center justify-end gap-2">{actions}</div> : null}
     </div>
   );
 }

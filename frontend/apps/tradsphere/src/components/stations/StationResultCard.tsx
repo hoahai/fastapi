@@ -49,18 +49,18 @@ export function StationResultCard({
         }
       }}
       className={cn(
-        "space-y-3 rounded-xl border border-slate-200 bg-white p-4 shadow-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
-        canOpen ? "cursor-pointer hover:border-blue-300 hover:shadow" : "cursor-default",
+        "space-y-3.5 rounded-xl border border-blue-100/90 bg-white p-4 shadow-[0_18px_30px_-24px_rgba(37,99,235,0.45)] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
+        canOpen ? "cursor-pointer hover:-translate-y-0.5 hover:border-blue-300 hover:shadow-[0_20px_34px_-24px_rgba(37,99,235,0.5)]" : "cursor-default",
       )}
     >
       <div className="flex flex-wrap items-start justify-between gap-3">
         <div className="min-w-0">
-          <p className="truncate text-base font-semibold text-slate-900">{station.code || "-"}</p>
+          <p className="truncate text-base font-semibold tracking-[-0.01em] text-slate-900">{station.code || "-"}</p>
           <p className="mt-0.5 truncate text-sm text-slate-700">{station.name || "-"}</p>
         </div>
       </div>
 
-      <div className="grid gap-1.5 text-sm text-slate-700 sm:grid-cols-2">
+      <div className="grid gap-2 text-sm text-slate-700 sm:grid-cols-2">
         <Meta label="Media Type" value={station.mediaType} />
         <Meta label="Language" value={station.language} />
         <Meta label="Affiliation" value={station.affiliation} />

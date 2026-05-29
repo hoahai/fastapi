@@ -105,7 +105,7 @@ export function EstimateNumberResults({
 
 function EmptyPanel({ icon, message }: { icon: ReactNode; message: string }) {
   return (
-    <div className="rounded-2xl border border-dashed border-slate-300 bg-slate-50 px-6 py-10 text-center">
+    <div className="rounded-2xl border border-dashed border-blue-200/90 bg-gradient-to-b from-blue-50/45 to-white px-6 py-11 text-center">
       <div className="inline-flex items-center gap-2 text-sm text-slate-600">
         {icon}
         <span>{message}</span>

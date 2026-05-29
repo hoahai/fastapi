@@ -1676,7 +1676,6 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
           eyebrow="TradSphere"
           title="Contacts"
           description="Find contacts, update contact details, and review station usage."
-          gradientVariant="app"
           action={<Button onClick={handleAddContact} disabled={!canEditTradsphere}>Add Contact</Button>}
         />
       )}

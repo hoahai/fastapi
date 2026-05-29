@@ -74,11 +74,11 @@ export function AppShell({ currentPath, onNavigate, children }: AppShellProps) {
 
   return (
     <div className="relative min-h-screen overflow-hidden bg-app-gradient text-foreground">
-      <div className="pointer-events-none absolute -left-16 top-0 size-72 rounded-full bg-blue-200/40 blur-3xl" />
-      <div className="pointer-events-none absolute right-0 top-16 size-72 rounded-full bg-cyan-200/30 blur-3xl" />
-      <div className="pointer-events-none absolute left-[45%] top-8 size-64 rounded-full bg-violet-200/20 blur-3xl" />
+      <div className="pointer-events-none absolute -left-28 -top-12 size-[25rem] rounded-full bg-blue-300/38 blur-[110px]" />
+      <div className="pointer-events-none absolute right-[-3rem] top-16 size-[24rem] rounded-full bg-indigo-300/30 blur-[110px]" />
+      <div className="pointer-events-none absolute left-[42%] top-2 size-[20rem] rounded-full bg-sky-200/32 blur-[100px]" />
 
-      <div className="relative min-h-screen w-full px-4 py-5 sm:px-6 lg:px-8">
+      <div className="relative min-h-screen w-full px-4 py-5 sm:px-6 lg:px-8 lg:py-6">
         <Sidebar
           currentPath={currentPath}
           collapsed={sidebarCollapsed}
@@ -101,7 +101,7 @@ export function AppShell({ currentPath, onNavigate, children }: AppShellProps) {
 
         <main
           className={cn(
-            "space-y-6 pb-6 transition-[margin] duration-200",
+            "relative space-y-7 pb-7 transition-[margin] duration-200",
             "lg:mr-6",
             sidebarVisuallyExpanded ? "lg:ml-[18.75rem]" : "lg:ml-[6.5rem]",
           )}

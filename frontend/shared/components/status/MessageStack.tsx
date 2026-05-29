@@ -21,15 +21,15 @@ type MessageStackProps = {
 
 function variantStyles(variant: MessageVariant): string {
   if (variant === "success") {
-    return "border-emerald-200 bg-emerald-50/80 text-emerald-800";
+    return "border-emerald-200/95 bg-emerald-50/90 text-emerald-800";
   }
   if (variant === "warning") {
-    return "border-amber-200 bg-amber-50/80 text-amber-800";
+    return "border-amber-200/95 bg-amber-50/90 text-amber-800";
   }
   if (variant === "error") {
-    return "border-rose-200 bg-rose-50/80 text-rose-800";
+    return "border-rose-200/95 bg-rose-50/90 text-rose-800";
   }
-  return "border-blue-200 bg-blue-50/80 text-blue-800";
+  return "border-blue-200/95 bg-blue-50/90 text-blue-800";
 }
 
 function MessageIcon({ variant }: { variant: MessageVariant }) {
@@ -53,11 +53,11 @@ function MessageItem({
   size: MessageItemSize;
 }) {
   const textSize = size === "section" ? "text-xs sm:text-sm" : "text-sm";
-  const containerSpacing = size === "section" ? "rounded-lg px-3 py-2.5" : "rounded-xl px-4 py-3";
+  const containerSpacing = size === "section" ? "rounded-lg px-3 py-2.5" : "rounded-xl px-4 py-3.5";
   return (
     <div
       className={cn(
-        "border shadow-sm",
+        "border shadow-[0_14px_28px_-22px_rgba(30,64,175,0.4)] backdrop-blur-[0.5px]",
         containerSpacing,
         textSize,
         variantStyles(item.variant),

@@ -266,7 +266,8 @@ export function AppDropdown({
           aria-expanded={isOpen}
           disabled={disabled || loading}
           className={cn(
-            "w-full justify-between rounded-md border-input bg-white font-normal",
+            "w-full justify-between rounded-lg border-blue-100/95 bg-white/90 font-medium text-slate-800 shadow-[0_16px_34px_-24px_rgba(59,130,246,0.5)] backdrop-blur-sm transition-[border-color,box-shadow,background-color,transform] hover:border-blue-200 hover:bg-white/95 hover:-translate-y-0.5 focus-visible:translate-y-0",
+            isOpen && "border-blue-200 bg-white/95 shadow-[0_20px_40px_-24px_rgba(59,130,246,0.52)]",
             isCompact ? "h-8 px-2.5 py-1.5 text-xs" : "h-10 px-3 py-2 text-sm",
           )}
           onClick={() => setIsOpen((current) => !current)}
@@ -286,13 +287,13 @@ export function AppDropdown({
           ref={menuRef}
           data-app-dropdown-menu="true"
           style={menuStyle}
-          className="pointer-events-auto rounded-md border border-input bg-white p-2 shadow-lg"
+          className="pointer-events-auto rounded-xl border border-blue-100/95 bg-white/88 p-2 shadow-[0_16px_34px_-22px_rgba(59,130,246,0.5)] backdrop-blur-[14px]"
         >
           {searchable ? (
             <input
               type="text"
               className={cn(
-                "mb-2 w-full rounded-md border border-input bg-white outline-none focus:ring-2 focus:ring-ring",
+                "mb-2 w-full rounded-lg border border-blue-100/85 bg-white/76 outline-none transition-[border-color,box-shadow,background-color] focus:border-blue-300 focus:bg-white/92 focus:ring-2 focus:ring-ring focus:ring-offset-1",
                 isCompact ? "h-8 px-2.5 text-xs" : "h-9 px-3 text-sm",
               )}
               placeholder="Search..."
@@ -330,18 +331,28 @@ export function AppDropdown({
                       <button
                         type="button"
                         className={cn(
-                          "flex w-full items-center justify-between rounded-md px-2 text-left",
+                          "flex w-full items-center justify-between rounded-lg border border-transparent px-2 text-left text-slate-800 transition-[background-color,border-color,box-shadow,color] hover:border-blue-300/60 hover:bg-blue-200/46",
                           isCompact ? "py-1.5 text-xs" : "py-2 text-sm",
-                          isHighlighted && "bg-blue-50",
-                          !isHighlighted && "hover:bg-slate-100",
+                          isSelected && "border-blue-600/80 bg-blue-600/58 text-slate-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.45),inset_0_0_0_1px_rgba(30,64,175,0.22),0_12px_22px_-16px_rgba(30,64,175,0.75)]",
+                          isSelected && isHighlighted && "border-blue-700/85 bg-blue-700/62",
+                          isSelected && !isHighlighted && "hover:border-blue-700/85 hover:bg-blue-700/60",
+                          isHighlighted && !isSelected && "border-blue-300/70 bg-blue-300/50 text-slate-900",
                         )}
                         onMouseEnter={() => setHighlightedIndex(index)}
                         onClick={() => selectValue(option.value)}
                       >
-                        <span className={cn("truncate", isMuted && "text-slate-400")}>{option.label}</span>
+                        <span
+                          className={cn(
+                            "truncate",
+                            isSelected && "rounded-md bg-white/30 px-1.5 py-0.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.35)]",
+                            isMuted && "text-slate-400",
+                          )}
+                        >
+                          {option.label}
+                        </span>
                         <Check
                           className={cn(
-                            "text-blue-600",
+                            isSelected ? "text-blue-700" : "text-blue-600",
                             isCompact ? "size-3.5" : "size-4",
                             isSelected ? "opacity-100" : "opacity-0",
                           )}

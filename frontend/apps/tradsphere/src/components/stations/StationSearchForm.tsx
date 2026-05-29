@@ -46,14 +46,14 @@ export function StationSearchForm({
   ];
 
   return (
-    <Section className="rounded-2xl border border-slate-200 bg-white p-5 shadow-soft">
+    <Section className="rounded-[1.45rem] border border-blue-100/90 bg-white/95 p-5 shadow-soft">
       <SectionHeader
         title="Stations Search"
         description="Search by one or more fields. Results load only after you click Search."
       />
 
       <form
-        className="space-y-4 px-1"
+        className="space-y-5 px-1.5"
         onSubmit={(event) => {
           event.preventDefault();
           if (disabled || searching || !canSubmit) {
@@ -62,7 +62,7 @@ export function StationSearchForm({
           onSubmit();
         }}
       >
-        <div className="grid grid-cols-1 gap-3 md:grid-cols-2 xl:grid-cols-4">
+        <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2 xl:grid-cols-4">
           <Field label="Station Code">
             <ClearableInput
               id="stations-search-code"
@@ -124,8 +124,9 @@ export function StationSearchForm({
 
         </div>
 
-        <div className="flex flex-wrap items-center justify-end gap-2">
-          <p className="text-xs text-slate-500">{resultText ?? ""}</p>
+        <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-100/70 bg-blue-50/40 px-3 py-2">
+          <p className="text-xs font-medium text-slate-500">{resultText ?? ""}</p>
+          <div className="flex flex-wrap items-center justify-end gap-2">
           {canClear ? (
             <Button type="button" variant="outline" onClick={onClear} disabled={disabled || searching}>
               Clear
@@ -137,10 +138,11 @@ export function StationSearchForm({
               Search
             </Button>
           ) : null}
+          </div>
         </div>
       </form>
 
-      {message ? <p className="mt-2 text-xs text-amber-700">{message}</p> : null}
+      {message ? <p className="mt-3 rounded-lg border border-amber-200/85 bg-amber-50/90 px-3 py-2 text-xs text-amber-700">{message}</p> : null}
     </Section>
   );
 }
@@ -148,7 +150,7 @@ export function StationSearchForm({
 function Field({ label, children }: { label: string; children: ReactNode }) {
   return (
     <label className="block min-w-0">
-      <span className="mb-1 block text-xs font-medium uppercase tracking-[0.08em] text-slate-500">{label}</span>
+      <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">{label}</span>
       {children}
     </label>
   );
@@ -182,7 +184,7 @@ function ClearableInput({
         type="button"
         aria-label="Clear input"
         onClick={() => onChange("")}
-        className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 opacity-0 transition hover:text-slate-600 focus-visible:opacity-100 focus-visible:outline-none group-hover:opacity-100 group-focus-within:opacity-100"
+        className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 opacity-0 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:opacity-100 focus-visible:outline-none group-hover:opacity-100 group-focus-within:opacity-100"
         style={{ visibility: hasValue ? "visible" : "hidden" }}
         tabIndex={hasValue ? 0 : -1}
       >

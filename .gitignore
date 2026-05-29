@@ -73,3 +73,6 @@ docs/
 
 # Python / pytest
 .pytest_cache/
+
+# Local AI skill/reference files
+.ai/

@@ -11,7 +11,7 @@ function OverlayPanel({ message, panelClassName }: OverlayPanelProps) {
   return (
     <div
       className={cn(
-        "flex items-center gap-2 rounded-xl border border-slate-200 bg-white/95 px-4 py-3 text-sm font-medium text-slate-700 shadow-soft",
+        "flex items-center gap-2.5 rounded-2xl border border-blue-100/90 bg-white/95 px-5 py-3.5 text-sm font-medium text-slate-700 shadow-soft",
         panelClassName,
       )}
     >
@@ -29,7 +29,7 @@ export type PageLoadingOverlayProps = {
 
 export function PageLoadingOverlay({ message, className, panelClassName }: PageLoadingOverlayProps) {
   return (
-    <div className={cn("fixed inset-0 z-30 flex items-center justify-center bg-slate-950/25 backdrop-blur-[1.5px]", className)}>
+    <div className={cn("fixed inset-0 z-30 flex items-center justify-center bg-slate-950/30 backdrop-blur-[2px]", className)}>
       <OverlayPanel message={message} panelClassName={panelClassName} />
     </div>
   );
@@ -43,7 +43,7 @@ export type SectionLoadingOverlayProps = {
 
 export function SectionLoadingOverlay({ message, className, panelClassName }: SectionLoadingOverlayProps) {
   return (
-    <div className={cn("absolute inset-0 z-20 flex items-center justify-center rounded-2xl bg-white/70 backdrop-blur-[1px]", className)}>
+    <div className={cn("absolute inset-0 z-20 flex items-center justify-center rounded-2xl bg-slate-100/68 backdrop-blur-[1.25px]", className)}>
       <OverlayPanel message={message} panelClassName={panelClassName} />
     </div>
   );

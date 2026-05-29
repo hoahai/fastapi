@@ -5270,7 +5270,6 @@ export default function InvoiceChecklistPage() {
           eyebrow="TradSphere"
           title="Invoice Reconciliation Checklist"
           description="Load a billing period, review checklist status by account and station, and track reconciliation notes with proof links."
-          gradientVariant="app"
         />
       )}
       footer={cacheStatus ? (

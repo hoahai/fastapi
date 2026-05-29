@@ -26,18 +26,18 @@ export function DashboardPanel({
     <SectionCard
       className={className}
       title={(
-        <span className="flex items-center gap-2">
+        <span className="flex items-center gap-2.5">
           {icon}
           <span>{title}</span>
         </span>
       )}
-      actions={<div className="flex items-center gap-1">{actions}</div>}
+      actions={<div className="flex items-center gap-1.5">{actions}</div>}
       contentClassName="space-y-5"
     >
-        <div className="flex justify-end">
+        <div className="flex justify-end rounded-xl border border-blue-100/70 bg-blue-50/35 px-3 py-2">
           <Input
             placeholder="Search"
-            className="max-w-xs"
+            className="max-w-xs bg-white/90"
             value={searchValue}
             onChange={(event) => onSearchChange(event.target.value)}
           />

@@ -14,7 +14,7 @@ export interface AppPageLayoutProps {
 const SIDEBAR_COLLAPSED_STORAGE_KEY = "workspace.sidebar.collapsed";
 const LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY = "tradsphere:ui:sidebarCollapsed:v1";
 const SIDEBAR_COLLAPSED_EVENT = "workspace-sidebar-collapsed-change";
-const PAGE_FOOTER_SPACER_CLASSNAME = "h-[calc(4.75rem+env(safe-area-inset-bottom))]";
+const PAGE_FOOTER_SPACER_CLASSNAME = "h-[calc(5.25rem+env(safe-area-inset-bottom))]";
 
 function readSidebarCollapsedState(): boolean {
   if (typeof window === "undefined") {
@@ -75,18 +75,18 @@ export function AppPageLayout({
   return (
     <div
       className={cn(
-        "mx-auto flex w-full max-w-[1600px] flex-1 flex-col gap-5 pb-6 xl:min-h-[calc(100dvh-3.5rem)]",
+        "mx-auto flex w-full max-w-[1600px] flex-1 flex-col gap-7 pb-7 xl:min-h-[calc(100dvh-3.5rem)]",
         className,
       )}
     >
       {banner}
       {pageMessages}
-      <div className={cn("flex min-h-0 flex-1 flex-col gap-5", contentClassName)}>
+      <div className={cn("flex min-h-0 flex-1 flex-col gap-6", contentClassName)}>
         {children}
         {footer ? <div aria-hidden className={cn("shrink-0", PAGE_FOOTER_SPACER_CLASSNAME)} /> : null}
       </div>
       {footer ? (
-        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(0.75rem+env(safe-area-inset-bottom))] z-10">
+        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(0.85rem+env(safe-area-inset-bottom))] z-10">
           <div className={`mx-4 sm:mx-6 lg:mr-6 ${sidebarVisuallyExpanded ? "lg:ml-[18.75rem]" : "lg:ml-[6.5rem]"}`}>
             <div className="mx-auto w-full max-w-[1600px]">
               {footer}
