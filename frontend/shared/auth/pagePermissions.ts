@@ -19,6 +19,10 @@ const APP_PAGE_CATALOG: Record<string, AppPageDefinition[]> = {
     { key: "shiftzy_home", label: "Schedules", route: "/shiftzy/home" },
     { key: "shiftzy_employees", label: "Employees", route: "/shiftzy/employees" },
   ],
+  leavesphere: [
+    { key: "leavesphere_home", label: "My PTO / Manager PTO", route: "/leavesphere/home" },
+    { key: "leavesphere_admin_pto", label: "Admin PTO", route: "/leavesphere/admin-pto" },
+  ],
 };
 
 function normalize(value: string): string {

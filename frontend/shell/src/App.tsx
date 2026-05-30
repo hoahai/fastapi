@@ -7,7 +7,7 @@ import { useRouteScrollRestoration } from "@shell/hooks/useRouteScrollRestoratio
 import { AuthProvider } from "@shared/auth/AuthProvider";
 import { AuthLoadingFallback, RequirePermission, RequireTenantAccess, shouldProtectFrontendAuth } from "@shared/auth/guards";
 import { canAccessAppRoute } from "@shared/auth/pagePermissions";
-import { hasAppViewAccess, hasSuperAdminAccess } from "@shared/auth/permissions";
+import { hasAppAdminAccess, hasAppViewAccess, hasSuperAdminAccess } from "@shared/auth/permissions";
 import { AuthCallbackPage, InviteAcceptPage, LoginPage, PendingInvitePage, UnauthorizedPage, UpdatePasswordPage } from "@shared/auth/pages";
 import { useAuth } from "@shared/auth/useAuth";
 
@@ -19,6 +19,9 @@ const InvoiceChecklistPage = lazy(() => import("@tradsphere/pages/InvoiceCheckli
 const TrafficPage = lazy(() => import("@tradsphere/pages/TrafficPage"));
 const ShiftzyEmployeesPage = lazy(() => import("@shiftzy/pages/ShiftzyEmployeesPage"));
 const ShiftzySchedulePage = lazy(() => import("@shiftzy/pages/ShiftzySchedulePage"));
+const LeaveSphereMyPtoPage = lazy(() => import("@leavesphere/pages/LeaveSphereMyPtoPage"));
+const LeaveSphereAdminPtoPage = lazy(() => import("@leavesphere/pages/LeaveSphereAdminPtoPage"));
+const LeaveSphereQuickApprovalPage = lazy(() => import("@leavesphere/pages/LeaveSphereQuickApprovalPage"));
 const AdminUsersPage = lazy(() => import("@shell/pages/AdminUsersPage"));
 const AppScopedAdminPage = lazy(() => import("@shell/pages/AppScopedAdminPage"));
 const ProfilePage = lazy(() => import("@shell/pages/ProfilePage"));
@@ -62,6 +65,22 @@ function parseScopedAdminRoute(path: string): string | null {
     return null;
   }
   return String(match[1] || "").trim().toLowerCase() || null;
+}
+
+function parseLeaveSphereQuickApprovalToken(path: string): string | null {
+  const match = String(path || "").match(/^\/leavesphere\/quick-approval\/([^/]+)$/);
+  if (!match) {
+    return null;
+  }
+  const encodedToken = String(match[1] || "").trim();
+  if (!encodedToken) {
+    return null;
+  }
+  try {
+    return decodeURIComponent(encodedToken);
+  } catch {
+    return null;
+  }
 }
 
 function formatAppLabel(appCode: string): string {
@@ -135,6 +154,12 @@ function toScrollStorageKey(route: string): string {
   }
   if (route === "/shiftzy/employees") {
     return "shiftzy.employees.scrollY";
+  }
+  if (route === "/leavesphere/home") {
+    return "leavesphere.home.scrollY";
+  }
+  if (route === "/leavesphere/admin-pto") {
+    return "leavesphere.admin-pto.scrollY";
   }
   if (route === "/admin/users") {
     return "workspace.admin.users.scrollY";
@@ -289,6 +314,34 @@ function RequireAppPageRoute({
   return <>{children}</>;
 }
 
+function RequireAppAdmin({
+  appCode,
+  children,
+  fallback,
+}: {
+  appCode: string;
+  children: ReactNode;
+  fallback: ReactNode;
+}) {
+  const auth = useAuth();
+  if (!shouldProtectFrontendAuth()) {
+    return <>{children}</>;
+  }
+  if (auth.status === "loading") {
+    return <AuthLoadingFallback />;
+  }
+  if (auth.status !== "authenticated") {
+    return <>{fallback}</>;
+  }
+  if (isAccessResolutionPending(auth.status, auth.accessLoading, auth.accessProfile, auth.accessError)) {
+    return <AuthLoadingFallback />;
+  }
+  if (!hasAppAdminAccess(auth.accessProfile, appCode)) {
+    return <>{fallback}</>;
+  }
+  return <>{children}</>;
+}
+
 function RequireAdminScope({ children, fallback }: { children: ReactNode; fallback: ReactNode }) {
   const auth = useAuth();
   if (!shouldProtectFrontendAuth()) {
@@ -407,6 +460,8 @@ function App() {
       "/tradsphere/invoice-checklists",
       "/shiftzy/home",
       "/shiftzy/employees",
+      "/leavesphere/home",
+      "/leavesphere/admin-pto",
     ]);
   }, []);
   const scopedAdminAppCode = useMemo(() => parseScopedAdminRoute(frontendPath), [frontendPath]);
@@ -455,6 +510,7 @@ function App() {
     const token = frontendPath.replace("/auth/invite/", "").trim();
     return token || null;
   }, [frontendPath]);
+  const leaveSphereQuickApprovalToken = useMemo(() => parseLeaveSphereQuickApprovalToken(frontendPath), [frontendPath]);
 
   function renderTradsphereRoute() {
     return (
@@ -534,6 +590,33 @@ function App() {
     );
   }
 
+  function renderLeaveSphereRoute() {
+    return (
+      <RequireSignedIn>
+        <RequireTenantAccess fallback={<RedirectToHome />}>
+          <RequireAppView appCode="leavesphere" fallback={<RedirectToHome />}>
+            {frontendPath === "/leavesphere/home" ? (
+              <RequireAppPageRoute appCode="leavesphere" route="/leavesphere/home" fallback={<RedirectToHome />}>
+                <Suspense fallback={<RouteChunkFallback />}>
+                  <LeaveSphereMyPtoPage />
+                </Suspense>
+              </RequireAppPageRoute>
+            ) : null}
+            {frontendPath === "/leavesphere/admin-pto" ? (
+              <RequireAppAdmin appCode="leavesphere" fallback={<RedirectToHome />}>
+                <RequireAppPageRoute appCode="leavesphere" route="/leavesphere/admin-pto" fallback={<RedirectToHome />}>
+                  <Suspense fallback={<RouteChunkFallback />}>
+                    <LeaveSphereAdminPtoPage />
+                  </Suspense>
+                </RequireAppPageRoute>
+              </RequireAppAdmin>
+            ) : null}
+          </RequireAppView>
+        </RequireTenantAccess>
+      </RequireSignedIn>
+    );
+  }
+
   function renderScopedAppAdminRoute(appCode: string) {
     const normalizedAppCode = String(appCode || "").trim().toLowerCase();
     if (!normalizedAppCode) {
@@ -595,10 +678,16 @@ function App() {
       {frontendPath === "/auth/unauthorized" ? <UnauthorizedPage /> : null}
       {frontendPath === "/auth/invite/pending" ? <PendingInvitePage /> : null}
       {inviteToken ? <InviteAcceptPage token={inviteToken} /> : null}
+      {leaveSphereQuickApprovalToken ? (
+        <Suspense fallback={<RouteChunkFallback />}>
+          <LeaveSphereQuickApprovalPage token={leaveSphereQuickApprovalToken} />
+        </Suspense>
+      ) : null}
       {frontendPath === "/profile" ? renderProfileRoute() : null}
       {frontendPath === "/admin/users" ? renderAdminRoute() : null}
       {frontendPath.startsWith("/tradsphere/") ? renderTradsphereRoute() : null}
       {frontendPath.startsWith("/shiftzy/") ? renderShiftzyRoute() : null}
+      {frontendPath.startsWith("/leavesphere/") && !leaveSphereQuickApprovalToken ? renderLeaveSphereRoute() : null}
       {scopedAdminAppCode ? renderScopedAppAdminRoute(scopedAdminAppCode) : null}
       {frontendPath === HOME_ROUTE ? (
         <RequireSignedIn>
@@ -607,7 +696,7 @@ function App() {
           </Suspense>
         </RequireSignedIn>
       ) : null}
-      {!knownRoutes.has(frontendPath) && !inviteToken && !scopedAdminAppCode ? (
+      {!knownRoutes.has(frontendPath) && !inviteToken && !scopedAdminAppCode && !leaveSphereQuickApprovalToken ? (
         <Suspense fallback={<RouteChunkFallback />}>
           <WorkspaceNotFoundPage onNavigate={navigate} />
         </Suspense>
@@ -627,6 +716,8 @@ function App() {
               {routeContent}
             </main>
           </div>
+        ) : leaveSphereQuickApprovalToken ? (
+          <>{routeContent}</>
         ) : (
           <AppShell currentPath={frontendPath} onNavigate={navigate}>
             {routeContent}

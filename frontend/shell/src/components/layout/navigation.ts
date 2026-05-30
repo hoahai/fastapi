@@ -1,5 +1,6 @@
 import {
   CalendarClock,
+  CalendarDays,
   ClipboardCheck,
   ContactRound,
   House,
@@ -8,6 +9,7 @@ import {
   RadioTower,
   Send,
   Search,
+  ShieldCheck,
   UserCheck,
   Users,
   type LucideIcon,
@@ -84,6 +86,29 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
     ],
   },
   {
+    id: "leavesphere",
+    label: "LeaveSphere",
+    description: "PTO and request management",
+    route: "/leavesphere/home",
+    icon: CalendarDays,
+    available: true,
+    activeMatchPrefix: "/leavesphere/",
+    children: [
+      {
+        id: "leavesphere-home",
+        label: "My PTO / Manager PTO",
+        route: "/leavesphere/home",
+        available: true,
+      },
+      {
+        id: "leavesphere-admin-pto",
+        label: "Admin PTO",
+        route: "/leavesphere/admin-pto",
+        available: true,
+      },
+    ],
+  },
+  {
     id: "spendsphere",
     label: "SpendSphere",
     description: "Coming soon",
@@ -148,3 +173,5 @@ export const TRADSPHERE_INVOICE_CHECKLISTS_CHILD_ICON = ClipboardCheck;
 export const TRADSPHERE_USERS_ACCESS_CHILD_ICON = UserCheck;
 export const SHIFTZY_SCHEDULES_CHILD_ICON = CalendarClock;
 export const SHIFTZY_ACCOUNTS_CHILD_ICON = Users;
+export const LEAVESPHERE_MY_PTO_CHILD_ICON = CalendarDays;
+export const LEAVESPHERE_ADMIN_PTO_CHILD_ICON = ShieldCheck;

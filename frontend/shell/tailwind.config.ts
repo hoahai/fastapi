@@ -8,6 +8,7 @@ const config: Config = {
     "../apps/tradsphere/src/**/*.{ts,tsx}",
     "../apps/home/src/**/*.{ts,tsx}",
     "../apps/shiftzy/src/**/*.{ts,tsx}",
+    "../apps/leavesphere/src/**/*.{ts,tsx}",
     "../shared/**/*.{ts,tsx}",
   ],
   theme: {

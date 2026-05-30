@@ -17,6 +17,7 @@ export default {
       "@tradsphere": path.resolve(shellRoot, "../apps/tradsphere/src"),
       "@home": path.resolve(shellRoot, "../apps/home/src"),
       "@shiftzy": path.resolve(shellRoot, "../apps/shiftzy/src"),
+      "@leavesphere": path.resolve(shellRoot, "../apps/leavesphere/src"),
       "@shared": path.resolve(shellRoot, "../shared"),
       react: path.resolve(shellNodeModules, "react"),
       "react-dom": path.resolve(shellNodeModules, "react-dom"),
