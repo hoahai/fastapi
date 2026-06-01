@@ -4,6 +4,7 @@ import { CheckCircle2, Circle, Pencil } from "lucide-react";
 import { EntityItemCard } from "@/components/dashboard/EntityItemCard";
 import { FloatingActionMenu, type FloatingActionMenuItem } from "@/components/dashboard/FloatingActionMenu";
 import { cn } from "@/lib/utils";
+import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 
 import type { EsnumItem } from "./types";
 
@@ -64,72 +65,73 @@ export function ScheduleCard({ esnum, onClick, onEditEstimate, disabled }: Sched
 
   return (
     <>
-      <div
-        ref={anchorRef}
-        className="shrink-0"
-        title={esnum.hasSchedule ? undefined : "No schedule yet"}
-        onMouseEnter={() => {
-          clearCloseTimer();
-          setIsCardHovered(true);
-        }}
-        onMouseLeave={() => {
-          setIsCardHovered(false);
-          if (!isMenuHovered && !isFocusWithin) {
-            queueMenuClose();
-          }
-        }}
-        onFocusCapture={() => {
-          clearCloseTimer();
-          setIsFocusWithin(true);
-        }}
-        onBlurCapture={() => {
-          setIsFocusWithin(false);
-          if (!isCardHovered && !isMenuHovered) {
-            queueMenuClose();
-          }
-        }}
-      >
-        <EntityItemCard
-          rootAs={isScheduleClickable ? "button" : "div"}
-          rootClassName={cn(
-            "min-w-44 p-5",
-            isScheduleClickable
-              ? "cursor-pointer"
-              : "cursor-default hover:translate-y-0 group-hover:translate-y-0",
-          )}
-          onClick={
-            isScheduleClickable
-              ? () => {
-                  onClick?.();
-                }
-              : undefined
-          }
-          disabled={disabled}
-          circleClassName={cn(
-            "text-2xl font-semibold tracking-tight",
-            isScheduleClickable
-              ? "bg-blue-50 text-blue-600 group-hover:bg-blue-100"
-              : "bg-blue-50 text-blue-600 group-hover:bg-blue-50 group-hover:scale-100",
-          )}
-          badge={
-            esnum.hasSchedule ? (
-              <span className="absolute -right-6 -top-1 z-20 inline-flex items-center gap-1 rounded-full bg-emerald-100/95 px-2 py-0.5 text-[11px] font-semibold leading-none text-emerald-800 shadow-sm">
-                <CheckCircle2 className="size-3" />
-                Scheduled
-              </span>
-            ) : (
-              <span className="absolute -right-6 -top-1 z-20 inline-flex items-center gap-1 rounded-full bg-slate-200/95 px-2 py-0.5 text-[11px] font-semibold leading-none text-slate-700 shadow-sm">
-                <Circle className="size-3" />
-                No Schedule
-              </span>
-            )
-          }
-          circleContent={esnum.estnum}
-          title={esnum.name}
-          subtitle={note}
-          srOnlyText={esnum.hasSchedule ? "Has schedule" : "No schedule yet"}
-        />
-      </div>
+      <TooltipTarget text={esnum.hasSchedule ? null : "No schedule yet"}>
+        <div
+          ref={anchorRef}
+          className="shrink-0"
+          onMouseEnter={() => {
+            clearCloseTimer();
+            setIsCardHovered(true);
+          }}
+          onMouseLeave={() => {
+            setIsCardHovered(false);
+            if (!isMenuHovered && !isFocusWithin) {
+              queueMenuClose();
+            }
+          }}
+          onFocusCapture={() => {
+            clearCloseTimer();
+            setIsFocusWithin(true);
+          }}
+          onBlurCapture={() => {
+            setIsFocusWithin(false);
+            if (!isCardHovered && !isMenuHovered) {
+              queueMenuClose();
+            }
+          }}
+        >
+          <EntityItemCard
+            rootAs={isScheduleClickable ? "button" : "div"}
+            rootClassName={cn(
+              "min-w-44 p-5",
+              isScheduleClickable
+                ? "cursor-pointer"
+                : "cursor-default hover:translate-y-0 group-hover:translate-y-0",
+            )}
+            onClick={
+              isScheduleClickable
+                ? () => {
+                    onClick?.();
+                  }
+                : undefined
+            }
+            disabled={disabled}
+            circleClassName={cn(
+              "text-2xl font-semibold tracking-tight",
+              isScheduleClickable
+                ? "bg-blue-50 text-blue-600 group-hover:bg-blue-100"
+                : "bg-blue-50 text-blue-600 group-hover:bg-blue-50 group-hover:scale-100",
+            )}
+            badge={
+              esnum.hasSchedule ? (
+                <span className="absolute -right-6 -top-1 z-20 inline-flex items-center gap-1 rounded-full bg-emerald-100/95 px-2 py-0.5 text-[11px] font-semibold leading-none text-emerald-800 shadow-sm">
+                  <CheckCircle2 className="size-3" />
+                  Scheduled
+                </span>
+              ) : (
+                <span className="absolute -right-6 -top-1 z-20 inline-flex items-center gap-1 rounded-full bg-slate-200/95 px-2 py-0.5 text-[11px] font-semibold leading-none text-slate-700 shadow-sm">
+                  <Circle className="size-3" />
+                  No Schedule
+                </span>
+              )
+            }
+            circleContent={esnum.estnum}
+            title={esnum.name}
+            subtitle={note}
+            srOnlyText={esnum.hasSchedule ? "Has schedule" : "No schedule yet"}
+          />
+        </div>
+      </TooltipTarget>
       <FloatingActionMenu
         open={isMenuOpen}
         anchorRef={anchorRef}

@@ -19,9 +19,9 @@ const InvoiceChecklistPage = lazy(() => import("@tradsphere/pages/InvoiceCheckli
 const TrafficPage = lazy(() => import("@tradsphere/pages/TrafficPage"));
 const ShiftzyEmployeesPage = lazy(() => import("@shiftzy/pages/ShiftzyEmployeesPage"));
 const ShiftzySchedulePage = lazy(() => import("@shiftzy/pages/ShiftzySchedulePage"));
-const LeaveSphereMyPtoPage = lazy(() => import("@leavesphere/pages/LeaveSphereMyPtoPage"));
-const LeaveSphereAdminPtoPage = lazy(() => import("@leavesphere/pages/LeaveSphereAdminPtoPage"));
-const LeaveSphereQuickApprovalPage = lazy(() => import("@leavesphere/pages/LeaveSphereQuickApprovalPage"));
+const LeaveSphereMyPtoPage = lazy(() => import("@leavesphere/pages/MyPtoPage"));
+const LeaveSphereAdminPtoPage = lazy(() => import("@leavesphere/pages/AdminPtoPage"));
+const LeaveSphereQuickApprovalPage = lazy(() => import("@leavesphere/pages/QuickApprovalPage"));
 const AdminUsersPage = lazy(() => import("@shell/pages/AdminUsersPage"));
 const AppScopedAdminPage = lazy(() => import("@shell/pages/AppScopedAdminPage"));
 const ProfilePage = lazy(() => import("@shell/pages/ProfilePage"));

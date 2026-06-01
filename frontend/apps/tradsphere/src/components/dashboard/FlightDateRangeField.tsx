@@ -3,6 +3,7 @@ import { CalendarDays } from "lucide-react";
 
 import { TRADSPHERE_BROADCAST_TIMEZONE } from "@/lib/broadcastCalendar";
 import { Input } from "@/components/ui/input";
+import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 import { FlightRangeSelector, type FlightRangePresetState } from "./FlightRangeSelector";
 
 const MONDAY_WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
@@ -148,15 +149,22 @@ export function DateInputField({
   onChange,
   disabled,
   label,
+  minDate,
+  maxDate,
+  openCalendarSignal,
 }: {
   id: string;
   value: string;
   onChange: (nextValue: string) => void;
   disabled: boolean;
   label: string;
+  minDate?: string;
+  maxDate?: string;
+  openCalendarSignal?: number;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
+  const lastOpenSignalRef = useRef<number | undefined>(openCalendarSignal);
 
   const today = useMemo(() => getTodayInChicago(), []);
   const parsed = useMemo(() => parseIsoDate(value), [value]);
@@ -202,6 +210,17 @@ export function DateInputField({
     };
   }, [isCalendarOpen]);
 
+  useEffect(() => {
+    if (disabled || openCalendarSignal === undefined) {
+      return;
+    }
+    if (lastOpenSignalRef.current === openCalendarSignal) {
+      return;
+    }
+    lastOpenSignalRef.current = openCalendarSignal;
+    setIsCalendarOpen(true);
+  }, [disabled, openCalendarSignal]);
+
   function handleToggleCalendar() {
     if (disabled) {
       return;
@@ -210,6 +229,12 @@ export function DateInputField({
   }
 
   function handleSelectDate(isoDate: string) {
+    if (minDate && isoDate < minDate) {
+      return;
+    }
+    if (maxDate && isoDate > maxDate) {
+      return;
+    }
     onChange(isoDate);
     setIsCalendarOpen(false);
   }
@@ -228,17 +253,18 @@ export function DateInputField({
 
   return (
     <div ref={containerRef} className="relative">
-      <Input
-        id={id}
-        type="text"
-        value={displayValue}
-        readOnly
-        onClick={handleToggleCalendar}
-        disabled={disabled}
-        className="cursor-pointer pr-9"
-        placeholder="MM/DD/YYYY"
-        title={`Scheduling date in ${TRADSPHERE_BROADCAST_TIMEZONE}. Calendar starts Monday.`}
-      />
+      <TooltipTarget text={`Scheduling date in ${TRADSPHERE_BROADCAST_TIMEZONE}. Calendar starts Monday.`}>
+        <Input
+          id={id}
+          type="text"
+          value={displayValue}
+          readOnly
+          onClick={handleToggleCalendar}
+          disabled={disabled}
+          className="cursor-pointer pr-9"
+          placeholder="MM/DD/YYYY"
+        />
+      </TooltipTarget>
       <button
         type="button"
         onClick={handleToggleCalendar}
@@ -286,11 +312,16 @@ export function DateInputField({
             {calendarDays.map((day) => {
               const isSelected = day.isoDate === value;
               const isToday = day.isoDate === toIsoDate(today.year, today.month, today.day);
+              const isOutOfRange = Boolean(
+                (minDate && day.isoDate < minDate)
+                || (maxDate && day.isoDate > maxDate),
+              );
               return (
                 <button
                   key={day.isoDate}
                   type="button"
                   onClick={() => handleSelectDate(day.isoDate)}
+                  disabled={isOutOfRange}
                   className={[
                     "h-9 rounded-md text-sm transition-colors",
                     day.inCurrentMonth ? "text-slate-800" : "text-slate-400",
@@ -298,6 +329,7 @@ export function DateInputField({
                       ? "bg-blue-600 font-semibold text-white hover:bg-blue-600"
                       : "hover:bg-slate-100",
                     !isSelected && isToday ? "border border-blue-300" : "",
+                    isOutOfRange ? "cursor-not-allowed opacity-35 hover:bg-transparent" : "",
                   ].join(" ")}
                 >
                   {day.dayNumber}
@@ -378,21 +410,22 @@ export function FlightDateRangeField({
 
   return (
     <div ref={containerRef} className="relative">
-      <Input
-        id="estnum-flight-dates"
-        type="text"
-        value={formatRangeDisplay(flightStart, flightEnd)}
-        readOnly
-        onClick={() => {
-          if (!disabled) {
-            setIsRangePickerOpen((current) => !current);
-          }
-        }}
-        disabled={disabled}
-        className="cursor-pointer pr-10"
-        placeholder="MM/DD/YYYY → MM/DD/YYYY"
-        title={`Scheduling dates in ${TRADSPHERE_BROADCAST_TIMEZONE}. Calendar starts Monday.`}
-      />
+      <TooltipTarget text={`Scheduling dates in ${TRADSPHERE_BROADCAST_TIMEZONE}. Calendar starts Monday.`}>
+        <Input
+          id="estnum-flight-dates"
+          type="text"
+          value={formatRangeDisplay(flightStart, flightEnd)}
+          readOnly
+          onClick={() => {
+            if (!disabled) {
+              setIsRangePickerOpen((current) => !current);
+            }
+          }}
+          disabled={disabled}
+          className="cursor-pointer pr-10"
+          placeholder="MM/DD/YYYY → MM/DD/YYYY"
+        />
+      </TooltipTarget>
       <button
         type="button"
         onClick={() => {

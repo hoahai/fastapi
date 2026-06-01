@@ -5,6 +5,7 @@
 - `frontend/apps/<app>` owns app-specific pages, components, hooks, and business lib code.
 - `frontend/shared` owns reusable auth, API, cache, components, hooks, and utilities used across apps.
 - `frontend/components.json` is the shared component scaffolding config.
+- LeaveSphere-specific behavior/permission docs: `frontend/apps/leavesphere/README.md`.
 
 ## Build and Sync
 - Render/frontend build currently runs from `frontend/shell`.

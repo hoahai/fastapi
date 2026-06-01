@@ -54,6 +54,7 @@ import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
 import { LoadActionArea } from "@shared/components/layout/LoadActionArea";
 import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { SectionCard } from "@shared/components/layout/SectionCard";
+import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 import { PageLoadingLayer, SectionLoadingLayer, SectionLoadingOverlay } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
@@ -5295,6 +5296,7 @@ export default function InvoiceChecklistPage() {
 
       <SectionCard title="Period & Load" divider={false} contentClassName="pt-1">
         <LoadActionArea
+          className="rounded-none bg-transparent p-0"
           controls={(
             <div className={isCustomPeriodSelection ? "space-y-2" : undefined}>
               <AppDropdown
@@ -5382,15 +5384,16 @@ export default function InvoiceChecklistPage() {
                   className="pr-9 transition !outline-none ![box-shadow:none] !focus:outline-none !focus:ring-0 !focus:ring-offset-0 !focus:border-slate-300 !focus:shadow-none !focus:[box-shadow:none] !focus-visible:outline-none !focus-visible:ring-0 !focus-visible:ring-offset-0 !focus-visible:border-slate-300 !focus-visible:shadow-none !focus-visible:[box-shadow:none]"
                 />
                 {draftSearch ? (
-                  <button
-                    type="button"
-                    onClick={handleClearSearch}
-                    className="absolute right-2 top-1/2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
-                    aria-label="Clear search"
-                    title="Clear search"
-                  >
-                    <X className="size-3.5" />
-                  </button>
+                  <TooltipTarget text="Clear search">
+                    <button
+                      type="button"
+                      onClick={handleClearSearch}
+                      className="absolute right-2 top-1/2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+                      aria-label="Clear search"
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  </TooltipTarget>
                 ) : null}
               </div>
             </div>
@@ -5893,21 +5896,22 @@ export default function InvoiceChecklistPage() {
                                   <span className="text-xs font-semibold text-emerald-900">{formatOptionalDollar(note.amount)}</span>
                                 </div>
                                 {isCurrentChecklistNote ? (
-                                  <button
-                                    type="button"
-                                    className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                                      isSelectedChecklistStationNote
-                                        ? "border border-amber-300 bg-amber-100/80 text-amber-800"
-                                        : "border border-blue-200 bg-blue-50/70 text-blue-700 hover:border-blue-300 hover:bg-blue-100"
-                                    }`}
-                                    onClick={(event) => {
-                                      event.stopPropagation();
-                                      runStationSelect(station.id);
-                                    }}
-                                    title="Switch to this checklist station row"
-                                  >
-                                    {formatStationNoteLinkLabel(station, note, selectedChecklistForView)}
-                                  </button>
+                                  <TooltipTarget text="Switch to this checklist station row">
+                                    <button
+                                      type="button"
+                                      className={`inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                                        isSelectedChecklistStationNote
+                                          ? "border border-amber-300 bg-amber-100/80 text-amber-800"
+                                          : "border border-blue-200 bg-blue-50/70 text-blue-700 hover:border-blue-300 hover:bg-blue-100"
+                                      }`}
+                                      onClick={(event) => {
+                                        event.stopPropagation();
+                                        runStationSelect(station.id);
+                                      }}
+                                    >
+                                      {formatStationNoteLinkLabel(station, note, selectedChecklistForView)}
+                                    </button>
+                                  </TooltipTarget>
                                 ) : (
                                   <span className="inline-flex items-center gap-1 rounded-full border border-slate-300 bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.08em] text-slate-700">
                                     {formatStationNoteLinkLabel(station, note, selectedChecklistForView)}
@@ -5942,20 +5946,21 @@ export default function InvoiceChecklistPage() {
                                 Updated: {formatDateTime(note.dateUpdated || note.dateCreated || null)}
                               </p>
                               {attachmentCount > 0 ? (
-                                <button
-                                  type="button"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    setAttachmentModalNoteId(note.id);
-                                  }}
-                                  className="inline-flex h-6 min-w-6 items-center justify-center gap-1 rounded-full border border-slate-300 bg-slate-50 px-2 text-[11px] font-semibold text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                  aria-label={`View ${attachmentCount} attachment${attachmentCount > 1 ? "s" : ""}`}
-                                  title={`${attachmentCount} attachment${attachmentCount > 1 ? "s" : ""}`}
-                                >
-                                  <span className="sr-only">Attachments</span>
-                                  <Paperclip className="size-3.5" />
-                                  {attachmentCount}
-                                </button>
+                                <TooltipTarget text={`${attachmentCount} attachment${attachmentCount > 1 ? "s" : ""}`}>
+                                  <button
+                                    type="button"
+                                    onClick={(event) => {
+                                      event.stopPropagation();
+                                      setAttachmentModalNoteId(note.id);
+                                    }}
+                                    className="inline-flex h-6 min-w-6 items-center justify-center gap-1 rounded-full border border-slate-300 bg-slate-50 px-2 text-[11px] font-semibold text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                    aria-label={`View ${attachmentCount} attachment${attachmentCount > 1 ? "s" : ""}`}
+                                  >
+                                    <span className="sr-only">Attachments</span>
+                                    <Paperclip className="size-3.5" />
+                                    {attachmentCount}
+                                  </button>
+                                </TooltipTarget>
                               ) : null}
                             </div>
                           </div>

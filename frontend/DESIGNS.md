@@ -45,6 +45,21 @@
 - If a search form has no required fields, default validity is `at least one searchable field is filled`.
 - Search pages should preserve non-sensitive state across in-app navigation (draft, submitted criteria, results, cache metadata).
 
+## Search Bar Pattern
+- Distinguish **backend search forms** from **client-side filter bars**:
+- Backend search forms are explicit-submit only and must not call APIs while typing.
+- Client-side filter bars (for already-loaded lists/tables/cards) may auto-apply after typing pause.
+- Client-side filter bars should follow shared behavior:
+- Keep separate `draft` and `applied` keyword state.
+- Auto-apply on typing pause (`1000ms` debounce default).
+- Apply immediately on `Enter`, `Tab`, and `blur`.
+- `Escape` clears keyword and exits focus from the field.
+- Include a right-aligned clear `X` button shown only when draft has value.
+- Search keyword matching should include user-visible key fields (for example name/type/status/date), with normalized case-insensitive matching.
+- Date-aware filter bars should support common user-entered formats (for example `YYYY-MM-DD`, `MM/DD/YYYY`, `M/D/YYYY`, and label text like `Apr 6, 2026`) when date fields are searchable.
+- Section/table filter bars should default to compact width and right alignment above result tables (not embedded inside table header rows) unless a page-specific UX requires full-width placement.
+- Search input visual style should reuse the shared app search-field treatment used in TradSphere Traffic Records.
+
 ## Search Cache UX
 - On valid submit, show matching cached results immediately when present.
 - After showing cache, always run a background network refresh for the submitted params.
@@ -278,6 +293,10 @@
 - All icon-only controls in Station modal workflows should include both tooltip text and matching accessible `aria-label`.
 - Icon-only action controls must use clear, task-specific icons (not ambiguous glyphs) plus tooltip + `aria-label` parity.
 - Tooltip layers should not be clipped by cards/scroll containers; prefer portal/fixed-position tooltip rendering for overlay reliability.
+- Do not use browser-native `title` tooltips for product UI; always use shared tooltip component patterns.
+- Modal-local filter/search bars should reuse the same draft/applied + debounce behavior as page-level client-side filter bars when filtering already-loaded modal content.
+- Modal filter/search bars should be placed near the top of modal content, outside heavy table wrappers when possible, and should not push footer actions off-screen.
+- Modal filter/search bars should keep compact width where space allows and preserve clear-button + keyboard behavior parity with page search bars.
 - Multi-column Station modal section headers should reserve consistent header height so section divider lines align on the same horizontal baseline.
 - Traffic Delivery Method inside Station modal should use action-driven workflow (`Select`, `Add`, `Edit`) rather than direct inline field editing.
 - Contact cards inside Station modal should stay compact and action-oriented (`Copy contact`, `Edit`, `Remove`) while remaining readable.
@@ -340,7 +359,7 @@
   - `FormRow`
   - `ReadOnlyField`
   - `IconActionButton`
-  - `Tooltip`
+- `Tooltip`
   - `FloatingActionMenu`
   - `CacheStatusChip`
 - `Section` should support: title, optional description, optional actions area, optional divider, and consistent spacing.
@@ -351,6 +370,7 @@
 - Icon-only actions must use shared icon button + tooltip patterns and always include `aria-label`.
 - Floating menus/tooltips must render as overlays so they do not change layout height and are not clipped by parent containers.
 - Cache/status interactions should use one shared chip pattern for page-level and modal-level placement, refresh action, tooltip, and loading state.
+- Any new tooltip UX must reuse shared tooltip primitives/components (for example `Tooltip` and `CacheStatusChip` patterns), not ad-hoc browser `title` behavior.
 
 ## Entity Item Action Menus
 - EstNum/entity cards should keep their primary click behavior on the card itself (for example: load/show schedule).

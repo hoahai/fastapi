@@ -2,6 +2,13 @@ import type { ApiRequestOptions } from "@shared/hooks/useApiRequest";
 
 export type LeaveSpherePtoStatus = "pending" | "approved" | "rejected" | "cancelled";
 export type LeaveSpherePtoType = "vacation" | "sick" | "personal" | "floating";
+export type LeaveSphereTeamRegion = "US" | "Mexico" | "Philippines";
+
+export const LEAVESPHERE_TEAM_REGION_OPTIONS: Array<{ value: LeaveSphereTeamRegion; label: string }> = [
+  { value: "US", label: "U.S." },
+  { value: "Mexico", label: "Mexico" },
+  { value: "Philippines", label: "Philippines" },
+];
 
 export type LeaveSpherePtoBalance = {
   type: LeaveSpherePtoType;
@@ -32,6 +39,7 @@ export type LeaveSphereHoliday = {
   id: string;
   name: string;
   date: string;
+  teamRegion: LeaveSphereTeamRegion;
 };
 
 export type LeaveSphereDirectReport = {
@@ -44,6 +52,7 @@ export type LeaveSpherePtoWorkspaceData = {
   currentUserId: string;
   currentUserName: string;
   managerId: string;
+  currentUserTeamRegion: LeaveSphereTeamRegion;
   isManager: boolean;
   balances: LeaveSpherePtoBalance[];
   requests: LeaveSpherePtoRequest[];
@@ -128,6 +137,26 @@ function asString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
+export function normalizeLeaveSphereTeamRegion(value: unknown, fallback: LeaveSphereTeamRegion = "US"): LeaveSphereTeamRegion {
+  const normalized = asString(value).toLowerCase();
+  if (normalized === "us" || normalized === "u.s." || normalized === "usa" || normalized === "united states") {
+    return "US";
+  }
+  if (normalized === "mexico" || normalized === "mx") {
+    return "Mexico";
+  }
+  if (
+    normalized === "philippines"
+    || normalized === "ph"
+    || normalized === "phl"
+    || normalized === "philippine"
+    || normalized === "philipine"
+  ) {
+    return "Philippines";
+  }
+  return fallback;
+}
+
 function toIsoDate(value: Date): string {
   const year = value.getFullYear();
   const month = String(value.getMonth() + 1).padStart(2, "0");
@@ -186,12 +215,18 @@ function baseBalances(): LeaveSpherePtoBalance[] {
 function baseHolidays(referenceDate: Date): LeaveSphereHoliday[] {
   const year = referenceDate.getFullYear();
   return [
-    { id: `${year}-new-year`, name: "New Year's Day", date: `${year}-01-01` },
-    { id: `${year}-memorial-day`, name: "Memorial Day", date: `${year}-05-25` },
-    { id: `${year}-independence-day`, name: "Independence Day", date: `${year}-07-04` },
-    { id: `${year}-labor-day`, name: "Labor Day", date: `${year}-09-07` },
-    { id: `${year}-thanksgiving`, name: "Thanksgiving", date: `${year}-11-26` },
-    { id: `${year}-christmas`, name: "Christmas Day", date: `${year}-12-25` },
+    { id: `${year}-us-new-year`, name: "New Year's Day", date: `${year}-01-01`, teamRegion: "US" },
+    { id: `${year}-us-memorial-day`, name: "Memorial Day", date: `${year}-05-25`, teamRegion: "US" },
+    { id: `${year}-us-independence-day`, name: "Independence Day", date: `${year}-07-04`, teamRegion: "US" },
+    { id: `${year}-us-labor-day`, name: "Labor Day", date: `${year}-09-07`, teamRegion: "US" },
+    { id: `${year}-mx-new-year`, name: "New Year's Day", date: `${year}-01-01`, teamRegion: "Mexico" },
+    { id: `${year}-mx-labor-day`, name: "Labor Day", date: `${year}-05-01`, teamRegion: "Mexico" },
+    { id: `${year}-mx-independence-day`, name: "Independence Day", date: `${year}-09-16`, teamRegion: "Mexico" },
+    { id: `${year}-mx-revolution-day`, name: "Revolution Day", date: `${year}-11-20`, teamRegion: "Mexico" },
+    { id: `${year}-ph-new-year`, name: "New Year's Day", date: `${year}-01-01`, teamRegion: "Philippines" },
+    { id: `${year}-ph-day-of-valour`, name: "Day of Valour", date: `${year}-04-09`, teamRegion: "Philippines" },
+    { id: `${year}-ph-independence-day`, name: "Independence Day", date: `${year}-06-12`, teamRegion: "Philippines" },
+    { id: `${year}-ph-bonifacio-day`, name: "Bonifacio Day", date: `${year}-11-30`, teamRegion: "Philippines" },
   ];
 }
 
@@ -317,6 +352,7 @@ function seedWorkspace(params: {
     currentUserId: params.currentUserId,
     currentUserName: params.currentUserName,
     managerId,
+    currentUserTeamRegion: "US",
     isManager: params.isManager,
     balances: baseBalances(),
     requests: buildSeedRequests({
@@ -370,6 +406,7 @@ function normalizeNetworkWorkspace(payload: unknown): LeaveSpherePtoWorkspaceDat
   const currentUserId = asString(raw.currentUserId);
   const currentUserName = asString(raw.currentUserName);
   const managerId = asString(raw.managerId);
+  const currentUserTeamRegion = normalizeLeaveSphereTeamRegion(raw.currentUserTeamRegion);
   const isManager = Boolean(raw.isManager);
   const balancesRaw = Array.isArray(raw.balances) ? raw.balances : [];
   const requestsRaw = Array.isArray(raw.requests) ? raw.requests : [];
@@ -416,6 +453,7 @@ function normalizeNetworkWorkspace(payload: unknown): LeaveSpherePtoWorkspaceDat
       id: asString(item.id),
       name: asString(item.name),
       date: asString(item.date),
+      teamRegion: normalizeLeaveSphereTeamRegion(item.teamRegion, currentUserTeamRegion),
     }))
     .filter((item) => item.id && item.date);
 
@@ -436,6 +474,7 @@ function normalizeNetworkWorkspace(payload: unknown): LeaveSpherePtoWorkspaceDat
     currentUserId,
     currentUserName,
     managerId,
+    currentUserTeamRegion,
     isManager,
     balances: balances.length > 0 ? balances : baseBalances(),
     requests,

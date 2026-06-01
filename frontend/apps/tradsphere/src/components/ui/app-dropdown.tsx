@@ -266,7 +266,7 @@ export function AppDropdown({
           aria-expanded={isOpen}
           disabled={disabled || loading}
           className={cn(
-            "w-full justify-between rounded-lg border-blue-100/95 bg-white/90 font-medium text-slate-800 shadow-[0_16px_34px_-24px_rgba(59,130,246,0.5)] backdrop-blur-sm transition-[border-color,box-shadow,background-color,transform] hover:border-blue-200 hover:bg-white/95 hover:-translate-y-0.5 focus-visible:translate-y-0",
+            "w-full justify-between rounded-lg border-blue-100/95 bg-white/90 font-medium text-slate-800 shadow-[0_16px_34px_-24px_rgba(59,130,246,0.5)] backdrop-blur-sm transition-[border-color,box-shadow,background-color,transform] hover:border-blue-200 hover:bg-white/95 hover:-translate-y-0.5 focus-visible:translate-y-0 disabled:border-input disabled:bg-slate-100/80 disabled:text-slate-500 disabled:shadow-none",
             isOpen && "border-blue-200 bg-white/95 shadow-[0_20px_40px_-24px_rgba(59,130,246,0.52)]",
             isCompact ? "h-8 px-2.5 py-1.5 text-xs" : "h-10 px-3 py-2 text-sm",
           )}

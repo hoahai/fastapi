@@ -41,6 +41,7 @@ import { canAccessAppRoute } from "@shared/auth/pagePermissions";
 import { hasAppAdminAccess, hasSuperAdminAccess } from "@shared/auth/permissions";
 import type { AccessProfile } from "@shared/auth/types";
 import { useAuth } from "@shared/auth/useAuth";
+import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 
 type SidebarProps = {
   currentPath: string;
@@ -483,25 +484,26 @@ export function Sidebar({
                 setAccountMenuOpen(false);
               }}
             >
-              <button
-                type="button"
-                aria-expanded={accountMenuOpen}
-                aria-label="Account menu"
-                className={cn(
-                  "group flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
-                  "text-slate-700 hover:bg-white/80 hover:text-slate-900",
-                  isCompact && "lg:justify-center",
-                )}
-                title={isCompact ? "Account" : undefined}
-              >
-                <UserRound className="size-4 shrink-0 text-blue-700 transition-colors group-hover:text-blue-800" />
-                {!isCompact ? (
-                  <div className="min-w-0 flex-1">
-                    <p className="truncate text-sm font-semibold tracking-[-0.01em] text-slate-800">{accountDisplayName}</p>
-                    <p className="truncate text-xs text-slate-500">{auth.user?.email || "-"}</p>
-                  </div>
-                ) : null}
-              </button>
+              <TooltipTarget text={isCompact ? "Account" : null}>
+                <button
+                  type="button"
+                  aria-expanded={accountMenuOpen}
+                  aria-label="Account menu"
+                  className={cn(
+                    "group flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
+                    "text-slate-700 hover:bg-white/80 hover:text-slate-900",
+                    isCompact && "lg:justify-center",
+                  )}
+                >
+                  <UserRound className="size-4 shrink-0 text-blue-700 transition-colors group-hover:text-blue-800" />
+                  {!isCompact ? (
+                    <div className="min-w-0 flex-1">
+                      <p className="truncate text-sm font-semibold tracking-[-0.01em] text-slate-800">{accountDisplayName}</p>
+                      <p className="truncate text-xs text-slate-500">{auth.user?.email || "-"}</p>
+                    </div>
+                  ) : null}
+                </button>
+              </TooltipTarget>
 
 	              {accountMenuOpen ? (
 	                <>
@@ -546,21 +548,22 @@ export function Sidebar({
 	              ) : null}
 	            </div>
           ) : (
-            <button
-              type="button"
-              onClick={() => {
-                onNavigate("/auth/login");
-                onCloseMobile();
-              }}
-              className={cn(
-                "flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-white/80 hover:text-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
-                isCompact && "lg:justify-center",
-              )}
-              title={isCompact ? "Sign in" : undefined}
-            >
-              <LogIn className="size-4 shrink-0 text-blue-700" />
-              {!isCompact ? <span>Sign in</span> : null}
-            </button>
+            <TooltipTarget text={isCompact ? "Sign in" : null}>
+              <button
+                type="button"
+                onClick={() => {
+                  onNavigate("/auth/login");
+                  onCloseMobile();
+                }}
+                className={cn(
+                  "flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-white/80 hover:text-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
+                  isCompact && "lg:justify-center",
+                )}
+              >
+                <LogIn className="size-4 shrink-0 text-blue-700" />
+                {!isCompact ? <span>Sign in</span> : null}
+              </button>
+            </TooltipTarget>
           )}
           </div>
         </div>
@@ -593,33 +596,34 @@ function SidebarItem({
   const iconTone = active ? "active" : available ? "default" : "muted";
 
   return (
-    <button
-      type="button"
-      onClick={() => {
-        if (!available) {
-          return;
-        }
-        onNavigate(route);
-        onCloseMobile();
-      }}
-      disabled={!available}
-      aria-current={active ? "page" : undefined}
-      className={cn(
-        "group relative flex w-full items-center gap-2.5 rounded-2xl px-2.5 py-2.5 text-left text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
-        active
-          ? collapsed
-            ? "bg-blue-200/48 text-blue-950 shadow-[0_14px_22px_-20px_rgba(59,130,246,0.46)]"
-            : "bg-blue-200/42 text-blue-950 shadow-[0_14px_22px_-20px_rgba(59,130,246,0.48)] backdrop-blur-sm"
-          : "text-slate-700 hover:bg-blue-100/58 hover:text-slate-900",
-        !available && "cursor-not-allowed text-slate-500 opacity-70 hover:bg-transparent",
-        collapsed && "lg:justify-center lg:px-1.5",
-      )}
-      title={collapsed ? label : undefined}
-    >
-      <NavIcon icon={Icon} tone={iconTone} />
-      {!collapsed ? <span className="truncate font-medium tracking-[-0.01em]">{label}</span> : null}
-      {!available && !collapsed ? <SoonBadge className="ml-auto" /> : null}
-    </button>
+    <TooltipTarget text={collapsed ? label : null}>
+      <button
+        type="button"
+        onClick={() => {
+          if (!available) {
+            return;
+          }
+          onNavigate(route);
+          onCloseMobile();
+        }}
+        disabled={!available}
+        aria-current={active ? "page" : undefined}
+        className={cn(
+          "group relative flex w-full items-center gap-2.5 rounded-2xl px-2.5 py-2.5 text-left text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
+          active
+            ? collapsed
+              ? "bg-blue-200/48 text-blue-950 shadow-[0_14px_22px_-20px_rgba(59,130,246,0.46)]"
+              : "bg-blue-200/42 text-blue-950 shadow-[0_14px_22px_-20px_rgba(59,130,246,0.48)] backdrop-blur-sm"
+            : "text-slate-700 hover:bg-blue-100/58 hover:text-slate-900",
+          !available && "cursor-not-allowed text-slate-500 opacity-70 hover:bg-transparent",
+          collapsed && "lg:justify-center lg:px-1.5",
+        )}
+      >
+        <NavIcon icon={Icon} tone={iconTone} />
+        {!collapsed ? <span className="truncate font-medium tracking-[-0.01em]">{label}</span> : null}
+        {!available && !collapsed ? <SoonBadge className="ml-auto" /> : null}
+      </button>
+    </TooltipTarget>
   );
 }
 
@@ -651,48 +655,49 @@ function SidebarParentItem({
   const iconTone = active ? "active" : available ? "default" : "muted";
 
   return (
-    <button
-      type="button"
-      onClick={() => {
-        if (!available) {
-          return;
-        }
-        if (hasChildren) {
-          if (!expanded) {
-            onExpand();
+    <TooltipTarget text={collapsed ? label : null}>
+      <button
+        type="button"
+        onClick={() => {
+          if (!available) {
             return;
           }
-          onToggleExpand();
-          return;
-        }
-        onNavigate();
-      }}
-      disabled={!available}
-      aria-current={active ? "page" : undefined}
-      className={cn(
-        "group relative flex w-full items-center gap-2.5 rounded-2xl px-2.5 py-2.5 text-left text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
-        active
-          ? collapsed
-            ? "bg-blue-200/48 text-blue-950 shadow-[0_14px_22px_-20px_rgba(59,130,246,0.46)]"
-            : "bg-blue-200/42 text-blue-950 shadow-[0_14px_22px_-20px_rgba(59,130,246,0.48)] backdrop-blur-sm"
-          : "text-slate-700 hover:bg-blue-100/58 hover:text-slate-900",
-        !available && "cursor-not-allowed text-slate-500 opacity-70 hover:bg-transparent",
-        collapsed && "lg:justify-center lg:px-1.5",
-      )}
-      title={collapsed ? label : undefined}
-    >
-      <NavIcon icon={Icon} tone={iconTone} />
-      {!collapsed ? <span className="truncate font-medium tracking-[-0.01em]">{label}</span> : null}
-      {!collapsed && hasChildren ? (
-        <ChevronDown
-          className={cn(
-            "ml-auto size-4 text-slate-400 transition-transform group-hover:text-blue-600",
-            expanded && "rotate-180 text-blue-700",
-          )}
-        />
-      ) : null}
-      {!available && !collapsed ? <SoonBadge className="ml-auto" /> : null}
-    </button>
+          if (hasChildren) {
+            if (!expanded) {
+              onExpand();
+              return;
+            }
+            onToggleExpand();
+            return;
+          }
+          onNavigate();
+        }}
+        disabled={!available}
+        aria-current={active ? "page" : undefined}
+        className={cn(
+          "group relative flex w-full items-center gap-2.5 rounded-2xl px-2.5 py-2.5 text-left text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
+          active
+            ? collapsed
+              ? "bg-blue-200/48 text-blue-950 shadow-[0_14px_22px_-20px_rgba(59,130,246,0.46)]"
+              : "bg-blue-200/42 text-blue-950 shadow-[0_14px_22px_-20px_rgba(59,130,246,0.48)] backdrop-blur-sm"
+            : "text-slate-700 hover:bg-blue-100/58 hover:text-slate-900",
+          !available && "cursor-not-allowed text-slate-500 opacity-70 hover:bg-transparent",
+          collapsed && "lg:justify-center lg:px-1.5",
+        )}
+      >
+        <NavIcon icon={Icon} tone={iconTone} />
+        {!collapsed ? <span className="truncate font-medium tracking-[-0.01em]">{label}</span> : null}
+        {!collapsed && hasChildren ? (
+          <ChevronDown
+            className={cn(
+              "ml-auto size-4 text-slate-400 transition-transform group-hover:text-blue-600",
+              expanded && "rotate-180 text-blue-700",
+            )}
+          />
+        ) : null}
+        {!available && !collapsed ? <SoonBadge className="ml-auto" /> : null}
+      </button>
+    </TooltipTarget>
   );
 }
 

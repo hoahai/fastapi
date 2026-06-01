@@ -34,6 +34,7 @@ import {
   shouldFetchNetwork,
   type CachePolicy,
 } from "@shared/cache";
+import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 import { SectionCard } from "@shared/components/layout/SectionCard";
 import type { EsnumItem } from "./types";
 
@@ -1164,17 +1165,20 @@ export function ScheduleTimelineSection({
                                   weeks[segment.endIndex]?.weekEnd ??
                                   "";
                                 return (
-                                  <div
+                                  <TooltipTarget
                                     key={`group:${group.estNum}:segment:${segmentIndex}`}
-                                    className="absolute top-2.5 h-7 rounded-full border shadow-sm"
-                                    style={{
-                                      left,
-                                      width: Math.max(width, 16),
-                                      backgroundColor: groupColor.background,
-                                      borderColor: groupColor.border,
-                                    }}
-                                    title={`EstNum ${group.estNum} · ${formatIsoDateMmDdYyyy(rangeStart)} to ${formatIsoDateMmDdYyyy(rangeEnd)}`}
-                                  />
+                                    text={`EstNum ${group.estNum} · ${formatIsoDateMmDdYyyy(rangeStart)} to ${formatIsoDateMmDdYyyy(rangeEnd)}`}
+                                  >
+                                    <div
+                                      className="absolute top-2.5 h-7 rounded-full border shadow-sm"
+                                      style={{
+                                        left,
+                                        width: Math.max(width, 16),
+                                        backgroundColor: groupColor.background,
+                                        borderColor: groupColor.border,
+                                      }}
+                                    />
+                                  </TooltipTarget>
                                 );
                               })
                             : null}
@@ -1220,26 +1224,29 @@ export function ScheduleTimelineSection({
                                       "";
 
                                     return (
-                                      <button
+                                      <TooltipTarget
                                         key={`${item.stationCode}:${item.estNum}:segment:${segmentIndex}`}
-                                        type="button"
-                                        className="absolute top-3 h-8 rounded-full border shadow-sm transition-all hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                        style={{
-                                          left,
-                                          width: Math.max(width, 16),
-                                          backgroundColor: color.background,
-                                          borderColor: color.border,
-                                        }}
-                                        title={`${item.stationCode} · ${item.estNum} · ${rangeStart} to ${rangeEnd}`}
-                                        onClick={() =>
-                                          setSelectedDetail({
-                                            item,
-                                            segment,
-                                            rangeStart,
-                                            rangeEnd,
-                                          })
-                                        }
-                                      />
+                                        text={`${item.stationCode} · ${item.estNum} · ${rangeStart} to ${rangeEnd}`}
+                                      >
+                                        <button
+                                          type="button"
+                                          className="absolute top-3 h-8 rounded-full border shadow-sm transition-all hover:brightness-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                                          style={{
+                                            left,
+                                            width: Math.max(width, 16),
+                                            backgroundColor: color.background,
+                                            borderColor: color.border,
+                                          }}
+                                          onClick={() =>
+                                            setSelectedDetail({
+                                              item,
+                                              segment,
+                                              rangeStart,
+                                              rangeEnd,
+                                            })
+                                          }
+                                        />
+                                      </TooltipTarget>
                                     );
                                   })}
                                 </div>

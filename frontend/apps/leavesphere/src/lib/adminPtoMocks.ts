@@ -1,12 +1,16 @@
 import type { ApiRequestOptions } from "@shared/hooks/useApiRequest";
 
 import type {
+  LeaveSphereTeamRegion,
   LeaveSphereHoliday,
   LeaveSpherePtoBalance,
   LeaveSpherePtoRequest,
   LeaveSpherePtoStatus,
   LeaveSpherePtoType,
-} from "@leavesphere/lib/leaveSpherePtoMocks";
+} from "@leavesphere/lib/ptoMocks";
+import {
+  normalizeLeaveSphereTeamRegion,
+} from "@leavesphere/lib/ptoMocks";
 
 export type LeaveSphereAdminEmployee = {
   employeeId: string;
@@ -14,6 +18,7 @@ export type LeaveSphereAdminEmployee = {
   title: string;
   managerId: string;
   managerName: string;
+  teamRegion: LeaveSphereTeamRegion;
   active: boolean;
 };
 
@@ -98,6 +103,7 @@ export type LeaveSphereAdminSetupInput =
       employeeName: string;
       title: string;
       managerId: string;
+      teamRegion: LeaveSphereTeamRegion;
     }
   | {
       kind: "employee_manager";
@@ -108,6 +114,7 @@ export type LeaveSphereAdminSetupInput =
       kind: "holiday";
       name: string;
       date: string;
+      teamRegion: LeaveSphereTeamRegion;
     };
 
 type RequestJson = (url: string, options?: ApiRequestOptions) => Promise<unknown>;
@@ -252,6 +259,7 @@ function seedWorkspace(params: {
       title: "LeaveSphere Admin",
       managerId: currentUserId,
       managerName: currentUserName,
+      teamRegion: "US",
       active: true,
     },
     {
@@ -260,6 +268,7 @@ function seedWorkspace(params: {
       title: "Senior Designer",
       managerId: currentUserId,
       managerName: currentUserName,
+      teamRegion: "Philippines",
       active: true,
     },
     {
@@ -268,6 +277,7 @@ function seedWorkspace(params: {
       title: "Performance Analyst",
       managerId: currentUserId,
       managerName: currentUserName,
+      teamRegion: "US",
       active: true,
     },
     {
@@ -276,6 +286,7 @@ function seedWorkspace(params: {
       title: "Paid Media Specialist",
       managerId: currentUserId,
       managerName: currentUserName,
+      teamRegion: "Mexico",
       active: true,
     },
     {
@@ -284,6 +295,7 @@ function seedWorkspace(params: {
       title: "Lifecycle Marketing Manager",
       managerId: "emp-mateo-garcia",
       managerName: "Mateo Garcia",
+      teamRegion: "Mexico",
       active: true,
     },
   ];
@@ -426,12 +438,16 @@ function seedWorkspace(params: {
 
   const year = now.getFullYear();
   const holidays: LeaveSphereHoliday[] = [
-    { id: `${year}-new-year`, name: "New Year's Day", date: `${year}-01-01` },
-    { id: `${year}-memorial`, name: "Memorial Day", date: `${year}-05-25` },
-    { id: `${year}-independence`, name: "Independence Day", date: `${year}-07-04` },
-    { id: `${year}-labor`, name: "Labor Day", date: `${year}-09-07` },
-    { id: `${year}-thanksgiving`, name: "Thanksgiving", date: `${year}-11-26` },
-    { id: `${year}-christmas`, name: "Christmas Day", date: `${year}-12-25` },
+    { id: `${year}-us-new-year`, name: "New Year's Day", date: `${year}-01-01`, teamRegion: "US" },
+    { id: `${year}-us-memorial`, name: "Memorial Day", date: `${year}-05-25`, teamRegion: "US" },
+    { id: `${year}-us-independence`, name: "Independence Day", date: `${year}-07-04`, teamRegion: "US" },
+    { id: `${year}-us-labor`, name: "Labor Day", date: `${year}-09-07`, teamRegion: "US" },
+    { id: `${year}-mx-new-year`, name: "New Year's Day", date: `${year}-01-01`, teamRegion: "Mexico" },
+    { id: `${year}-mx-labor`, name: "Labor Day", date: `${year}-05-01`, teamRegion: "Mexico" },
+    { id: `${year}-mx-independence`, name: "Independence Day", date: `${year}-09-16`, teamRegion: "Mexico" },
+    { id: `${year}-ph-new-year`, name: "New Year's Day", date: `${year}-01-01`, teamRegion: "Philippines" },
+    { id: `${year}-ph-day-of-valour`, name: "Day of Valour", date: `${year}-04-09`, teamRegion: "Philippines" },
+    { id: `${year}-ph-independence`, name: "Independence Day", date: `${year}-06-12`, teamRegion: "Philippines" },
   ];
 
   const ptoTypes: LeaveSphereAdminPtoTypeConfig[] = PTO_TYPES.map((type) => ({
@@ -497,6 +513,35 @@ function normalizeNetworkWorkspace(payload: unknown): LeaveSphereAdminWorkspaceD
     currentUserName,
     reset: true,
   });
+
+  const employeesRaw = Array.isArray(raw.employees) ? raw.employees : [];
+  if (employeesRaw.length > 0) {
+    workspace.employees = employeesRaw
+      .filter(isRecord)
+      .map((item) => ({
+        employeeId: asString(item.employeeId),
+        employeeName: asString(item.employeeName),
+        title: asString(item.title),
+        managerId: asString(item.managerId),
+        managerName: asString(item.managerName),
+        teamRegion: normalizeLeaveSphereTeamRegion(item.teamRegion),
+        active: Boolean(item.active),
+      }))
+      .filter((item) => item.employeeId && item.employeeName);
+  }
+
+  const holidaysRaw = Array.isArray(raw.holidays) ? raw.holidays : [];
+  if (holidaysRaw.length > 0) {
+    workspace.holidays = holidaysRaw
+      .filter(isRecord)
+      .map((item) => ({
+        id: asString(item.id),
+        name: asString(item.name),
+        date: asString(item.date),
+        teamRegion: normalizeLeaveSphereTeamRegion(item.teamRegion),
+      }))
+      .filter((item) => item.id && item.date);
+  }
 
   const requestsRaw = Array.isArray(raw.requests) ? raw.requests : [];
   workspace.requests = requestsRaw
@@ -818,6 +863,7 @@ export async function updateLeaveSphereAdminSetupData(params: SetupArgs): Promis
       title: asString(payload.title) || "Team Member",
       managerId: manager?.employeeId || workspace.currentUserId,
       managerName: manager?.employeeName || workspace.currentUserName,
+      teamRegion: normalizeLeaveSphereTeamRegion(payload.teamRegion),
       active: true,
     });
     workspace.employeeBalances.push({
@@ -845,8 +891,9 @@ export async function updateLeaveSphereAdminSetupData(params: SetupArgs): Promis
     }
   } else if (payload.kind === "holiday") {
     const date = asString(payload.date);
+    const teamRegion = normalizeLeaveSphereTeamRegion(payload.teamRegion);
     if (date) {
-      const key = `holiday-${date}`;
+      const key = `holiday-${teamRegion.toLowerCase()}-${date}`;
       const existing = workspace.holidays.find((item) => item.id === key);
       if (existing) {
         existing.name = asString(payload.name) || existing.name;
@@ -855,6 +902,7 @@ export async function updateLeaveSphereAdminSetupData(params: SetupArgs): Promis
           id: key,
           name: asString(payload.name) || "Company Holiday",
           date,
+          teamRegion,
         });
       }
       workspace.holidays.sort((left, right) => left.date.localeCompare(right.date));

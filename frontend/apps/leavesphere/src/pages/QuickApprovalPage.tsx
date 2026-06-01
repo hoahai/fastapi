@@ -30,7 +30,7 @@ import {
   type LeaveSphereQuickApprovalDecision,
   type LeaveSphereQuickApprovalPreview,
   type LeaveSphereQuickApprovalRequestStatus,
-} from "@leavesphere/lib/leaveSphereQuickApproval";
+} from "@leavesphere/lib/quickApproval";
 
 type LeaveSphereQuickApprovalPageProps = {
   token: string;

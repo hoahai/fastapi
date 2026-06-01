@@ -9,6 +9,7 @@ import { readBrowserCacheSnapshot, writeBrowserCache } from "@/lib/browserCache"
 import { SectionCard } from "@shared/components";
 import { roleLabel } from "@shared/auth/accessAssignments";
 import { useAuth } from "@shared/auth/useAuth";
+import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 
 type AppPageOption = {
   key: string;
@@ -511,22 +512,23 @@ export function TradspherePermissionDetailsSection({
                         const checked = draftPageKeys.includes(String(page.key || "").trim().toLowerCase());
                         const inputId = `page-permission-${user.userId}-${page.key}`;
                         return (
-                          <label
-                            key={page.key}
-                            htmlFor={inputId}
-                            title={page.route}
-                            className="flex cursor-pointer items-center gap-2 rounded-md px-1 py-1 text-xs text-slate-700 hover:bg-slate-50"
-                          >
-                            <input
-                              id={inputId}
-                              type="checkbox"
-                              checked={checked}
-                              disabled={!canManage || saving}
-                              onChange={() => togglePageKey(user.userId, page.key)}
-                              className="size-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
-                            />
-                            <span className="font-medium text-slate-800">{page.label}</span>
-                          </label>
+                          <TooltipTarget text={page.route}>
+                            <label
+                              key={page.key}
+                              htmlFor={inputId}
+                              className="flex cursor-pointer items-center gap-2 rounded-md px-1 py-1 text-xs text-slate-700 hover:bg-slate-50"
+                            >
+                              <input
+                                id={inputId}
+                                type="checkbox"
+                                checked={checked}
+                                disabled={!canManage || saving}
+                                onChange={() => togglePageKey(user.userId, page.key)}
+                                className="size-3.5 rounded border-slate-300 text-blue-600 focus:ring-blue-500"
+                              />
+                              <span className="font-medium text-slate-800">{page.label}</span>
+                            </label>
+                          </TooltipTarget>
                         );
                       })}
                     </div>

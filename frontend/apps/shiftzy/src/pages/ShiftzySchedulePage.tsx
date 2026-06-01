@@ -44,6 +44,7 @@ import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
+import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 import { FormRow } from "@shared/components/form/FormRow";
 import { readCacheSnapshot, setCacheData, type CacheSource } from "@shared/cache";
 
@@ -1113,23 +1114,24 @@ export default function ShiftzySchedulePage() {
             </h2>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button
-              variant="ghost"
-              className="group h-10 transform-gpu gap-1.5 rounded-md px-2 !text-slate-500 transition-transform duration-200 ease-out hover:scale-[1.03] hover:!bg-transparent hover:!text-blue-600 focus-visible:scale-[1.03] focus-visible:!bg-transparent focus-visible:!text-blue-600 motion-reduce:transform-none"
-              onClick={() => {
-                const nextWeek = weeks[weekIndex - 1];
-                if (!nextWeek) {
-                  return;
-                }
-                void handleSelectWeek(nextWeek.weekNo);
-              }}
-              disabled={!canGoPreviousWeek || hasBusyAction || hasPendingChanges}
-              aria-label="Previous week"
-              title="Previous week"
-            >
-              <ChevronLeft className="size-4 !text-slate-500 transition-transform duration-200 ease-out group-hover:scale-125 group-hover:!text-blue-600 group-focus-visible:scale-125 group-focus-visible:!text-blue-600" />
-              Previous
-            </Button>
+            <TooltipTarget text="Previous week">
+              <Button
+                variant="ghost"
+                className="group h-10 transform-gpu gap-1.5 rounded-md px-2 !text-slate-500 transition-transform duration-200 ease-out hover:scale-[1.03] hover:!bg-transparent hover:!text-blue-600 focus-visible:scale-[1.03] focus-visible:!bg-transparent focus-visible:!text-blue-600 motion-reduce:transform-none"
+                onClick={() => {
+                  const nextWeek = weeks[weekIndex - 1];
+                  if (!nextWeek) {
+                    return;
+                  }
+                  void handleSelectWeek(nextWeek.weekNo);
+                }}
+                disabled={!canGoPreviousWeek || hasBusyAction || hasPendingChanges}
+                aria-label="Previous week"
+              >
+                <ChevronLeft className="size-4 !text-slate-500 transition-transform duration-200 ease-out group-hover:scale-125 group-hover:!text-blue-600 group-focus-visible:scale-125 group-focus-visible:!text-blue-600" />
+                Previous
+              </Button>
+            </TooltipTarget>
             <div className="min-w-[16rem] max-w-[22rem]">
               <AppDropdown
                 value={selectedWeekNo ? String(selectedWeekNo) : ""}
@@ -1148,23 +1150,24 @@ export default function ShiftzySchedulePage() {
               />
             </div>
             <div className="flex items-center gap-3">
-              <Button
-                variant="ghost"
-                className="group h-10 transform-gpu gap-1.5 rounded-md px-2 !text-slate-500 transition-transform duration-200 ease-out hover:scale-[1.03] hover:!bg-transparent hover:!text-blue-600 focus-visible:scale-[1.03] focus-visible:!bg-transparent focus-visible:!text-blue-600 motion-reduce:transform-none"
-                onClick={() => {
-                  const nextWeek = weeks[weekIndex + 1];
-                  if (!nextWeek) {
-                    return;
-                  }
-                  void handleSelectWeek(nextWeek.weekNo);
-                }}
-                disabled={!canGoNextWeek || hasBusyAction || hasPendingChanges}
-                aria-label="Next week"
-                title="Next week"
-              >
-                Next
-                <ChevronRight className="size-4 !text-slate-500 transition-transform duration-200 ease-out group-hover:scale-125 group-hover:!text-blue-600 group-focus-visible:scale-125 group-focus-visible:!text-blue-600" />
-              </Button>
+              <TooltipTarget text="Next week">
+                <Button
+                  variant="ghost"
+                  className="group h-10 transform-gpu gap-1.5 rounded-md px-2 !text-slate-500 transition-transform duration-200 ease-out hover:scale-[1.03] hover:!bg-transparent hover:!text-blue-600 focus-visible:scale-[1.03] focus-visible:!bg-transparent focus-visible:!text-blue-600 motion-reduce:transform-none"
+                  onClick={() => {
+                    const nextWeek = weeks[weekIndex + 1];
+                    if (!nextWeek) {
+                      return;
+                    }
+                    void handleSelectWeek(nextWeek.weekNo);
+                  }}
+                  disabled={!canGoNextWeek || hasBusyAction || hasPendingChanges}
+                  aria-label="Next week"
+                >
+                  Next
+                  <ChevronRight className="size-4 !text-slate-500 transition-transform duration-200 ease-out group-hover:scale-125 group-hover:!text-blue-600 group-focus-visible:scale-125 group-focus-visible:!text-blue-600" />
+                </Button>
+              </TooltipTarget>
               <div className="h-6 w-px self-center bg-slate-300" aria-hidden />
               <span
                 ref={topActionMenuAnchorRef}

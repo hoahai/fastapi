@@ -49,6 +49,7 @@ import {
   writeScopedPageState,
 } from "@shared/cache";
 import { Tooltip } from "@shared/components/actions/Tooltip";
+import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
 import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { SectionCard } from "@shared/components/layout/SectionCard";
@@ -1757,28 +1758,31 @@ function EmailChipsInput({
         const normalizedEmail = asString(email).toLowerCase();
         const displayLabel = asString(labelByEmail[normalizedEmail]) || normalizedEmail;
         return (
-          <span
+          <TooltipTarget
             key={normalizedEmail}
-            title={displayLabel === normalizedEmail ? normalizedEmail : `${displayLabel} <${normalizedEmail}>`}
-            className={[
-              "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium",
-              allChipsSelected
-                ? "border-blue-300 bg-blue-100 text-blue-800"
-                : "border-slate-200 bg-slate-100 text-slate-700",
-            ].join(" ")}
+            text={displayLabel === normalizedEmail ? normalizedEmail : `${displayLabel} <${normalizedEmail}>`}
           >
-            <span className="max-w-[14rem] truncate">{displayLabel}</span>
-            {!disabled ? (
-              <button
-                type="button"
-                onClick={() => onChange(value.filter((entry) => asString(entry).toLowerCase() !== normalizedEmail))}
-                className="inline-flex size-4 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-200 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                aria-label={`Remove ${normalizedEmail}`}
-              >
-                <X className="size-3" />
-              </button>
-            ) : null}
-          </span>
+            <span
+              className={[
+                "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium",
+                allChipsSelected
+                  ? "border-blue-300 bg-blue-100 text-blue-800"
+                  : "border-slate-200 bg-slate-100 text-slate-700",
+              ].join(" ")}
+            >
+              <span className="max-w-[14rem] truncate">{displayLabel}</span>
+              {!disabled ? (
+                <button
+                  type="button"
+                  onClick={() => onChange(value.filter((entry) => asString(entry).toLowerCase() !== normalizedEmail))}
+                  className="inline-flex size-4 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-200 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
+                  aria-label={`Remove ${normalizedEmail}`}
+                >
+                  <X className="size-3" />
+                </button>
+              ) : null}
+            </span>
+          </TooltipTarget>
         );
       })}
       <input
@@ -6076,15 +6080,16 @@ export default function TrafficPage() {
               className="pr-9 transition !outline-none ![box-shadow:none] !focus:outline-none !focus:ring-0 !focus:ring-offset-0 !focus:border-slate-300 !focus:shadow-none !focus:[box-shadow:none] !focus-visible:outline-none !focus-visible:ring-0 !focus-visible:ring-offset-0 !focus-visible:border-slate-300 !focus-visible:shadow-none !focus-visible:[box-shadow:none]"
             />
             {draftTrafficSearch ? (
-              <button
-                type="button"
-                onClick={handleClearTrafficSearch}
-                className="absolute right-2 top-1/2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
-                aria-label="Clear traffic search"
-                title="Clear traffic search"
-              >
-                <X className="size-3.5" />
-              </button>
+              <TooltipTarget text="Clear traffic search">
+                <button
+                  type="button"
+                  onClick={handleClearTrafficSearch}
+                  className="absolute right-2 top-1/2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300"
+                  aria-label="Clear traffic search"
+                >
+                  <X className="size-3.5" />
+                </button>
+              </TooltipTarget>
             ) : null}
           </div>
 
@@ -7315,20 +7320,21 @@ export default function TrafficPage() {
                   }}
                 />
                 {asString(flightModalDraft?.fileUrl) ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFlightModalError(null);
-                      setFlightFileUrlError(null);
-                      setFlightModalDraft((current) => (current ? { ...current, fileUrl: "" } : current));
-                    }}
-                    disabled={!canEditTradsphere || isSaving || isSentLocked}
-                    className="absolute right-2 top-1/2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 disabled:cursor-not-allowed disabled:opacity-50"
-                    aria-label="Clear file URL"
-                    title="Clear file URL"
-                  >
-                    <X className="size-3.5" />
-                  </button>
+                  <TooltipTarget text="Clear file URL">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFlightModalError(null);
+                        setFlightFileUrlError(null);
+                        setFlightModalDraft((current) => (current ? { ...current, fileUrl: "" } : current));
+                      }}
+                      disabled={!canEditTradsphere || isSaving || isSentLocked}
+                      className="absolute right-2 top-1/2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 disabled:cursor-not-allowed disabled:opacity-50"
+                      aria-label="Clear file URL"
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  </TooltipTarget>
                 ) : null}
               </div>
               {flightFileUrlError ? <p className="text-xs text-rose-600">{flightFileUrlError}</p> : null}
@@ -7372,20 +7378,21 @@ export default function TrafficPage() {
                   }}
                 />
                 {asString(flightModalDraft?.scriptUrl) ? (
-                  <button
-                    type="button"
-                    onClick={() => {
-                      setFlightModalError(null);
-                      setFlightScriptUrlError(null);
-                      setFlightModalDraft((current) => (current ? { ...current, scriptUrl: null } : current));
-                    }}
-                    disabled={!canEditTradsphere || isSaving || isSentLocked}
-                    className="absolute right-2 top-1/2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 disabled:cursor-not-allowed disabled:opacity-50"
-                    aria-label="Clear script URL"
-                    title="Clear script URL"
-                  >
-                    <X className="size-3.5" />
-                  </button>
+                  <TooltipTarget text="Clear script URL">
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setFlightModalError(null);
+                        setFlightScriptUrlError(null);
+                        setFlightModalDraft((current) => (current ? { ...current, scriptUrl: null } : current));
+                      }}
+                      disabled={!canEditTradsphere || isSaving || isSentLocked}
+                      className="absolute right-2 top-1/2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 disabled:cursor-not-allowed disabled:opacity-50"
+                      aria-label="Clear script URL"
+                    >
+                      <X className="size-3.5" />
+                    </button>
+                  </TooltipTarget>
                 ) : null}
               </div>
               {flightScriptUrlError ? <p className="text-xs text-rose-600">{flightScriptUrlError}</p> : null}
