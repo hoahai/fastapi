@@ -37,9 +37,11 @@ import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
 import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
+import { LeaveSpherePtoRequestCard } from "@leavesphere/components/LeaveSpherePtoRequestCard";
 import { LeaveSphereMonthCalendar, type LeaveSphereMonthCalendarEvent } from "@leavesphere/components/MonthCalendar";
 import {
   mapLeaveSphereHolidayRegionToChipTone,
+  mapLeaveSpherePtoStatusToChipTone,
   LeaveSpherePtoStatusChip,
   LeaveSpherePtoToneChip,
 } from "@leavesphere/components/PtoStatusChip";
@@ -49,7 +51,6 @@ import {
 } from "@leavesphere/components/PtoRequestDetailModal";
 import {
   loadLeaveSpherePtoWorkspace,
-  LEAVESPHERE_TEAM_REGION_OPTIONS,
   reviewLeaveSpherePtoRequest,
   submitLeaveSpherePtoRequest,
   type LeaveSpherePtoRequest,
@@ -58,6 +59,8 @@ import {
   type LeaveSpherePtoWorkspaceData,
 } from "@leavesphere/lib/ptoMocks";
 import { calculateLeaveSpherePtoHours } from "@leavesphere/lib/ptoHours";
+import { buildLeaveSpherePtoCalendarChipLabel } from "@leavesphere/lib/ptoCalendar";
+import { formatPtoRequestDateRangeLabel } from "@leavesphere/lib/ptoDate";
 import { getPtoRequestActionConfig } from "@leavesphere/lib/ptoRequestActionConfig";
 import {
   getLeaveSphereReviewActionConfirmCopy,
@@ -406,6 +409,7 @@ export default function LeaveSphereMyPtoPage() {
   const [requestForm, setRequestForm] = useState<RequestFormState>(EMPTY_FORM);
   const [selectedMyRequestId, setSelectedMyRequestId] = useState<string | null>(null);
   const [selectedHolidayId, setSelectedHolidayId] = useState<string | null>(null);
+  const [isCancelMyRequestDialogOpen, setIsCancelMyRequestDialogOpen] = useState(false);
 
   const [reviewTargetId, setReviewTargetId] = useState<string | null>(null);
   const [reviewNote, setReviewNote] = useState("");
@@ -608,6 +612,11 @@ export default function LeaveSphereMyPtoPage() {
     }
     setReviewNote(selectedReviewRequest.managerNote || "");
   }, [selectedReviewRequest?.id]);
+  useEffect(() => {
+    if (!selectedMyRequest) {
+      setIsCancelMyRequestDialogOpen(false);
+    }
+  }, [selectedMyRequest?.id]);
   const selectedMyRequestActionConfig = useMemo(
     () => (selectedMyRequest
       ? getPtoRequestActionConfig({
@@ -661,9 +670,6 @@ export default function LeaveSphereMyPtoPage() {
   const calendarEvents = useMemo(() => {
     const events: LeaveSphereMonthCalendarEvent[] = [];
     for (const holiday of workspaceForYear?.holidays ?? []) {
-      if (holiday.teamRegion !== workspaceForYear?.currentUserTeamRegion) {
-        continue;
-      }
       events.push({
         id: `holiday:${holiday.id}`,
         label: `${holiday.name} (${holiday.teamRegion})`,
@@ -674,22 +680,22 @@ export default function LeaveSphereMyPtoPage() {
       });
     }
     for (const request of myRequests) {
-      const tone = request.status === "approved"
-        ? "approved"
-        : request.status === "rejected"
-          ? "rejected"
-          : "pending";
+      const requestType = requestTypeLabel(request.type);
       events.push({
         id: `request:${request.id}`,
-        label: `${requestTypeLabel(request.type)} (${statusLabel(request.status)})`,
-        tone,
+        label: buildLeaveSpherePtoCalendarChipLabel(requestType, request.reason),
+        tone: mapLeaveSpherePtoStatusToChipTone(request.status),
         startDate: request.startDate,
         endDate: request.endDate,
-        title: `${requestTypeLabel(request.type)} · ${formatDateLabel(request.startDate)} - ${formatDateLabel(request.endDate)}`,
+        title: [
+          requestType,
+          request.reason,
+          `${formatDateLabel(request.startDate)} - ${formatDateLabel(request.endDate)}`,
+        ].filter(Boolean).join(" · "),
       });
     }
     return events;
-  }, [myRequests, workspaceForYear?.currentUserTeamRegion, workspaceForYear?.holidays]);
+  }, [myRequests, workspaceForYear?.holidays]);
   const holidayDates = useMemo(() => {
     return new Set(
       (workspaceForYear?.holidays ?? [])
@@ -1335,27 +1341,16 @@ export default function LeaveSphereMyPtoPage() {
               </div>
             ) : (
               myRequests.map((request) => (
-                <button
-                  type="button"
+                <LeaveSpherePtoRequestCard
                   key={request.id}
-                  className="w-full rounded-xl border border-blue-100 bg-white px-3.5 py-3 text-left transition-colors hover:border-blue-300 hover:bg-blue-50/35"
                   onClick={() => setSelectedMyRequestId(request.id)}
-                >
-                  <div className="flex items-start justify-between gap-2">
-                    <div>
-                      <p className="text-sm font-semibold text-slate-900">{requestTypeLabel(request.type)}</p>
-                      <p className="text-xs text-slate-600">
-                        {formatDateLabel(request.startDate)} - {formatDateLabel(request.endDate)}
-                      </p>
-                    </div>
-                    <LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} />
-                  </div>
-                  <p className="mt-2 text-xs text-slate-700">{request.reason}</p>
-                  <div className="mt-2 flex items-center justify-between text-[11px] text-slate-500">
-                    <span>{formatHoursLabel(request.hours)}</span>
-                    <span>Submitted {formatDateLabel(request.submittedAt)}</span>
-                  </div>
-                </button>
+                  title={requestTypeLabel(request.type)}
+                  dateLabel={formatPtoRequestDateRangeLabel(request.startDate, request.endDate)}
+                  detailLabel={request.reason}
+                  hoursLabel={formatHoursLabel(request.hours)}
+                  submittedLabel={`Submitted ${formatDateLabel(request.submittedAt)}`}
+                  statusChip={<LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} />}
+                />
               ))
             )}
           </div>
@@ -1379,13 +1374,13 @@ export default function LeaveSphereMyPtoPage() {
           }}
           legend={(
             <div className="flex flex-wrap gap-2 text-[11px] text-slate-600">
-              <LeaveSpherePtoToneChip
-                tone={mapLeaveSphereHolidayRegionToChipTone(workspaceForYear.currentUserTeamRegion)}
-                label={`${LEAVESPHERE_TEAM_REGION_OPTIONS.find((item) => item.value === workspaceForYear.currentUserTeamRegion)?.label || workspaceForYear.currentUserTeamRegion} Holiday`}
-              />
+              <LeaveSpherePtoToneChip tone="holiday_us" />
+              <LeaveSpherePtoToneChip tone="holiday_mexico" />
+              <LeaveSpherePtoToneChip tone="holiday_philippines" />
               <LeaveSpherePtoToneChip tone="pending" label="Pending PTO" />
               <LeaveSpherePtoToneChip tone="approved" label="Approved PTO" />
               <LeaveSpherePtoToneChip tone="rejected" label="Rejected PTO" />
+              <LeaveSpherePtoToneChip tone="cancelled" label="Canceled PTO" />
             </div>
           )}
         />
@@ -1609,12 +1604,25 @@ export default function LeaveSphereMyPtoPage() {
           <Button
             variant="outline"
             className="border-rose-200 text-rose-700 hover:bg-rose-50"
-            onClick={() => void handleCancelMyRequest()}
+            onClick={() => setIsCancelMyRequestDialogOpen(true)}
             disabled={isSavingRequestDetail}
           >
             Cancel
           </Button>
         ) : null}
+      />
+
+      <ConfirmDialog
+        open={isCancelMyRequestDialogOpen}
+        title="Cancel PTO request?"
+        description="This will change the request status to cancelled. This action cannot be undone."
+        confirmLabel="Cancel request"
+        cancelLabel="Go back"
+        onCancel={() => setIsCancelMyRequestDialogOpen(false)}
+        onConfirm={() => {
+          setIsCancelMyRequestDialogOpen(false);
+          void handleCancelMyRequest();
+        }}
       />
 
       <LeaveSpherePtoRequestDetailModal

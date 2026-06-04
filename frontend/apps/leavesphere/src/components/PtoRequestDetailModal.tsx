@@ -18,6 +18,7 @@ import { canModalClose, shouldBlockOutsideClose } from "@tradsphere/components/u
 import { Textarea } from "@tradsphere/components/ui/textarea";
 import { UnsavedChangesDialog } from "@tradsphere/components/ui/unsaved-changes-dialog";
 import { LeaveSpherePtoStatusChip } from "@leavesphere/components/PtoStatusChip";
+import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
 
 import type { LeaveSpherePtoRequest, LeaveSpherePtoStatus, LeaveSpherePtoType } from "@leavesphere/lib/ptoMocks";
 
@@ -65,6 +66,7 @@ type LeaveSpherePtoRequestDetailModalProps = {
   calculateHours?: (startDate: string, endDate: string) => string;
   hoursHelperText?: string;
   readOnly?: boolean;
+  canSubmitOverride?: boolean;
   saveLabel?: string;
   saving?: boolean;
   details?: ReactNode;
@@ -149,6 +151,7 @@ export function LeaveSpherePtoRequestDetailModal({
   calculateHours,
   hoursHelperText,
   readOnly = false,
+  canSubmitOverride,
   saveLabel = "Save changes",
   saving = false,
   details,
@@ -178,6 +181,10 @@ export function LeaveSpherePtoRequestDetailModal({
   const shouldAutoCalculateOnOpenRef = useRef(true);
   const hasHandledInitialAutoCalculateRef = useRef(false);
   const previousDateRangeRef = useRef<{ startDate: string; endDate: string } | null>(null);
+  const reasonField = useCommittedTextField<HTMLTextAreaElement>(
+    form.reason,
+    (value) => setForm((current) => ({ ...current, reason: value })),
+  );
 
   useEffect(() => {
     const didJustOpen = open && !wasOpenRef.current;
@@ -267,7 +274,8 @@ export function LeaveSpherePtoRequestDetailModal({
   const canSave = Boolean(
     submitHandler
     && hasValidCoreFields
-    && hasFormChanges,
+    && hasFormChanges
+    && (canSubmitOverride ?? true),
   );
 
   const shouldShowSubmitButton = Boolean(submitHandler && (canSave || saving));
@@ -342,8 +350,9 @@ export function LeaveSpherePtoRequestDetailModal({
       <label className={isMyPtoDetailLayout ? "block space-y-1 text-sm" : "space-y-1 text-sm"}>
         <span className="text-slate-600">Reason</span>
         <Textarea
-          value={form.reason}
-          onChange={(event) => setForm((current) => ({ ...current, reason: event.target.value }))}
+          value={reasonField.value}
+          onChange={reasonField.onChange}
+          onBlur={reasonField.onBlur}
           className={reasonMinHeightClassName}
           disabled={saving || readOnly}
         />
@@ -426,6 +435,14 @@ export function LeaveSpherePtoRequestDetailModal({
     closeModal();
   }
 
+  function handleRevertChanges() {
+    if (!hasUnsavedChanges || saving || readOnly) {
+      return;
+    }
+    setForm(baselineForm);
+    setFormError(null);
+  }
+
   return (
     <Dialog open={open} onOpenChange={handleDialogOpenChange}>
       <DialogContent
@@ -506,13 +523,20 @@ export function LeaveSpherePtoRequestDetailModal({
           </div>
         ) : null}
 
-        <DialogFooter>
+        <DialogFooter className="gap-2">
           {footerActions}
-          {shouldShowSubmitButton ? (
-            <Button onClick={() => void handleSave()} disabled={saving || !canSave}>
-              {saving ? "Saving..." : saveLabel}
-            </Button>
-          ) : null}
+          <div className="flex items-center gap-2">
+            {hasUnsavedChanges ? (
+              <Button variant="outline" onClick={handleRevertChanges} disabled={saving}>
+                Revert
+              </Button>
+            ) : null}
+            {shouldShowSubmitButton ? (
+              <Button onClick={() => void handleSave()} disabled={saving || !canSave}>
+                {saving ? "Saving..." : saveLabel}
+              </Button>
+            ) : null}
+          </div>
         </DialogFooter>
       </DialogContent>
 

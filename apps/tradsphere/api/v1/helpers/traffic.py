@@ -2,6 +2,7 @@ from __future__ import annotations
 
 from collections import defaultdict
 from datetime import date, datetime, timezone
+from html import escape as html_escape
 from decimal import Decimal, InvalidOperation, ROUND_HALF_UP
 import json
 import re
@@ -56,6 +57,8 @@ _DELIVERY_STATUS_VALUES = {
 }
 _CONFIRMED_STATUS_VALUES = {"", "pending", "confirmed", "issue", "not_required"}
 _EMAIL_SENT_STATUS_VALUES = {"draft", "ready", "sent", "failed"}
+_TEST_EMAIL_NOTICE_TEXT = "TEST EMAIL - This is a test copy of a Tradsphere Traffic email."
+_TEST_EMAIL_SUBJECT_PREFIX = "[Test]"
 
 _ROTATION_TARGET = Decimal("100.00")
 _ROTATION_MIN = Decimal("0.00")
@@ -351,6 +354,51 @@ def _looks_like_html(value: object) -> bool:
     if not text:
         return False
     return bool(re.search(r"</?[a-z][\s\S]*>", text, re.IGNORECASE))
+
+
+def _build_test_email_notice_text() -> str:
+    return _TEST_EMAIL_NOTICE_TEXT
+
+
+def _build_test_email_notice_html() -> str:
+    notice_text = html_escape(_TEST_EMAIL_NOTICE_TEXT)
+    return (
+        '<div style="margin:0 0 18px;padding:12px 14px;border:1px solid #f59e0b;'
+        'border-radius:10px;background:#fffbeb;color:#92400e;font-size:13px;'
+        'line-height:1.5;font-weight:600;">'
+        f"{notice_text}"
+        "</div>"
+    )
+
+
+def _build_test_email_subject(subject: str) -> str:
+    subject_text = str(subject or "").strip()
+    if not subject_text:
+        return _TEST_EMAIL_SUBJECT_PREFIX
+    if subject_text.lower().startswith(_TEST_EMAIL_SUBJECT_PREFIX.lower()):
+        return subject_text
+    return f"{_TEST_EMAIL_SUBJECT_PREFIX} {subject_text}"
+
+
+def _inject_test_email_notice_html(body_text: str) -> str:
+    raw_body = str(body_text or "")
+    notice_html = _build_test_email_notice_html()
+    if not raw_body.strip():
+        return notice_html
+    if not _looks_like_html(raw_body):
+        escaped_text = html_escape(raw_body)
+        return (
+            "<!DOCTYPE html><html><body>"
+            f"{notice_html}"
+            f'<pre style="margin:0;white-space:pre-wrap;font-family:inherit;">{escaped_text}</pre>'
+            "</body></html>"
+        )
+
+    match = re.search(r"(?is)<body[^>]*>", raw_body)
+    if match is None:
+        return notice_html + raw_body
+    insert_at = match.end()
+    return raw_body[:insert_at] + notice_html + raw_body[insert_at:]
 
 
 def _safe_decimal(value: object) -> Decimal:
@@ -1443,6 +1491,87 @@ def send_traffic_email_data(*, traffic_id: str, payload: dict, sent_by_user_id: 
     return {
         "trafficId": normalized_traffic_id,
         "email": _serialize_email_row(row),
+    }
+
+
+def send_traffic_email_test_data(*, traffic_id: str, payload: dict) -> dict:
+    normalized_traffic_id = _require_uuid4(traffic_id, field="trafficId")
+    if not isinstance(payload, dict):
+        raise ValueError("Payload must be an object")
+
+    traffic_row = _ensure_traffic_exists(normalized_traffic_id)
+    _ensure_not_archived(traffic_row, action="send test email")
+
+    to_email = _normalize_email_list(
+        [payload.get("toEmail")],
+        field="toEmail",
+        required=True,
+    )[0]
+    subject = _build_test_email_subject(
+        _normalize_required_text(payload.get("subject"), field="subject", max_length=500)
+    )
+    body_text = str(payload.get("body") or "").strip()
+    if not body_text:
+        raise ValueError("body is required")
+
+    try:
+        smtp_config = get_smtp_settings(required=True)
+    except Exception as exc:
+        raise ValueError(str(exc)) from exc
+    if not smtp_config:
+        raise ValueError("TradSphere SMTP config is required")
+
+    smtp_settings = SmtpSettings(
+        host=str(smtp_config["host"]),
+        port=int(smtp_config["port"]),
+        username=(
+            str(smtp_config.get("username") or "").strip()
+            or None
+        ),
+        password=(
+            str(smtp_config.get("password") or "").strip()
+            or None
+        ),
+        from_email=str(smtp_config["from_email"]),
+        from_name=(
+            str(smtp_config.get("from_name") or "").strip()
+            or None
+        ),
+        reply_to=(
+            str(smtp_config.get("reply_to") or "").strip()
+            or None
+        ),
+        use_tls=bool(smtp_config.get("use_tls")),
+        use_ssl=bool(smtp_config.get("use_ssl")),
+        timeout_seconds=float(smtp_config.get("timeout_seconds") or 20.0),
+    )
+
+    test_notice_text = _build_test_email_notice_text()
+    html_body = _inject_test_email_notice_html(body_text)
+    text_body = f"{test_notice_text}\n\n{_html_to_plain_text(body_text) or body_text}"
+
+    try:
+        smtp_result = send_smtp_email(
+            settings=smtp_settings,
+            to_addresses=[to_email],
+            subject=subject,
+            text_body=text_body,
+            html_body=html_body,
+        )
+    except (SmtpSendError, ValueError) as exc:
+        raise EmailSendError(str(exc) or "SMTP send failed") from exc
+
+    smtp_message_id = _normalize_optional_text(
+        smtp_result.get("message_id"),
+        field="smtpMessageId",
+        max_length=500,
+    )
+    return {
+        "trafficId": normalized_traffic_id,
+        "testEmail": {
+            "toEmail": to_email,
+            "smtpMessageId": smtp_message_id,
+        },
     }
 
 

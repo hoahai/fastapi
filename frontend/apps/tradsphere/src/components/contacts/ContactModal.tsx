@@ -17,6 +17,12 @@ import { canModalClose, shouldBlockOutsideClose } from "@/components/ui/modal-cl
 import { Textarea } from "@/components/ui/textarea";
 import { UnsavedChangesDialog } from "@/components/ui/unsaved-changes-dialog";
 import { ModalFooter, Section, SectionHeader } from "@shared/components";
+import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
+import {
+  normalizeUsPhoneDisplay,
+  normalizeUsPhoneOnInput,
+  validateUsPhoneField,
+} from "@shared/utils/phone";
 
 import { UsedByAccountsSection } from "./UsedByAccountsSection";
 import { UsedByEstNumsSection } from "./UsedByEstNumsSection";
@@ -65,9 +71,6 @@ type ContactModalProps = {
 };
 
 const EMAIL_RE = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/;
-const OFFICE_EXT_RE = /^(?<base>.+?)(?:\s*x(?<ext>\d{1,6}))?$/i;
-const PHONE_ALLOWED_RE = /^[\d\s().+-]+$/;
-
 function asString(value: unknown): string {
   if (typeof value === "string") {
     return value.trim();
@@ -170,110 +173,6 @@ function parseNameParts(fullName: string): { firstName: string; lastName: string
   };
 }
 
-function isValidUsPhoneBase(value: string): boolean {
-  if (!value || !PHONE_ALLOWED_RE.test(value)) {
-    return false;
-  }
-  if (value.includes("+") && !value.trim().startsWith("+")) {
-    return false;
-  }
-  if (value.split("+").length > 2) {
-    return false;
-  }
-  const digits = value.replace(/\D/g, "");
-  if (digits.length === 10) {
-    return true;
-  }
-  return digits.length === 11 && digits.startsWith("1");
-}
-
-function formatUsPhoneBase(value: string): string | null {
-  const digits = value.replace(/\D/g, "");
-  if (digits.length === 10) {
-    return `(${digits.slice(0, 3)}) ${digits.slice(3, 6)}-${digits.slice(6)}`;
-  }
-  if (digits.length === 11 && digits.startsWith("1")) {
-    const local = digits.slice(1);
-    return `(${local.slice(0, 3)}) ${local.slice(3, 6)}-${local.slice(6)}`;
-  }
-  return null;
-}
-
-function normalizePhoneDisplay(value: string, allowExtension: boolean): string {
-  const text = asString(value);
-  if (!text) {
-    return "";
-  }
-
-  if (allowExtension) {
-    const match = OFFICE_EXT_RE.exec(text);
-    if (!match || typeof match.groups?.base !== "string") {
-      return text;
-    }
-    const base = match.groups.base.trim();
-    const ext = typeof match.groups.ext === "string" ? match.groups.ext : "";
-    const formattedBase = formatUsPhoneBase(base);
-    if (!formattedBase) {
-      return text;
-    }
-    return ext ? `${formattedBase} x${ext}` : formattedBase;
-  }
-
-  const formatted = formatUsPhoneBase(text);
-  return formatted ?? text;
-}
-
-function normalizePhoneOnInput(value: string, allowExtension: boolean): string {
-  const text = value.replace(/\s+/g, " ").trimStart();
-  if (!text) {
-    return "";
-  }
-
-  if (allowExtension) {
-    const match = OFFICE_EXT_RE.exec(text);
-    if (!match || typeof match.groups?.base !== "string") {
-      return text;
-    }
-    const base = match.groups.base.trim();
-    const ext = typeof match.groups.ext === "string" ? match.groups.ext : "";
-    const formattedBase = formatUsPhoneBase(base);
-    if (!formattedBase) {
-      return text;
-    }
-    return ext ? `${formattedBase} x${ext}` : formattedBase;
-  }
-
-  const formatted = formatUsPhoneBase(text);
-  return formatted ?? text;
-}
-
-function validatePhoneField(value: string, options: { field: string; maxLength: number; allowExtension: boolean }): string | null {
-  const text = asString(value);
-  if (!text) {
-    return null;
-  }
-  if (text.length > options.maxLength) {
-    return `${options.field} must be <= ${options.maxLength} characters.`;
-  }
-  if (options.allowExtension) {
-    const match = OFFICE_EXT_RE.exec(text);
-    if (!match || typeof match.groups?.base !== "string") {
-      return `${options.field} must be a US phone format; optional extension x####.`;
-    }
-    if (!isValidUsPhoneBase(match.groups.base.trim())) {
-      return `${options.field} must be all digits (10/11) or valid US phone format.`;
-    }
-    return null;
-  }
-  if (/\bx\d+\s*$/i.test(text)) {
-    return `${options.field} cannot include extension; use Office for x####.`;
-  }
-  if (!isValidUsPhoneBase(text)) {
-    return `${options.field} must be all digits (10/11) or valid US phone format.`;
-  }
-  return null;
-}
-
 function isAppDropdownInteractionTarget(target: EventTarget | null): boolean {
   if (!(target instanceof Element)) {
     return false;
@@ -339,6 +238,16 @@ export function ContactModal({
     cell: null,
   });
   const hasUnsavedChanges = useMemo(() => !formsEqual(form, baseline), [baseline, form]);
+  const firstNameField = useCommittedTextField<HTMLInputElement>(
+    form.firstName,
+    (value) => updateNameField("firstName", value),
+    { normalizeOnBlur: toNameCase },
+  );
+  const lastNameField = useCommittedTextField<HTMLInputElement>(
+    form.lastName,
+    (value) => updateNameField("lastName", value),
+    { normalizeOnBlur: toNameCase },
+  );
 
   function applyIncomingContact(nextContact: ContactRecord | null) {
     const next = buildFormFromContact(nextContact);
@@ -414,7 +323,7 @@ export function ContactModal({
   const emailError = !email ? "Email is required." : isEmailValid ? null : "Email must be valid.";
   const officeError = useMemo(
     () =>
-      validatePhoneField(form.office, {
+      validateUsPhoneField(form.office, {
         field: "Office",
         maxLength: 35,
         allowExtension: true,
@@ -423,7 +332,7 @@ export function ContactModal({
   );
   const cellError = useMemo(
     () =>
-      validatePhoneField(form.cell, {
+      validateUsPhoneField(form.cell, {
         field: "Cell",
         maxLength: 20,
         allowExtension: false,
@@ -483,6 +392,20 @@ export function ContactModal({
     if (submitError) {
       setSubmitError(null);
     }
+  }
+
+  function handleRevertChanges() {
+    if (!hasUnsavedChanges || isSubmitting || isReadOnly) {
+      return;
+    }
+    setForm(baseline);
+    setSubmitError(null);
+    setIsFullNameManuallyEdited(false);
+    setFieldTouched({
+      email: null,
+      office: null,
+      cell: null,
+    });
   }
 
   function handleDialogOpenChange(nextOpen: boolean) {
@@ -598,9 +521,9 @@ export function ContactModal({
 
                   <LabeledField label="First Name">
                     <Input
-                      value={form.firstName}
-                      onChange={(event) => updateNameField("firstName", event.target.value)}
-                      onBlur={(event) => updateNameField("firstName", toNameCase(event.target.value))}
+                      value={firstNameField.value}
+                      onChange={firstNameField.onChange}
+                      onBlur={firstNameField.onBlur}
                       maxLength={255}
                       autoComplete="off"
                       disabled={isSubmitting || isReadOnly}
@@ -609,9 +532,9 @@ export function ContactModal({
 
                   <LabeledField label="Last Name">
                     <Input
-                      value={form.lastName}
-                      onChange={(event) => updateNameField("lastName", event.target.value)}
-                      onBlur={(event) => updateNameField("lastName", toNameCase(event.target.value))}
+                      value={lastNameField.value}
+                      onChange={lastNameField.onChange}
+                      onBlur={lastNameField.onBlur}
                       maxLength={255}
                       autoComplete="off"
                       disabled={isSubmitting || isReadOnly}
@@ -672,14 +595,14 @@ export function ContactModal({
                     <Input
                       value={form.office}
                       onChange={(event) =>
-                        updateForm("office", normalizePhoneOnInput(event.target.value, true))
+                        updateForm("office", normalizeUsPhoneOnInput(event.target.value, true))
                       }
                       onBlur={(event) => {
-                        const normalized = normalizePhoneDisplay(event.target.value, true);
+                        const normalized = normalizeUsPhoneDisplay(event.target.value, true);
                         updateForm("office", normalized);
                         markTouched(
                           "office",
-                          validatePhoneField(normalized, {
+                          validateUsPhoneField(normalized, {
                             field: "Office",
                             maxLength: 35,
                             allowExtension: true,
@@ -698,14 +621,14 @@ export function ContactModal({
                     <Input
                       value={form.cell}
                       onChange={(event) =>
-                        updateForm("cell", normalizePhoneOnInput(event.target.value, false))
+                        updateForm("cell", normalizeUsPhoneOnInput(event.target.value, false))
                       }
                       onBlur={(event) => {
-                        const normalized = normalizePhoneDisplay(event.target.value, false);
+                        const normalized = normalizeUsPhoneDisplay(event.target.value, false);
                         updateForm("cell", normalized);
                         markTouched(
                           "cell",
-                          validatePhoneField(normalized, {
+                          validateUsPhoneField(normalized, {
                             field: "Cell",
                             maxLength: 20,
                             allowExtension: false,
@@ -795,18 +718,25 @@ export function ContactModal({
             ) : (
               <span />
             )}
-            {shouldShowSubmitButton ? (
-              <Button onClick={handleSubmit} disabled={!canSubmit}>
-                {isSubmitting ? (
-                  <>
-                    <Loader2 className="size-4 animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  submitLabel
-                )}
-              </Button>
-            ) : null}
+            <div className="flex items-center gap-2">
+              {canEdit && hasUnsavedChanges ? (
+                <Button variant="outline" onClick={handleRevertChanges} disabled={isSubmitting}>
+                  Revert
+                </Button>
+              ) : null}
+              {shouldShowSubmitButton ? (
+                <Button onClick={handleSubmit} disabled={!canSubmit}>
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    submitLabel
+                  )}
+                </Button>
+              ) : null}
+            </div>
           </ModalFooter>
         </DialogContent>
       </Dialog>

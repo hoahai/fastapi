@@ -9,6 +9,7 @@ import { canModalClose, shouldBlockOutsideClose } from "@tradsphere/components/u
 import { Textarea } from "@tradsphere/components/ui/textarea";
 import { UnsavedChangesDialog } from "@tradsphere/components/ui/unsaved-changes-dialog";
 import { FormRow } from "@shared/components/form/FormRow";
+import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
 import type { ShiftzyEmployee, ShiftzyPosition } from "@shiftzy/lib/shiftzyApi";
 
 type ShiftzyEmployeeEditModalProps = {
@@ -85,6 +86,15 @@ export function ShiftzyEmployeeEditModal({
 }: ShiftzyEmployeeEditModalProps) {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false);
+  const nameField = useCommittedTextField<HTMLInputElement>(
+    form.name,
+    (value) => setForm((current) => ({ ...current, name: value })),
+    { normalizeOnBlur: toNameCase },
+  );
+  const noteField = useCommittedTextField<HTMLTextAreaElement>(
+    form.note,
+    (value) => setForm((current) => ({ ...current, note: value })),
+  );
 
   const initialForm = useMemo<FormState>(() => {
     if (!employee) {
@@ -149,6 +159,13 @@ export function ShiftzyEmployeeEditModal({
     });
   }
 
+  function handleRevertChanges() {
+    if (!hasUnsavedChanges || saving || !canEdit) {
+      return;
+    }
+    setForm(initialForm);
+  }
+
   return (
     <>
       <Dialog open={open} onOpenChange={handleOpenChange}>
@@ -179,12 +196,9 @@ export function ShiftzyEmployeeEditModal({
           <div className="mt-4 space-y-3">
           <FormRow label="Name">
             <Input
-              value={form.name}
-              onChange={(event) => setForm((current) => ({ ...current, name: event.target.value }))}
-              onBlur={(event) => {
-                const normalized = toNameCase(event.target.value);
-                setForm((current) => ({ ...current, name: normalized }));
-              }}
+              value={nameField.value}
+              onChange={nameField.onChange}
+              onBlur={nameField.onBlur}
               onPaste={(event) => {
                 const pasted = event.clipboardData.getData("text");
                 if (!pasted.trim()) {
@@ -223,8 +237,9 @@ export function ShiftzyEmployeeEditModal({
           <FormRow label="Note" alignStart>
             <Textarea
               rows={3}
-              value={form.note}
-              onChange={(event) => setForm((current) => ({ ...current, note: event.target.value }))}
+              value={noteField.value}
+              onChange={noteField.onChange}
+              onBlur={noteField.onBlur}
               disabled={inputsDisabled}
             />
           </FormRow>
@@ -264,7 +279,12 @@ export function ShiftzyEmployeeEditModal({
           </FormRow>
           </div>
 
-          <DialogFooter>
+          <DialogFooter className="gap-2">
+            {hasUnsavedChanges && canEdit ? (
+              <Button variant="outline" onClick={handleRevertChanges} disabled={saving}>
+                Revert
+              </Button>
+            ) : null}
             {hasUnsavedChanges && canSave ? (
               <Button onClick={() => void handleSubmit()} disabled={!canSave || saving}>
                 {saving ? (

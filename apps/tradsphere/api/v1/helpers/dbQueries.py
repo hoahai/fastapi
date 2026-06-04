@@ -5964,7 +5964,7 @@ def list_traffic_flights(*, traffic_id: str) -> list[dict]:
         "fileUrl, scriptUrl, note, dateCreated, dateUpdated "
         f"FROM {flights_table} "
         "WHERE trafficId = %s "
-        "ORDER BY flightStart ASC, id ASC"
+        "ORDER BY dateCreated ASC, id ASC"
     )
     return fetch_all(query, (traffic_id_text,))
 

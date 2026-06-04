@@ -3,6 +3,7 @@ import uuid
 from decimal import Decimal
 from unittest.mock import patch
 
+from apps.tradsphere.api.v1.helpers import dbQueries
 from apps.tradsphere.api.v1.helpers import traffic as traffic_helper
 
 
@@ -79,6 +80,70 @@ class TrafficHelperValidationTests(unittest.TestCase):
                     payload={"sentStatus": "ready", "toEmails": ["a@example.com"], "subject": "Sub"},
                 )
             self.assertEqual(str(ctx_body.exception), "body is required when sentStatus is ready")
+
+    def test_test_email_send_injects_notice_without_persisting(self):
+        traffic_id = str(uuid.uuid4())
+        smtp_result = {"message_id": "abc123"}
+
+        with patch.object(
+            traffic_helper,
+            "_ensure_traffic_exists",
+            return_value={"id": traffic_id, "status": "draft"},
+        ), patch.object(
+            traffic_helper,
+            "get_smtp_settings",
+            return_value={
+                "host": "smtp.example.com",
+                "port": 587,
+                "from_email": "noreply@example.com",
+                "username": None,
+                "password": None,
+                "from_name": "Tradsphere",
+                "reply_to": None,
+                "use_tls": True,
+                "use_ssl": False,
+                "timeout_seconds": 20,
+            },
+        ), patch.object(
+            traffic_helper,
+            "send_smtp_email",
+            return_value=smtp_result,
+        ) as send_mock:
+            result = traffic_helper.send_traffic_email_test_data(
+                traffic_id=traffic_id,
+                payload={
+                    "toEmail": "test@example.com",
+                    "subject": "May 2026 Traffic",
+                    "body": "<html><body><p>Hello team.</p></body></html>",
+                },
+            )
+
+        self.assertEqual(result["trafficId"], traffic_id)
+        self.assertEqual(result["testEmail"]["toEmail"], "test@example.com")
+        self.assertEqual(result["testEmail"]["smtpMessageId"], "abc123")
+        send_mock.assert_called_once()
+        sent_kwargs = send_mock.call_args.kwargs
+        self.assertEqual(sent_kwargs["subject"], "[Test] May 2026 Traffic")
+        self.assertIn("TEST EMAIL - This is a test copy", sent_kwargs["text_body"])
+        self.assertIn("TEST EMAIL - This is a test copy", sent_kwargs["html_body"])
+        self.assertIn("Hello team.", sent_kwargs["html_body"])
+
+    def test_traffic_flights_query_orders_by_created_time(self):
+        traffic_id = str(uuid.uuid4())
+
+        with patch.object(
+            dbQueries,
+            "get_db_tables",
+            return_value={"TRAFFICFLIGHTS": "TrafficFlights"},
+        ), patch.object(
+            dbQueries,
+            "fetch_all",
+            return_value=[],
+        ) as fetch_mock:
+            dbQueries.list_traffic_flights(traffic_id=traffic_id)
+
+        query = fetch_mock.call_args.args[0]
+        self.assertIn("ORDER BY dateCreated ASC, id ASC", query)
 
     def test_flight_allows_missing_file_url_and_validates_rotation_range(self):
         traffic_id = str(uuid.uuid4())

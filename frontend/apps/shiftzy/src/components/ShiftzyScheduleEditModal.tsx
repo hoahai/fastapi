@@ -9,6 +9,7 @@ import { canModalClose, shouldBlockOutsideClose } from "@tradsphere/components/u
 import { Textarea } from "@tradsphere/components/ui/textarea";
 import { UnsavedChangesDialog } from "@tradsphere/components/ui/unsaved-changes-dialog";
 import { FormRow } from "@shared/components/form/FormRow";
+import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
 import type {
   ShiftzyEmployee,
   ShiftzyPosition,
@@ -90,6 +91,10 @@ export function ShiftzyScheduleEditModal({
 }: ShiftzyScheduleEditModalProps) {
   const [form, setForm] = useState<FormState>(EMPTY_FORM);
   const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false);
+  const noteField = useCommittedTextField<HTMLTextAreaElement>(
+    form.note,
+    (value) => setForm((current) => ({ ...current, note: value })),
+  );
 
   const initialForm = useMemo<FormState>(() => {
     if (!schedule) {
@@ -194,6 +199,13 @@ export function ShiftzyScheduleEditModal({
       endTime: form.endTime,
       note: form.note.trim() || null,
     });
+  }
+
+  function handleRevertChanges() {
+    if (!hasUnsavedChanges || saving || !canEdit) {
+      return;
+    }
+    setForm(initialForm);
   }
 
   return (
@@ -307,15 +319,21 @@ export function ShiftzyScheduleEditModal({
             <FormRow label="Note" alignStart>
               <Textarea
                 rows={3}
-                value={form.note}
-                onChange={(event) => setForm((current) => ({ ...current, note: event.target.value }))}
+                value={noteField.value}
+                onChange={noteField.onChange}
+                onBlur={noteField.onBlur}
                 disabled={inputsDisabled}
               />
             </FormRow>
             </div>
           ) : null}
 
-          <DialogFooter>
+          <DialogFooter className="gap-2">
+            {hasUnsavedChanges && canEdit ? (
+              <Button variant="outline" onClick={handleRevertChanges} disabled={saving}>
+                Revert
+              </Button>
+            ) : null}
             {canEdit && hasUnsavedChanges && canSave ? (
               <Button onClick={() => void handleSubmit()} disabled={!canSave || saving}>
                 {saving ? (

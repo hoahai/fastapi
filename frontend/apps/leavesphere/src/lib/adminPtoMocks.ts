@@ -3,7 +3,6 @@ import type { ApiRequestOptions } from "@shared/hooks/useApiRequest";
 import type {
   LeaveSphereTeamRegion,
   LeaveSphereHoliday,
-  LeaveSpherePtoBalance,
   LeaveSpherePtoRequest,
   LeaveSpherePtoStatus,
   LeaveSpherePtoType,
@@ -11,6 +10,16 @@ import type {
 import {
   normalizeLeaveSphereTeamRegion,
 } from "@leavesphere/lib/ptoMocks";
+import {
+  buildLeaveSphereAdminBalanceUsageRows,
+  deriveLeaveSphereAdminEmployeeBalances,
+  seedLeaveSphereAdminBalanceTransactions,
+  type LeaveSphereAdminEmployeeBalance,
+  type LeaveSphereAdminEmployeeBalanceUsageRow,
+  type LeaveSphereAdminPtoActionCode,
+  type LeaveSphereAdminPtoTransaction,
+  type LeaveSphereAdminPtoTransactionStatus,
+} from "@leavesphere/lib/adminPtoBalanceLedger";
 
 export type LeaveSphereAdminEmployee = {
   employeeId: string;
@@ -34,16 +43,12 @@ export type LeaveSphereAdminPtoActionConfig = {
   detail: string;
 };
 
-export type LeaveSphereAdminEmployeeBalance = {
-  employeeId: string;
-  employeeName: string;
-  balances: LeaveSpherePtoBalance[];
-};
-
 export type LeaveSphereAdminWorkspaceData = {
   currentUserId: string;
   currentUserName: string;
   employees: LeaveSphereAdminEmployee[];
+  employeeBalanceUsage: LeaveSphereAdminEmployeeBalanceUsageRow[];
+  balanceTransactions: LeaveSphereAdminPtoTransaction[];
   employeeBalances: LeaveSphereAdminEmployeeBalance[];
   requests: LeaveSpherePtoRequest[];
   holidays: LeaveSphereHoliday[];
@@ -60,6 +65,7 @@ export type LeaveSphereAdminLoadResult = {
 export type LeaveSphereAdminMutationResult = {
   workspace: LeaveSphereAdminWorkspaceData;
   source: "mock" | "network";
+  createdRequestId?: string | null;
 };
 
 export type LeaveSphereAdminCreateRequestInput = {
@@ -79,9 +85,12 @@ export type LeaveSphereAdminReviewRequestInput = {
 
 export type LeaveSphereAdminAdjustBalanceInput = {
   employeeId: string;
-  type: LeaveSpherePtoType;
-  mode: "add" | "subtract" | "set";
+  ptoTypeCode: LeaveSpherePtoType;
+  ptoActionCode: LeaveSphereAdminPtoActionCode;
+  transactionId?: string | null;
   hours: number;
+  year: number;
+  status: LeaveSphereAdminPtoTransactionStatus;
   note: string;
 };
 
@@ -216,6 +225,11 @@ function cloneWorkspace(workspace: LeaveSphereAdminWorkspaceData): LeaveSphereAd
   return {
     ...workspace,
     employees: workspace.employees.map((item) => ({ ...item })),
+    employeeBalanceUsage: workspace.employeeBalanceUsage.map((item) => ({
+      ...item,
+      balances: item.balances.map((balance) => ({ ...balance })),
+    })),
+    balanceTransactions: workspace.balanceTransactions.map((item) => ({ ...item })),
     employeeBalances: workspace.employeeBalances.map((item) => ({
       ...item,
       balances: item.balances.map((balance) => ({ ...balance })),
@@ -227,12 +241,12 @@ function cloneWorkspace(workspace: LeaveSphereAdminWorkspaceData): LeaveSphereAd
   };
 }
 
-function buildBaseBalances(params: {
+function buildBaseEmployeeBalances(params: {
   vacation: [number, number, number];
   sick: [number, number, number];
   personal: [number, number, number];
   floating: [number, number, number];
-}): LeaveSpherePtoBalance[] {
+}): LeaveSphereAdminEmployeeBalance["balances"] {
   return PTO_TYPES.map((type) => {
     const tuple = params[type];
     return {
@@ -242,6 +256,18 @@ function buildBaseBalances(params: {
       usedHours: tuple[1],
       scheduledHours: tuple[2],
     };
+  });
+}
+
+function deriveWorkspaceEmployeeBalances(params: {
+  employeeBalanceUsage: LeaveSphereAdminEmployeeBalanceUsageRow[];
+  balanceTransactions: LeaveSphereAdminPtoTransaction[];
+  year: number;
+}): LeaveSphereAdminEmployeeBalance[] {
+  return deriveLeaveSphereAdminEmployeeBalances({
+    usageRows: params.employeeBalanceUsage,
+    transactions: params.balanceTransactions,
+    year: params.year,
   });
 }
 
@@ -300,11 +326,11 @@ function seedWorkspace(params: {
     },
   ];
 
-  const employeeBalances: LeaveSphereAdminEmployeeBalance[] = [
+  const baseEmployeeBalances: LeaveSphereAdminEmployeeBalance[] = [
     {
       employeeId: currentUserId,
       employeeName: currentUserName,
-      balances: buildBaseBalances({
+      balances: buildBaseEmployeeBalances({
         vacation: [120, 48, 8],
         sick: [64, 8, 0],
         personal: [40, 8, 8],
@@ -314,7 +340,7 @@ function seedWorkspace(params: {
     {
       employeeId: "emp-lee-chen",
       employeeName: "Lee Chen",
-      balances: buildBaseBalances({
+      balances: buildBaseEmployeeBalances({
         vacation: [120, 24, 16],
         sick: [64, 16, 8],
         personal: [40, 8, 0],
@@ -324,7 +350,7 @@ function seedWorkspace(params: {
     {
       employeeId: "emp-sara-johnson",
       employeeName: "Sara Johnson",
-      balances: buildBaseBalances({
+      balances: buildBaseEmployeeBalances({
         vacation: [120, 32, 8],
         sick: [64, 16, 0],
         personal: [40, 0, 8],
@@ -334,7 +360,7 @@ function seedWorkspace(params: {
     {
       employeeId: "emp-mateo-garcia",
       employeeName: "Mateo Garcia",
-      balances: buildBaseBalances({
+      balances: buildBaseEmployeeBalances({
         vacation: [120, 56, 0],
         sick: [64, 8, 0],
         personal: [40, 8, 0],
@@ -344,7 +370,7 @@ function seedWorkspace(params: {
     {
       employeeId: "emp-noah-park",
       employeeName: "Noah Park",
-      balances: buildBaseBalances({
+      balances: buildBaseEmployeeBalances({
         vacation: [120, 40, 16],
         sick: [64, 8, 0],
         personal: [40, 8, 0],
@@ -462,11 +488,25 @@ function seedWorkspace(params: {
     { code: "carry_over", label: "Carry Over", detail: "Year rollover carry-over sync" },
   ];
 
+  const employeeBalanceUsage = buildLeaveSphereAdminBalanceUsageRows(baseEmployeeBalances);
+  const balanceTransactions = seedLeaveSphereAdminBalanceTransactions({
+    employeeBalances: baseEmployeeBalances,
+    years: [year - 1, year, year + 1],
+    createdAt: toIsoDate(now),
+    createdByName: currentUserName,
+  });
+
   return {
     currentUserId,
     currentUserName,
     employees,
-    employeeBalances,
+    employeeBalanceUsage,
+    balanceTransactions,
+    employeeBalances: deriveWorkspaceEmployeeBalances({
+      employeeBalanceUsage,
+      balanceTransactions,
+      year,
+    }),
     requests,
     holidays,
     ptoTypes,
@@ -494,6 +534,15 @@ function ensureWorkspace(params: {
 function writeWorkspace(workspaceKey: string, workspace: LeaveSphereAdminWorkspaceData): LeaveSphereAdminWorkspaceData {
   STORE.set(workspaceKey, cloneWorkspace(workspace));
   return cloneWorkspace(workspace);
+}
+
+function resolveWorkspaceBalanceYear(workspace: LeaveSphereAdminWorkspaceData): number {
+  const currentYear = new Date().getFullYear();
+  if (workspace.balanceTransactions.some((item) => item.year === currentYear)) {
+    return currentYear;
+  }
+  const firstTransactionYear = workspace.balanceTransactions[0]?.year;
+  return Number.isInteger(firstTransactionYear) ? firstTransactionYear : currentYear;
 }
 
 function normalizeNetworkWorkspace(payload: unknown): LeaveSphereAdminWorkspaceData | null {
@@ -564,6 +613,67 @@ function normalizeNetworkWorkspace(payload: unknown): LeaveSphereAdminWorkspaceD
     }))
     .filter((item) => item.id && PTO_TYPES.includes(item.type));
 
+  const employeeBalancesRaw = Array.isArray(raw.employeeBalances) ? raw.employeeBalances : [];
+  if (employeeBalancesRaw.length > 0) {
+    const networkEmployeeBalances: LeaveSphereAdminEmployeeBalance[] = employeeBalancesRaw
+      .filter(isRecord)
+      .map((row) => ({
+        employeeId: asString(row.employeeId),
+        employeeName: asString(row.employeeName),
+        balances: PTO_TYPES.map((type) => {
+          const balancesRaw = Array.isArray(row.balances) ? row.balances : [];
+          const balance = balancesRaw.find((item) => isRecord(item) && asString(item.type) === type);
+          return {
+            type,
+            label: (isRecord(balance) ? asString(balance.label) : "") || PTO_TYPE_LABELS[type],
+            totalHours: isRecord(balance) ? asNumber(balance.totalHours) : 0,
+            usedHours: isRecord(balance) ? asNumber(balance.usedHours) : 0,
+            scheduledHours: isRecord(balance) ? asNumber(balance.scheduledHours) : 0,
+          };
+        }),
+      }))
+      .filter((row) => row.employeeId && row.employeeName);
+
+    if (networkEmployeeBalances.length > 0) {
+      workspace.employeeBalanceUsage = buildLeaveSphereAdminBalanceUsageRows(networkEmployeeBalances);
+      workspace.balanceTransactions = seedLeaveSphereAdminBalanceTransactions({
+        employeeBalances: networkEmployeeBalances,
+        years: [new Date().getFullYear()],
+        createdAt: toIsoDate(new Date()),
+        createdByName: currentUserName,
+      });
+    }
+  }
+
+  const balanceTransactionsRaw = Array.isArray(raw.balanceTransactions)
+    ? raw.balanceTransactions
+    : Array.isArray(raw.ptoTransactions)
+      ? raw.ptoTransactions
+      : [];
+  if (balanceTransactionsRaw.length > 0) {
+    workspace.balanceTransactions = balanceTransactionsRaw
+      .filter(isRecord)
+      .map((item) => ({
+        id: asString(item.id) || `txn-${Math.random().toString(36).slice(2, 8)}`,
+        employeeId: asString(item.employeeId),
+        ptoTypeCode: (asString(item.ptoTypeCode) as LeaveSpherePtoType) || "vacation",
+        ptoActionCode: (asString(item.ptoActionCode) as LeaveSphereAdminPtoActionCode) || "load_grant",
+        hours: asNumber(item.hours),
+        year: Math.trunc(asNumber(item.year)) || new Date().getFullYear(),
+        status: (asString(item.status) as LeaveSphereAdminPtoTransactionStatus) || "Approved",
+        note: asString(item.note) || null,
+        createdAt: asString(item.createdAt) || toIsoDate(new Date()),
+        createdByName: asString(item.createdByName) || null,
+      }))
+      .filter((item) => item.employeeId && PTO_TYPES.includes(item.ptoTypeCode));
+  }
+
+  workspace.employeeBalances = deriveWorkspaceEmployeeBalances({
+    employeeBalanceUsage: workspace.employeeBalanceUsage,
+    balanceTransactions: workspace.balanceTransactions,
+    year: resolveWorkspaceBalanceYear(workspace),
+  });
+
   return workspace;
 }
 
@@ -571,8 +681,65 @@ function findEmployee(workspace: LeaveSphereAdminWorkspaceData, employeeId: stri
   return workspace.employees.find((item) => item.employeeId === employeeId) || null;
 }
 
-function findEmployeeBalance(workspace: LeaveSphereAdminWorkspaceData, employeeId: string): LeaveSphereAdminEmployeeBalance | null {
-  return workspace.employeeBalances.find((item) => item.employeeId === employeeId) || null;
+function findEmployeeBalanceUsage(workspace: LeaveSphereAdminWorkspaceData, employeeId: string): LeaveSphereAdminEmployeeBalanceUsageRow | null {
+  return workspace.employeeBalanceUsage.find((item) => item.employeeId === employeeId) || null;
+}
+
+function applyLeaveSphereAdminBalanceTransaction(
+  workspace: LeaveSphereAdminWorkspaceData,
+  payload: LeaveSphereAdminAdjustBalanceInput,
+  currentUserName: string,
+): void {
+  const nextHours = asNumber(payload.hours);
+  const transactionId = asString(payload.transactionId);
+  const nextTransaction = {
+    id: transactionId || `pto-txn-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
+    employeeId: payload.employeeId,
+    ptoTypeCode: payload.ptoTypeCode,
+    ptoActionCode: payload.ptoActionCode,
+    hours: nextHours,
+    year: payload.year,
+    status: payload.status,
+    note: asString(payload.note) || null,
+    createdAt: toIsoDate(new Date()),
+    createdByName: currentUserName,
+  };
+
+  if (transactionId) {
+    let replaced = false;
+    workspace.balanceTransactions = workspace.balanceTransactions.map((item) => {
+      if (
+        !replaced
+        && item.id === transactionId
+        && item.employeeId === payload.employeeId
+        && item.ptoTypeCode === payload.ptoTypeCode
+        && item.year === payload.year
+        && item.status === "Approved"
+        && item.ptoActionCode === "load_grant"
+      ) {
+        replaced = true;
+        return {
+          ...item,
+          hours: nextHours,
+          note: asString(payload.note) || null,
+          status: payload.status,
+          createdByName: currentUserName,
+        };
+      }
+      return item;
+    });
+    if (!replaced) {
+      workspace.balanceTransactions = [nextTransaction, ...workspace.balanceTransactions];
+    }
+  } else {
+    workspace.balanceTransactions = [nextTransaction, ...workspace.balanceTransactions];
+  }
+
+  workspace.employeeBalances = deriveWorkspaceEmployeeBalances({
+    employeeBalanceUsage: workspace.employeeBalanceUsage,
+    balanceTransactions: workspace.balanceTransactions,
+    year: payload.year,
+  });
 }
 
 export async function loadLeaveSphereAdminPtoWorkspace(params: LoadArgs): Promise<LeaveSphereAdminLoadResult> {
@@ -632,6 +799,7 @@ export async function createLeaveSphereAdminPtoRequest(params: CreateRequestArgs
         return {
           workspace: writeWorkspace(workspaceKey, normalized),
           source: "network",
+          createdRequestId: normalized.requests[0]?.id ?? null,
         };
       }
     } catch {
@@ -672,15 +840,21 @@ export async function createLeaveSphereAdminPtoRequest(params: CreateRequestArgs
   };
 
   workspace.requests = [request, ...workspace.requests];
-  const balance = findEmployeeBalance(workspace, employee.employeeId);
+  const balance = findEmployeeBalanceUsage(workspace, employee.employeeId);
   const typeBalance = balance?.balances.find((item) => item.type === type);
   if (typeBalance) {
     typeBalance.scheduledHours += hours;
   }
+  workspace.employeeBalances = deriveWorkspaceEmployeeBalances({
+    employeeBalanceUsage: workspace.employeeBalanceUsage,
+    balanceTransactions: workspace.balanceTransactions,
+    year: resolveWorkspaceBalanceYear(workspace),
+  });
 
   return {
     workspace: writeWorkspace(workspaceKey, workspace),
     source: "mock",
+    createdRequestId: request.id,
   };
 }
 
@@ -726,7 +900,7 @@ export async function reviewLeaveSphereAdminPtoRequest(params: ReviewRequestArgs
   target.reviewerName = currentUserName;
   target.managerNote = asString(payload.note) || null;
 
-  const balance = findEmployeeBalance(workspace, target.employeeId);
+  const balance = findEmployeeBalanceUsage(workspace, target.employeeId);
   const typeBalance = balance?.balances.find((item) => item.type === target.type);
   if (typeBalance) {
     typeBalance.scheduledHours = Math.max(0, typeBalance.scheduledHours - target.hours);
@@ -734,6 +908,11 @@ export async function reviewLeaveSphereAdminPtoRequest(params: ReviewRequestArgs
       typeBalance.usedHours += target.hours;
     }
   }
+  workspace.employeeBalances = deriveWorkspaceEmployeeBalances({
+    employeeBalanceUsage: workspace.employeeBalanceUsage,
+    balanceTransactions: workspace.balanceTransactions,
+    year: resolveWorkspaceBalanceYear(workspace),
+  });
 
   return {
     workspace: writeWorkspace(workspaceKey, workspace),
@@ -743,6 +922,7 @@ export async function reviewLeaveSphereAdminPtoRequest(params: ReviewRequestArgs
 
 export async function adjustLeaveSphereAdminPtoBalance(params: AdjustBalanceArgs): Promise<LeaveSphereAdminMutationResult> {
   const { requestJson, workspaceKey, currentUserId, currentUserName, payload } = params;
+  const workspace = ensureWorkspace({ workspaceKey, currentUserId, currentUserName });
 
   if (resolveUseApi()) {
     try {
@@ -752,8 +932,21 @@ export async function adjustLeaveSphereAdminPtoBalance(params: AdjustBalanceArgs
         successToast: false,
         errorToast: false,
       });
+      const responseRaw = unwrapEnvelope(response);
+      const hasExplicitBalanceTransactions = isRecord(responseRaw) && (
+        Array.isArray(responseRaw.balanceTransactions)
+        || Array.isArray(responseRaw.ptoTransactions)
+      );
       const normalized = normalizeNetworkWorkspace(response);
       if (normalized) {
+        if (!hasExplicitBalanceTransactions) {
+          const mergedWorkspace = cloneWorkspace(workspace);
+          applyLeaveSphereAdminBalanceTransaction(mergedWorkspace, payload, currentUserName);
+          return {
+            workspace: writeWorkspace(workspaceKey, mergedWorkspace),
+            source: "network",
+          };
+        }
         return {
           workspace: writeWorkspace(workspaceKey, normalized),
           source: "network",
@@ -765,36 +958,15 @@ export async function adjustLeaveSphereAdminPtoBalance(params: AdjustBalanceArgs
   }
 
   await wait(MOCK_DELAY_MS);
-  const workspace = ensureWorkspace({ workspaceKey, currentUserId, currentUserName });
-  const balanceEntry = findEmployeeBalance(workspace, payload.employeeId);
-  const typeBalance = balanceEntry?.balances.find((item) => item.type === payload.type);
-  if (!typeBalance) {
+  const employee = findEmployee(workspace, payload.employeeId);
+  if (!employee) {
     return {
       workspace: writeWorkspace(workspaceKey, workspace),
       source: "mock",
     };
   }
 
-  const delta = Math.max(0, asNumber(payload.hours));
-  if (payload.mode === "set") {
-    typeBalance.totalHours = delta;
-  } else if (payload.mode === "add") {
-    typeBalance.totalHours += delta;
-  } else {
-    typeBalance.totalHours = Math.max(0, typeBalance.totalHours - delta);
-  }
-
-  const note = asString(payload.note);
-  if (note) {
-    workspace.ptoActions = [
-      {
-        code: `adjust-${Date.now().toString(36)}`,
-        label: "Balance Adjustment",
-        detail: note,
-      },
-      ...workspace.ptoActions,
-    ].slice(0, 8);
-  }
+  applyLeaveSphereAdminBalanceTransaction(workspace, payload, currentUserName);
 
   return {
     workspace: writeWorkspace(workspaceKey, workspace),
@@ -866,7 +1038,7 @@ export async function updateLeaveSphereAdminSetupData(params: SetupArgs): Promis
       teamRegion: normalizeLeaveSphereTeamRegion(payload.teamRegion),
       active: true,
     });
-    workspace.employeeBalances.push({
+    const defaultEmployeeBalance: LeaveSphereAdminEmployeeBalance = {
       employeeId,
       employeeName,
       balances: PTO_TYPES.map((type) => ({
@@ -876,7 +1048,17 @@ export async function updateLeaveSphereAdminSetupData(params: SetupArgs): Promis
         usedHours: 0,
         scheduledHours: 0,
       })),
-    });
+    };
+    workspace.employeeBalanceUsage.push(...buildLeaveSphereAdminBalanceUsageRows([defaultEmployeeBalance]));
+    workspace.balanceTransactions = [
+      ...seedLeaveSphereAdminBalanceTransactions({
+        employeeBalances: [defaultEmployeeBalance],
+        years: [new Date().getFullYear()],
+        createdAt: toIsoDate(new Date()),
+        createdByName: currentUserName,
+      }),
+      ...workspace.balanceTransactions,
+    ];
   } else if (payload.kind === "employee_manager") {
     const employee = workspace.employees.find((item) => item.employeeId === payload.employeeId);
     const manager = workspace.employees.find((item) => item.employeeId === payload.managerId);
@@ -908,6 +1090,12 @@ export async function updateLeaveSphereAdminSetupData(params: SetupArgs): Promis
       workspace.holidays.sort((left, right) => left.date.localeCompare(right.date));
     }
   }
+
+  workspace.employeeBalances = deriveWorkspaceEmployeeBalances({
+    employeeBalanceUsage: workspace.employeeBalanceUsage,
+    balanceTransactions: workspace.balanceTransactions,
+    year: resolveWorkspaceBalanceYear(workspace),
+  });
 
   return {
     workspace: writeWorkspace(workspaceKey, workspace),

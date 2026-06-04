@@ -58,6 +58,10 @@
   - disable submit while invalid/loading/submitting
   - use concise `Save` label in edit flows unless domain-specific wording is required
 - Cache/status chips must use a shared chip component and stay in low-emphasis page/modal bottom placement.
+- Free-text inputs must preserve raw typing while the user is editing.
+  - Do not trim, title-case, or otherwise normalize free-text values in `onChange`.
+  - Normalize on blur or on submit/save instead, and prefer the shared `useCommittedTextField` hook for text inputs/areas.
+  - Live formatting is only appropriate for structured inputs that intentionally need it, such as phone fields, masked codes, and dates.
 
 ## Backend Safety Rules
 - Do not rename or restructure `apps/`.

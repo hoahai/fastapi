@@ -9,7 +9,6 @@ import {
 } from "@/lib/broadcastCalendar";
 import { AppDropdown, type AppDropdownOption } from "@/components/ui/app-dropdown";
 import { Button } from "@/components/ui/button";
-import { CacheStatusChip } from "@/components/ui/cache-status-chip";
 import {
   Dialog,
   DialogClose,
@@ -26,6 +25,8 @@ import { UnsavedChangesDialog } from "@/components/ui/unsaved-changes-dialog";
 import { useApiRequest, type ApiRequestOptions } from "@/hooks/useApiRequest";
 import { readBrowserCacheSnapshot, writeBrowserCache } from "@/lib/browserCache";
 import { TRADSPHERE_CACHE_TTL_MS } from "@shared/cache";
+import { ModalCacheFooter } from "@shared/components/modal/ModalCacheFooter";
+import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
 
 import { FlightDateRangeField } from "./FlightDateRangeField";
 import { type FlightRangePresetState } from "./FlightRangeSelector";
@@ -543,6 +544,15 @@ export function EstimateNumberModal({
   const handledDetailRefreshTokenRef = useRef(0);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false);
+  const buyerField = useCommittedTextField<HTMLInputElement>(
+    form.buyer,
+    (value) => updateForm("buyer", value),
+    { normalizeOnBlur: toTitleCasePreservingSpaces },
+  );
+  const noteField = useCommittedTextField<HTMLTextAreaElement>(
+    form.note,
+    (value) => updateForm("note", value),
+  );
 
   useEffect(() => {
     if (!open) {
@@ -749,6 +759,24 @@ export function EstimateNumberModal({
     }));
   }
 
+  function handleRevertChanges() {
+    if (!hasUnsavedChanges || isSubmitting || isReadOnly || !originalForm) {
+      return;
+    }
+
+    const parsedStart = parseIsoDate(originalForm.flightStart);
+    const resetPreset = buildDefaultQuarterPreset(
+      parsedStart?.month ?? chicagoToday.month,
+      parsedStart?.year ?? chicagoToday.year,
+    );
+
+    setForm(originalForm);
+    setFlightRangePreset(resetPreset);
+    setHasAutoSeededDefaultDates(false);
+    setFlightRangeError(null);
+    setSubmitError(null);
+  }
+
   const isEditMode = mode === "edit";
   const isReadOnly = !canEdit;
   const hasUnsavedChanges =
@@ -923,6 +951,28 @@ export function EstimateNumberModal({
     (!isEditMode || hasUnsavedChanges) &&
     canEdit;
   const shouldShowSubmitButton = canEdit && (canSubmit || isSubmitting);
+  const footerActions = (
+    <>
+      {canEdit && hasUnsavedChanges ? (
+        <Button variant="outline" onClick={handleRevertChanges} disabled={isSubmitting || !originalForm}>
+          Revert
+        </Button>
+      ) : null}
+      {shouldShowSubmitButton ? (
+        <Button onClick={handleSubmit} disabled={isSubmitting}>
+          {isSubmitting ? (
+            <>
+              <Loader2 className="size-4 animate-spin" />
+              Saving...
+            </>
+          ) : (
+            submitLabel
+          )}
+        </Button>
+      ) : null}
+    </>
+  );
+  const shouldShowFooterActions = Boolean(canEdit && (hasUnsavedChanges || shouldShowSubmitButton));
 
   return (
     <Dialog open={open} onOpenChange={handleDialogOpenChange}>
@@ -1046,14 +1096,9 @@ export function EstimateNumberModal({
             >
               <Input
                 id="estnum-buyer"
-                value={form.buyer}
-                onChange={(event) => updateForm("buyer", event.target.value)}
-                onBlur={(event) => {
-                  const normalized = toTitleCasePreservingSpaces(event.target.value);
-                  if (normalized !== form.buyer) {
-                    updateForm("buyer", normalized);
-                  }
-                }}
+                value={buyerField.value}
+                onChange={buyerField.onChange}
+                onBlur={buyerField.onBlur}
                 placeholder="Buyer name"
                 maxLength={36}
                 disabled={isSubmitting || isReadOnly}
@@ -1087,8 +1132,9 @@ export function EstimateNumberModal({
             <LabeledField label="Note" alignStart>
               <Textarea
                 id="estnum-note"
-                value={form.note}
-                onChange={(event) => updateForm("note", event.target.value)}
+                value={noteField.value}
+                onChange={noteField.onChange}
+                onBlur={noteField.onBlur}
                 placeholder="Optional note"
                 maxLength={2048}
                 disabled={isSubmitting || isReadOnly}
@@ -1099,7 +1145,25 @@ export function EstimateNumberModal({
 
         {submitError ? <p className="mt-2 text-sm text-rose-600">{submitError}</p> : null}
 
-        {shouldShowSubmitButton ? (
+        {detailStatusText ? (
+          <ModalCacheFooter
+            text={detailStatusText}
+            onRefresh={() => {
+              if (!isLoadingDetail && !isSubmitting && isEditMode && !hasUnsavedChanges) {
+                setDetailRefreshToken((current) => current + 1);
+              }
+            }}
+            disabled={!isEditMode || isLoadingDetail || isSubmitting || hasUnsavedChanges}
+            refreshing={isRefreshingDetail}
+            refreshLabel="Refresh estimate detail"
+            tooltipText={
+              hasUnsavedChanges
+                ? "Save or discard your edits before refreshing estimate detail."
+                : "Click to refresh this data"
+            }
+            actions={shouldShowFooterActions ? footerActions : null}
+          />
+        ) : shouldShowSubmitButton ? (
           <DialogFooter>
             <Button onClick={handleSubmit} disabled={isSubmitting}>
               {isSubmitting ? (
@@ -1112,27 +1176,6 @@ export function EstimateNumberModal({
               )}
             </Button>
           </DialogFooter>
-        ) : null}
-
-        {detailStatusText ? (
-          <footer className="shrink-0 border-t border-slate-100 bg-white px-0 pt-2 pb-[calc(1rem+env(safe-area-inset-bottom))]">
-            <CacheStatusChip
-              text={detailStatusText}
-              onRefresh={() => {
-                if (!isLoadingDetail && !isSubmitting && isEditMode && !hasUnsavedChanges) {
-                  setDetailRefreshToken((current) => current + 1);
-                }
-              }}
-              disabled={!isEditMode || isLoadingDetail || isSubmitting || hasUnsavedChanges}
-              refreshing={isRefreshingDetail}
-              refreshLabel="Refresh estimate detail"
-              tooltipText={
-                hasUnsavedChanges
-                  ? "Save or discard your edits before refreshing estimate detail."
-                  : "Click to refresh this data"
-              }
-            />
-          </footer>
         ) : null}
         {hasDeferredDetailUpdate ? (
           <p className="mt-2 text-sm text-amber-700">

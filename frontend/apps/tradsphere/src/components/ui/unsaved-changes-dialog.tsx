@@ -32,6 +32,10 @@ export function UnsavedChangesDialog({
     >
       <DialogContent
         className="max-w-md rounded-2xl border border-amber-100 bg-white p-6 shadow-[0_20px_60px_-24px_rgba(15,23,42,0.45)]"
+        onEscapeKeyDown={(event) => {
+          event.preventDefault();
+          onDiscardChanges();
+        }}
         onInteractOutside={(event) => {
           event.preventDefault();
         }}
@@ -47,15 +51,15 @@ export function UnsavedChangesDialog({
         </DialogHeader>
 
         <DialogFooter className="mt-7">
-          <Button onClick={onKeepEditing} className="min-w-32">
-            Keep editing
-          </Button>
           <Button
             variant="outline"
             onClick={onDiscardChanges}
             className="min-w-32 border-rose-300 text-rose-700 hover:bg-rose-50"
           >
             Discard changes
+          </Button>
+          <Button onClick={onKeepEditing} className="min-w-32">
+            Keep editing
           </Button>
         </DialogFooter>
       </DialogContent>

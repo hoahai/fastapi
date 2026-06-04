@@ -4,6 +4,7 @@ export * from "./actions/Tooltip";
 export * from "./entities/EntityItem";
 export * from "./form/FormRow";
 export * from "./form/ReadOnlyField";
+export * from "./RichTextEditor";
 export * from "./layout/Section";
 export * from "./layout/AppPageLayout";
 export * from "./layout/LoadActionArea";

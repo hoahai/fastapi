@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
-import { AlertTriangle, Archive, Copy, Eye, Link2, Loader2, Pencil, Plus, RefreshCw, Send, Table2, Trash2, Unlink, X } from "lucide-react";
+import { AlertTriangle, Archive, Copy, Eye, Link2, Loader2, Pencil, Plus, RefreshCw, Send, Table2, Trash2, Unlink, Unlock, X } from "lucide-react";
 
 import { ActionIconButton } from "@/components/dashboard/ActionIconButton";
 import { AccountSelector } from "@/components/dashboard/AccountSelector";
@@ -27,7 +27,8 @@ import { useApiRequest } from "@/hooks/useApiRequest";
 import { useDirtyRefreshGuard } from "@/hooks/useDirtyRefreshGuard";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { usePersistentState } from "@/hooks/usePersistentState";
-import { readBrowserCacheSnapshot, writeBrowserCache } from "@/lib/browserCache";
+import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
+import { readBrowserCacheSnapshot, removeBrowserCache, writeBrowserCache } from "@/lib/browserCache";
 import {
   buildTrafficEmailHtmlDocument,
   parseTrafficEmailWorkspaceFromBody,
@@ -52,11 +53,13 @@ import { Tooltip } from "@shared/components/actions/Tooltip";
 import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
 import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
+import { RichTextEditor } from "@shared/components/RichTextEditor";
 import { SectionCard } from "@shared/components/layout/SectionCard";
 import { ModalCacheFooter } from "@shared/components/modal/ModalCacheFooter";
 import { PageLoadingLayer, SectionLoadingLayer, SectionLoadingOverlay } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, SectionMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
+import { normalizeRichTextHtml } from "@shared/utils/richText";
 
 type CacheStatus = {
   source: "cache" | "network";
@@ -294,6 +297,54 @@ const EMAIL_WORKSPACE_TABS: Array<{ value: TrafficWorkspaceTab; label: string }>
   { value: "workflow", label: "Traffic Detail" },
   { value: "email", label: "Email" },
 ];
+
+type TrafficLockBannerKind = "confirmed" | "sent" | "email";
+
+type TrafficLockBannerProps = {
+  kind: TrafficLockBannerKind;
+  isUnlocking: boolean;
+  disabled: boolean;
+  onUnlock: () => void;
+};
+
+function TrafficLockBanner({
+  kind,
+  isUnlocking,
+  disabled,
+  onUnlock,
+}: TrafficLockBannerProps) {
+  const message = kind === "confirmed"
+    ? "This traffic is confirmed and locked. Unblock it to edit again."
+    : kind === "sent"
+      ? "This traffic is sent and locked. Unblock it to edit again."
+      : "This email is sent and locked. Unblock it to edit again.";
+  return (
+    <div className="flex flex-col gap-3 rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-700 sm:flex-row sm:items-center sm:justify-between">
+      <p>{message}</p>
+      <Button
+        variant="outline"
+        size="sm"
+        disabled={disabled}
+        onClick={() => {
+          onUnlock();
+        }}
+        className="shrink-0 border-emerald-200 bg-white text-emerald-700 hover:border-emerald-300 hover:bg-emerald-50 hover:text-emerald-800"
+      >
+        {isUnlocking ? (
+          <>
+            <Loader2 className="size-4 animate-spin" />
+            Unblocking...
+          </>
+        ) : (
+          <>
+            <Unlock className="size-4" />
+            Unblock
+          </>
+        )}
+      </Button>
+    </div>
+  );
+}
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -751,6 +802,20 @@ function normalizeTrafficDetail(payload: unknown): TrafficDetail | null {
   const stationsRaw = Array.isArray(data.stations) ? data.stations : [];
   const emailRaw = isRecord(data.email) ? data.email : null;
   const summary = normalizeRotationSummary(data.summary);
+  const compareFlightCreatedAt = (left: { dateCreated: string | null; id: number }, right: { dateCreated: string | null; id: number }) => {
+    const leftCreated = asString(left.dateCreated);
+    const rightCreated = asString(right.dateCreated);
+    if (leftCreated && rightCreated && leftCreated !== rightCreated) {
+      return leftCreated.localeCompare(rightCreated);
+    }
+    if (leftCreated && !rightCreated) {
+      return -1;
+    }
+    if (!leftCreated && rightCreated) {
+      return 1;
+    }
+    return left.id - right.id;
+  };
 
   const detail: TrafficDetail = {
     traffic: {
@@ -780,7 +845,7 @@ function normalizeTrafficDetail(payload: unknown): TrafficDetail | null {
         dateCreated: asNullableString(item.dateCreated),
         dateUpdated: asNullableString(item.dateUpdated),
       }))
-      .sort((a, b) => a.id - b.id),
+      .sort(compareFlightCreatedAt),
     stations: stationsRaw
       .filter(isRecord)
       .map((item) => ({
@@ -1126,6 +1191,11 @@ function buildTrafficStationCandidatesCacheKey(params: {
 
 function isLocalTrafficId(trafficId: string): boolean {
   return asString(trafficId).startsWith(LOCAL_TRAFFIC_ID_PREFIX);
+}
+
+function isLikelyEmailAddress(value: string): boolean {
+  const normalized = asString(value).trim();
+  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized);
 }
 
 function buildLocalTrafficId(): string {
@@ -2086,8 +2156,8 @@ function buildTrafficEmailWorkspaceFromDetail(detail: TrafficDetail): TrafficEma
   const parsedBody = parseTrafficEmailWorkspaceFromBody(asString(detail.email?.body || ""));
 
   return {
-    bodyContent: parsedBody.workspace?.bodyContent ?? parsedBody.bodyFallbackText,
-    instructionsContent: parsedBody.workspace?.instructionsContent ?? buildDefaultTrafficInstructionsText(detail.flights),
+    bodyContent: parsedBody.workspace?.bodyContent ?? normalizeRichTextHtml(parsedBody.bodyFallbackText),
+    instructionsContent: parsedBody.workspace?.instructionsContent ?? normalizeRichTextHtml(buildDefaultTrafficInstructionsText(detail.flights)),
     downloadLinks: mergeTrafficEmailDownloadLinksByFlight(detail.flights, parsedBody.workspace?.downloadLinks),
     bodyTouched: false,
     instructionsTouched: false,
@@ -2177,7 +2247,11 @@ export default function TrafficPage() {
   const [isChipRefreshOverlayVisible, setIsChipRefreshOverlayVisible] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isSendingEmail, setIsSendingEmail] = useState(false);
+  const [isSendingTestEmail, setIsSendingTestEmail] = useState(false);
   const [isMarkingTrafficSent, setIsMarkingTrafficSent] = useState(false);
+  const [isUnlockingTraffic, setIsUnlockingTraffic] = useState(false);
+  const [isTrafficConfirmDialogOpen, setIsTrafficConfirmDialogOpen] = useState(false);
+  const [trafficConfirmTargetTrafficId, setTrafficConfirmTargetTrafficId] = useState<string | null>(null);
   const [emailSendSuccessPrompt, setEmailSendSuccessPrompt] = useState<{
     trafficId: string;
     recipientCount: number;
@@ -2194,6 +2268,8 @@ export default function TrafficPage() {
   const [deletingTrafficIds, setDeletingTrafficIds] = useState<string[]>([]);
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<TrafficWorkspaceTab>("workflow");
   const [isEmailPreviewOpen, setIsEmailPreviewOpen] = useState(false);
+  const [isTestEmailModalOpen, setIsTestEmailModalOpen] = useState(false);
+  const [testEmailTo, setTestEmailTo] = useState("");
   const [emailWorkspaceByTrafficId, setEmailWorkspaceByTrafficId] = useState<Record<string, TrafficEmailWorkspaceDraft>>({});
   const [isDownloadLinkNoteModalOpen, setIsDownloadLinkNoteModalOpen] = useState(false);
   const [activeDownloadLinkNoteIndex, setActiveDownloadLinkNoteIndex] = useState<number | null>(null);
@@ -2235,6 +2311,7 @@ export default function TrafficPage() {
   const [stationLookupCacheStatus, setStationLookupCacheStatus] = useState<CacheStatus | null>(null);
   const [stationLookupRefreshToken, setStationLookupRefreshToken] = useState(0);
   const [stationMetaRefreshToken, setStationMetaRefreshToken] = useState(0);
+  const [duplicatingTrafficId, setDuplicatingTrafficId] = useState<string | null>(null);
   const [isRefreshEmailMergeDialogOpen, setIsRefreshEmailMergeDialogOpen] = useState(false);
   const [pendingRefreshEmailMerge, setPendingRefreshEmailMerge] = useState<RefreshEmailMergePrompt | null>(null);
   const [isStationDiscardDialogOpen, setIsStationDiscardDialogOpen] = useState(false);
@@ -2262,6 +2339,48 @@ export default function TrafficPage() {
   const stationDeliveryStatusFieldRef = useRef<HTMLDivElement | null>(null);
   const stationConfirmedStatusFieldRef = useRef<HTMLDivElement | null>(null);
   const stationNoteTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const stationDeliveryStatusRestoreRef = useRef<Record<number, string>>({});
+  const stationConfirmedStatusRestoreRef = useRef<Record<number, string>>({});
+
+  const flightScriptUrlField = useCommittedTextField<HTMLInputElement>(
+    flightModalDraft?.scriptUrl ?? "",
+    (value) => {
+      setFlightModalError(null);
+      setFlightScriptUrlError(null);
+      setFlightModalDraft((current) => (current ? { ...current, scriptUrl: value } : current));
+    },
+    {
+      onCommit: (normalizedValue, rawValue) => {
+        if (!asString(rawValue)) {
+          setFlightScriptUrlError(null);
+          setFlightModalDraft((current) => (current ? { ...current, scriptUrl: null } : current));
+          return;
+        }
+        const normalizedUrl = normalizeStrictHttpUrlInput(normalizedValue);
+        if (normalizedUrl) {
+          setFlightScriptUrlError(null);
+          setFlightModalDraft((current) => (current ? { ...current, scriptUrl: normalizedUrl } : current));
+          return;
+        }
+        setFlightScriptUrlError("Invalid URL. Enter a valid http(s) URL.");
+        setFlightModalDraft((current) => (current ? { ...current, scriptUrl: null } : current));
+      },
+    },
+  );
+  const flightNoteField = useCommittedTextField<HTMLTextAreaElement>(
+    flightModalDraft?.note ?? "",
+    (value) => {
+      setFlightModalError(null);
+      setFlightModalDraft((current) => (current ? { ...current, note: value } : current));
+    },
+  );
+  const stationNoteField = useCommittedTextField<HTMLTextAreaElement>(
+    stationModalDraft?.note ?? "",
+    (value) => {
+      setStationModalError(null);
+      setStationModalDraft((current) => (current ? { ...current, note: value } : current));
+    },
+  );
 
   const hasUnsavedChanges = useMemo(() => hasTrafficDetailChanges(detailBaseline, detailDraft), [detailBaseline, detailDraft]);
   const hasQueuedUnsavedChanges = useMemo(() => {
@@ -2306,6 +2425,11 @@ export default function TrafficPage() {
     refreshMessageRef.current = refreshMessage;
     activeAccountCodeRef.current = activeAccountCode;
   }, [activeAccountCode, detailBaseline, detailDraft, refreshMessage, selectedTrafficId, trafficList]);
+
+  useEffect(() => {
+    stationDeliveryStatusRestoreRef.current = {};
+    stationConfirmedStatusRestoreRef.current = {};
+  }, [selectedTrafficId]);
 
   const activeDraft = detailDraft;
   const flightModalIsciPlaceholder = useMemo(() => {
@@ -2371,8 +2495,30 @@ export default function TrafficPage() {
     archiveTargetTrafficId
     && deletingTrafficIdSet.has(archiveTargetTrafficId),
   );
+  const isDuplicatingTraffic = Boolean(duplicatingTrafficId);
   const timelineAccountCode = asString(activeDraft?.traffic.accountCode).toUpperCase();
-  const isSentLocked = asString(detailBaseline?.traffic.status).toLowerCase() === "sent";
+  const persistedTrafficStatus = asString(detailBaseline?.traffic.status).toLowerCase();
+  const currentTrafficStatus = asString(detailDraft?.traffic.status || detailBaseline?.traffic.status).toLowerCase();
+  const isSentLocked = currentTrafficStatus === "sent";
+  const isConfirmedLocked = currentTrafficStatus === "confirmed";
+  const isConfirmedSavedLocked = persistedTrafficStatus === "confirmed";
+  const isEmailSentLocked = asString(activeDraft?.email?.sentStatus || detailBaseline?.email?.sentStatus).toLowerCase() === "sent";
+  const isEmailLocked = isEmailSentLocked || isSentLocked || isConfirmedLocked;
+  const isTrafficEditingLocked = isSentLocked || isConfirmedLocked;
+  const isFlightModalReadOnly = isTrafficEditingLocked;
+  const emailWorkspacePrimaryActionLabel = isEmailLocked ? "Preview email" : "Send email";
+  const trafficLockBannerKind = isConfirmedLocked
+    ? "confirmed"
+    : isSentLocked
+      ? "sent"
+      : null;
+  const emailLockBannerKind = isConfirmedLocked
+    ? "confirmed"
+    : isSentLocked
+      ? "sent"
+      : isEmailSentLocked
+        ? "email"
+        : null;
   const stationSyncFlightRange = useMemo(() => {
     return resolveFlightRangeFromFlights(activeDraft?.flights ?? []);
   }, [activeDraft?.flights]);
@@ -2383,12 +2529,27 @@ export default function TrafficPage() {
     return JSON.stringify(normalizeFlightForCompare(flightModalBaseline)) !== JSON.stringify(normalizeFlightForCompare(flightModalDraft));
   }, [flightModalBaseline, flightModalDraft]);
   const hasStationModalChanges = useMemo(() => {
-    return JSON.stringify(normalizeStationForCompare(stationModalBaseline)) !== JSON.stringify(normalizeStationForCompare(stationModalDraft));
+    const baseline = stationModalBaseline;
+    const draft = stationModalDraft;
+    if (!baseline || !draft) {
+      return Boolean(baseline || draft);
+    }
+    return JSON.stringify({
+      stationCode: asString(baseline.stationCode).toUpperCase(),
+      deliveryStatus: asString(baseline.deliveryStatus).toLowerCase(),
+      confirmedStatus: asString(baseline.confirmedStatus).toLowerCase(),
+      note: typeof baseline.note === "string" ? baseline.note : asString(baseline.note || ""),
+    }) !== JSON.stringify({
+      stationCode: asString(draft.stationCode).toUpperCase(),
+      deliveryStatus: asString(draft.deliveryStatus).toLowerCase(),
+      confirmedStatus: asString(draft.confirmedStatus).toLowerCase(),
+      note: typeof draft.note === "string" ? draft.note : asString(draft.note || ""),
+    });
   }, [stationModalBaseline, stationModalDraft]);
   const canSaveFlightModal = Boolean(
     canEditTradsphere
       && !isSaving
-      && !isSentLocked
+      && !isTrafficEditingLocked
       && flightModalDraft
       && hasFlightModalChanges,
   );
@@ -2397,12 +2558,30 @@ export default function TrafficPage() {
   const canSaveStationModal = Boolean(
     canEditTradsphere
       && !isSaving
-      && !isSentLocked
+      && !isConfirmedLocked
       && stationModalDraft
       && hasStationModalChanges,
   );
   const stationModalValidationError = useMemo(() => validateStationModalDraft(stationModalDraft), [stationModalDraft]);
   const canSubmitStationModal = Boolean(canSaveStationModal && !stationModalValidationError);
+  const stationModalFooterActions = (
+    <>
+      {canEditTradsphere && hasStationModalChanges ? (
+        <Button
+          variant="outline"
+          onClick={revertStationModalChanges}
+          disabled={isSaving}
+        >
+          Revert
+        </Button>
+      ) : null}
+      {canSubmitStationModal ? (
+        <Button onClick={saveStationModal}>
+          {stationModalMode === "create" ? "Add" : "Save"}
+        </Button>
+      ) : null}
+    </>
+  );
 
   const canSaveChanges = Boolean(
     canEditTradsphere
@@ -2448,7 +2627,7 @@ export default function TrafficPage() {
     return activeEmailWorkspace.downloadLinks[activeDownloadLinkNoteIndex] ?? null;
   }, [activeDownloadLinkNoteIndex, activeEmailWorkspace]);
   const canSendTrafficEmail = useMemo(() => {
-    if (!canEditTradsphere || isSaving || isSendingEmail || isMarkingTrafficSent || isSentLocked) {
+    if (!canEditTradsphere || isSaving || isSendingEmail || isMarkingTrafficSent || isEmailLocked) {
       return false;
     }
     if (!activeDraft?.email || !activeEmailWorkspace || !activeTrafficId) {
@@ -2466,7 +2645,47 @@ export default function TrafficPage() {
     isSaving,
     isSendingEmail,
     isMarkingTrafficSent,
-    isSentLocked,
+    isEmailLocked,
+  ]);
+  const canOpenTrafficTestEmailModal = useMemo(() => {
+    if (!canEditTradsphere || isSaving || isSendingEmail || isSendingTestEmail) {
+      return false;
+    }
+    if (!activeDraft?.email || !activeEmailWorkspace || !activeTrafficId) {
+      return false;
+    }
+    if (isLocalTrafficId(activeTrafficId)) {
+      return false;
+    }
+    return true;
+  }, [
+    activeDraft,
+    activeEmailWorkspace,
+    activeTrafficId,
+    canEditTradsphere,
+    isSaving,
+    isSendingEmail,
+    isSendingTestEmail,
+  ]);
+  const canSendTrafficTestEmail = useMemo(() => {
+    if (!canEditTradsphere || isSaving || isSendingTestEmail) {
+      return false;
+    }
+    if (!activeDraft?.email || !activeEmailWorkspace || !activeTrafficId) {
+      return false;
+    }
+    if (isLocalTrafficId(activeTrafficId)) {
+      return false;
+    }
+    return isLikelyEmailAddress(testEmailTo);
+  }, [
+    activeDraft,
+    activeEmailWorkspace,
+    activeTrafficId,
+    canEditTradsphere,
+    isSaving,
+    isSendingTestEmail,
+    testEmailTo,
   ]);
 
   const cacheStatusText = useMemo(() => {
@@ -3059,6 +3278,138 @@ export default function TrafficPage() {
       : item));
   }, []);
 
+  const applyTrafficStatusToLoadedState = useCallback((trafficIdRaw: string, nextStatus: TrafficStatus) => {
+    const trafficId = asString(trafficIdRaw);
+    if (!trafficId) {
+      return;
+    }
+
+    const applyStatus = (current: TrafficDetail | null): TrafficDetail | null => {
+      if (!current || asString(current.traffic.id) !== trafficId) {
+        return current;
+      }
+      return computeSummary({
+        ...current,
+        traffic: {
+          ...current.traffic,
+          status: nextStatus,
+        },
+      });
+    };
+
+    setDetailBaseline((current) => applyStatus(current));
+    setDetailDraft((current) => applyStatus(current));
+    setDraftSessionsByTrafficId((current) => {
+      const session = current[trafficId];
+      if (!session) {
+        return current;
+      }
+      return {
+        ...current,
+        [trafficId]: {
+          baseline: session.baseline
+            ? computeSummary({
+                ...session.baseline,
+                traffic: {
+                  ...session.baseline.traffic,
+                  status: nextStatus,
+                },
+              })
+            : session.baseline,
+          draft: computeSummary({
+            ...session.draft,
+            traffic: {
+              ...session.draft.traffic,
+              status: nextStatus,
+            },
+          }),
+        },
+      };
+    });
+    updateTrafficCardSummary(trafficId, { status: nextStatus });
+  }, [computeSummary, updateTrafficCardSummary]);
+
+  const handleToggleStationConfirmedStatus = useCallback((stationId: number) => {
+    if (!canEditTradsphere || isSaving || isConfirmedLocked) {
+      return;
+    }
+    updateDraft((current) => {
+      const target = current.stations.find((item) => item.id === stationId);
+      if (!target) {
+        return current;
+      }
+      const currentConfirmedStatus = asString(target.confirmedStatus).toLowerCase();
+      const baselineStation = detailBaselineRef.current?.stations.find((item) => item.id === stationId) ?? null;
+      const baselineConfirmedStatus = asString(baselineStation?.confirmedStatus).toLowerCase();
+      const nextStations = current.stations.map((item) => {
+        if (item.id !== stationId) {
+          return item;
+        }
+        if (currentConfirmedStatus === "confirmed") {
+          const restoreStatus = stationConfirmedStatusRestoreRef.current[stationId]
+            ?? (baselineStation ? baselineStation.confirmedStatus : target.confirmedStatus);
+          delete stationConfirmedStatusRestoreRef.current[stationId];
+          return {
+            ...item,
+            confirmedStatus: restoreStatus,
+          };
+        }
+        stationConfirmedStatusRestoreRef.current[stationId] = asString(target.confirmedStatus).toLowerCase()
+          || baselineConfirmedStatus
+          || "";
+        return {
+          ...item,
+          confirmedStatus: "confirmed",
+        };
+      });
+      return {
+        ...current,
+        stations: nextStations,
+      };
+    });
+  }, [canEditTradsphere, isConfirmedLocked, isSaving, updateDraft]);
+
+  const handleToggleStationDeliveryStatus = useCallback((stationId: number) => {
+    if (!canEditTradsphere || isSaving || isConfirmedLocked) {
+      return;
+    }
+    updateDraft((current) => {
+      const target = current.stations.find((item) => item.id === stationId);
+      if (!target) {
+        return current;
+      }
+      const currentDeliveryStatus = asString(target.deliveryStatus).toLowerCase();
+      const baselineStation = detailBaselineRef.current?.stations.find((item) => item.id === stationId) ?? null;
+      const baselineDeliveryStatus = asString(baselineStation?.deliveryStatus).toLowerCase();
+      const nextStations = current.stations.map((item) => {
+        if (item.id !== stationId) {
+          return item;
+        }
+        if (currentDeliveryStatus === "ready_to_email") {
+          const restoreStatus = stationDeliveryStatusRestoreRef.current[stationId]
+            ?? (baselineStation ? baselineStation.deliveryStatus : target.deliveryStatus)
+            ?? "";
+          delete stationDeliveryStatusRestoreRef.current[stationId];
+          return {
+            ...item,
+            deliveryStatus: restoreStatus,
+          };
+        }
+        stationDeliveryStatusRestoreRef.current[stationId] = asString(target.deliveryStatus)
+          || baselineDeliveryStatus
+          || "";
+        return {
+          ...item,
+          deliveryStatus: "ready_to_email",
+        };
+      });
+      return {
+        ...current,
+        stations: nextStations,
+      };
+    });
+  }, [canEditTradsphere, isConfirmedLocked, isSaving, updateDraft]);
+
   useEffect(() => {
     if (!activeDraft || !activeTrafficId) {
       return;
@@ -3448,6 +3799,8 @@ export default function TrafficPage() {
     if (!canSaveChanges) {
       return;
     }
+    stashCurrentDraftSession();
+
     const targetsById = new Map<string, { baseline: TrafficDetail | null; draft: TrafficDetail }>();
     for (const [trafficId, session] of Object.entries(draftSessionsByTrafficId)) {
       if (!hasTrafficDetailChanges(session.baseline, session.draft)) {
@@ -3484,6 +3837,11 @@ export default function TrafficPage() {
 
     try {
       const savedTrafficIdByDraftId: Record<string, string> = {};
+      const savedTrafficCacheWrites: Array<{
+        cacheKey: string;
+        detail: TrafficDetail;
+        oldCacheKey?: string;
+      }> = [];
       for (const target of saveTargets) {
         const requestBody = buildBulkSaveRequestForDetail(target.draft, target.baseline);
         const bulkSavePayload = await requestJson("/api/tradsphere/v1/traffic/bulk-save", {
@@ -3508,6 +3866,17 @@ export default function TrafficPage() {
           throw new Error("Failed to save traffic record.");
         }
         savedTrafficIdByDraftId[requestBody.draftTrafficId] = trafficId;
+
+        if (bulkDetail) {
+          const computedDetail = computeSummary(bulkDetail);
+          savedTrafficCacheWrites.push({
+            cacheKey: buildTrafficDetailCacheKey(trafficId),
+            detail: computedDetail,
+            oldCacheKey: requestBody.isLocalDraft && requestBody.draftTrafficId && requestBody.draftTrafficId !== trafficId
+              ? buildTrafficDetailCacheKey(requestBody.draftTrafficId)
+              : undefined,
+          });
+        }
 
         if (requestBody.isLocalDraft && requestBody.draftTrafficId && requestBody.draftTrafficId !== trafficId) {
           setEmailWorkspaceByTrafficId((current) => {
@@ -3538,6 +3907,8 @@ export default function TrafficPage() {
       }
 
       setDraftSessionsByTrafficId({});
+      stationDeliveryStatusRestoreRef.current = {};
+      stationConfirmedStatusRestoreRef.current = {};
 
       const selectedOverride = asString(savedTrafficIdByDraftId[asString(selectedTrafficId)] || selectedTrafficId) || null;
       const nextSelectedId = selectedOverride || asString(savedTrafficIdByDraftId[asString(detailDraft?.traffic.id)]) || null;
@@ -3551,6 +3922,17 @@ export default function TrafficPage() {
           deferWhenDirty: false,
         });
       }
+
+      for (const cacheWrite of savedTrafficCacheWrites) {
+        writeBrowserCache(cacheWrite.cacheKey, cacheWrite.detail, TRAFFIC_DETAIL_CACHE_TTL_MS, {
+          source: "network",
+          fetchedAt: Date.now(),
+        });
+        if (cacheWrite.oldCacheKey) {
+          removeBrowserCache(cacheWrite.oldCacheKey);
+        }
+      }
+
       setRefreshMessage(null);
       clearDeferredUpdate();
       toast.success(
@@ -3574,6 +3956,7 @@ export default function TrafficPage() {
     requestHeaders,
     requestJson,
     selectedTrafficId,
+    stashCurrentDraftSession,
     toast,
     upsertSelectedByAccount,
     validateForSave,
@@ -4071,7 +4454,7 @@ export default function TrafficPage() {
   }, [activeAccountCode, loadTrafficDetail, restoreDraftSession, selectedTrafficId, stashCurrentDraftSession, upsertSelectedByAccount]);
 
   const handleCreateTraffic = useCallback(async () => {
-    if (!activeAccountCode || !canEditTradsphere || isSaving || isSentLocked) {
+    if (!activeAccountCode || !canEditTradsphere || isSaving) {
       return;
     }
     stashCurrentDraftSession();
@@ -4127,8 +4510,152 @@ export default function TrafficPage() {
     activeAccountCode,
     canEditTradsphere,
     isSaving,
-    isSentLocked,
     stashCurrentDraftSession,
+    toast,
+    trafficList,
+    upsertSelectedByAccount,
+  ]);
+
+  const buildDuplicatedTrafficDraft = useCallback((source: TrafficDetail): TrafficDetail => {
+    const nextTrafficId = buildLocalTrafficId();
+    const nextFlights = source.flights.map((flight) => {
+      const nextId = tempRowIdRef.current;
+      tempRowIdRef.current -= 1;
+      return {
+        ...flight,
+        id: nextId,
+        trafficId: nextTrafficId,
+        dateCreated: null,
+        dateUpdated: null,
+      };
+    });
+    const nextStations = source.stations.map((station) => {
+      const nextId = tempRowIdRef.current;
+      tempRowIdRef.current -= 1;
+      return {
+        ...station,
+        id: nextId,
+        trafficId: nextTrafficId,
+        dateCreated: null,
+        dateUpdated: null,
+      };
+    });
+    const nextEmail = source.email
+      ? {
+          ...source.email,
+          id: 0,
+          trafficId: nextTrafficId,
+          sentStatus: "draft",
+          sentAt: null,
+          sentByUserId: null,
+          smtpMessageId: null,
+          lastSendAttemptAt: null,
+          lastSendError: null,
+          dateCreated: null,
+          dateUpdated: null,
+        }
+      : null;
+
+    return computeSummary({
+      traffic: {
+        ...source.traffic,
+        id: nextTrafficId,
+        status: "draft",
+        dateCreated: null,
+        dateUpdated: null,
+      },
+      flights: nextFlights,
+      stations: nextStations,
+      email: nextEmail,
+      summary: {
+        totalRotation: 0,
+        rotationWarning: false,
+        rotationWarningMessage: null,
+        warnings: [],
+        flightCount: 0,
+        stationCount: 0,
+      },
+    });
+  }, []);
+
+  const resolveTrafficDetailForDuplicate = useCallback(async (trafficIdRaw: string): Promise<TrafficDetail | null> => {
+    const trafficId = asString(trafficIdRaw);
+    if (!trafficId) {
+      return null;
+    }
+    if (activeDraft && asString(activeDraft.traffic.id) === trafficId) {
+      return cloneDetail(activeDraft);
+    }
+
+    const session = draftSessionsByTrafficId[trafficId];
+    if (session?.draft) {
+      return cloneDetail(session.draft);
+    }
+
+    const cachedSnapshot = readBrowserCacheSnapshot<TrafficDetail>(buildTrafficDetailCacheKey(trafficId));
+    const cachedDetail = normalizeTrafficDetail(cachedSnapshot?.data);
+    if (cachedDetail) {
+      return cachedDetail;
+    }
+
+    if (!isOnline) {
+      return null;
+    }
+
+    const payload = await requestJson(`/api/tradsphere/v1/traffic?id=${encodeURIComponent(trafficId)}`, {
+      headers: requestHeaders,
+      successToast: false,
+      errorToast: false,
+    });
+    return normalizeTrafficDetail(payload);
+  }, [activeDraft, draftSessionsByTrafficId, isOnline, requestHeaders, requestJson]);
+
+  const handleDuplicateTraffic = useCallback(async (trafficIdRaw: string) => {
+    const trafficId = asString(trafficIdRaw);
+    if (!trafficId || !canEditTradsphere || isSaving || isLoadingAccountTraffic || isLoadingDetail) {
+      return;
+    }
+    if (duplicatingTrafficId) {
+      return;
+    }
+
+    setDuplicatingTrafficId(trafficId);
+    try {
+      const sourceDetail = await resolveTrafficDetailForDuplicate(trafficId);
+      if (!sourceDetail) {
+        throw new Error("Traffic detail is unavailable for duplication.");
+      }
+
+      stashCurrentDraftSession();
+
+      const duplicatedDraft = buildDuplicatedTrafficDraft(sourceDetail);
+      const nextList = [buildListSummaryFromDetail(duplicatedDraft, stationLookupMetaByCode), ...trafficList];
+
+      setTrafficList(nextList);
+      setSelectedTrafficId(duplicatedDraft.traffic.id);
+      upsertSelectedByAccount(activeAccountCode, duplicatedDraft.traffic.id);
+      setDetailBaseline(null);
+      setDetailDraft(duplicatedDraft);
+      setRefreshMessage(null);
+      setError(null);
+      toast.success("Draft duplicated", "A local copy of the traffic record was created.");
+    } catch (duplicateError) {
+      const message = getTrafficErrorMessage(duplicateError, "Failed to duplicate traffic.");
+      toast.error("Unable to duplicate traffic", message);
+    } finally {
+      setDuplicatingTrafficId(null);
+    }
+  }, [
+    activeAccountCode,
+    buildDuplicatedTrafficDraft,
+    canEditTradsphere,
+    duplicatingTrafficId,
+    isLoadingAccountTraffic,
+    isLoadingDetail,
+    isSaving,
+    resolveTrafficDetailForDuplicate,
+    stashCurrentDraftSession,
+    stationLookupMetaByCode,
     toast,
     trafficList,
     upsertSelectedByAccount,
@@ -4760,7 +5287,7 @@ export default function TrafficPage() {
   }
 
   function addFlightDraft() {
-    if (!detailDraft || isSentLocked) {
+    if (!detailDraft) {
       return;
     }
     const draft = createEmptyFlightDraft(detailDraft.traffic.id);
@@ -4773,7 +5300,7 @@ export default function TrafficPage() {
   }
 
   function editFlightDraft(flightId: number) {
-    if (!detailDraft || isSentLocked) {
+    if (!detailDraft) {
       return;
     }
     const target = detailDraft.flights.find((item) => item.id === flightId);
@@ -4789,10 +5316,31 @@ export default function TrafficPage() {
     setIsFlightModalOpen(true);
   }
 
-  function removeFlightDraft(flightId: number) {
-    if (isSentLocked) {
+  function duplicateFlightDraft(flightId: number) {
+    if (!detailDraft) {
       return;
     }
+    const targetIndex = detailDraft.flights.findIndex((item) => item.id === flightId);
+    if (targetIndex < 0) {
+      return;
+    }
+    const nextTempId = tempRowIdRef.current;
+    tempRowIdRef.current -= 1;
+    const duplicatedFlight: TrafficFlight = {
+      ...detailDraft.flights[targetIndex],
+      id: nextTempId,
+      dateCreated: null,
+      dateUpdated: null,
+    };
+    updateDraft((current) => {
+      return {
+        ...current,
+        flights: [...current.flights, duplicatedFlight],
+      };
+    });
+  }
+
+  function removeFlightDraft(flightId: number) {
     const currentDetail = detailDraft;
     const remainingFlights = (currentDetail?.flights ?? []).filter((item) => item.id !== flightId);
     const nextSyncRange = resolveFlightRangeFromFlights(remainingFlights);
@@ -4842,7 +5390,7 @@ export default function TrafficPage() {
     const flightId = pendingFlightDeleteId;
     setPendingFlightDeleteId(null);
     setIsLastFlightDeleteConfirmOpen(false);
-    if (flightId === null || isSentLocked) {
+    if (flightId === null) {
       return;
     }
     const currentDetail = detailDraft;
@@ -4970,6 +5518,16 @@ export default function TrafficPage() {
     }
   }
 
+  function revertFlightModalChanges() {
+    if (!flightModalBaseline || !hasFlightModalChanges || isSaving || isFlightModalReadOnly) {
+      return;
+    }
+    setFlightModalDraft({ ...flightModalBaseline });
+    setFlightModalError(null);
+    setFlightFileUrlError(null);
+    setFlightScriptUrlError(null);
+  }
+
   function handleResolveFlightStationSyncSelection(shouldSyncStations: boolean) {
     const pending = pendingFlightStationSync;
     const selectedEstNums = [...selectedFlightStationSyncEstNums];
@@ -5040,7 +5598,7 @@ export default function TrafficPage() {
   }
 
   function addStationDraft() {
-    if (!detailDraft || isSentLocked) {
+    if (!detailDraft) {
       return;
     }
     const draft = createEmptyStationDraft(detailDraft.traffic.id);
@@ -5054,7 +5612,7 @@ export default function TrafficPage() {
   }
 
   function editStationDraft(stationId: number) {
-    if (!detailDraft || isSentLocked) {
+    if (!detailDraft) {
       return;
     }
     const target = detailDraft.stations.find((item) => item.id === stationId);
@@ -5072,13 +5630,29 @@ export default function TrafficPage() {
   }
 
   function removeStationDraft(stationId: number) {
-    if (isSentLocked) {
-      return;
-    }
     updateDraft((current) => ({
       ...current,
       stations: current.stations.filter((item) => item.id !== stationId),
     }));
+  }
+
+  function maybePromptConfirmTrafficStatus(nextStations: TrafficStation[]) {
+    if (!detailDraft) {
+      return;
+    }
+    const trafficStatus = asString(detailDraft.traffic.status).toLowerCase();
+    if (trafficStatus === "confirmed") {
+      return;
+    }
+    if (nextStations.length === 0) {
+      return;
+    }
+    const allConfirmed = nextStations.every((station) => asString(station.confirmedStatus).toLowerCase() === "confirmed");
+    if (!allConfirmed) {
+      return;
+    }
+    setTrafficConfirmTargetTrafficId(detailDraft.traffic.id);
+    setIsTrafficConfirmDialogOpen(true);
   }
 
   function saveStationModal() {
@@ -5092,6 +5666,7 @@ export default function TrafficPage() {
     }
     const stationContactEmails = extractPreferredContactEmails(stationModalDraft.contactsSnapshot);
 
+    let nextStations: TrafficStation[] | null = null;
     if (stationModalMode === "create") {
       const nextTempId = tempRowIdRef.current;
       tempRowIdRef.current -= 1;
@@ -5110,11 +5685,19 @@ export default function TrafficPage() {
             }
           : current.email,
       }));
+      if (detailDraft) {
+        nextStations = [...detailDraft.stations, nextStation];
+      }
     } else if (stationModalBaseline) {
+      const updatedStation = {
+        ...stationModalDraft,
+        id: stationModalBaseline.id,
+        stationCode: asString(stationModalDraft.stationCode).toUpperCase(),
+      };
       updateDraft((current) => ({
         ...current,
         stations: current.stations.map((item) => item.id === stationModalBaseline.id
-          ? { ...stationModalDraft, id: item.id, stationCode: asString(stationModalDraft.stationCode).toUpperCase() }
+          ? updatedStation
           : item),
         email: current.email
           ? {
@@ -5123,10 +5706,30 @@ export default function TrafficPage() {
             }
           : current.email,
       }));
+      if (detailDraft) {
+        nextStations = detailDraft.stations.map((item) => item.id === stationModalBaseline.id ? updatedStation : item);
+      }
     }
 
     setIsStationModalOpen(false);
     resetStationModalState();
+    if (nextStations) {
+      maybePromptConfirmTrafficStatus(nextStations);
+    }
+  }
+
+  function revertStationModalChanges() {
+    if (!stationModalBaseline || !hasStationModalChanges || isSaving) {
+      return;
+    }
+    setStationModalDraft({ ...stationModalBaseline });
+    setStationModalError(null);
+    setStationLookupError(null);
+    setStationLookupName(null);
+    setStationLookupQueryCode(asString(stationModalBaseline.stationCode).toUpperCase());
+    setStationLookupCacheStatus(null);
+    setStationLookupRefreshToken(0);
+    setIsStationLookupLoading(false);
   }
 
   function handleStationModalOpenChange(nextOpen: boolean) {
@@ -5658,7 +6261,7 @@ export default function TrafficPage() {
   }, [activeEmailPreviewHtml, toast]);
 
   const handleSendTrafficEmail = useCallback(async () => {
-    if (!canEditTradsphere || isSaving || isSendingEmail || isMarkingTrafficSent || isSentLocked) {
+    if (!canEditTradsphere || isSaving || isSendingEmail || isMarkingTrafficSent || isEmailLocked) {
       return;
     }
     if (!activeDraft?.email || !activeEmailWorkspace || !activeTrafficId) {
@@ -5805,12 +6408,92 @@ export default function TrafficPage() {
     activeTrafficId,
     accountNameByCode,
     canEditTradsphere,
+    isEmailLocked,
     isSaving,
     isSendingEmail,
     isMarkingTrafficSent,
-    isSentLocked,
     requestHeaders,
     requestJson,
+    toast,
+  ]);
+
+  const handleOpenTestEmailModal = useCallback(() => {
+    if (!canOpenTrafficTestEmailModal) {
+      return;
+    }
+    setTestEmailTo("");
+    setIsTestEmailModalOpen(true);
+  }, [canOpenTrafficTestEmailModal]);
+
+  const handleSendTrafficTestEmail = useCallback(async () => {
+    if (!canSendTrafficTestEmail || !activeDraft?.email || !activeEmailWorkspace || !activeTrafficId) {
+      return;
+    }
+
+    const toEmail = asString(testEmailTo).trim().toLowerCase();
+    if (!isLikelyEmailAddress(toEmail)) {
+      toast.error("Invalid test email", "Enter a valid email address for the test recipient.");
+      return;
+    }
+
+    const subject = asString(activeDraft.email.subject);
+    if (!subject) {
+      toast.error("Missing subject", "Email subject is required before sending the test copy.");
+      return;
+    }
+
+    const accountCode = asString(activeDraft.traffic.accountCode).toUpperCase();
+    const accountLabel = accountNameByCode[accountCode] || accountCode || "Tradsphere";
+    const body = persistTrafficEmailBody({
+      workspace: {
+        bodyContent: activeEmailWorkspace.bodyContent,
+        instructionsContent: activeEmailWorkspace.instructionsContent,
+        downloadLinks: activeEmailWorkspace.downloadLinks,
+      },
+      subject,
+      accountLabel,
+      campaignLabel: asString(activeDraft.traffic.campaign),
+      statusLabel: formatStatusOptionLabel(activeDraft.traffic.status),
+    });
+    if (!asString(body)) {
+      toast.error("Missing email body", "Email body is required before sending the test copy.");
+      return;
+    }
+
+    setIsSendingTestEmail(true);
+    setError(null);
+    try {
+      await requestJson(
+        `/api/tradsphere/v1/traffic/email/send-test?trafficId=${encodeURIComponent(activeTrafficId)}`,
+        {
+          method: "POST",
+          headers: requestHeaders,
+          body: {
+            toEmail,
+            subject,
+            body,
+          },
+          successToast: false,
+        },
+      );
+      setIsTestEmailModalOpen(false);
+      toast.success("Test email sent", `A test copy was sent to ${toEmail}.`);
+    } catch (sendError) {
+      const message = getTrafficErrorMessage(sendError, "Failed to send test email.");
+      setError(message);
+      toast.error("Test send failed", message);
+    } finally {
+      setIsSendingTestEmail(false);
+    }
+  }, [
+    accountNameByCode,
+    activeDraft,
+    activeEmailWorkspace,
+    activeTrafficId,
+    canSendTrafficTestEmail,
+    requestHeaders,
+    requestJson,
+    testEmailTo,
     toast,
   ]);
 
@@ -5818,6 +6501,7 @@ export default function TrafficPage() {
     if (!activeDraft || !activeDraft.email || !activeEmailWorkspace) {
       return;
     }
+    setIsTestEmailModalOpen(false);
     setIsEmailPreviewOpen(true);
   }, [activeDraft, activeEmailWorkspace]);
 
@@ -5835,56 +6519,16 @@ export default function TrafficPage() {
     setIsMarkingTrafficSent(true);
     setError(null);
     try {
+      const nextStatus: TrafficStatus = "sent";
       const payload = await requestJson(`/api/tradsphere/v1/traffic?id=${encodeURIComponent(trafficId)}`, {
         method: "PUT",
         headers: requestHeaders,
-        body: { status: "sent" },
+        body: { status: nextStatus },
         successToast: false,
       });
       const data = unwrapData(payload);
-      const persistedStatus = asString(isRecord(data) ? data.status : "").toLowerCase() || "sent";
-
-      const applyStatus = (current: TrafficDetail | null): TrafficDetail | null => {
-        if (!current || asString(current.traffic.id) !== trafficId) {
-          return current;
-        }
-        return computeSummary({
-          ...current,
-          traffic: {
-            ...current.traffic,
-            status: persistedStatus as TrafficStatus,
-          },
-        });
-      };
-      setDetailBaseline((current) => applyStatus(current));
-      setDetailDraft((current) => applyStatus(current));
-      setDraftSessionsByTrafficId((current) => {
-        const session = current[trafficId];
-        if (!session) {
-          return current;
-        }
-        return {
-          ...current,
-          [trafficId]: {
-            baseline: session.baseline
-              ? computeSummary({
-                  ...session.baseline,
-                  traffic: {
-                    ...session.baseline.traffic,
-                    status: persistedStatus as TrafficStatus,
-                  },
-                })
-              : session.baseline,
-            draft: computeSummary({
-              ...session.draft,
-              traffic: {
-                ...session.draft.traffic,
-                status: persistedStatus as TrafficStatus,
-              },
-            }),
-          },
-        };
-      });
+      const persistedStatus = asString(isRecord(data) ? data.status : "").toLowerCase() || nextStatus;
+      applyTrafficStatusToLoadedState(trafficId, persistedStatus as TrafficStatus);
       setEmailSendSuccessPrompt(null);
       toast.success("Traffic status updated", "Traffic status has been marked as Sent.");
     } catch (statusError) {
@@ -5894,7 +6538,120 @@ export default function TrafficPage() {
     } finally {
       setIsMarkingTrafficSent(false);
     }
-  }, [emailSendSuccessPrompt, requestHeaders, requestJson, toast]);
+  }, [applyTrafficStatusToLoadedState, emailSendSuccessPrompt, requestHeaders, requestJson, toast]);
+
+  const handleUnlockTraffic = useCallback(async () => {
+    const trafficId = asString(activeTrafficId);
+    if (
+      !trafficId
+      || !activeDraft
+      || !activeDraft.email
+      || !activeEmailWorkspace
+      || !isEmailLocked
+      || isLocalTrafficId(trafficId)
+    ) {
+      return;
+    }
+
+    setIsUnlockingTraffic(true);
+    setError(null);
+    try {
+      const payload = await requestJson("/api/tradsphere/v1/traffic/bulk-save", {
+        method: "POST",
+        headers: requestHeaders,
+        body: {
+          trafficId,
+          traffic: {
+            accountCode: activeDraft.traffic.accountCode,
+            campaign: activeDraft.traffic.campaign,
+            status: "ready",
+            note: activeDraft.traffic.note,
+          },
+          updateTraffic: true,
+          flightCreates: [],
+          flightUpdates: [],
+          flightDeletes: [],
+          stationCreates: [],
+          stationUpdates: [],
+          stationDeletes: [],
+          upsertEmail: true,
+          email: {
+            toEmails: activeDraft.email.toEmails,
+            ccEmails: activeDraft.email.ccEmails,
+            bccEmails: activeDraft.email.bccEmails,
+            subject: activeDraft.email.subject,
+            body: activeDraft.email.body,
+            sentStatus: "ready",
+          },
+        },
+        successToast: false,
+      });
+      const data = unwrapData(payload);
+      const nextDetail = normalizeTrafficDetail({
+        data: isRecord(data) && isRecord(data.detail) ? data.detail : data,
+      });
+      if (!nextDetail) {
+        throw new Error("Invalid unlock response.");
+      }
+      const computedDetail = computeSummary(nextDetail);
+      setDetailBaseline((current) => {
+        if (!current || asString(current.traffic.id) !== trafficId) {
+          return current;
+        }
+        return computedDetail;
+      });
+      setDetailDraft((current) => {
+        if (!current || asString(current.traffic.id) !== trafficId) {
+          return current;
+        }
+        return computedDetail;
+      });
+      setDraftSessionsByTrafficId((current) => {
+        const session = current[trafficId];
+        if (!session) {
+          return current;
+        }
+        return {
+          ...current,
+          [trafficId]: {
+            baseline: session.baseline
+              ? computedDetail
+              : session.baseline,
+            draft: computedDetail,
+          },
+        };
+      });
+      updateTrafficCardSummary(trafficId, { status: "ready" });
+      toast.success("Traffic unlocked", "Traffic email and traffic status have been set back to Ready.");
+    } catch (statusError) {
+      const message = getTrafficErrorMessage(statusError, "Failed to unlock traffic.");
+      setError(message);
+      toast.error("Unlock failed", message);
+    } finally {
+      setIsUnlockingTraffic(false);
+    }
+  }, [activeDraft, activeEmailWorkspace, activeTrafficId, computeSummary, isEmailLocked, requestHeaders, requestJson, toast, updateTrafficCardSummary]);
+
+  const handlePromptConfirmTrafficStatus = useCallback((shouldConfirm: boolean) => {
+    const trafficId = asString(trafficConfirmTargetTrafficId);
+    setIsTrafficConfirmDialogOpen(false);
+    setTrafficConfirmTargetTrafficId(null);
+    if (!shouldConfirm || !trafficId || !detailDraft || asString(detailDraft.traffic.id) !== trafficId) {
+      return;
+    }
+    updateDraft((current) => ({
+      ...current,
+      traffic: {
+        ...current.traffic,
+        status: "confirmed",
+      },
+    }));
+    updateTrafficCardSummary(trafficId, { status: "confirmed" });
+    toast.info(
+      "Traffic status prepared",
+      "Traffic status has been set to Confirmed in the draft. Save to lock the record.",
+    );
+  }, [detailDraft, toast, trafficConfirmTargetTrafficId, updateDraft, updateTrafficCardSummary]);
 
   const normalizedAppliedTrafficSearch = useMemo(
     () => normalizeSearchKeyword(appliedTrafficSearch),
@@ -6064,7 +6821,7 @@ export default function TrafficPage() {
               aria-label="New Traffic"
               title="New Traffic"
               onClick={() => void handleCreateTraffic()}
-              disabled={!activeAccountCode || !canEditTradsphere || isLoadingAccountTraffic || isSaving || isSentLocked}
+              disabled={!activeAccountCode || !canEditTradsphere || isLoadingAccountTraffic || isSaving}
               className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
             />
           )}
@@ -6115,6 +6872,7 @@ export default function TrafficPage() {
                 const isDeletingCard = deletingTrafficIdSet.has(item.id);
                 const displayCampaign = active && activeDraft ? activeDraft.traffic.campaign : item.campaign;
                 const displayStatus = active && activeDraft ? activeDraft.traffic.status : item.status;
+                const isLockedTrafficCard = ["sent", "confirmed"].includes(asString(displayStatus).toLowerCase());
                 return (
                   <div
                     key={item.id}
@@ -6158,6 +6916,21 @@ export default function TrafficPage() {
                       </div>
                       <div className="flex items-center">
                         <div className="flex items-center gap-0.5 transition-opacity duration-150 max-md:opacity-100 md:pointer-events-none md:opacity-0 md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100">
+                            <ActionIconButton
+                              icon={duplicatingTrafficId === item.id ? <Loader2 className="animate-spin" /> : <Copy />}
+                              tooltip={duplicatingTrafficId === item.id ? "Duplicating traffic..." : "Duplicate Traffic"}
+                              aria-label={duplicatingTrafficId === item.id ? "Duplicating traffic" : "Duplicate Traffic"}
+                            title={duplicatingTrafficId === item.id ? "Duplicating traffic" : "Duplicate Traffic"}
+                            onClick={(event) => {
+                              event.stopPropagation();
+                              if (duplicatingTrafficId === item.id) {
+                                return;
+                              }
+                              void handleDuplicateTraffic(item.id);
+                            }}
+                              disabled={!canEditTradsphere || isSaving || isDeletingCard || isLoadingAccountTraffic || isLoadingDetail || isDuplicatingTraffic || isLockedTrafficCard}
+                            className="!h-6 !w-6 !rounded-full !p-0 text-blue-500 hover:!bg-blue-50 hover:!scale-105 hover:text-blue-600 focus-visible:!bg-blue-50 focus-visible:!scale-105 focus-visible:text-blue-600 [&_svg]:!h-3.5 [&_svg]:!w-3.5 [&_svg]:text-blue-500 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110 hover:[&_svg]:text-blue-600 focus-visible:[&_svg]:text-blue-600"
+                          />
                           <ActionIconButton
                             icon={isDeletingCard ? <Loader2 className="animate-spin" /> : (shouldHardDelete ? <Trash2 /> : <Archive />)}
                             tooltip={isDeletingCard ? "Removing traffic..." : (shouldHardDelete ? "Delete Traffic" : "Archive Traffic")}
@@ -6174,7 +6947,7 @@ export default function TrafficPage() {
                               }
                               openTrafficRemovalDialog(item.id, "archive");
                             }}
-                            disabled={!canEditTradsphere || isSaving || isDeletingCard || isLoadingAccountTraffic || isLoadingDetail}
+                            disabled={!canEditTradsphere || isSaving || isDeletingCard || isLoadingAccountTraffic || isLoadingDetail || isLockedTrafficCard}
                             className="!h-6 !w-6 !rounded-full !p-0 text-rose-500 hover:!bg-rose-50 hover:!scale-105 hover:text-rose-600 focus-visible:!bg-rose-50 focus-visible:!scale-105 focus-visible:text-rose-600 [&_svg]:!h-3.5 [&_svg]:!w-3.5 [&_svg]:text-rose-500 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110 hover:[&_svg]:text-rose-600 focus-visible:[&_svg]:text-rose-600"
                           />
                         </div>
@@ -6237,18 +7010,18 @@ export default function TrafficPage() {
             id="traffic-workspace-panel-workflow"
             title="Traffic Details"
             actions={(
-              <ActionIconButton
-                icon={<Archive />}
-                tooltip="Archive Traffic"
-                aria-label="Archive Traffic"
-                title="Archive Traffic"
+                <ActionIconButton
+                  icon={<Archive />}
+                  tooltip="Archive Traffic"
+                  aria-label="Archive Traffic"
+                  title="Archive Traffic"
                 onClick={() => {
                   if (!selectedTrafficId) {
                     return;
                   }
                   openTrafficRemovalDialog(selectedTrafficId, "archive");
                 }}
-                disabled={!selectedTrafficId || !canEditTradsphere || isSaving || isDeletingSelectedTraffic || isSentLocked || hasUnsavedChanges}
+                disabled={!selectedTrafficId || !canEditTradsphere || isSaving || isDeletingSelectedTraffic || hasUnsavedChanges || isTrafficEditingLocked}
                 className="!h-7 !w-7 !p-0 text-rose-600 hover:text-rose-700 focus-visible:text-rose-700 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:text-rose-600 hover:[&_svg]:text-rose-700 focus-visible:[&_svg]:text-rose-700"
               />
             )}
@@ -6264,10 +7037,15 @@ export default function TrafficPage() {
               </div>
             ) : (
               <>
-                {isSentLocked ? (
-                  <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-2 text-sm text-emerald-700">
-                    This traffic is sent and locked. Editing actions are disabled.
-                  </div>
+                {trafficLockBannerKind ? (
+                  <TrafficLockBanner
+                    kind={trafficLockBannerKind}
+                    isUnlocking={isUnlockingTraffic}
+                    disabled={!canEditTradsphere || isSaving || isUnlockingTraffic}
+                    onUnlock={() => {
+                      void handleUnlockTraffic();
+                    }}
+                  />
                 ) : null}
 
                 <div className="grid gap-3 sm:grid-cols-2">
@@ -6275,7 +7053,7 @@ export default function TrafficPage() {
                     <span className="text-slate-600">Campaign</span>
                     <Input
                       value={activeDraft.traffic.campaign}
-                      disabled={!canEditTradsphere || isSaving || isSentLocked}
+                      disabled={!canEditTradsphere || isSaving || isTrafficEditingLocked}
                       onChange={(event) => {
                         const nextCampaign = event.target.value;
                         updateDraft((current) => ({
@@ -6307,7 +7085,7 @@ export default function TrafficPage() {
                       }}
                       options={STATUS_OPTIONS}
                       searchable={false}
-                      disabled={!canEditTradsphere || isSaving || isSentLocked}
+                      disabled={!canEditTradsphere || isSaving || isConfirmedSavedLocked}
                     />
                   </label>
                 </div>
@@ -6317,7 +7095,7 @@ export default function TrafficPage() {
                   <Textarea
                     value={activeDraft.traffic.note || ""}
                     className="min-h-[88px]"
-                    disabled={!canEditTradsphere || isSaving || isSentLocked}
+                    disabled={!canEditTradsphere || isSaving || isTrafficEditingLocked}
                     onChange={(event) => updateDraft((current) => ({
                       ...current,
                       traffic: {
@@ -6340,7 +7118,7 @@ export default function TrafficPage() {
                 aria-label="Add Flight"
                 title="Add Flight"
                 onClick={addFlightDraft}
-                disabled={!canEditTradsphere || isSaving || isSentLocked}
+                disabled={!canEditTradsphere || isSaving || isTrafficEditingLocked}
                 className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
               />
             )}
@@ -6386,10 +7164,15 @@ export default function TrafficPage() {
                       </thead>
                       <tbody>
                         {activeDraft.flights.map((flight) => (
+                          (() => {
+                            const isDraftFlight = flight.id < 0;
+                            return (
                           <tr
                             key={flight.id}
-                            onClick={() => editFlightDraft(flight.id)}
-                            className="group cursor-pointer border-t border-slate-200 text-slate-700 transition hover:bg-blue-50/40"
+                            onClick={() => {
+                              editFlightDraft(flight.id);
+                            }}
+                            className={`group cursor-pointer border-t border-slate-200 text-slate-700 transition ${isDraftFlight ? "bg-amber-50/70 hover:bg-amber-100/70" : "hover:bg-blue-50/40"}`}
                           >
                             <td className="whitespace-nowrap px-3 py-2">{formatFlightRangeForTable(flight.flightStart, flight.flightEnd)}</td>
                             <td className="whitespace-nowrap px-3 py-2">{flight.medium || "-"}</td>
@@ -6440,20 +7223,36 @@ export default function TrafficPage() {
                               )}
                             </td>
                             <td className="px-3 py-2 text-right">
-                              <ActionIconButton
-                                icon={<Trash2 />}
-                                tooltip="Delete flight row"
-                                aria-label="Delete flight row"
-                                title="Delete flight row"
-                                onClick={(event) => {
-                                  event.stopPropagation();
-                                  removeFlightDraft(flight.id);
-                                }}
-                                disabled={!canEditTradsphere || isSaving || isSentLocked}
-                                className="!h-6 !w-6 !rounded-full !p-0 text-rose-500 hover:!bg-rose-50 hover:!scale-105 hover:text-rose-600 focus-visible:!bg-rose-50 focus-visible:!scale-105 focus-visible:text-rose-600 [&_svg]:!h-3.5 [&_svg]:!w-3.5"
-                              />
+                              <div className="inline-flex items-center gap-0.5">
+                                <ActionIconButton
+                                  icon={<Copy />}
+                                  tooltip="Duplicate flight row"
+                                  aria-label="Duplicate flight row"
+                                  title="Duplicate flight row"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    duplicateFlightDraft(flight.id);
+                                  }}
+                                  disabled={!canEditTradsphere || isSaving || isTrafficEditingLocked}
+                                  className="!h-6 !w-6 !rounded-full !p-0 text-blue-500 hover:!bg-blue-50 hover:!scale-105 hover:text-blue-600 focus-visible:!bg-blue-50 focus-visible:!scale-105 focus-visible:text-blue-600 [&_svg]:!h-3.5 [&_svg]:!w-3.5"
+                                />
+                                <ActionIconButton
+                                  icon={<Trash2 />}
+                                  tooltip="Delete flight row"
+                                  aria-label="Delete flight row"
+                                  title="Delete flight row"
+                                  onClick={(event) => {
+                                    event.stopPropagation();
+                                    removeFlightDraft(flight.id);
+                                  }}
+                                  disabled={!canEditTradsphere || isSaving || isTrafficEditingLocked}
+                                  className="!h-6 !w-6 !rounded-full !p-0 text-rose-500 hover:!bg-rose-50 hover:!scale-105 hover:text-rose-600 focus-visible:!bg-rose-50 focus-visible:!scale-105 focus-visible:text-rose-600 [&_svg]:!h-3.5 [&_svg]:!w-3.5"
+                                />
+                              </div>
                             </td>
                           </tr>
+                            );
+                          })()
                         ))}
                       </tbody>
                     </table>
@@ -6473,15 +7272,15 @@ export default function TrafficPage() {
                   aria-label="Sync stations from flight date range"
                   title="Sync stations from flight date range"
                   onClick={handleManualStationSync}
-                  disabled={
-                    !activeDraft
-                    || !stationSyncFlightRange
-                    || !canEditTradsphere
-                    || isSaving
-                    || isSentLocked
-                    || isStationAutoSyncing
-                    || !isOnline
-                  }
+                    disabled={
+                      !activeDraft
+                      || !stationSyncFlightRange
+                      || !canEditTradsphere
+                      || isSaving
+                      || isStationAutoSyncing
+                      || isTrafficEditingLocked
+                      || !isOnline
+                    }
                   className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
                 />
                 <ActionIconButton
@@ -6495,7 +7294,7 @@ export default function TrafficPage() {
                     }
                     setIsScheduleTimelineModalOpen(true);
                   }}
-                  disabled={!timelineAccountCode || !stationSyncFlightRange || isLoadingAccountTraffic || isStationAutoSyncing}
+                  disabled={!timelineAccountCode || !stationSyncFlightRange || isLoadingAccountTraffic || isStationAutoSyncing || isTrafficEditingLocked}
                   className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
                 />
                 <ActionIconButton
@@ -6504,7 +7303,7 @@ export default function TrafficPage() {
                   aria-label="Add Station"
                   title="Add Station"
                   onClick={addStationDraft}
-                  disabled={!canEditTradsphere || isSaving || isSentLocked}
+                  disabled={!canEditTradsphere || isSaving || isTrafficEditingLocked}
                   className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
                 />
               </div>
@@ -6542,8 +7341,13 @@ export default function TrafficPage() {
                       {sortedStations.map((station) => (
                         <tr
                           key={station.id}
-                          onClick={() => editStationDraft(station.id)}
-                          className="group cursor-pointer border-t border-slate-200 text-slate-700 transition hover:bg-blue-50/40"
+                          onClick={() => {
+                            if (isConfirmedLocked) {
+                              return;
+                            }
+                            editStationDraft(station.id);
+                          }}
+                          className={`group border-t border-slate-200 text-slate-700 transition ${isConfirmedLocked ? "cursor-not-allowed" : "cursor-pointer hover:bg-blue-50/40"}`}
                         >
                           <td className="whitespace-nowrap px-3 py-2">
                             {formatStationDisplayLabel(station.stationCode, stationLookupMetaByCode[asString(station.stationCode).toUpperCase()])}
@@ -6566,6 +7370,9 @@ export default function TrafficPage() {
                               type="button"
                               onClick={(event) => {
                                 event.stopPropagation();
+                                if (isTrafficEditingLocked) {
+                                  return;
+                                }
                                 handleOpenDeliveryMethodDetail(station.stationCode);
                               }}
                               className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium transition focus-visible:outline-none focus-visible:ring-2 ${deliveryMethodChipClass(station.deliveryMethod)}`}
@@ -6580,6 +7387,9 @@ export default function TrafficPage() {
                                 <StationContactsCell
                                   emails={allEmails}
                                   onCopy={() => {
+                                    if (isTrafficEditingLocked) {
+                                      return;
+                                    }
                                     void handleCopyStationContacts(allEmails);
                                   }}
                                 />
@@ -6587,14 +7397,82 @@ export default function TrafficPage() {
                             })()}
                           </td>
                           <td className="whitespace-nowrap px-3 py-2">
-                            <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${stationStatusChipClass(station.deliveryStatus)}`}>
-                              {formatStatusOptionLabel(station.deliveryStatus)}
-                            </span>
+                            {(() => {
+                              const deliveryStatusValue = asString(station.deliveryStatus).toLowerCase();
+                              const hasDeliveryRestore = Object.prototype.hasOwnProperty.call(stationDeliveryStatusRestoreRef.current, station.id);
+                              const deliveryStatusInteractive = canEditTradsphere && !isSaving && !isConfirmedLocked && (deliveryStatusValue !== "ready_to_email" || hasDeliveryRestore);
+                              const deliveryStatusChip = (
+                                <button
+                                  type="button"
+                                  onClick={deliveryStatusInteractive ? (event) => {
+                                    event.stopPropagation();
+                                    handleToggleStationDeliveryStatus(station.id);
+                                  } : undefined}
+                                  disabled={!deliveryStatusInteractive}
+                                  aria-pressed={deliveryStatusValue === "ready_to_email"}
+                                  aria-disabled={!deliveryStatusInteractive}
+                                  className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium transition focus-visible:outline-none focus-visible:ring-2 ${stationStatusChipClass(station.deliveryStatus)} ${deliveryStatusInteractive ? "cursor-pointer hover:brightness-95" : "cursor-default opacity-80"}`}
+                                >
+                                  {formatStatusOptionLabel(station.deliveryStatus)}
+                                </button>
+                              );
+
+                              if (!deliveryStatusInteractive) {
+                                return deliveryStatusChip;
+                              }
+
+                              return (
+                                <TooltipTarget
+                                  text={
+                                    deliveryStatusValue === "ready_to_email"
+                                      ? "Click to restore the original delivery status."
+                                      : "Click to mark Ready To Email. Click again to restore the original value."
+                                  }
+                                  placement="top"
+                                >
+                                  {deliveryStatusChip}
+                                </TooltipTarget>
+                              );
+                            })()}
                           </td>
                           <td className="whitespace-nowrap px-3 py-2">
-                            <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${stationStatusChipClass(station.confirmedStatus)}`}>
-                              {formatStatusOptionLabel(station.confirmedStatus)}
-                            </span>
+                            {(() => {
+                              const confirmedStatusValue = asString(station.confirmedStatus).toLowerCase();
+                              const hasConfirmedRestore = Object.prototype.hasOwnProperty.call(stationConfirmedStatusRestoreRef.current, station.id);
+                              const confirmedStatusInteractive = canEditTradsphere && !isSaving && !isConfirmedLocked && (confirmedStatusValue !== "confirmed" || hasConfirmedRestore);
+                              const confirmedStatusChip = (
+                                <button
+                                  type="button"
+                                  onClick={confirmedStatusInteractive ? (event) => {
+                                    event.stopPropagation();
+                                    handleToggleStationConfirmedStatus(station.id);
+                                  } : undefined}
+                                  disabled={!confirmedStatusInteractive}
+                                  aria-pressed={confirmedStatusValue === "confirmed"}
+                                  aria-disabled={!confirmedStatusInteractive}
+                                  className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium transition focus-visible:outline-none focus-visible:ring-2 ${stationStatusChipClass(station.confirmedStatus)} ${confirmedStatusInteractive ? "cursor-pointer hover:brightness-95" : "cursor-default opacity-80"}`}
+                                >
+                                  {formatStatusOptionLabel(station.confirmedStatus)}
+                                </button>
+                              );
+
+                              if (!confirmedStatusInteractive) {
+                                return confirmedStatusChip;
+                              }
+
+                              return (
+                                <TooltipTarget
+                                  text={
+                                    confirmedStatusValue === "confirmed"
+                                      ? "Click to restore the original confirmation status."
+                                      : "Click to mark Confirmed. Click again to restore the original value."
+                                  }
+                                  placement="top"
+                                >
+                                  {confirmedStatusChip}
+                                </TooltipTarget>
+                              );
+                            })()}
                           </td>
                           <td className="px-3 py-2 text-right">
                             <ActionIconButton
@@ -6606,7 +7484,7 @@ export default function TrafficPage() {
                                 event.stopPropagation();
                                 removeStationDraft(station.id);
                               }}
-                              disabled={!canEditTradsphere || isSaving || isSentLocked}
+                              disabled={!canEditTradsphere || isSaving || isTrafficEditingLocked}
                               className="!h-6 !w-6 !rounded-full !p-0 text-rose-500 hover:!bg-rose-50 hover:!scale-105 hover:text-rose-600 focus-visible:!bg-rose-50 focus-visible:!scale-105 focus-visible:text-rose-600 [&_svg]:!h-3.5 [&_svg]:!w-3.5"
                             />
                           </td>
@@ -6638,26 +7516,16 @@ export default function TrafficPage() {
             actions={(
               <div className="flex items-center gap-1">
                 <ActionIconButton
-                  icon={<Eye />}
-                  tooltip="Preview email HTML"
-                  aria-label="Preview email HTML"
-                  title="Preview email HTML"
-                  onClick={handleOpenEmailPreviewModal}
-                  disabled={!activeDraft || !activeDraft.email || !activeEmailWorkspace}
-                  className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
-                />
-                <ActionIconButton
-                  icon={isSendingEmail ? <Loader2 className="animate-spin" /> : <Send />}
-                  tooltip={isSendingEmail ? "Sending email..." : "Review and send email"}
-                  aria-label={isSendingEmail ? "Sending email" : "Review and send email"}
-                  title={isSendingEmail ? "Sending email..." : "Review and send email"}
+                  icon={isSendingEmail ? <Loader2 className="animate-spin" /> : (isEmailLocked ? <Eye /> : <Send />)}
+                  tooltip={isSendingEmail ? "Sending email..." : emailWorkspacePrimaryActionLabel}
+                  aria-label={isSendingEmail ? "Sending email" : emailWorkspacePrimaryActionLabel}
+                  title={isSendingEmail ? "Sending email..." : emailWorkspacePrimaryActionLabel}
                   onClick={() => {
                     handleOpenEmailPreviewModal();
                   }}
                   disabled={
                     !canEditTradsphere
-                    || isSentLocked
-                    || !activeDraft
+                      || !activeDraft
                     || !activeDraft.email
                     || !activeEmailWorkspace
                     || isSaving
@@ -6684,14 +7552,27 @@ export default function TrafficPage() {
               </div>
             ) : (
               <>
-                <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3">
+              <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3">
+                  {emailLockBannerKind ? (
+                    <>
+                      <TrafficLockBanner
+                        kind={emailLockBannerKind}
+                        isUnlocking={isUnlockingTraffic}
+                        disabled={!canEditTradsphere || isSaving || isUnlockingTraffic}
+                        onUnlock={() => {
+                          void handleUnlockTraffic();
+                        }}
+                      />
+                      <div className="h-3" />
+                    </>
+                  ) : null}
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Recipients</p>
                   <p className="mt-1 text-xs text-slate-500">Manage recipients and draft subject.</p>
                   <div className="mt-3 space-y-2">
                     <EmailChipsInput
                       value={activeDraft.email?.toEmails || []}
                       placeholder="To emails"
-                      disabled={!canEditTradsphere || isSaving || isSentLocked}
+                      disabled={!canEditTradsphere || isSaving || isEmailLocked}
                       labelByEmail={contactNameByEmail}
                       onChange={(nextEmails) => updateDraft((current) => ({
                         ...current,
@@ -6707,7 +7588,7 @@ export default function TrafficPage() {
                       <EmailChipsInput
                         value={activeDraft.email?.ccEmails || []}
                         placeholder="CC emails"
-                        disabled={!canEditTradsphere || isSaving || isSentLocked}
+                        disabled={!canEditTradsphere || isSaving || isEmailLocked}
                         labelByEmail={contactNameByEmail}
                         onChange={(nextEmails) => updateDraft((current) => ({
                           ...current,
@@ -6722,7 +7603,7 @@ export default function TrafficPage() {
                       <EmailChipsInput
                         value={activeDraft.email?.bccEmails || []}
                         placeholder="BCC emails"
-                        disabled={!canEditTradsphere || isSaving || isSentLocked}
+                        disabled={!canEditTradsphere || isSaving || isEmailLocked}
                         labelByEmail={contactNameByEmail}
                         onChange={(nextEmails) => updateDraft((current) => ({
                           ...current,
@@ -6738,7 +7619,7 @@ export default function TrafficPage() {
                     <Input
                       value={activeDraft.email?.subject || ""}
                       placeholder="Email subject"
-                      disabled={!canEditTradsphere || isSaving || isSentLocked}
+                      disabled={!canEditTradsphere || isSaving || isEmailLocked}
                       onChange={(event) => updateDraft((current) => ({
                         ...current,
                         email: current.email
@@ -6754,16 +7635,17 @@ export default function TrafficPage() {
 
                 <div className="rounded-xl border border-slate-200 bg-white p-3">
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Body Content</p>
-                  <p className="mt-1 text-xs text-slate-500">Main message shown in the email body.</p>
-                  <Textarea
+                  <p className="mt-1 text-xs text-slate-500">Main message shown in the email body. Use the toolbar to format text.</p>
+                  <RichTextEditor
                     value={activeEmailWorkspace.bodyContent}
                     placeholder="Email body"
-                    className="mt-3 min-h-[130px]"
-                    disabled={!canEditTradsphere || isSaving || isSentLocked}
-                    onChange={(event) => {
+                    className="mt-3"
+                    editorMinHeight="130px"
+                    disabled={!canEditTradsphere || isSaving || isEmailLocked}
+                    onChange={(nextValue) => {
                       const nextWorkspace: TrafficEmailWorkspaceDraft = {
                         ...activeEmailWorkspace,
-                        bodyContent: event.target.value,
+                        bodyContent: nextValue,
                         bodyTouched: true,
                       };
                       commitEmailWorkspace(nextWorkspace);
@@ -6801,7 +7683,7 @@ export default function TrafficPage() {
                               const notePreview = formatDownloadLinkNotePreview(item.note);
                               const hasNote = Boolean(notePreview);
                               return (
-                                <tr key={`download-link-${index}`} className="border-t border-slate-200 text-slate-700">
+                                <tr key={`download-link-${item.flightId ?? index}`} className="border-t border-slate-200 text-slate-700">
                                   <td className="whitespace-nowrap px-3 py-2.5 align-middle">{asString(item.isci) || "—"}</td>
                                   <td className="px-3 py-2.5 align-middle">
                                     {fileUrl ? (
@@ -6843,7 +7725,7 @@ export default function TrafficPage() {
                                       aria-label={hasNote ? "Edit note" : "Add note"}
                                       title={hasNote ? `Edit note: ${notePreview}` : "Add note"}
                                       onClick={() => handleOpenDownloadLinkNoteModal(index)}
-                                      disabled={!canEditTradsphere || isSaving || isSentLocked}
+                                      disabled={!canEditTradsphere || isSaving || isEmailLocked}
                                       className="!h-8 !w-8 !rounded-full !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-3.5 [&_svg]:!w-3.5"
                                     />
                                   </td>
@@ -6859,16 +7741,17 @@ export default function TrafficPage() {
 
                 <div className="rounded-xl border border-slate-200 bg-white p-3">
                   <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Traffic Instructions</p>
-                  <p className="mt-1 text-xs text-slate-500">Example: Air ASAP, Expired date, and airing guidance.</p>
-                  <Textarea
+                  <p className="mt-1 text-xs text-slate-500">Example: Air ASAP, Expired date, and airing guidance. Use the toolbar to format text.</p>
+                  <RichTextEditor
                     value={activeEmailWorkspace.instructionsContent}
                     placeholder="Air ASAP"
-                    className="mt-3 min-h-[120px]"
-                    disabled={!canEditTradsphere || isSaving || isSentLocked}
-                    onChange={(event) => {
+                    className="mt-3"
+                    editorMinHeight="120px"
+                    disabled={!canEditTradsphere || isSaving || isEmailLocked}
+                    onChange={(nextValue) => {
                       const nextWorkspace: TrafficEmailWorkspaceDraft = {
                         ...activeEmailWorkspace,
-                        instructionsContent: event.target.value,
+                        instructionsContent: nextValue,
                         instructionsTouched: true,
                       };
                       commitEmailWorkspace(nextWorkspace);
@@ -6913,7 +7796,7 @@ export default function TrafficPage() {
                 <Button
                   variant="outline"
                   onClick={() => handleDiscard()}
-                  disabled={isSaving || isSendingEmail || isMarkingTrafficSent || isDeletingSelectedTraffic || isSentLocked}
+                  disabled={isSaving || isSendingEmail || isMarkingTrafficSent || isDeletingSelectedTraffic}
                 >
                   Revert
                 </Button>
@@ -6976,6 +7859,9 @@ export default function TrafficPage() {
         open={isEmailPreviewOpen}
         onOpenChange={(open) => {
           setIsEmailPreviewOpen(open);
+          if (!open) {
+            setIsTestEmailModalOpen(false);
+          }
         }}
       >
         <DialogContent className="!h-[92vh] !max-h-[92vh] !w-[min(96vw,1160px)] !max-w-[1160px] overflow-hidden p-0">
@@ -7001,23 +7887,41 @@ export default function TrafficPage() {
                   className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
                 />
                 <Button
+                  variant="secondary"
                   onClick={() => {
-                    void handleSendTrafficEmail();
+                    handleOpenTestEmailModal();
                   }}
-                  disabled={!canSendTrafficEmail}
+                  disabled={!canOpenTrafficTestEmailModal}
                 >
-                  {isSendingEmail ? (
+                  {isSendingTestEmail ? (
                     <>
                       <Loader2 className="size-4 animate-spin" />
-                      Sending...
+                      Sending Test...
                     </>
                   ) : (
-                    <>
-                      <Send className="size-4" />
-                      Send
-                    </>
+                    "Send Test"
                   )}
                 </Button>
+                {!isEmailLocked ? (
+                  <Button
+                    onClick={() => {
+                      void handleSendTrafficEmail();
+                    }}
+                    disabled={!canSendTrafficEmail || isSendingTestEmail}
+                  >
+                    {isSendingEmail ? (
+                      <>
+                        <Loader2 className="size-4 animate-spin" />
+                        Sending...
+                      </>
+                    ) : (
+                      <>
+                        <Send className="size-4" />
+                        Send
+                      </>
+                    )}
+                  </Button>
+                ) : null}
               </div>
             </div>
             <DialogDescription>
@@ -7031,10 +7935,20 @@ export default function TrafficPage() {
               </div>
             ) : (
               <div className="space-y-2">
+                {emailLockBannerKind ? (
+                  <TrafficLockBanner
+                    kind={emailLockBannerKind}
+                    isUnlocking={isUnlockingTraffic}
+                    disabled={!canEditTradsphere || isSaving || isUnlockingTraffic}
+                    onUnlock={() => {
+                      void handleUnlockTraffic();
+                    }}
+                  />
+                ) : null}
                 <EmailChipsInput
                   value={activeDraft.email.toEmails || []}
                   placeholder="To emails"
-                  disabled={!canEditTradsphere || isSaving || isSendingEmail || isMarkingTrafficSent || isSentLocked}
+                  disabled={!canEditTradsphere || isSaving || isSendingEmail || isMarkingTrafficSent || isEmailLocked}
                   labelByEmail={contactNameByEmail}
                   onChange={(nextEmails) => updateDraft((current) => ({
                     ...current,
@@ -7050,7 +7964,7 @@ export default function TrafficPage() {
                   <EmailChipsInput
                     value={activeDraft.email.ccEmails || []}
                     placeholder="CC emails"
-                    disabled={!canEditTradsphere || isSaving || isSendingEmail || isMarkingTrafficSent || isSentLocked}
+                    disabled={!canEditTradsphere || isSaving || isSendingEmail || isMarkingTrafficSent || isEmailLocked}
                     labelByEmail={contactNameByEmail}
                     onChange={(nextEmails) => updateDraft((current) => ({
                       ...current,
@@ -7065,7 +7979,7 @@ export default function TrafficPage() {
                   <EmailChipsInput
                     value={activeDraft.email.bccEmails || []}
                     placeholder="BCC emails"
-                    disabled={!canEditTradsphere || isSaving || isSendingEmail || isMarkingTrafficSent || isSentLocked}
+                    disabled={!canEditTradsphere || isSaving || isSendingEmail || isMarkingTrafficSent || isEmailLocked}
                     labelByEmail={contactNameByEmail}
                     onChange={(nextEmails) => updateDraft((current) => ({
                       ...current,
@@ -7095,6 +8009,67 @@ export default function TrafficPage() {
               />
             </div>
           </div>
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={isTestEmailModalOpen}
+        onOpenChange={(open) => {
+          setIsTestEmailModalOpen(open);
+        }}
+      >
+        <DialogContent className="max-w-lg">
+          <DialogClose
+            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            aria-label="Close test email modal"
+          >
+            <X className="size-4" />
+          </DialogClose>
+          <DialogHeader className="pr-8">
+            <DialogTitle>Send Test Email</DialogTitle>
+            <DialogDescription>
+              Send a one-off copy to a single recipient. The message includes a visible test-email notice.
+            </DialogDescription>
+          </DialogHeader>
+          <div className="space-y-2">
+            <label className="space-y-1 text-sm">
+              <span className="text-slate-600">Test recipient</span>
+              <Input
+                value={testEmailTo}
+                placeholder="test@example.com"
+                autoFocus
+                disabled={!canOpenTrafficTestEmailModal || isSendingTestEmail}
+                onChange={(event) => setTestEmailTo(event.target.value)}
+              />
+            </label>
+            <p className="text-xs text-slate-500">
+              This does not change the saved traffic email state.
+            </p>
+          </div>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => setIsTestEmailModalOpen(false)}
+              disabled={isSendingTestEmail}
+            >
+              Cancel
+            </Button>
+            <Button
+              onClick={() => {
+                void handleSendTrafficTestEmail();
+              }}
+              disabled={!canSendTrafficTestEmail}
+            >
+              {isSendingTestEmail ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  Sending...
+                </>
+              ) : (
+                "Send Test Email"
+              )}
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -7130,18 +8105,27 @@ export default function TrafficPage() {
                 value={downloadLinkNoteDraft}
                 placeholder="Add a custom note for this flight download item"
                 className="min-h-[130px]"
-                disabled={!canEditTradsphere || isSaving || isSentLocked}
+                disabled={!canEditTradsphere || isSaving || isEmailLocked}
                 onChange={(event) => setDownloadLinkNoteDraft(event.target.value)}
               />
             </label>
           </div>
-          <DialogFooter>
+          <DialogFooter className="gap-2">
             <Button variant="outline" onClick={handleCloseDownloadLinkNoteModal}>
               Cancel
             </Button>
+            {activeDownloadLinkNoteEntry && downloadLinkNoteDraft !== asString(activeDownloadLinkNoteEntry.note || "") ? (
+              <Button
+                variant="outline"
+                onClick={() => setDownloadLinkNoteDraft(asString(activeDownloadLinkNoteEntry.note || ""))}
+                disabled={isSaving || isEmailLocked}
+              >
+                Revert
+              </Button>
+            ) : null}
             <Button
               onClick={handleSaveDownloadLinkNote}
-              disabled={!canEditTradsphere || isSaving || isSentLocked || activeDownloadLinkNoteIndex === null}
+              disabled={!canEditTradsphere || isSaving || isEmailLocked || activeDownloadLinkNoteIndex === null}
             >
               Save Note
             </Button>
@@ -7181,7 +8165,7 @@ export default function TrafficPage() {
                     setFlightModalError(null);
                     setFlightModalDraft((current) => (current ? { ...current, flightStart: value } : current));
                   }}
-                  disabled={!canEditTradsphere || isSaving || isSentLocked}
+                  disabled={!canEditTradsphere || isSaving || isFlightModalReadOnly}
                   label="flight start"
                 />
               </label>
@@ -7194,7 +8178,7 @@ export default function TrafficPage() {
                     setFlightModalError(null);
                     setFlightModalDraft((current) => (current ? { ...current, flightEnd: value } : current));
                   }}
-                  disabled={!canEditTradsphere || isSaving || isSentLocked}
+                  disabled={!canEditTradsphere || isSaving || isFlightModalReadOnly}
                   label="flight end"
                 />
               </label>
@@ -7208,7 +8192,7 @@ export default function TrafficPage() {
                   }}
                   options={FLIGHT_MEDIA_OPTIONS.map((option) => ({ value: option, label: option }))}
                   searchable={false}
-                  disabled={!canEditTradsphere || isSaving || isSentLocked}
+                  disabled={!canEditTradsphere || isSaving || isFlightModalReadOnly}
                 />
               </label>
               <label className="space-y-1 text-sm">
@@ -7223,7 +8207,7 @@ export default function TrafficPage() {
                   }}
                   options={FLIGHT_LANGUAGE_OPTIONS}
                   searchable={false}
-                  disabled={!canEditTradsphere || isSaving || isSentLocked}
+                  disabled={!canEditTradsphere || isSaving || isFlightModalReadOnly}
                 />
               </label>
               <label className="space-y-1 text-sm">
@@ -7233,7 +8217,7 @@ export default function TrafficPage() {
                   min={0}
                   step={1}
                   value={String(Math.max(0, Math.trunc(asNumber(flightModalDraft?.length, 0))))}
-                  disabled={!canEditTradsphere || isSaving || isSentLocked}
+                  disabled={!canEditTradsphere || isSaving || isFlightModalReadOnly}
                   onChange={(event) => {
                     setFlightModalError(null);
                     setFlightModalDraft((current) => (current ? { ...current, length: Math.max(0, Math.trunc(asNumber(event.target.value, 0))) } : current));
@@ -7248,7 +8232,7 @@ export default function TrafficPage() {
                   max={100}
                   step={0.01}
                   value={String(asNumber(flightModalDraft?.rotation, 0))}
-                  disabled={!canEditTradsphere || isSaving || isSentLocked}
+                  disabled={!canEditTradsphere || isSaving || isFlightModalReadOnly}
                   onChange={(event) => {
                     setFlightModalError(null);
                     setFlightModalDraft((current) => (current ? { ...current, rotation: asNumber(event.target.value, 0) } : current));
@@ -7260,7 +8244,7 @@ export default function TrafficPage() {
                 <Input
                   value={flightModalDraft?.isci || ""}
                   placeholder={flightModalIsciPlaceholder}
-                  disabled={!canEditTradsphere || isSaving || isSentLocked}
+                  disabled={!canEditTradsphere || isSaving || isFlightModalReadOnly}
                   onKeyDown={(event) => {
                     if (event.key !== "Enter" && event.key !== "Tab") {
                       return;
@@ -7290,7 +8274,7 @@ export default function TrafficPage() {
                   value={flightModalDraft?.fileUrl || ""}
                   placeholder="https://..."
                   className="pr-9"
-                  disabled={!canEditTradsphere || isSaving || isSentLocked}
+                  disabled={!canEditTradsphere || isSaving || isFlightModalReadOnly}
                   onChange={(event) => {
                     setFlightModalError(null);
                     setFlightFileUrlError(null);
@@ -7328,7 +8312,7 @@ export default function TrafficPage() {
                         setFlightFileUrlError(null);
                         setFlightModalDraft((current) => (current ? { ...current, fileUrl: "" } : current));
                       }}
-                      disabled={!canEditTradsphere || isSaving || isSentLocked}
+                      disabled={!canEditTradsphere || isSaving || isFlightModalReadOnly}
                       className="absolute right-2 top-1/2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 disabled:cursor-not-allowed disabled:opacity-50"
                       aria-label="Clear file URL"
                     >
@@ -7345,15 +8329,11 @@ export default function TrafficPage() {
                 <Input
                   ref={flightScriptUrlInputRef}
                   type="url"
-                  value={flightModalDraft?.scriptUrl || ""}
+                  value={flightScriptUrlField.value}
                   placeholder="https://..."
                   className="pr-9"
-                  disabled={!canEditTradsphere || isSaving || isSentLocked}
-                  onChange={(event) => {
-                    setFlightModalError(null);
-                    setFlightScriptUrlError(null);
-                    setFlightModalDraft((current) => (current ? { ...current, scriptUrl: asNullableString(event.target.value) } : current));
-                  }}
+                  disabled={!canEditTradsphere || isSaving || isFlightModalReadOnly}
+                  onChange={flightScriptUrlField.onChange}
                   onKeyDown={(event) => {
                     if (event.key !== "Enter") {
                       return;
@@ -7361,23 +8341,9 @@ export default function TrafficPage() {
                     event.preventDefault();
                     flightNoteTextareaRef.current?.focus();
                   }}
-                  onBlur={(event) => {
-                    const raw = asString(event.target.value);
-                    if (!raw) {
-                      setFlightScriptUrlError(null);
-                      return;
-                    }
-                    const normalized = normalizeStrictHttpUrlInput(raw);
-                    if (normalized) {
-                      setFlightScriptUrlError(null);
-                      setFlightModalDraft((current) => (current ? { ...current, scriptUrl: normalized } : current));
-                      return;
-                    }
-                    setFlightScriptUrlError("Invalid URL. Enter a valid http(s) URL.");
-                    setFlightModalDraft((current) => (current ? { ...current, scriptUrl: null } : current));
-                  }}
+                  onBlur={flightScriptUrlField.onBlur}
                 />
-                {asString(flightModalDraft?.scriptUrl) ? (
+                {asString(flightScriptUrlField.value) ? (
                   <TooltipTarget text="Clear script URL">
                     <button
                       type="button"
@@ -7386,7 +8352,7 @@ export default function TrafficPage() {
                         setFlightScriptUrlError(null);
                         setFlightModalDraft((current) => (current ? { ...current, scriptUrl: null } : current));
                       }}
-                      disabled={!canEditTradsphere || isSaving || isSentLocked}
+                      disabled={!canEditTradsphere || isSaving || isFlightModalReadOnly}
                       className="absolute right-2 top-1/2 inline-flex size-6 -translate-y-1/2 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-slate-300 disabled:cursor-not-allowed disabled:opacity-50"
                       aria-label="Clear script URL"
                     >
@@ -7401,18 +8367,21 @@ export default function TrafficPage() {
               <span className="text-slate-600">Note</span>
               <Textarea
                 ref={flightNoteTextareaRef}
-                value={flightModalDraft?.note || ""}
+                value={flightNoteField.value}
                 className="min-h-[96px]"
-                disabled={!canEditTradsphere || isSaving || isSentLocked}
-                onChange={(event) => {
-                  setFlightModalError(null);
-                  setFlightModalDraft((current) => (current ? { ...current, note: asNullableString(event.target.value) } : current));
-                }}
+                disabled={!canEditTradsphere || isSaving || isFlightModalReadOnly}
+                onChange={flightNoteField.onChange}
+                onBlur={flightNoteField.onBlur}
               />
             </label>
           </div>
           {flightModalError ? <p className="text-sm text-rose-600">{flightModalError}</p> : null}
-          <DialogFooter>
+          <DialogFooter className="gap-2">
+            {canEditTradsphere && hasFlightModalChanges ? (
+              <Button variant="outline" onClick={revertFlightModalChanges} disabled={isSaving || isFlightModalReadOnly}>
+                Revert
+              </Button>
+            ) : null}
             {canSubmitFlightModal ? (
               <Button onClick={saveFlightModal}>
                 {flightModalMode === "create" ? "Add" : "Save"}
@@ -7719,7 +8688,7 @@ export default function TrafficPage() {
                   <span className="text-sm font-medium leading-5 text-slate-600">Station Code</span>
                   <Input
                     value={stationModalDraft?.stationCode || ""}
-                    disabled={!canEditTradsphere || isSaving || isSentLocked}
+                    disabled={!canEditTradsphere || isSaving || isTrafficEditingLocked}
                     onChange={(event) => {
                       setStationModalError(null);
                       setStationLookupError(null);
@@ -7737,7 +8706,11 @@ export default function TrafficPage() {
                         commitStationLookupCode(event.currentTarget.value);
                         if (event.key === "Enter" || !event.shiftKey) {
                           event.preventDefault();
-                          focusStationDeliveryStatusField();
+                          if (isSentLocked) {
+                            focusStationConfirmedStatusField();
+                          } else {
+                            focusStationDeliveryStatusField();
+                          }
                         }
                       }
                     }}
@@ -7808,20 +8781,20 @@ export default function TrafficPage() {
                       handleStationStatusFieldAdvance(event, "confirmed");
                     }}
                   >
-                    <AppDropdown
-                      value={stationModalDraft?.deliveryStatus || ""}
-                      onValueChange={(value) => {
-                        setStationModalError(null);
-                        setStationModalDraft((current) => (current ? { ...current, deliveryStatus: value } : current));
-                      }}
-                      options={[{ value: "", label: "" }, ...DELIVERY_STATUS_OPTIONS.map((option) => ({ value: option, label: formatStatusOptionLabel(option) }))]}
-                      searchable={false}
-                      disabled={!canEditTradsphere || isSaving || isSentLocked}
-                      placeholder=""
-                    />
-                  </div>
-                </label>
-                <label className="space-y-1 text-sm">
+                      <AppDropdown
+                        value={stationModalDraft?.deliveryStatus || ""}
+                        onValueChange={(value) => {
+                          setStationModalError(null);
+                          setStationModalDraft((current) => (current ? { ...current, deliveryStatus: value } : current));
+                        }}
+                        options={[{ value: "", label: "" }, ...DELIVERY_STATUS_OPTIONS.map((option) => ({ value: option, label: formatStatusOptionLabel(option) }))]}
+                        searchable={false}
+                        disabled={!canEditTradsphere || isSaving || isTrafficEditingLocked}
+                        placeholder=""
+                      />
+                    </div>
+                  </label>
+                  <label className="space-y-1 text-sm">
                   <span className="text-sm font-medium leading-5 text-slate-600">Confirmed Status</span>
                   <div
                     ref={stationConfirmedStatusFieldRef}
@@ -7829,43 +8802,34 @@ export default function TrafficPage() {
                       handleStationStatusFieldAdvance(event, "note");
                     }}
                   >
-                    <AppDropdown
-                      value={stationModalDraft?.confirmedStatus || ""}
-                      onValueChange={(value) => {
-                        setStationModalError(null);
-                        setStationModalDraft((current) => (current ? { ...current, confirmedStatus: value } : current));
-                      }}
-                      options={[{ value: "", label: "" }, ...CONFIRMED_STATUS_OPTIONS.map((option) => ({ value: option, label: formatStatusOptionLabel(option) }))]}
-                      searchable={false}
-                      disabled={!canEditTradsphere || isSaving || isSentLocked}
-                      placeholder=""
-                    />
-                  </div>
-                </label>
+                      <AppDropdown
+                        value={stationModalDraft?.confirmedStatus || ""}
+                        onValueChange={(value) => {
+                          setStationModalError(null);
+                          setStationModalDraft((current) => (current ? { ...current, confirmedStatus: value } : current));
+                        }}
+                        options={[{ value: "", label: "" }, ...CONFIRMED_STATUS_OPTIONS.map((option) => ({ value: option, label: formatStatusOptionLabel(option) }))]}
+                        searchable={false}
+                        disabled={!canEditTradsphere || isSaving || isConfirmedLocked}
+                        placeholder=""
+                      />
+                    </div>
+                  </label>
                 </div>
                 <label className="space-y-1 text-sm">
                   <span className="text-sm font-medium leading-5 text-slate-600">Note</span>
                   <Textarea
                     ref={stationNoteTextareaRef}
-                    value={stationModalDraft?.note || ""}
+                    value={stationNoteField.value}
                     className="min-h-[96px]"
-                    disabled={!canEditTradsphere || isSaving || isSentLocked}
-                    onChange={(event) => {
-                      setStationModalError(null);
-                      setStationModalDraft((current) => (current ? { ...current, note: asNullableString(event.target.value) } : current));
-                    }}
+                    disabled={!canEditTradsphere || isSaving || isConfirmedLocked}
+                    onChange={stationNoteField.onChange}
+                    onBlur={stationNoteField.onBlur}
                   />
                 </label>
               </div>
             </section>
           </div>
-          <DialogFooter>
-            {canSubmitStationModal ? (
-              <Button onClick={saveStationModal}>
-                {stationModalMode === "create" ? "Add" : "Save"}
-              </Button>
-            ) : null}
-          </DialogFooter>
           <ModalCacheFooter
             text={stationLookupStatusText}
             onRefresh={() => {
@@ -7878,7 +8842,40 @@ export default function TrafficPage() {
             refreshing={isStationLookupLoading}
             refreshLabel="Refresh station info"
             tooltipText={stationLookupQueryCode ? "Click to refresh this data" : "Enter a station code to load station info."}
+            actions={canEditTradsphere && (hasStationModalChanges || canSubmitStationModal) ? stationModalFooterActions : null}
           />
+        </DialogContent>
+      </Dialog>
+
+      <Dialog
+        open={isTrafficConfirmDialogOpen}
+        onOpenChange={(open) => {
+          setIsTrafficConfirmDialogOpen(open);
+          if (!open) {
+            setTrafficConfirmTargetTrafficId(null);
+          }
+        }}
+      >
+        <DialogContent>
+          <DialogHeader>
+            <DialogTitle>Mark traffic as Confirmed?</DialogTitle>
+            <DialogDescription>
+              All station confirmed statuses are now Confirmed. Do you want to change the traffic status to Confirmed?
+            </DialogDescription>
+          </DialogHeader>
+          <DialogFooter>
+            <Button
+              variant="outline"
+              onClick={() => handlePromptConfirmTrafficStatus(false)}
+            >
+              Not now
+            </Button>
+            <Button
+              onClick={() => handlePromptConfirmTrafficStatus(true)}
+            >
+              Mark Confirmed
+            </Button>
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 

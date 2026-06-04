@@ -22,7 +22,7 @@ type LeaveSpherePtoChipMeta = {
 
 const CHIP_META: Record<LeaveSpherePtoChipTone, LeaveSpherePtoChipMeta> = {
   holiday_us: {
-    className: "border-blue-300 bg-blue-700 text-white",
+    className: "border-blue-300 bg-blue-800 text-white",
     label: "U.S. Holiday",
     Icon: CalendarDays,
   },

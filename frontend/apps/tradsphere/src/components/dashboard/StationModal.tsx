@@ -21,6 +21,11 @@ import { useApiRequest } from "@/hooks/useApiRequest";
 import { readBrowserCacheSnapshot, removeBrowserCache, writeBrowserCache } from "@/lib/browserCache";
 import { TRADSPHERE_CACHE_TTL_MS } from "@shared/cache";
 import { ModalCacheFooter } from "@shared/components/modal/ModalCacheFooter";
+import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
+import {
+  normalizeUsPhoneDisplay,
+  normalizeUsPhoneOnInput,
+} from "@shared/utils/phone";
 
 import {
   StationBasicInfoSection,
@@ -906,10 +911,16 @@ function toComparableDraft(draft: StationModalDraft) {
         clientKey: asString(contact.clientKey),
         contactType: normalizeContactType(contact.contactType),
         contactId: contact.contactId ?? null,
+        linkId: contact.linkId ?? null,
+        firstName: asString(contact.firstName),
+        lastName: asString(contact.lastName),
         fullName: asString(contact.fullName),
         email: asString(contact.email).toLowerCase(),
         office: asString(contact.office),
         cell: asString(contact.cell),
+        company: asString(contact.company),
+        jobTitle: asString(contact.jobTitle),
+        note: asString(contact.note),
         primaryContact: Boolean(contact.primaryContact),
         linkNote: asString(contact.linkNote),
       }))
@@ -1472,6 +1483,16 @@ export function StationModal({
   const [contactEditorError, setContactEditorError] = useState<string | null>(null);
   const [isContactEditorFullNameManuallyEdited, setIsContactEditorFullNameManuallyEdited] = useState(false);
   const [isContactEditorDiscardDialogOpen, setIsContactEditorDiscardDialogOpen] = useState(false);
+  const contactEditorFirstNameField = useCommittedTextField<HTMLInputElement>(
+    contactEditorForm.firstName,
+    (value) => updateContactEditorNameField("firstName", value),
+    { normalizeOnBlur: toNameCase },
+  );
+  const contactEditorLastNameField = useCommittedTextField<HTMLInputElement>(
+    contactEditorForm.lastName,
+    (value) => updateContactEditorNameField("lastName", value),
+    { normalizeOnBlur: toNameCase },
+  );
 
   const [isAddExistingContactOpen, setIsAddExistingContactOpen] = useState(false);
   const [existingContactsCatalog, setExistingContactsCatalog] = useState<ExistingContactOption[]>([]);
@@ -2262,6 +2283,15 @@ export function StationModal({
     setIsDeliveryMethodEditorDiscardDialogOpen(false);
   }
 
+  function revertDeliveryMethodEditor() {
+    if (isReadOnly || !hasDeliveryMethodEditorChanges) {
+      return;
+    }
+    setDeliveryMethodEditorForm(deliveryMethodEditorBaseline);
+    setDeliveryMethodEditorError(null);
+    setDeliveryMethodUsageError(null);
+  }
+
   function closeContactEditor(force = false) {
     if (!force && hasContactEditorChanges) {
       setIsContactEditorDiscardDialogOpen(true);
@@ -2414,6 +2444,15 @@ export function StationModal({
     setIsContactEditorDiscardDialogOpen(false);
   }
 
+  function revertContactEditor() {
+    if (isReadOnly || !hasContactEditorChanges) {
+      return;
+    }
+    setContactEditorForm(contactEditorBaseline);
+    setContactEditorError(null);
+    setIsContactEditorFullNameManuallyEdited(false);
+  }
+
   function closeAddExistingContact(force = false) {
     if (!force && hasAddExistingContactChanges) {
       setIsAddExistingContactDiscardDialogOpen(true);
@@ -2519,6 +2558,17 @@ export function StationModal({
     updateContacts([...draft.contacts, nextContact]);
     setIsAddExistingContactOpen(false);
     setIsAddExistingContactDiscardDialogOpen(false);
+  }
+
+  function revertAddExistingContact() {
+    if (isReadOnly || !hasAddExistingContactChanges) {
+      return;
+    }
+    setSelectedExistingContactId(addExistingContactBaseline.selectedExistingContactId);
+    setSelectedExistingContactType(addExistingContactBaseline.selectedExistingContactType);
+    setSelectedExistingPrimaryContact(addExistingContactBaseline.selectedExistingPrimaryContact);
+    setExistingContactSearch("");
+    setExistingContactsError(null);
   }
 
   async function handleCopyContact(index: number) {
@@ -2692,6 +2742,14 @@ export function StationModal({
     }
   }
 
+  function revertStationDraft() {
+    if (isReadOnly || !hasUnsavedChanges || !originalDraft) {
+      return;
+    }
+    setDraft(originalDraft);
+    setSubmitError(null);
+  }
+
   const selectedDeliveryMethodOption = useMemo(
     () =>
       selectedDeliveryMethodId
@@ -2822,21 +2880,6 @@ export function StationModal({
             {submitError ? <p className="mt-2 text-sm text-rose-600">{submitError}</p> : null}
           </div>
 
-          <DialogFooter>
-            {shouldShowSubmitButton ? (
-              <Button onClick={handleSubmit} disabled={!canSubmit}>
-                {isSubmitting ? (
-                  <>
-                    <Loader2 className="size-4 animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  submitLabel
-                )}
-              </Button>
-            ) : null}
-          </DialogFooter>
-
           {detailStatusText ? (
             <ModalCacheFooter
               text={detailStatusText}
@@ -2853,8 +2896,49 @@ export function StationModal({
                   ? "Save or discard your edits before refreshing station detail."
                   : "Click to refresh this data"
               }
+              actions={
+                <>
+                  {canEdit && hasUnsavedChanges ? (
+                    <Button variant="outline" onClick={revertStationDraft} disabled={isSubmitting}>
+                      Revert
+                    </Button>
+                  ) : null}
+                  {shouldShowSubmitButton ? (
+                    <Button onClick={handleSubmit} disabled={!canSubmit}>
+                      {isSubmitting ? (
+                        <>
+                          <Loader2 className="size-4 animate-spin" />
+                          Saving...
+                        </>
+                      ) : (
+                        submitLabel
+                      )}
+                    </Button>
+                  ) : null}
+                </>
+              }
             />
-          ) : null}
+          ) : (
+            <DialogFooter className="gap-2">
+              {canEdit && hasUnsavedChanges ? (
+                <Button variant="outline" onClick={revertStationDraft} disabled={isSubmitting}>
+                  Revert
+                </Button>
+              ) : null}
+              {shouldShowSubmitButton ? (
+                <Button onClick={handleSubmit} disabled={!canSubmit}>
+                  {isSubmitting ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    submitLabel
+                  )}
+                </Button>
+              ) : null}
+            </DialogFooter>
+          )}
           {hasDeferredDetailUpdate ? (
             <p className="mt-2 text-sm text-amber-700">
               Newer station detail is available and will apply after your current edits are saved or discarded.
@@ -2949,9 +3033,9 @@ export function StationModal({
               </div>
             </div>
 
-            <div className="space-y-1">
-              <p className={SHARED_LABEL_CLASS}>Available Methods</p>
-              <div className="max-h-[48vh] overflow-y-auto rounded-md border border-slate-200 bg-white">
+              <div className="space-y-1">
+                <p className={SHARED_LABEL_CLASS}>Available Methods</p>
+                <div className="max-h-[48vh] overflow-y-auto rounded-md border border-slate-200 bg-white">
                 {isLoadingDeliveryMethods ? (
                   <div className="flex items-center justify-center gap-2 px-3 py-6 text-sm text-slate-500">
                     <Loader2 className="size-4 animate-spin" />
@@ -3001,19 +3085,31 @@ export function StationModal({
                 )}
               </div>
             </div>
+            </div>
 
             {deliveryMethodSelectorError ? (
               <p className="text-sm text-rose-600">{deliveryMethodSelectorError}</p>
             ) : null}
 
-            {canEdit && canApplySelectedDeliveryMethod ? (
-              <div className="flex justify-end">
+            <DialogFooter className="gap-2">
+              {canEdit && hasDeliveryMethodSelectorChanges ? (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setSelectedDeliveryMethodId(initialSelectedDeliveryMethodId);
+                    setDeliveryMethodSelectorError(null);
+                  }}
+                  disabled={isReadOnly}
+                >
+                  Revert
+                </Button>
+              ) : null}
+              {canEdit && canApplySelectedDeliveryMethod ? (
                 <Button size="sm" onClick={applySelectedDeliveryMethod} disabled={isReadOnly}>
                   Use
                 </Button>
-              </div>
-            ) : null}
-            </div>
+              ) : null}
+            </DialogFooter>
           </div>
 
           <ModalCacheFooter
@@ -3194,16 +3290,21 @@ export function StationModal({
               </div>
             ) : null}
 
+            </div>
             {deliveryMethodEditorError ? <p className="text-sm text-rose-600">{deliveryMethodEditorError}</p> : null}
 
-            {canEdit && canApplyDeliveryMethodEditor ? (
-              <div className="flex justify-end">
+            <DialogFooter className="gap-2">
+              {canEdit && hasDeliveryMethodEditorChanges ? (
+                <Button variant="outline" onClick={revertDeliveryMethodEditor} disabled={isReadOnly}>
+                  Revert
+                </Button>
+              ) : null}
+              {canEdit && canApplyDeliveryMethodEditor ? (
                 <Button size="sm" onClick={saveDeliveryMethodEditor} disabled={isReadOnly}>
                   Apply
                 </Button>
-              </div>
-            ) : null}
-            </div>
+              ) : null}
+            </DialogFooter>
           </div>
 
           <ModalCacheFooter
@@ -3274,9 +3375,9 @@ export function StationModal({
             </LabeledField>
             <LabeledField label="First Name">
               <Input
-                value={contactEditorForm.firstName}
-                onChange={(event) => updateContactEditorNameField("firstName", event.target.value)}
-                onBlur={(event) => updateContactEditorNameField("firstName", toNameCase(event.target.value))}
+                value={contactEditorFirstNameField.value}
+                onChange={contactEditorFirstNameField.onChange}
+                onBlur={contactEditorFirstNameField.onBlur}
                 placeholder="First Name"
                 autoComplete="off"
                 maxLength={255}
@@ -3285,9 +3386,9 @@ export function StationModal({
             </LabeledField>
             <LabeledField label="Last Name">
               <Input
-                value={contactEditorForm.lastName}
-                onChange={(event) => updateContactEditorNameField("lastName", event.target.value)}
-                onBlur={(event) => updateContactEditorNameField("lastName", toNameCase(event.target.value))}
+                value={contactEditorLastNameField.value}
+                onChange={contactEditorLastNameField.onChange}
+                onBlur={contactEditorLastNameField.onBlur}
                 placeholder="Last Name"
                 autoComplete="off"
                 maxLength={255}
@@ -3316,10 +3417,21 @@ export function StationModal({
               <Input
                 value={contactEditorForm.office}
                 onChange={(event) => {
-                  setContactEditorForm((current) => ({ ...current, office: event.target.value }));
+                  setContactEditorForm((current) => ({
+                    ...current,
+                    office: normalizeUsPhoneOnInput(event.target.value, true),
+                  }));
+                }}
+                onBlur={(event) => {
+                  setContactEditorForm((current) => ({
+                    ...current,
+                    office: normalizeUsPhoneDisplay(event.target.value, true),
+                  }));
                 }}
                 placeholder="Office"
                 maxLength={35}
+                inputMode="tel"
+                autoComplete="off"
                 disabled={isReadOnly}
               />
             </LabeledField>
@@ -3327,10 +3439,21 @@ export function StationModal({
               <Input
                 value={contactEditorForm.cell}
                 onChange={(event) => {
-                  setContactEditorForm((current) => ({ ...current, cell: event.target.value }));
+                  setContactEditorForm((current) => ({
+                    ...current,
+                    cell: normalizeUsPhoneOnInput(event.target.value, false),
+                  }));
+                }}
+                onBlur={(event) => {
+                  setContactEditorForm((current) => ({
+                    ...current,
+                    cell: normalizeUsPhoneDisplay(event.target.value, false),
+                  }));
                 }}
                 placeholder="Cell"
                 maxLength={20}
+                inputMode="tel"
+                autoComplete="off"
                 disabled={isReadOnly}
               />
             </LabeledField>
@@ -3416,13 +3539,18 @@ export function StationModal({
 
           {contactEditorError ? <p className="text-sm text-rose-600">{contactEditorError}</p> : null}
 
-          {canEdit && canApplyContactEditor ? (
-            <div className="flex justify-end">
-              <Button size="sm" onClick={saveContactEditor} disabled={isReadOnly}>
+          <DialogFooter className="gap-2">
+            {canEdit && hasContactEditorChanges ? (
+              <Button variant="outline" onClick={revertContactEditor} disabled={isReadOnly}>
+                Revert
+              </Button>
+            ) : null}
+            {canEdit && canApplyContactEditor ? (
+              <Button onClick={saveContactEditor} disabled={isReadOnly}>
                 Apply
               </Button>
-            </div>
-          ) : null}
+            ) : null}
+          </DialogFooter>
         </DialogContent>
       </Dialog>
 
@@ -3520,6 +3648,7 @@ export function StationModal({
                 )}
               </div>
             </div>
+            </div>
 
             <LabeledField
               label={
@@ -3556,14 +3685,18 @@ export function StationModal({
 
             {existingContactsError ? <p className="text-sm text-rose-600">{existingContactsError}</p> : null}
 
-            {canEdit && canAddExistingContact ? (
-              <div className="flex justify-end">
+            <DialogFooter className="gap-2">
+              {canEdit && hasAddExistingContactChanges ? (
+                <Button variant="outline" onClick={revertAddExistingContact} disabled={isReadOnly}>
+                  Revert
+                </Button>
+              ) : null}
+              {canEdit && canAddExistingContact ? (
                 <Button size="sm" onClick={addExistingContactToDraft} disabled={isReadOnly}>
                   Add
                 </Button>
-              </div>
-            ) : null}
-            </div>
+              ) : null}
+            </DialogFooter>
           </div>
 
           <ModalCacheFooter
