@@ -6646,7 +6646,7 @@ function AddChecklistStationDialog({
   const stationCodeValid = normalizedStationCode.length > 0 && normalizedStationCode.length <= 10;
   const canSubmit = !disabled && !isBusy && estNumValid && stationCodeValid && Boolean(checklist);
   const statusOptions = useMemo(
-    () => buildStatusOptions(STATION_STATUS_OPTIONS_BASE, "", statusDraft).map((value) => ({ value, label: value || "(empty)" })),
+    () => buildStatusOptions(STATION_STATUS_OPTIONS_BASE, "", statusDraft).map((value) => ({ value, label: value })),
     [statusDraft],
   );
 
