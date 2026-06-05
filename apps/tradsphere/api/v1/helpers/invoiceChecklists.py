@@ -57,11 +57,13 @@ from apps.tradsphere.api.v1.helpers.dbQueries import (
 from shared.storage import (
     DeleteAssetInput,
     StorageUploadInput,
+    StorageDeleteError,
     delete_file,
     get_note_attachment_limit,
     upload_file,
     validate_attachment_payload,
 )
+from shared.normalization import normalize_optional_note_text as _normalize_optional_note_text
 from shared.tenant import get_tenant_id
 
 _MAX_YEAR = 2155
@@ -357,7 +359,7 @@ def _normalize_checklist_payload(payload: dict) -> dict:
         "year": _ensure_required_year(payload.get("year")),
         "month": _ensure_required_month(payload.get("month")),
         "status": _ensure_optional_text(payload.get("status"), field="status", max_length=32),
-        "note": _ensure_optional_text(payload.get("note"), field="note", max_length=2048),
+        "note": _normalize_optional_note_text(payload.get("note")),
     }
 
 
@@ -381,7 +383,7 @@ def _normalize_checklist_updates(payload: dict) -> dict[str, object]:
     if "status" in payload:
         updates["status"] = _ensure_optional_text(payload.get("status"), field="status", max_length=32)
     if "note" in payload:
-        updates["note"] = _ensure_optional_text(payload.get("note"), field="note", max_length=2048)
+        updates["note"] = _normalize_optional_note_text(payload.get("note"))
     if not updates:
         raise ValueError("At least one updatable field is required")
     return updates
@@ -451,7 +453,7 @@ def _normalize_note_payload(payload: dict) -> dict:
         raise NotFoundError(f"Checklist station not found: {station_row_id}")
 
     amount_value = _ensure_optional_amount(payload.get("amount"))
-    note_value = _ensure_optional_text(payload.get("note"), field="note", max_length=2048)
+    note_value = _normalize_optional_note_text(payload.get("note"))
     if not _has_note_or_amount(note_value=note_value, amount_value=amount_value):
         raise ValueError("At least one of amount or note is required")
 
@@ -469,7 +471,7 @@ def _normalize_note_updates(payload: dict) -> dict[str, object]:
     if "amount" in payload:
         updates["amount"] = _ensure_optional_amount(payload.get("amount"))
     if "note" in payload:
-        updates["note"] = _ensure_optional_text(payload.get("note"), field="note", max_length=2048)
+        updates["note"] = _normalize_optional_note_text(payload.get("note"))
     if not updates:
         raise ValueError("At least one updatable field is required")
     return updates
@@ -1072,6 +1074,7 @@ def delete_invoice_checklist_note_data(*, note_id: int) -> dict:
         tenant_slug=tenant_slug,
     )
 
+    failed_attachment_ids: list[int] = []
     for attachment_row in attachment_rows:
         attachment_id_raw = attachment_row.get("attachmentId")
         if attachment_id_raw is None:
@@ -1090,7 +1093,7 @@ def delete_invoice_checklist_note_data(*, note_id: int) -> dict:
                     ),
                 )
             except Exception:
-                pass
+                failed_attachment_ids.append(attachment_id_value)
         _safe_db_call(
             delete_inv_note_attachment,
             attachment_id=attachment_id_value,
@@ -1106,6 +1109,10 @@ def delete_invoice_checklist_note_data(*, note_id: int) -> dict:
         deleted = delete_inv_checklist_note(note_id=note_id_value)
     except Exception as exc:
         raise _map_db_exception(exc) from exc
+    if failed_attachment_ids:
+        raise StorageDeleteError(
+            f"Failed to delete {len(failed_attachment_ids)} attachment file(s) from storage"
+        )
     return {"deleted": int(deleted > 0), "id": note_id_value}
 
 
@@ -1623,11 +1630,7 @@ def bulk_save_invoice_checklists_data(*, payload: dict) -> dict:
                 field=f"createNotes[{index}].checklistStationId",
             )
         amount_value = _ensure_optional_amount(row.get("amount"))
-        note_value = _ensure_optional_text(
-            row.get("note"),
-            field=f"createNotes[{index}].note",
-            max_length=2048,
-        )
+        note_value = _normalize_optional_note_text(row.get("note"))
         if not _has_note_or_amount(note_value=note_value, amount_value=amount_value):
             raise ValueError("At least one of amount or note is required")
         note_creates.append(
@@ -1651,11 +1654,7 @@ def bulk_save_invoice_checklists_data(*, payload: dict) -> dict:
         if "amount" in row:
             update_row["amount"] = _ensure_optional_amount(row.get("amount"))
         if "note" in row:
-            update_row["note"] = _ensure_optional_text(
-                row.get("note"),
-                field=f"noteUpdates[{index}].note",
-                max_length=2048,
-            )
+            update_row["note"] = _normalize_optional_note_text(row.get("note"))
         next_amount = update_row.get("amount")
         next_note = update_row.get("note")
         if not _has_note_or_amount(note_value=next_note, amount_value=next_amount):

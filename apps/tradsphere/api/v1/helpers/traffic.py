@@ -39,6 +39,7 @@ from apps.tradsphere.api.v1.helpers.dbQueries import (
 )
 from apps.tradsphere.api.v1.helpers.stations import list_stations_data
 from shared.smtp import SmtpSendError, SmtpSettings, send_smtp_email
+from shared.normalization import normalize_optional_note_text as _normalize_optional_note_text
 from shared.tenant import get_tenant_id
 from shared.utils import run_parallel
 
@@ -881,7 +882,7 @@ def create_traffic_data(*, payload: dict) -> dict:
         allowed_values=_TRAFFIC_STATUSES,
         default_value="draft",
     )
-    note = _normalize_optional_text(payload.get("note"), field="note", max_length=2048)
+    note = _normalize_optional_note_text(payload.get("note"))
 
     traffic_id = str(uuid.uuid4())
     _safe_db_call(
@@ -920,7 +921,7 @@ def update_traffic_data(*, traffic_id: str, payload: dict) -> dict:
             allowed_values=_TRAFFIC_STATUSES,
         )
     if "note" in payload:
-        fields["note"] = _normalize_optional_text(payload.get("note"), field="note", max_length=2048)
+        fields["note"] = _normalize_optional_note_text(payload.get("note"))
 
     if not fields:
         raise ValueError("At least one updatable field is required: campaign, status, note")
@@ -986,7 +987,7 @@ def create_traffic_flight_data(*, traffic_id: str, payload: dict) -> dict:
     rotation = _normalize_rotation(payload.get("rotation"))
     file_url = _normalize_optional_text(payload.get("fileUrl"), field="fileUrl", max_length=2048)
     script_url = _normalize_optional_text(payload.get("scriptUrl"), field="scriptUrl", max_length=2048)
-    note = _normalize_optional_text(payload.get("note"), field="note", max_length=2048)
+    note = _normalize_optional_note_text(payload.get("note"))
 
     created_flight_id = _safe_db_call(
         insert_traffic_flight,
@@ -1066,7 +1067,7 @@ def update_traffic_flight_data(*, traffic_id: str, flight_id: int, payload: dict
     if "scriptUrl" in payload:
         fields["scriptUrl"] = _normalize_optional_text(payload.get("scriptUrl"), field="scriptUrl", max_length=2048)
     if "note" in payload:
-        fields["note"] = _normalize_optional_text(payload.get("note"), field="note", max_length=2048)
+        fields["note"] = _normalize_optional_note_text(payload.get("note"))
 
     if not fields:
         raise ValueError(
@@ -1145,7 +1146,7 @@ def create_traffic_station_data(*, traffic_id: str, payload: dict) -> dict:
         default_value="",
         allow_blank=True,
     )
-    note = _normalize_optional_text(payload.get("note"), field="note", max_length=2048)
+    note = _normalize_optional_note_text(payload.get("note"))
 
     created_station_id = _safe_db_call(
         insert_traffic_station,
@@ -1220,7 +1221,7 @@ def update_traffic_station_data(*, traffic_id: str, station_id: int, payload: di
             allow_blank=True,
         )
     if "note" in payload:
-        fields["note"] = _normalize_optional_text(payload.get("note"), field="note", max_length=2048)
+        fields["note"] = _normalize_optional_note_text(payload.get("note"))
 
     if not fields:
         raise ValueError(
@@ -1639,11 +1640,7 @@ def bulk_save_traffic_data(*, payload: dict, sent_by_user_id: str | None = None)
                     field="status",
                     allowed_values=_TRAFFIC_STATUSES,
                 ),
-                "note": _normalize_optional_text(
-                    traffic_payload.get("note"),
-                    field="note",
-                    max_length=2048,
-                ),
+                "note": _normalize_optional_note_text(traffic_payload.get("note")),
             }
     else:
         account_code = require_account_code(traffic_payload.get("accountCode"), field="accountCode")
@@ -1661,11 +1658,7 @@ def bulk_save_traffic_data(*, payload: dict, sent_by_user_id: str | None = None)
                 allowed_values=_TRAFFIC_STATUSES,
                 default_value="draft",
             ),
-            "note": _normalize_optional_text(
-                traffic_payload.get("note"),
-                field="note",
-                max_length=2048,
-            ),
+            "note": _normalize_optional_note_text(traffic_payload.get("note")),
         }
         normalized_traffic_id = str(uuid.uuid4())
 
@@ -1718,7 +1711,7 @@ def bulk_save_traffic_data(*, payload: dict, sent_by_user_id: str | None = None)
                 "rotation": str(_normalize_rotation(item.get("rotation"))),
                 "fileUrl": _normalize_optional_text(item.get("fileUrl"), field="fileUrl", max_length=2048),
                 "scriptUrl": _normalize_optional_text(item.get("scriptUrl"), field="scriptUrl", max_length=2048),
-                "note": _normalize_optional_text(item.get("note"), field="note", max_length=2048),
+                "note": _normalize_optional_note_text(item.get("note")),
             }
         )
 
@@ -1768,7 +1761,7 @@ def bulk_save_traffic_data(*, payload: dict, sent_by_user_id: str | None = None)
         if "scriptUrl" in item:
             fields["scriptUrl"] = _normalize_optional_text(item.get("scriptUrl"), field="scriptUrl", max_length=2048)
         if "note" in item:
-            fields["note"] = _normalize_optional_text(item.get("note"), field="note", max_length=2048)
+            fields["note"] = _normalize_optional_note_text(item.get("note"))
         if not fields:
             continue
         normalized_flight_updates.append(
@@ -1814,7 +1807,7 @@ def bulk_save_traffic_data(*, payload: dict, sent_by_user_id: str | None = None)
                     default_value="",
                     allow_blank=True,
                 ),
-                "note": _normalize_optional_text(item.get("note"), field="note", max_length=2048),
+                "note": _normalize_optional_note_text(item.get("note")),
             }
         )
 
@@ -1861,7 +1854,7 @@ def bulk_save_traffic_data(*, payload: dict, sent_by_user_id: str | None = None)
                 allow_blank=True,
             )
         if "note" in item:
-            fields["note"] = _normalize_optional_text(item.get("note"), field="note", max_length=2048)
+            fields["note"] = _normalize_optional_note_text(item.get("note"))
         if not fields:
             continue
         normalized_station_updates.append(

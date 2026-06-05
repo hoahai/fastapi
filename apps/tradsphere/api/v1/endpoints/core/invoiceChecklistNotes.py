@@ -6,6 +6,7 @@ from apps.tradsphere.api.v1.helpers.invoiceChecklists import (
     InvalidReferenceError,
     NotFoundError,
     SafeDatabaseError,
+    StorageDeleteError,
     create_invoice_checklist_note_data,
     delete_invoice_checklist_note_data,
     list_invoice_checklist_notes_data,
@@ -201,11 +202,14 @@ def delete_invoice_checklist_note_route(
         - Requires valid API key
         - noteId query param is required
         - Unknown noteId returns HTTP 404
+        - Storage delete failures return HTTP 502 after note cleanup
     """
     try:
         return delete_invoice_checklist_note_data(note_id=note_id)
     except NotFoundError as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
+    except StorageDeleteError as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except SafeDatabaseError:

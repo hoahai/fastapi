@@ -18,6 +18,25 @@ def normalize_optional_input_text(value: object) -> str | None:
     return text or None
 
 
+def normalize_multiline_input_text(value: object) -> str:
+    """Trim outer whitespace while preserving internal line breaks."""
+    text = str(value or "")
+    text = text.replace("\u00A0", " ")
+    text = text.replace("\r\n", "\n").replace("\r", "\n")
+    return text.strip()
+
+
+def normalize_multiline_optional_input_text(value: object) -> str | None:
+    """Normalize multiline text and return None when the final text is empty."""
+    text = normalize_multiline_input_text(value)
+    return text or None
+
+
+def normalize_optional_note_text(value: object) -> str | None:
+    """Normalize note text while preserving internal line breaks."""
+    return normalize_multiline_optional_input_text(value)
+
+
 def normalize_compact_token(value: object) -> str:
     """Normalize text and remove all spaces for token-like inputs."""
     return normalize_input_text(value).replace(" ", "")

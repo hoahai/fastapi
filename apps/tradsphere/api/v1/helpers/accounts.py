@@ -13,6 +13,7 @@ from apps.tradsphere.api.v1.helpers.dbQueries import (
     insert_accounts,
     update_accounts,
 )
+from shared.normalization import normalize_optional_note_text as _normalize_optional_note_text
 
 _BILLING_TYPE_VALUES = {"BROADCAST": "Broadcast", "CALENDAR": "Calendar"}
 
@@ -136,11 +137,7 @@ def create_accounts(payload: list[dict] | dict) -> dict[str, int]:
                     field="market",
                     max_length=255,
                 ),
-                "note": _normalize_optional_text(
-                    row.get("note"),
-                    field="note",
-                    max_length=2048,
-                ),
+                "note": _normalize_optional_note_text(row.get("note")),
                 "active": _normalize_active(
                     row.get("active"),
                     required=True,
@@ -201,11 +198,7 @@ def modify_accounts(payload: list[dict] | dict) -> dict[str, int]:
                 max_length=255,
             )
         if "note" in row:
-            item["note"] = _normalize_optional_text(
-                row.get("note"),
-                field="note",
-                max_length=2048,
-            )
+            item["note"] = _normalize_optional_note_text(row.get("note"))
         if "active" in row:
             item["active"] = _normalize_active(
                 row.get("active"),

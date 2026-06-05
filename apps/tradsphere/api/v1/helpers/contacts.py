@@ -23,6 +23,7 @@ from apps.tradsphere.api.v1.helpers.dbQueries import (
 )
 from apps.tradsphere.api.v1.helpers.estNums import list_est_nums_data
 from apps.tradsphere.api.v1.helpers.schedules import list_schedules_data
+from shared.normalization import normalize_optional_note_text as _normalize_optional_note_text
 
 _DUPLICATE_IN_PAYLOAD = "duplicate_in_payload"
 _EMAIL_ALREADY_EXISTS = "email_already_exists"
@@ -450,11 +451,7 @@ def create_contacts_data(payload: list[dict] | dict) -> dict[str, int]:
                     allow_extension=False,
                 ),
                 "active": row.get("active"),
-                "note": _ensure_optional_text(
-                    row.get("note"),
-                    field="note",
-                    max_length=2048,
-                ),
+                "note": _normalize_optional_note_text(row.get("note")),
             }
         )
 
@@ -530,11 +527,7 @@ def modify_contacts_data(payload: list[dict] | dict) -> dict[str, int]:
         if "active" in row:
             item["active"] = row.get("active")
         if "note" in row:
-            item["note"] = _ensure_optional_text(
-                row.get("note"),
-                field="note",
-                max_length=2048,
-            )
+            item["note"] = _normalize_optional_note_text(row.get("note"))
         if len(item) == 1:
             raise ValueError(f"No updatable fields provided for contact id '{row_id}'")
         normalized_rows.append(item)

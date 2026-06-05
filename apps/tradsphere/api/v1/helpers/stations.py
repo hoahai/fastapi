@@ -21,6 +21,7 @@ from apps.tradsphere.api.v1.helpers.dbQueries import (
     update_delivery_methods,
     update_stations,
 )
+from shared.normalization import normalize_optional_note_text as _normalize_optional_note_text
 
 _LANGUAGE_VALUES = {
     "EN": "English",
@@ -548,11 +549,7 @@ def create_stations_data(payload: list[dict] | dict) -> dict[str, int]:
                     max_length=255,
                 ),
                 "deliveryMethodId": delivery_method_id,
-                "note": _ensure_optional_text(
-                    row.get("note"),
-                    field="note",
-                    max_length=2048,
-                ),
+                "note": _normalize_optional_note_text(row.get("note")),
             }
         )
 
@@ -645,11 +642,7 @@ def modify_stations_data(payload: list[dict] | dict) -> dict[str, int]:
                 max_length=255,
             )
         if "note" in row:
-            item["note"] = _ensure_optional_text(
-                row.get("note"),
-                field="note",
-                max_length=2048,
-            )
+            item["note"] = _normalize_optional_note_text(row.get("note"))
 
         if "deliveryMethodId" in row:
             delivery_method_id = _parse_station_delivery_method_id(
@@ -713,11 +706,7 @@ def modify_delivery_methods_data(payload: list[dict] | dict) -> dict[str, int]:
                 max_length=50,
             )
         if "note" in row:
-            item["note"] = _ensure_optional_text(
-                row.get("note"),
-                field="note",
-                max_length=2048,
-            )
+            item["note"] = _normalize_optional_note_text(row.get("note"))
         if len(item) == 1:
             raise ValueError(
                 f"No updatable fields provided for delivery method id '{delivery_method_id}'"

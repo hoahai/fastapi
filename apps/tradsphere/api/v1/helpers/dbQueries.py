@@ -7,6 +7,7 @@ from shared.db import execute_many, fetch_all, run_transaction
 from shared.normalization import (
     normalize_compact_token as _normalize_compact_token,
     normalize_input_text as _normalize_input_text,
+    normalize_optional_note_text as _normalize_optional_note_text,
     normalize_optional_input_text as _normalize_optional_input_text,
 )
 from shared.tenantDataCache import (
@@ -843,7 +844,7 @@ def insert_accounts(items: list[dict]) -> int:
             raise ValueError("accountCode is required")
         billing_type = _normalize_input_text(item.get("billingType") or "Calendar") or "Calendar"
         market = _normalize_optional_input_text(item.get("market"))
-        note = _normalize_optional_input_text(item.get("note"))
+        note = _normalize_optional_note_text(item.get("note"))
         active = _normalize_bool(item.get("active"), default=True)
         values.append((account_code, billing_type, market, note, active))
 
@@ -885,7 +886,7 @@ def update_accounts(items: list[dict]) -> int:
             params.append(market)
 
         if "note" in item:
-            note = _normalize_optional_input_text(item.get("note"))
+            note = _normalize_optional_note_text(item.get("note"))
             fields.append("note = %s")
             params.append(note)
 
@@ -1204,7 +1205,7 @@ def insert_est_nums(items: list[dict]) -> int:
         buyer = _normalize_input_text(item.get("buyer"))
         if not buyer:
             raise ValueError("buyer is required")
-        note = _normalize_optional_input_text(item.get("note"))
+        note = _normalize_optional_note_text(item.get("note"))
         values.append((est_num, account_code, flight_start, flight_end, media_type, buyer, note))
 
     query = (
@@ -1269,7 +1270,7 @@ def update_est_nums(items: list[dict]) -> int:
 
         if "note" in item:
             fields.append("note = %s")
-            params.append(_normalize_optional_input_text(item.get("note")))
+            params.append(_normalize_optional_note_text(item.get("note")))
 
         if not fields:
             raise ValueError(f"No updatable fields provided for estNum '{est_num}'")
@@ -2160,7 +2161,7 @@ def insert_delivery_methods(items: list[dict]) -> int:
             raise ValueError("username is required")
         deadline = _normalize_input_text(item.get("deadline") or "10 AM") or "10 AM"
         password = item.get("password")
-        note = _normalize_optional_input_text(item.get("note"))
+        note = _normalize_optional_note_text(item.get("note"))
         values.append((name, url, username, password, deadline, note))
 
     query = (
@@ -2509,7 +2510,7 @@ def insert_stations(items: list[dict]) -> int:
                 language,
                 _normalize_optional_input_text(item.get("ownership")),
                 int(delivery_method_id),
-                _normalize_optional_input_text(item.get("note")),
+                _normalize_optional_note_text(item.get("note")),
             )
         )
 
@@ -2588,7 +2589,7 @@ def update_stations(items: list[dict]) -> int:
             params.append(int(delivery_method_id))
         if "note" in item:
             fields.append("note = %s")
-            params.append(_normalize_optional_input_text(item.get("note")))
+            params.append(_normalize_optional_note_text(item.get("note")))
         if not fields:
             raise ValueError(f"No updatable fields provided for station '{code}'")
         params.append(code)
@@ -2649,7 +2650,7 @@ def update_delivery_methods(items: list[dict]) -> int:
             params.append(deadline)
         if "note" in item:
             fields.append("note = %s")
-            params.append(_normalize_optional_input_text(item.get("note")))
+            params.append(_normalize_optional_note_text(item.get("note")))
         if not fields:
             raise ValueError(
                 f"No updatable fields provided for delivery method id '{delivery_method_id}'"
@@ -2939,7 +2940,7 @@ def insert_contacts(items: list[dict]) -> int:
                 _normalize_optional_input_text(item.get("cell")),
                 email,
                 _normalize_bool(item.get("active"), default=True),
-                _normalize_optional_input_text(item.get("note")),
+                _normalize_optional_note_text(item.get("note")),
             )
         )
     query = (
@@ -2999,7 +3000,7 @@ def update_contacts(items: list[dict]) -> int:
             params.append(_normalize_bool(item.get("active"), default=True))
         if "note" in item:
             fields.append("note = %s")
-            params.append(_normalize_optional_input_text(item.get("note")))
+            params.append(_normalize_optional_note_text(item.get("note")))
         if not fields:
             raise ValueError(f"No updatable fields provided for contact id '{contact_id}'")
         params.append(int(contact_id))
@@ -3293,7 +3294,7 @@ def save_station_detail_bundle(
         desired_url = _normalize_input_text(delivery_payload.get("url"))
         desired_username = _normalize_input_text(delivery_payload.get("username"))
         desired_deadline = _normalize_input_text(delivery_payload.get("deadline"))
-        desired_note = _normalize_optional_input_text(delivery_payload.get("note"))
+        desired_note = _normalize_optional_note_text(delivery_payload.get("note"))
         desired_password = delivery_payload.get("password")
         desired_id: int | None = int(desired_id_raw) if desired_id_raw is not None else None
 
@@ -3405,7 +3406,7 @@ def save_station_detail_bundle(
         current_url = _normalize_input_text(current_row.get("url")) or ""
         current_username = _normalize_input_text(current_row.get("username")) or ""
         current_deadline = _normalize_input_text(current_row.get("deadline")) or ""
-        current_note = _normalize_optional_input_text(current_row.get("note"))
+        current_note = _normalize_optional_note_text(current_row.get("note"))
 
         password_changed = desired_password is not None and str(desired_password).strip() != ""
         is_changed = (
@@ -3517,7 +3518,7 @@ def save_station_detail_bundle(
                     _normalize_input_text(station_payload.get("language")),
                     _normalize_optional_input_text(station_payload.get("ownership")),
                     resolved_delivery_method_id,
-                    _normalize_optional_input_text(station_payload.get("note")),
+                    _normalize_optional_note_text(station_payload.get("note")),
                 ),
             )
             summary["stationCreated"] = True
@@ -3535,7 +3536,7 @@ def save_station_detail_bundle(
                     _normalize_input_text(station_payload.get("language")),
                     _normalize_optional_input_text(station_payload.get("ownership")),
                     resolved_delivery_method_id,
-                    _normalize_optional_input_text(station_payload.get("note")),
+                    _normalize_optional_note_text(station_payload.get("note")),
                     normalized_station_code,
                 ),
             )
@@ -3612,7 +3613,7 @@ def save_station_detail_bundle(
                         "office": _normalize_optional_input_text(row.get("office")),
                         "cell": _normalize_optional_input_text(row.get("cell")),
                         "active": _normalize_bool(row.get("active"), default=True),
-                        "note": _normalize_optional_input_text(row.get("note")),
+                        "note": _normalize_optional_note_text(row.get("note")),
                     }
                 )
                 continue
@@ -3650,7 +3651,7 @@ def save_station_detail_bundle(
                     "active": _normalize_bool(row.get("active"), default=True)
                     if "active" in row
                     else None,
-                    "note": _normalize_optional_input_text(row.get("note"))
+                    "note": _normalize_optional_note_text(row.get("note"))
                     if "note" in row
                     else None,
                 }
@@ -3819,7 +3820,7 @@ def save_station_detail_bundle(
                 "contactId": resolved_contact_id,
                 "contactType": contact_type,
                 "primaryContact": _normalize_bool(row.get("primaryContact"), default=False),
-                "note": _normalize_optional_input_text(row.get("note")),
+                "note": _normalize_optional_note_text(row.get("note")),
                 "active": _normalize_bool(row.get("active"), default=True),
             }
 
@@ -3922,7 +3923,7 @@ def insert_stations_contacts(items: list[dict]) -> int:
                 int(contact_id),
                 contact_type,
                 _normalize_bool(item.get("primaryContact"), default=False),
-                _normalize_optional_input_text(item.get("note")),
+                _normalize_optional_note_text(item.get("note")),
                 _normalize_bool(item.get("active"), default=True),
             )
         )
@@ -3977,7 +3978,7 @@ def update_stations_contacts(items: list[dict]) -> int:
             params.append(_normalize_bool(item.get("primaryContact"), default=False))
         if "note" in item:
             fields.append("note = %s")
-            params.append(_normalize_optional_input_text(item.get("note")))
+            params.append(_normalize_optional_note_text(item.get("note")))
         if "active" in item:
             fields.append("active = %s")
             params.append(_normalize_bool(item.get("active"), default=True))
@@ -4340,7 +4341,7 @@ def insert_inv_checklist(item: dict) -> int:
         int(item.get("year")),
         int(item.get("month")),
         _normalize_optional_input_text(item.get("status")),
-        _normalize_optional_input_text(item.get("note")),
+        _normalize_optional_note_text(item.get("note")),
     )
     inserted = execute_many(query, [values])
     if int(inserted or 0) > 0:
@@ -4374,7 +4375,7 @@ def insert_inv_checklists_for_sync(items: list[dict]) -> int:
                 int(item.get("year")),
                 int(item.get("month")),
                 _normalize_optional_input_text(item.get("status")),
-                _normalize_optional_input_text(item.get("note")),
+                _normalize_optional_note_text(item.get("note")),
             )
         )
 
@@ -4411,7 +4412,7 @@ def update_inv_checklist(
         params.append(_normalize_optional_input_text(fields.get("status")))
     if "note" in fields:
         updates.append("note = %s")
-        params.append(_normalize_optional_input_text(fields.get("note")))
+        params.append(_normalize_optional_note_text(fields.get("note")))
     if not updates:
         return 0
 
@@ -4723,7 +4724,7 @@ def save_inv_checklist_bulk_changes(
                         int(row["year"]),
                         int(row["month"]),
                         _normalize_optional_input_text(row.get("status")),
-                        _normalize_optional_input_text(row.get("note")),
+                        _normalize_optional_note_text(row.get("note")),
                     )
                 )
                 checklist_ids_created[str(row["clientChecklistId"])] = str(row["id"])
@@ -4744,7 +4745,7 @@ def save_inv_checklist_bulk_changes(
                 params.append(_normalize_optional_input_text(row.get("status")))
             if "note" in row:
                 fields.append("note = %s")
-                params.append(_normalize_optional_input_text(row.get("note")))
+                params.append(_normalize_optional_note_text(row.get("note")))
             if not fields:
                 continue
             params.append(str(row["checklistId"]))
@@ -4803,7 +4804,7 @@ def save_inv_checklist_bulk_changes(
                 values.append(row.get("amount"))
             if "note" in row:
                 columns.append("note")
-                values.append(_normalize_input_text(row.get("note")))
+                values.append(_normalize_optional_note_text(row.get("note")))
             cursor.execute(
                 (
                     f"INSERT INTO {note_table} "
@@ -4822,7 +4823,7 @@ def save_inv_checklist_bulk_changes(
                 params.append(row.get("amount"))
             if "note" in row:
                 fields.append("note = %s")
-                params.append(_normalize_input_text(row.get("note")))
+                params.append(_normalize_optional_note_text(row.get("note")))
             if not fields:
                 continue
             params.append(int(row["noteId"]))
@@ -5177,7 +5178,7 @@ def insert_inv_checklist_note(item: dict) -> int:
     columns = ["checklistStationId"]
     values: list[object] = [int(item.get("checklistStationId"))]
     amount_value = item.get("amount")
-    note_value = _normalize_input_text(item.get("note"))
+    note_value = _normalize_optional_note_text(item.get("note"))
     if amount_value is not None:
         columns.append("amount")
         values.append(amount_value)
@@ -5218,7 +5219,7 @@ def update_inv_checklist_note(
         params.append(fields.get("amount"))
     if "note" in fields:
         updates.append("note = %s")
-        params.append(_normalize_input_text(fields.get("note")))
+        params.append(_normalize_optional_note_text(fields.get("note")))
     if not updates:
         return 0
 
@@ -5918,7 +5919,7 @@ def update_traffic(
         params.append(_normalize_input_text(fields.get("status")))
     if "note" in fields:
         updates.append("note = %s")
-        params.append(_normalize_optional_input_text(fields.get("note")))
+        params.append(_normalize_optional_note_text(fields.get("note")))
     if not updates:
         return 0
     params.append(str(traffic_id or "").strip())
@@ -5947,7 +5948,7 @@ def insert_traffic(item: dict) -> int:
         _normalize_account_code(item.get("accountCode")),
         _normalize_input_text(item.get("campaign")),
         _normalize_input_text(item.get("status")),
-        _normalize_optional_input_text(item.get("note")),
+        _normalize_optional_note_text(item.get("note")),
     )
     return int(execute_many(query, [values]) or 0)
 
@@ -6011,7 +6012,7 @@ def insert_traffic_flight(item: dict) -> int:
         float(item.get("rotation")),
         _normalize_input_text(item.get("fileUrl")),
         _normalize_optional_input_text(item.get("scriptUrl")),
-        _normalize_optional_input_text(item.get("note")),
+        _normalize_optional_note_text(item.get("note")),
     )
     inserted_id = run_transaction(
         lambda cursor: (
@@ -6062,7 +6063,7 @@ def update_traffic_flight(
         params.append(_normalize_optional_input_text(fields.get("scriptUrl")))
     if "note" in fields:
         updates.append("note = %s")
-        params.append(_normalize_optional_input_text(fields.get("note")))
+        params.append(_normalize_optional_note_text(fields.get("note")))
     if not updates:
         return 0
     params.extend([int(flight_id), str(traffic_id or "").strip()])
@@ -6152,7 +6153,7 @@ def insert_traffic_station(item: dict) -> int:
         _normalize_optional_input_text(item.get("deliveryMethod")),
         _normalize_optional_input_text(item.get("deliveryStatus")),
         _normalize_optional_input_text(item.get("confirmedStatus")),
-        _normalize_optional_input_text(item.get("note")),
+        _normalize_optional_note_text(item.get("note")),
     )
     inserted_id = run_transaction(
         lambda cursor: (
@@ -6191,7 +6192,7 @@ def update_traffic_station(
         params.append(_normalize_optional_input_text(fields.get("confirmedStatus")))
     if "note" in fields:
         updates.append("note = %s")
-        params.append(_normalize_optional_input_text(fields.get("note")))
+        params.append(_normalize_optional_note_text(fields.get("note")))
     if not updates:
         return 0
     params.extend([int(station_id), str(traffic_id or "").strip()])
@@ -6334,7 +6335,7 @@ def save_traffic_bulk_changes(
                     _normalize_account_code(traffic_create_item.get("accountCode")),
                     _normalize_input_text(traffic_create_item.get("campaign")),
                     _normalize_input_text(traffic_create_item.get("status")),
-                    _normalize_optional_input_text(traffic_create_item.get("note")),
+                    _normalize_optional_note_text(traffic_create_item.get("note")),
                 ),
             )
             counts["traffic_creates"] += int(cursor.rowcount or 0)
@@ -6350,7 +6351,7 @@ def save_traffic_bulk_changes(
                 params.append(_normalize_input_text(traffic_fields.get("status")))
             if "note" in traffic_fields:
                 updates.append("note = %s")
-                params.append(_normalize_optional_input_text(traffic_fields.get("note")))
+                params.append(_normalize_optional_note_text(traffic_fields.get("note")))
             if updates:
                 params.append(traffic_id_text)
                 cursor.execute(
@@ -6398,7 +6399,7 @@ def save_traffic_bulk_changes(
                     float(row.get("rotation")),
                     _normalize_input_text(row.get("fileUrl")),
                     _normalize_optional_input_text(row.get("scriptUrl")),
-                    _normalize_optional_input_text(row.get("note")),
+                    _normalize_optional_note_text(row.get("note")),
                 )
                 for row in flight_creates
             ]
@@ -6445,7 +6446,7 @@ def save_traffic_bulk_changes(
                 params.append(_normalize_optional_input_text(fields.get("scriptUrl")))
             if "note" in fields:
                 updates.append("note = %s")
-                params.append(_normalize_optional_input_text(fields.get("note")))
+                params.append(_normalize_optional_note_text(fields.get("note")))
             if not updates:
                 continue
             params.extend([int(row.get("id")), traffic_id_text])
@@ -6464,7 +6465,7 @@ def save_traffic_bulk_changes(
                     _normalize_optional_input_text(row.get("deliveryMethod")),
                     _normalize_optional_input_text(row.get("deliveryStatus")),
                     _normalize_optional_input_text(row.get("confirmedStatus")),
-                    _normalize_optional_input_text(row.get("note")),
+                    _normalize_optional_note_text(row.get("note")),
                 )
                 for row in station_creates
             ]
@@ -6499,7 +6500,7 @@ def save_traffic_bulk_changes(
                 params.append(_normalize_optional_input_text(fields.get("confirmedStatus")))
             if "note" in fields:
                 updates.append("note = %s")
-                params.append(_normalize_optional_input_text(fields.get("note")))
+                params.append(_normalize_optional_note_text(fields.get("note")))
             if not updates:
                 continue
             params.extend([int(row.get("id")), traffic_id_text])
