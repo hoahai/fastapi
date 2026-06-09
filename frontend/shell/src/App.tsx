@@ -99,6 +99,84 @@ function formatAppLabel(appCode: string): string {
     .join(" ");
 }
 
+const BROWSER_TITLE_SUFFIX = "TheSphereWorks";
+
+function formatBrowserTitle(pageTitle: string): string {
+  const normalized = String(pageTitle || "").trim();
+  if (!normalized) {
+    return BROWSER_TITLE_SUFFIX;
+  }
+  return `${normalized} | ${BROWSER_TITLE_SUFFIX}`;
+}
+
+function resolveAppRouteTitle(route: string): string | null {
+  const normalizedRoute = stripTrailingSlash(route);
+  const scopedAdminMatch = normalizedRoute.match(/^\/([a-z0-9-_]+)\/admin$/);
+  if (scopedAdminMatch) {
+    return `${formatAppLabel(scopedAdminMatch[1] || "")} Admin`;
+  }
+
+  for (const app of APP_NAV_ITEMS) {
+    const child = app.children?.find((item) => item.available && item.route === normalizedRoute);
+    if (!child) {
+      continue;
+    }
+    return `${app.label} ${child.label}`;
+  }
+
+  return null;
+}
+
+function resolveBrowserTitle(params: {
+  frontendPath: string;
+  inviteToken: string | null;
+  leaveSphereQuickApprovalToken: string | null;
+  scopedAdminAppCode: string | null;
+}): string {
+  const { frontendPath, inviteToken, leaveSphereQuickApprovalToken, scopedAdminAppCode } = params;
+
+  if (frontendPath === HOME_ROUTE) {
+    return formatBrowserTitle("Workspace Home");
+  }
+  if (frontendPath === "/auth/login") {
+    return formatBrowserTitle("Sign In");
+  }
+  if (frontendPath === "/auth/callback") {
+    return formatBrowserTitle("Signing In");
+  }
+  if (frontendPath === "/auth/update-password") {
+    return formatBrowserTitle("Update Password");
+  }
+  if (frontendPath === "/auth/unauthorized") {
+    return formatBrowserTitle("Access Not Authorized");
+  }
+  if (frontendPath === "/auth/invite/pending") {
+    return formatBrowserTitle("Invitation Pending");
+  }
+  if (inviteToken) {
+    return formatBrowserTitle("Accept Invitation");
+  }
+  if (leaveSphereQuickApprovalToken) {
+    return formatBrowserTitle("LeaveSphere Quick Approval");
+  }
+  if (frontendPath === "/profile") {
+    return formatBrowserTitle("My Profile");
+  }
+  if (frontendPath === "/admin/users") {
+    return formatBrowserTitle("Admin Users");
+  }
+  if (scopedAdminAppCode) {
+    return formatBrowserTitle(`${formatAppLabel(scopedAdminAppCode)} Admin`);
+  }
+
+  const appRouteTitle = resolveAppRouteTitle(frontendPath);
+  if (appRouteTitle) {
+    return formatBrowserTitle(appRouteTitle);
+  }
+
+  return formatBrowserTitle("Page Not Found");
+}
+
 function toFrontendHref(route: string): string {
   return route;
 }
@@ -507,10 +585,27 @@ function App() {
     if (!frontendPath.startsWith("/auth/invite/")) {
       return null;
     }
+    if (frontendPath === "/auth/invite/pending") {
+      return null;
+    }
     const token = frontendPath.replace("/auth/invite/", "").trim();
     return token || null;
   }, [frontendPath]);
   const leaveSphereQuickApprovalToken = useMemo(() => parseLeaveSphereQuickApprovalToken(frontendPath), [frontendPath]);
+  const browserTitle = useMemo(
+    () =>
+      resolveBrowserTitle({
+        frontendPath,
+        inviteToken,
+        leaveSphereQuickApprovalToken,
+        scopedAdminAppCode,
+      }),
+    [frontendPath, inviteToken, leaveSphereQuickApprovalToken, scopedAdminAppCode],
+  );
+
+  useEffect(() => {
+    document.title = browserTitle;
+  }, [browserTitle]);
 
   function renderTradsphereRoute() {
     return (
