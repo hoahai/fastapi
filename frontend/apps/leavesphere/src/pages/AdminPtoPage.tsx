@@ -40,6 +40,7 @@ import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
 import { LoadActionArea } from "@shared/components/layout/LoadActionArea";
 import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { SectionCard } from "@shared/components/layout/SectionCard";
+import { ModalShell } from "@shared/components";
 import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
@@ -2625,124 +2626,120 @@ export default function LeaveSphereAdminPtoPage() {
 
       <Dialog open={isAdjustModalOpen} onOpenChange={handleAdjustModalOpenChange}>
         <DialogContent
-          className="max-w-xl"
-          onEscapeKeyDown={(event) => {
-            if (shouldBlockOutsideClose({ isBusy: isMutating, hasUnsavedChanges: hasAdjustFormChanges })) {
-              event.preventDefault();
-            }
-          }}
+          className="flex max-h-[90vh] max-w-xl flex-col overflow-hidden rounded-xl bg-white p-6"
           onInteractOutside={(event) => {
             if (shouldBlockOutsideClose({ isBusy: isMutating, hasUnsavedChanges: hasAdjustFormChanges })) {
               event.preventDefault();
             }
           }}
         >
-          <DialogClose
-            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
-            aria-label="Close load PTO hours modal"
-            disabled={isMutating}
-          >
-            <X className="size-4" />
-          </DialogClose>
-          <DialogHeader>
-            <DialogTitle>{adjustDialogTitle}</DialogTitle>
-            <DialogDescription>
-              {isAdjustEditMode
-                ? "Update the selected approved PTO load request."
-                : "Create a new approved PTO load request."}
-            </DialogDescription>
-          </DialogHeader>
+          <ModalShell busy={isMutating} busyMessage="Saving PTO hours..." className="min-h-0 flex-1">
+            <DialogClose
+              className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
+              aria-label="Close load PTO hours modal"
+            >
+              <X className="size-4" />
+            </DialogClose>
+            <DialogHeader>
+              <DialogTitle>{adjustDialogTitle}</DialogTitle>
+              <DialogDescription>
+                {isAdjustEditMode
+                  ? "Update the selected approved PTO load request."
+                  : "Create a new approved PTO load request."}
+              </DialogDescription>
+            </DialogHeader>
 
-          {adjustError ? (
-            <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{adjustError}</div>
-          ) : null}
+            {adjustError ? (
+              <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{adjustError}</div>
+            ) : null}
 
-          <div className="mt-3 grid gap-3">
-            <label className="space-y-1 text-sm">
-                <span className="text-slate-600">Employee</span>
-              <AppDropdown
-                value={adjustForm.employeeId}
-                onValueChange={(value) => {
-                  const nextRequests = resolveAdjustLoadRequests(value, adjustForm.ptoTypeCode);
-                  const nextRequest = nextRequests[0] || null;
-                  setAdjustForm((current) => ({
-                    ...current,
-                    employeeId: value,
-                    transactionId: isAdjustEditMode ? (nextRequest?.id || "") : current.transactionId,
-                    hours: isAdjustEditMode ? (nextRequest ? String(nextRequest.hours) : "") : current.hours,
-                  }));
-                }}
-                options={employeeOptions}
-                searchable
-                disabled={isMutating || isAdjustEditMode}
-              />
-            </label>
-            <div className="grid gap-3 sm:grid-cols-2">
+            <div className="mt-3 grid gap-3">
               <label className="space-y-1 text-sm">
-                <span className="text-slate-600">PTO type</span>
+                <span className="text-slate-600">Employee</span>
                 <AppDropdown
-                  value={adjustForm.ptoTypeCode}
+                  value={adjustForm.employeeId}
                   onValueChange={(value) => {
-                    const nextType = value as LeaveSpherePtoType;
-                    const nextRequests = resolveAdjustLoadRequests(adjustForm.employeeId, nextType);
+                    const nextRequests = resolveAdjustLoadRequests(value, adjustForm.ptoTypeCode);
                     const nextRequest = nextRequests[0] || null;
                     setAdjustForm((current) => ({
                       ...current,
-                      ptoTypeCode: nextType,
+                      employeeId: value,
                       transactionId: isAdjustEditMode ? (nextRequest?.id || "") : current.transactionId,
                       hours: isAdjustEditMode ? (nextRequest ? String(nextRequest.hours) : "") : current.hours,
                     }));
                   }}
-                  options={ptoTypeOptions}
-                  searchable={false}
+                  options={employeeOptions}
+                  searchable
                   disabled={isMutating || isAdjustEditMode}
                 />
               </label>
-            </div>
-            <label className="space-y-1 text-sm">
-              <span className="text-slate-600">Hours</span>
-              <Input
-                type="number"
-                min={0}
-                step={0.5}
-                value={adjustForm.hours}
-                onChange={(event) => setAdjustForm((current) => ({
-                  ...current,
-                  hours: event.target.value,
-                }))}
-                disabled={isMutating}
-              />
-            </label>
-            <label className="space-y-1 text-sm">
-              <span className="text-slate-600">Note</span>
-              <Textarea value={adjustForm.note} onChange={(event) => setAdjustForm((current) => ({ ...current, note: event.target.value }))} className="min-h-[96px]" disabled={isMutating} />
-            </label>
-          </div>
-
-          {(hasAdjustFormChanges || shouldShowAdjustCancelButton || shouldShowAdjustSubmitButton) ? (
-            <DialogFooter className="gap-2">
-              {hasAdjustFormChanges ? (
-                <Button variant="outline" onClick={handleRevertAdjustForm} disabled={isMutating}>
-                  Revert
-                </Button>
-              ) : null}
-              {shouldShowAdjustCancelButton ? (
-                <Button
-                  variant="outline"
-                  className="border-rose-200 text-rose-700 hover:bg-rose-50"
-                  onClick={() => setPendingAdjustAction("cancel")}
+              <div className="grid gap-3 sm:grid-cols-2">
+                <label className="space-y-1 text-sm">
+                  <span className="text-slate-600">PTO type</span>
+                  <AppDropdown
+                    value={adjustForm.ptoTypeCode}
+                    onValueChange={(value) => {
+                      const nextType = value as LeaveSpherePtoType;
+                      const nextRequests = resolveAdjustLoadRequests(adjustForm.employeeId, nextType);
+                      const nextRequest = nextRequests[0] || null;
+                      setAdjustForm((current) => ({
+                        ...current,
+                        ptoTypeCode: nextType,
+                        transactionId: isAdjustEditMode ? (nextRequest?.id || "") : current.transactionId,
+                        hours: isAdjustEditMode ? (nextRequest ? String(nextRequest.hours) : "") : current.hours,
+                      }));
+                    }}
+                    options={ptoTypeOptions}
+                    searchable={false}
+                    disabled={isMutating || isAdjustEditMode}
+                  />
+                </label>
+              </div>
+              <label className="space-y-1 text-sm">
+                <span className="text-slate-600">Hours</span>
+                <Input
+                  type="number"
+                  min={0}
+                  step={0.5}
+                  value={adjustForm.hours}
+                  onChange={(event) => setAdjustForm((current) => ({
+                    ...current,
+                    hours: event.target.value,
+                  }))}
                   disabled={isMutating}
-                >
-                  Cancel
-                </Button>
-              ) : null}
-              {shouldShowAdjustSubmitButton ? (
-                <Button onClick={() => void handleAdjustBalance()} disabled={isMutating || !canSubmitAdjustForm}>
-                  {isMutating ? "Saving..." : adjustSubmitLabel}
-                </Button>
-              ) : null}
-            </DialogFooter>
-          ) : null}
+                />
+              </label>
+              <label className="space-y-1 text-sm">
+                <span className="text-slate-600">Note</span>
+                <Textarea value={adjustForm.note} onChange={(event) => setAdjustForm((current) => ({ ...current, note: event.target.value }))} className="min-h-[96px]" disabled={isMutating} />
+              </label>
+            </div>
+
+            {(hasAdjustFormChanges || shouldShowAdjustCancelButton || shouldShowAdjustSubmitButton) ? (
+              <DialogFooter className="gap-2">
+                {hasAdjustFormChanges ? (
+                  <Button variant="outline" onClick={handleRevertAdjustForm} disabled={isMutating}>
+                    Revert
+                  </Button>
+                ) : null}
+                {shouldShowAdjustCancelButton ? (
+                  <Button
+                    variant="outline"
+                    className="border-rose-200 text-rose-700 hover:bg-rose-50"
+                    onClick={() => setPendingAdjustAction("cancel")}
+                    disabled={isMutating}
+                  >
+                    Cancel
+                  </Button>
+                ) : null}
+                {shouldShowAdjustSubmitButton ? (
+                  <Button onClick={() => void handleAdjustBalance()} disabled={isMutating || !canSubmitAdjustForm}>
+                    {isMutating ? "Saving..." : adjustSubmitLabel}
+                  </Button>
+                ) : null}
+              </DialogFooter>
+            ) : null}
+          </ModalShell>
         </DialogContent>
       </Dialog>
 
@@ -2772,156 +2769,160 @@ export default function LeaveSphereAdminPtoPage() {
       />
 
       <Dialog open={isSetupModalOpen} onOpenChange={setIsSetupModalOpen}>
-        <DialogContent className="max-w-2xl">
-          <DialogHeader>
-            <DialogTitle>Setup / admin data</DialogTitle>
-            <DialogDescription>Manage PTO types, actions, employees, employee managers, and holidays.</DialogDescription>
-          </DialogHeader>
+        <DialogContent className="flex max-h-[90vh] max-w-2xl flex-col overflow-hidden rounded-xl bg-white p-6">
+          <ModalShell busy={isMutating} busyMessage="Saving setup..." className="min-h-0 flex-1">
+            <DialogHeader>
+              <DialogTitle>Setup / admin data</DialogTitle>
+              <DialogDescription>Manage PTO types, actions, employees, employee managers, and holidays.</DialogDescription>
+            </DialogHeader>
 
-          {setupError ? (
-            <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{setupError}</div>
-          ) : null}
-
-          <div className="grid gap-3">
-            <label className="space-y-1 text-sm">
-              <span className="text-slate-600">Setup section</span>
-              <AppDropdown
-                value={setupForm.kind}
-                onValueChange={(value) => setSetupForm((current) => ({ ...current, kind: value as SetupForm["kind"] }))}
-                options={[
-                  { value: "pto_type", label: "PTO Types" },
-                  { value: "pto_action", label: "PTO Actions" },
-                  { value: "employee", label: "Employees" },
-                  { value: "employee_manager", label: "Employee Managers" },
-                  { value: "holiday", label: "Holidays" },
-                ]}
-                searchable={false}
-                disabled={isMutating}
-              />
-            </label>
-
-            {setupForm.kind === "pto_type" ? (
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="space-y-1 text-sm">
-                  <span className="text-slate-600">Type code</span>
-                  <AppDropdown
-                    value={setupForm.code}
-                    onValueChange={(value) => setSetupForm((current) => ({ ...current, code: value }))}
-                    options={PTO_TYPE_OPTIONS.map((item) => ({ value: item.value, label: item.label }))}
-                    searchable={false}
-                    disabled={isMutating}
-                  />
-                </label>
-                <label className="space-y-1 text-sm">
-                  <span className="text-slate-600">Label</span>
-                  <Input value={setupForm.label} onChange={(event) => setSetupForm((current) => ({ ...current, label: event.target.value }))} disabled={isMutating} />
-                </label>
-              </div>
+            {setupError ? (
+              <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{setupError}</div>
             ) : null}
 
-            {setupForm.kind === "pto_action" ? (
-              <div className="grid gap-3">
-                <label className="space-y-1 text-sm">
-                  <span className="text-slate-600">Action code (optional)</span>
-                  <Input value={setupForm.code} onChange={(event) => setSetupForm((current) => ({ ...current, code: event.target.value }))} disabled={isMutating} />
-                </label>
-                <label className="space-y-1 text-sm">
-                  <span className="text-slate-600">Action label</span>
-                  <Input value={setupForm.label} onChange={(event) => setSetupForm((current) => ({ ...current, label: event.target.value }))} disabled={isMutating} />
-                </label>
-                <label className="space-y-1 text-sm">
-                  <span className="text-slate-600">Detail</span>
-                  <Textarea value={setupForm.detail} onChange={(event) => setSetupForm((current) => ({ ...current, detail: event.target.value }))} className="min-h-[90px]" disabled={isMutating} />
-                </label>
-              </div>
-            ) : null}
+            <div className="grid gap-3">
+              <label className="space-y-1 text-sm">
+                <span className="text-slate-600">Setup section</span>
+                <AppDropdown
+                  value={setupForm.kind}
+                  onValueChange={(value) => setSetupForm((current) => ({ ...current, kind: value as SetupForm["kind"] }))}
+                  options={[
+                    { value: "pto_type", label: "PTO Types" },
+                    { value: "pto_action", label: "PTO Actions" },
+                    { value: "employee", label: "Employees" },
+                    { value: "employee_manager", label: "Employee Managers" },
+                    { value: "holiday", label: "Holidays" },
+                  ]}
+                  searchable={false}
+                  disabled={isMutating}
+                />
+              </label>
 
-            {setupForm.kind === "employee" ? (
-              <div className="grid gap-3">
-                <label className="space-y-1 text-sm">
-                  <span className="text-slate-600">Employee name</span>
-                  <Input value={setupForm.employeeName} onChange={(event) => setSetupForm((current) => ({ ...current, employeeName: event.target.value }))} disabled={isMutating} />
-                </label>
-                <label className="space-y-1 text-sm">
-                  <span className="text-slate-600">Title</span>
-                  <Input value={setupForm.title} onChange={(event) => setSetupForm((current) => ({ ...current, title: event.target.value }))} disabled={isMutating} />
-                </label>
-                <label className="space-y-1 text-sm">
-                  <span className="text-slate-600">Team region</span>
-                  <AppDropdown
-                    value={setupForm.teamRegion}
-                    onValueChange={(value) => setSetupForm((current) => ({ ...current, teamRegion: value as LeaveSphereTeamRegion }))}
-                    options={LEAVESPHERE_TEAM_REGION_OPTIONS}
-                    searchable={false}
-                    disabled={isMutating}
-                  />
-                </label>
-                <label className="space-y-1 text-sm">
-                  <span className="text-slate-600">Manager</span>
-                  <AppDropdown
-                    value={setupForm.managerId}
-                    onValueChange={(value) => setSetupForm((current) => ({ ...current, managerId: value }))}
-                    options={employeeOptions}
-                    searchable
-                    disabled={isMutating}
-                  />
-                </label>
-              </div>
-            ) : null}
+              {setupForm.kind === "pto_type" ? (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="space-y-1 text-sm">
+                    <span className="text-slate-600">Type code</span>
+                    <AppDropdown
+                      value={setupForm.code}
+                      onValueChange={(value) => setSetupForm((current) => ({ ...current, code: value }))}
+                      options={PTO_TYPE_OPTIONS.map((item) => ({ value: item.value, label: item.label }))}
+                      searchable={false}
+                      disabled={isMutating}
+                    />
+                  </label>
+                  <label className="space-y-1 text-sm">
+                    <span className="text-slate-600">Label</span>
+                    <Input value={setupForm.label} onChange={(event) => setSetupForm((current) => ({ ...current, label: event.target.value }))} disabled={isMutating} />
+                  </label>
+                </div>
+              ) : null}
 
-            {setupForm.kind === "employee_manager" ? (
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="space-y-1 text-sm">
-                  <span className="text-slate-600">Employee</span>
-                  <AppDropdown
-                    value={setupForm.employeeId}
-                    onValueChange={(value) => setSetupForm((current) => ({ ...current, employeeId: value }))}
-                    options={employeeOptions}
-                    searchable
-                    disabled={isMutating}
-                  />
-                </label>
-                <label className="space-y-1 text-sm">
-                  <span className="text-slate-600">Manager</span>
-                  <AppDropdown
-                    value={setupForm.managerId}
-                    onValueChange={(value) => setSetupForm((current) => ({ ...current, managerId: value }))}
-                    options={employeeOptions}
-                    searchable
-                    disabled={isMutating}
-                  />
-                </label>
-              </div>
-            ) : null}
+              {setupForm.kind === "pto_action" ? (
+                <div className="grid gap-3">
+                  <label className="space-y-1 text-sm">
+                    <span className="text-slate-600">Action code (optional)</span>
+                    <Input value={setupForm.code} onChange={(event) => setSetupForm((current) => ({ ...current, code: event.target.value }))} disabled={isMutating} />
+                  </label>
+                  <label className="space-y-1 text-sm">
+                    <span className="text-slate-600">Action label</span>
+                    <Input value={setupForm.label} onChange={(event) => setSetupForm((current) => ({ ...current, label: event.target.value }))} disabled={isMutating} />
+                  </label>
+                  <label className="space-y-1 text-sm">
+                    <span className="text-slate-600">Detail</span>
+                    <Textarea value={setupForm.detail} onChange={(event) => setSetupForm((current) => ({ ...current, detail: event.target.value }))} className="min-h-[90px]" disabled={isMutating} />
+                  </label>
+                </div>
+              ) : null}
 
-            {setupForm.kind === "holiday" ? (
-              <div className="grid gap-3 sm:grid-cols-3">
-                <label className="space-y-1 text-sm">
-                  <span className="text-slate-600">Holiday name</span>
-                  <Input value={setupForm.name} onChange={(event) => setSetupForm((current) => ({ ...current, name: event.target.value }))} disabled={isMutating} />
-                </label>
-                <label className="space-y-1 text-sm">
-                  <span className="text-slate-600">Date</span>
-                  <Input type="date" value={setupForm.date} onChange={(event) => setSetupForm((current) => ({ ...current, date: event.target.value }))} disabled={isMutating} />
-                </label>
-                <label className="space-y-1 text-sm">
-                  <span className="text-slate-600">Team region</span>
-                  <AppDropdown
-                    value={setupForm.teamRegion}
-                    onValueChange={(value) => setSetupForm((current) => ({ ...current, teamRegion: value as LeaveSphereTeamRegion }))}
-                    options={LEAVESPHERE_TEAM_REGION_OPTIONS}
-                    searchable={false}
-                    disabled={isMutating}
-                  />
-                </label>
-              </div>
-            ) : null}
-          </div>
+              {setupForm.kind === "employee" ? (
+                <div className="grid gap-3">
+                  <label className="space-y-1 text-sm">
+                    <span className="text-slate-600">Employee name</span>
+                    <Input value={setupForm.employeeName} onChange={(event) => setSetupForm((current) => ({ ...current, employeeName: event.target.value }))} disabled={isMutating} />
+                  </label>
+                  <label className="space-y-1 text-sm">
+                    <span className="text-slate-600">Title</span>
+                    <Input value={setupForm.title} onChange={(event) => setSetupForm((current) => ({ ...current, title: event.target.value }))} disabled={isMutating} />
+                  </label>
+                  <label className="space-y-1 text-sm">
+                    <span className="text-slate-600">Team region</span>
+                    <AppDropdown
+                      value={setupForm.teamRegion}
+                      onValueChange={(value) => setSetupForm((current) => ({ ...current, teamRegion: value as LeaveSphereTeamRegion }))}
+                      options={LEAVESPHERE_TEAM_REGION_OPTIONS}
+                      searchable={false}
+                      disabled={isMutating}
+                    />
+                  </label>
+                  <label className="space-y-1 text-sm">
+                    <span className="text-slate-600">Manager</span>
+                    <AppDropdown
+                      value={setupForm.managerId}
+                      onValueChange={(value) => setSetupForm((current) => ({ ...current, managerId: value }))}
+                      options={employeeOptions}
+                      searchable
+                      disabled={isMutating}
+                    />
+                  </label>
+                </div>
+              ) : null}
 
-          <DialogFooter>
-            <Button variant="outline" onClick={() => setIsSetupModalOpen(false)} disabled={isMutating}>Cancel</Button>
-            <Button onClick={() => void handleSetupSave()} disabled={isMutating}>Save setup</Button>
-          </DialogFooter>
+              {setupForm.kind === "employee_manager" ? (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <label className="space-y-1 text-sm">
+                    <span className="text-slate-600">Employee</span>
+                    <AppDropdown
+                      value={setupForm.employeeId}
+                      onValueChange={(value) => setSetupForm((current) => ({ ...current, employeeId: value }))}
+                      options={employeeOptions}
+                      searchable
+                      disabled={isMutating}
+                    />
+                  </label>
+                  <label className="space-y-1 text-sm">
+                    <span className="text-slate-600">Manager</span>
+                    <AppDropdown
+                      value={setupForm.managerId}
+                      onValueChange={(value) => setSetupForm((current) => ({ ...current, managerId: value }))}
+                      options={employeeOptions}
+                      searchable
+                      disabled={isMutating}
+                    />
+                  </label>
+                </div>
+              ) : null}
+
+              {setupForm.kind === "holiday" ? (
+                <div className="grid gap-3 sm:grid-cols-3">
+                  <label className="space-y-1 text-sm">
+                    <span className="text-slate-600">Holiday name</span>
+                    <Input value={setupForm.name} onChange={(event) => setSetupForm((current) => ({ ...current, name: event.target.value }))} disabled={isMutating} />
+                  </label>
+                  <label className="space-y-1 text-sm">
+                    <span className="text-slate-600">Date</span>
+                    <Input type="date" value={setupForm.date} onChange={(event) => setSetupForm((current) => ({ ...current, date: event.target.value }))} disabled={isMutating} />
+                  </label>
+                  <label className="space-y-1 text-sm">
+                    <span className="text-slate-600">Team region</span>
+                    <AppDropdown
+                      value={setupForm.teamRegion}
+                      onValueChange={(value) => setSetupForm((current) => ({ ...current, teamRegion: value as LeaveSphereTeamRegion }))}
+                      options={LEAVESPHERE_TEAM_REGION_OPTIONS}
+                      searchable={false}
+                      disabled={isMutating}
+                    />
+                  </label>
+                </div>
+              ) : null}
+            </div>
+
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setIsSetupModalOpen(false)}>
+                Cancel
+              </Button>
+              <Button onClick={() => void handleSetupSave()} disabled={isMutating}>Save setup</Button>
+            </DialogFooter>
+          </ModalShell>
         </DialogContent>
       </Dialog>
 

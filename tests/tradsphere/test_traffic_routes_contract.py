@@ -241,6 +241,8 @@ class TrafficMissingQueryParamTests(unittest.TestCase):
                 est_num=None,
                 languages=None,
                 language=None,
+                media_types=None,
+                media_type=None,
             )
 
         self.assertEqual(result, {"ok": True})
@@ -250,6 +252,7 @@ class TrafficMissingQueryParamTests(unittest.TestCase):
             flight_end="2026-06-30",
             est_nums=[26001, 26002],
             languages=[],
+            media_types=[],
         )
 
     def test_station_candidates_reject_invalid_est_num_filter(self):

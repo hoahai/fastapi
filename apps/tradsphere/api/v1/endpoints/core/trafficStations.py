@@ -69,7 +69,33 @@ def get_traffic_station_candidates_route(
                 }
               }
             ],
-            "summary": {"candidateCount": 1, "estNumCount": 1}
+            "summary": {
+              "candidateCount": 1,
+              "estNumCount": 1,
+              "months": [
+                {"monthKey": "2026-06", "year": 2026, "month": 6, "label": "JUN'26"}
+              ],
+              "rows": [
+                {
+                  "estNum": 26001,
+                  "stationCode": "KABC",
+                  "stationName": "ABC Affiliate",
+                  "monthCells": [
+                    {
+                      "monthKey": "2026-06",
+                      "year": 2026,
+                      "month": 6,
+                      "label": "JUN'26",
+                      "hasSchedule": true,
+                      "hasSpot": true,
+                      "scheduleCount": 2,
+                      "totalSpot": 8,
+                      "totalGrossText": "$125.00"
+                    }
+                  ]
+                }
+              ]
+            }
           }
         }
 
@@ -81,6 +107,8 @@ def get_traffic_station_candidates_route(
         - Optional languages/language accepts comma-separated values: English, Spanish
         - Optional mediaTypes/mediaType accepts comma-separated values: TV, RA, CA, OD, NP, CINE
         - flightStart/flightEnd must be ISO dates and flightStart <= flightEnd
+        - summary.months and summary.rows describe the overlapping schedule matrix used by the station-sync modal
+        - the matrix groups rows by the broadcast month of the Monday at the start of each schedule week
         - Unknown query params are rejected (400)
     """
     account_code_value = require_query_value(account_code, field="accountCode")

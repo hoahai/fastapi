@@ -61,7 +61,6 @@ import {
   removeBrowserCacheByPrefix,
   writeBrowserCache,
 } from "@/lib/browserCache";
-import { TRADSPHERE_SELECTIONS_CACHE_KEY } from "@/lib/tradsphereAccountSelections";
 import { buildAuthHeaders as buildSharedAuthHeaders } from "@shared/api/authHeaders";
 import { TRADSPHERE_CACHE_TTL_MS, shouldFetchNetwork, type CachePolicy } from "@shared/cache";
 import { useAuth } from "@shared/auth/useAuth";
@@ -71,6 +70,7 @@ import { useScopedPersistentState } from "@shared/hooks/useScopedPersistentState
 import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
 import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { SectionCard } from "@shared/components/layout/SectionCard";
+import { ModalShell } from "@shared/components";
 import { PageLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
@@ -206,7 +206,6 @@ function App() {
   const [isStationModalOpen, setIsStationModalOpen] = useState(false);
   const [stationModalMode, setStationModalMode] = useState<StationModalMode>("create");
   const [stationModalCode, setStationModalCode] = useState<string | null>(null);
-  const [scheduleUploadSuccessMessage, setScheduleUploadSuccessMessage] = useState<string | null>(null);
   const [dashboardDeferredMessage, setDashboardDeferredMessage] = useState<string | null>(null);
   const requestHeaders = useMemo(
     () => buildSharedAuthHeaders(auth.session, auth.tenantSlug, false),
@@ -225,7 +224,7 @@ function App() {
     selectionsError,
     isOfflineSelections,
     selectionsCacheStatus,
-    loadSelections,
+    refreshSelections,
   } = useTradsphereAccountSelections({
     requestJson,
     requestHeaders,
@@ -311,7 +310,6 @@ function App() {
     setAccountForm(null);
     setEsnums([]);
     setStations([]);
-    setScheduleUploadSuccessMessage(null);
   }
 
   function applyLoadedData(data: MainLoadResponse) {
@@ -531,6 +529,7 @@ function App() {
     }
     setIsChipRefreshOverlayVisible(true);
     try {
+      await refreshSelections();
       const result = await loadAccountDashboard("network-only");
       if (result.success) {
         toast.success("Dashboard refreshed", `Fetched fresh data for ${selectedAccountCode}.`);
@@ -797,8 +796,7 @@ function App() {
         },
       });
 
-      removeBrowserCacheByPrefix(TRADSPHERE_SELECTIONS_CACHE_KEY);
-      await loadSelections("network-only");
+      await refreshSelections();
       handleAccountChange(accountCode);
       setIsCreateAccountModalOpen(false);
       setIsCreateAccountUnsavedDialogOpen(false);
@@ -886,8 +884,16 @@ function App() {
           onRefresh={() => {
             void handleRefreshAccount();
           }}
-          disabled={!selectedAccountCode || !isOnline || isLoadingAccount || isRefreshingAccount || isSaving}
-          refreshing={isRefreshingAccount}
+          disabled={
+            !selectedAccountCode ||
+            !isOnline ||
+            isLoadingAccount ||
+            isRefreshingSelections ||
+            isRefreshingAccount ||
+            isChipRefreshOverlayVisible ||
+            isSaving
+          }
+          refreshing={isRefreshingSelections || isRefreshingAccount || isChipRefreshOverlayVisible}
           refreshLabel="Refresh data"
           tooltipText={isOnline ? "Click to refresh data" : "Offline. Reconnect to refresh data."}
           containerClassName="w-full"
@@ -902,7 +908,7 @@ function App() {
           isLoadingSelections={isLoadingSelections}
           selectionsError={selectionsError}
           isLoadingAccount={isLoadingAccount}
-          isRefreshingAccount={isRefreshingAccount}
+          isRefreshingAccount={isRefreshingSelections || isRefreshingAccount}
           isSavingAccount={isSaving}
           onAccountChange={handleAccountChange}
           onLoad={handleLoadAccount}
@@ -959,7 +965,6 @@ function App() {
                       aria-label="Upload schedules"
                       tooltip="Upload schedules"
                       onClick={() => {
-                        setScheduleUploadSuccessMessage(null);
                         setIsScheduleUploadOpen(true);
                       }}
                       disabled={!canEditTradsphere || isLoadingAccount || isSaving}
@@ -975,11 +980,6 @@ function App() {
                   </>
                 }
               >
-                {scheduleUploadSuccessMessage ? (
-                  <p className="rounded-md border border-emerald-100 bg-emerald-50 px-3 py-2 text-sm text-emerald-700">
-                    {scheduleUploadSuccessMessage}
-                  </p>
-                ) : null}
                 <div
                   ref={scheduleListRef}
                   onScroll={handleScheduleListScroll}
@@ -1046,7 +1046,7 @@ function App() {
         uploadUrl={SCHEDULE_IMPORT_URL}
         headers={requestHeaders}
         onUploadSuccess={(fileName) => {
-          setScheduleUploadSuccessMessage(`Upload completed for "${fileName}".`);
+          toast.success("Upload completed", `Upload completed for "${fileName}".`);
           setInvalidatedScheduleEstnum(null);
           setScheduleCacheInvalidationToken((current) => current + 1);
           removeBrowserCacheByPrefix(`schedule-table:${selectedAccountCode.toUpperCase()}:`);
@@ -1056,12 +1056,7 @@ function App() {
 
       <Dialog open={isCreateAccountModalOpen} onOpenChange={handleCreateAccountDialogOpenChange}>
         <DialogContent
-          className="max-w-[620px] rounded-xl bg-white p-6"
-          onEscapeKeyDown={(event) => {
-            if (isCreatingAccount) {
-              event.preventDefault();
-            }
-          }}
+          className="flex max-h-[90vh] max-w-[620px] flex-col overflow-hidden rounded-xl bg-white p-6"
           onInteractOutside={(event) => {
             if (
               shouldBlockOutsideClose({
@@ -1073,83 +1068,84 @@ function App() {
             }
           }}
         >
-          <DialogClose
-            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
-            aria-label="Close create account modal"
-            disabled={isCreatingAccount}
-          >
-            <X className="size-4" />
-          </DialogClose>
-
-          <DialogHeader>
-            <DialogTitle>Create Account</DialogTitle>
-            <DialogDescription>Add a TradSphere account mapping for an existing master account code.</DialogDescription>
-          </DialogHeader>
-
-          <div className="mt-4 space-y-4">
-            <LabeledField
-              label={
-                <>
-                  Account Code<RequiredMark />
-                </>
-              }
+          <ModalShell busy={isCreatingAccount} busyMessage="Creating account..." className="min-h-0 flex-1">
+            <DialogClose
+              className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
+              aria-label="Close create account modal"
             >
-              <Input
-                value={createAccountForm.accountCode}
-                onChange={(event) => {
-                  const value = event.target.value.toUpperCase();
-                  setCreateAccountForm((current) => ({ ...current, accountCode: value }));
+              <X className="size-4" />
+            </DialogClose>
+
+            <DialogHeader>
+              <DialogTitle>Create Account</DialogTitle>
+              <DialogDescription>Add a TradSphere account mapping for an existing master account code.</DialogDescription>
+            </DialogHeader>
+
+            <div className="mt-4 space-y-4">
+              <LabeledField
+                label={
+                  <>
+                    Account Code<RequiredMark />
+                  </>
+                }
+              >
+                <Input
+                  value={createAccountForm.accountCode}
+                  onChange={(event) => {
+                    const value = event.target.value.toUpperCase();
+                    setCreateAccountForm((current) => ({ ...current, accountCode: value }));
+                    if (createAccountError) {
+                      setCreateAccountError(null);
+                    }
+                  }}
+                  placeholder="e.g. TAAA"
+                  disabled={isCreatingAccount}
+                />
+              </LabeledField>
+
+              <AccountEditableFields
+                billingType={createAccountForm.billingType}
+                market={createAccountForm.market}
+                note={createAccountForm.note}
+                onBillingTypeChange={(value) => {
+                  setCreateAccountForm((current) => ({ ...current, billingType: value }));
+                }}
+                onMarketChange={(value) => {
+                  setCreateAccountForm((current) => ({ ...current, market: value }));
                   if (createAccountError) {
                     setCreateAccountError(null);
                   }
                 }}
-                placeholder="e.g. TAAA"
+                onNoteChange={(value) => {
+                  setCreateAccountForm((current) => ({ ...current, note: value }));
+                  if (createAccountError) {
+                    setCreateAccountError(null);
+                  }
+                }}
                 disabled={isCreatingAccount}
+                billingAriaLabel="Create account billing type"
+                marketPlaceholder="e.g. Los Angeles"
+                notePlaceholder="Optional note"
               />
-            </LabeledField>
 
-            <AccountEditableFields
-              billingType={createAccountForm.billingType}
-              market={createAccountForm.market}
-              note={createAccountForm.note}
-              onBillingTypeChange={(value) => {
-                setCreateAccountForm((current) => ({ ...current, billingType: value }));
-              }}
-              onMarketChange={(value) => {
-                setCreateAccountForm((current) => ({ ...current, market: value }));
-                if (createAccountError) {
-                  setCreateAccountError(null);
-                }
-              }}
-              onNoteChange={(value) => {
-                setCreateAccountForm((current) => ({ ...current, note: value }));
-                if (createAccountError) {
-                  setCreateAccountError(null);
-                }
-              }}
-              disabled={isCreatingAccount}
-              billingAriaLabel="Create account billing type"
-              marketPlaceholder="e.g. Los Angeles"
-              notePlaceholder="Optional note"
-            />
+              {createAccountError ? <p className="text-sm text-rose-600">{createAccountError}</p> : null}
 
-            {createAccountError ? <p className="text-sm text-rose-600">{createAccountError}</p> : null}
-
-            <DialogFooter>
-              {shouldShowCreateAccountSubmit ? (
-                <Button onClick={handleCreateAccount} disabled={!canCreateAccount || isCreatingAccount}>
-                  {isCreatingAccount ? (
-                    <>
-                      <Loader2 className="size-4 animate-spin" />
-                      Creating
-                    </>
-                  ) : (
-                    "Create Account"
-                  )}
-                </Button>
-              ) : null}
-            </DialogFooter>
-          </div>
+              <DialogFooter>
+                {shouldShowCreateAccountSubmit ? (
+                  <Button onClick={handleCreateAccount} disabled={!canCreateAccount || isCreatingAccount}>
+                    {isCreatingAccount ? (
+                      <>
+                        <Loader2 className="size-4 animate-spin" />
+                        Creating
+                      </>
+                    ) : (
+                      "Create Account"
+                    )}
+                  </Button>
+                ) : null}
+              </DialogFooter>
+            </div>
+          </ModalShell>
         </DialogContent>
       </Dialog>
 

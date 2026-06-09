@@ -54,10 +54,12 @@ import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
 import { LoadActionArea } from "@shared/components/layout/LoadActionArea";
 import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { SectionCard } from "@shared/components/layout/SectionCard";
+import { ModalShell } from "@shared/components";
 import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 import { PageLoadingLayer, SectionLoadingLayer, SectionLoadingOverlay } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
+import { shouldTreatChecklistDetailAsHydrating } from "@/utils/invoiceChecklistHydration";
 import {
   buildPeriodValue,
   buildRollingPeriods,
@@ -732,13 +734,13 @@ function resolveChecklistStatusByStationStatuses(
 
 function buildLoadCacheKey(periodValue: string): string {
   const safe = asString(periodValue) || "latest";
-  return `invoice-checklists:load:${safe}:v3`;
+  return `invoice-checklists:load:${safe}:v5`;
 }
 
 function buildChecklistDetailCacheKey(periodValue: string, checklistId: string): string {
   const safePeriod = asString(periodValue) || "latest";
   const safeChecklistId = asString(checklistId) || "unknown";
-  return `invoice-checklists:detail:${safePeriod}:${safeChecklistId}:v2`;
+  return `invoice-checklists:detail:${safePeriod}:${safeChecklistId}:v4`;
 }
 
 function buildStationMatchedNotesCacheKey(estNum: number, stationCode: string): string {
@@ -1869,8 +1871,6 @@ export default function InvoiceChecklistPage() {
   const stationContactsHydrationAttemptedRef = useRef<Set<string>>(new Set());
   const handledStationNotesRefreshRequestIdRef = useRef(0);
   const handledStationContactsRefreshRequestIdRef = useRef(0);
-  const selectionBeforeSearchRef = useRef<{ checklistId: string | null; stationId: number | null } | null>(null);
-  const pendingStationRestoreAfterChecklistSelectRef = useRef<number | null>(null);
   const generatedAttachmentImageUrlsRef = useRef<string[]>([]);
   const nextLocalIdRef = useRef(-1);
   const [isAddNoteModalOpen, setIsAddNoteModalOpen] = useState(false);
@@ -2002,18 +2002,6 @@ export default function InvoiceChecklistPage() {
   useEffect(() => {
     stationContactsHydrationAttemptedRef.current.clear();
   }, [loadedPeriodValue]);
-
-  useEffect(() => {
-    const pendingStationId = pendingStationRestoreAfterChecklistSelectRef.current;
-    if (pendingStationId === null || !selectedChecklist) {
-      return;
-    }
-    pendingStationRestoreAfterChecklistSelectRef.current = null;
-    if (!selectedChecklist.stations.some((station) => station.id === pendingStationId)) {
-      return;
-    }
-    setSelectedStationId(pendingStationId);
-  }, [selectedChecklist]);
 
   const normalizedAppliedSearch = useMemo(() => asString(appliedSearch).toLowerCase(), [appliedSearch]);
 
@@ -2232,13 +2220,29 @@ export default function InvoiceChecklistPage() {
     visibleChecklistIds,
   ]);
 
+  const selectedChecklistSummaryForView = useMemo(() => {
+    if (!selectedChecklistId) {
+      return null;
+    }
+    return checklists.find((item) => item.id === selectedChecklistId) ?? null;
+  }, [checklists, selectedChecklistId]);
+
+  const isHydratingSelectedChecklistDetail = useMemo(
+    () => shouldTreatChecklistDetailAsHydrating({
+      selectedChecklist,
+      selectedChecklistId,
+      selectedChecklistSummary: selectedChecklistSummaryForView,
+    }),
+    [selectedChecklist, selectedChecklistId, selectedChecklistSummaryForView],
+  );
+
   const filteredStationsForSelectedChecklist = useMemo(
     () => filterStationsForChecklist(selectedChecklistForView, normalizedAppliedSearch),
     [normalizedAppliedSearch, selectedChecklistForView],
   );
 
   useEffect(() => {
-    if (!selectedChecklist) {
+    if (!selectedChecklist || isHydratingSelectedChecklistDetail) {
       return;
     }
     const stations = selectedChecklist.stations ?? [];
@@ -2250,10 +2254,10 @@ export default function InvoiceChecklistPage() {
       return;
     }
     setChecklistStatusDraft(targetStatus);
-  }, [checklistStatusDraft, selectedChecklist, stationStatusDraftById]);
+  }, [checklistStatusDraft, isHydratingSelectedChecklistDetail, selectedChecklist, stationStatusDraftById]);
 
   useEffect(() => {
-    if (!selectedChecklist) {
+    if (!selectedChecklist || isHydratingSelectedChecklistDetail) {
       return;
     }
     const override = buildChecklistCardSummaryOverride(selectedChecklist, stationStatusDraftById);
@@ -2295,24 +2299,24 @@ export default function InvoiceChecklistPage() {
         [selectedChecklist.id]: override,
       };
     });
-  }, [selectedChecklist, stationStatusDraftById]);
+  }, [isHydratingSelectedChecklistDetail, selectedChecklist, stationStatusDraftById]);
 
   const hasDirtyChecklistStatus = useMemo(() => {
-    if (!selectedChecklist) {
+    if (!selectedChecklist || isHydratingSelectedChecklistDetail) {
       return false;
     }
     return checklistStatusDraft !== (selectedChecklist.status || "");
-  }, [checklistStatusDraft, selectedChecklist]);
+  }, [checklistStatusDraft, isHydratingSelectedChecklistDetail, selectedChecklist]);
 
   const hasDirtyChecklistNote = useMemo(() => {
-    if (!selectedChecklist) {
+    if (!selectedChecklist || isHydratingSelectedChecklistDetail) {
       return false;
     }
     return checklistNoteDraft.trim() !== (selectedChecklist.note || "").trim();
-  }, [checklistNoteDraft, selectedChecklist]);
+  }, [checklistNoteDraft, isHydratingSelectedChecklistDetail, selectedChecklist]);
 
   const dirtyStationStatusEntries = useMemo(() => {
-    if (!selectedChecklist) {
+    if (!selectedChecklist || isHydratingSelectedChecklistDetail) {
       return [] as Array<{ stationId: number; status: string }>;
     }
     return selectedChecklist.stations.reduce<Array<{ stationId: number; status: string }>>((acc, station) => {
@@ -2327,30 +2331,30 @@ export default function InvoiceChecklistPage() {
       acc.push({ stationId: station.id, status: draftStatus });
       return acc;
     }, []);
-  }, [selectedChecklist, stationStatusDraftById]);
+  }, [isHydratingSelectedChecklistDetail, selectedChecklist, stationStatusDraftById]);
 
   const hasPendingLocalNotes = useMemo(() => {
-    if (!selectedChecklist) {
+    if (!selectedChecklist || isHydratingSelectedChecklistDetail) {
       return false;
     }
     return selectedChecklist.stations.some((station) => station.notes.some((note) => note.isLocalDraft === true));
-  }, [selectedChecklist]);
+  }, [isHydratingSelectedChecklistDetail, selectedChecklist]);
 
   const hasPendingLocalAttachments = useMemo(() => {
-    if (!selectedChecklist) {
+    if (!selectedChecklist || isHydratingSelectedChecklistDetail) {
       return false;
     }
     return selectedChecklist.stations.some((station) => (
       station.notes.some((note) => note.attachments.some((attachment) => attachment.isLocalDraft === true))
     ));
-  }, [selectedChecklist]);
+  }, [isHydratingSelectedChecklistDetail, selectedChecklist]);
 
   const hasPendingLocalStations = useMemo(() => {
-    if (!selectedChecklist) {
+    if (!selectedChecklist || isHydratingSelectedChecklistDetail) {
       return false;
     }
     return selectedChecklist.stations.some((station) => station.isLocalDraft === true);
-  }, [selectedChecklist]);
+  }, [isHydratingSelectedChecklistDetail, selectedChecklist]);
 
   const hasPendingLocalChecklists = useMemo(
     () => checklists.some((item) => item.isLocalDraft === true),
@@ -2362,15 +2366,15 @@ export default function InvoiceChecklistPage() {
   const isDeletingSelectedChecklist = Boolean(selectedChecklistId && deletingChecklistIdSet.has(selectedChecklistId));
 
   const hasDirtyStationRemovals = useMemo(() => {
-    if (!selectedChecklist || !selectedChecklistBaseline) {
+    if (!selectedChecklist || !selectedChecklistBaseline || isHydratingSelectedChecklistDetail) {
       return false;
     }
     const currentStationIds = new Set(selectedChecklist.stations.map((station) => station.id));
     return selectedChecklistBaseline.stations.some((station) => !currentStationIds.has(station.id));
-  }, [selectedChecklist, selectedChecklistBaseline]);
+  }, [isHydratingSelectedChecklistDetail, selectedChecklist, selectedChecklistBaseline]);
 
   const hasDirtyExistingNotes = useMemo(() => {
-    if (!selectedChecklist || !selectedChecklistBaseline) {
+    if (!selectedChecklist || !selectedChecklistBaseline || isHydratingSelectedChecklistDetail) {
       return false;
     }
       const baselineById = new Map<number, { amount: number | null; note: string }>();
@@ -2406,7 +2410,7 @@ export default function InvoiceChecklistPage() {
       }
     }
     return false;
-  }, [selectedChecklist, selectedChecklistBaseline]);
+  }, [isHydratingSelectedChecklistDetail, selectedChecklist, selectedChecklistBaseline]);
 
   const hasDirtyStationStatuses = dirtyStationStatusEntries.length > 0;
   const hasDirtyChecklistFields = hasDirtyChecklistStatus || hasDirtyChecklistNote;
@@ -2435,7 +2439,7 @@ export default function InvoiceChecklistPage() {
         ids.add(checklistId);
         continue;
       }
-      if (checklistId === selectedChecklistId && hasUnsavedChanges) {
+      if (checklistId === selectedChecklistId && hasUnsavedChanges && !isHydratingSelectedChecklistDetail) {
         ids.add(checklistId);
       }
     }
@@ -2443,6 +2447,7 @@ export default function InvoiceChecklistPage() {
   }, [
     checklists,
     hasUnsavedChanges,
+    isHydratingSelectedChecklistDetail,
     localChecklistBaselinesById,
     localChecklistDetailsById,
     selectedChecklist,
@@ -2925,6 +2930,29 @@ export default function InvoiceChecklistPage() {
     }
   }
 
+  function handleOpenNoteAttachment(note: NoteItem) {
+    const firstAttachment = note.attachments[0] ?? null;
+    if (!firstAttachment) {
+      return;
+    }
+
+    const attachmentName = asString(firstAttachment.fileName) || `Attachment ${firstAttachment.id}`;
+    const attachmentUrl = asString(firstAttachment.accessUrl) || asString(firstAttachment.url);
+    const previewSrc = isImageAttachment(firstAttachment) ? attachmentImageSrcById[firstAttachment.id] : null;
+
+    if (previewSrc) {
+      setAttachmentPreview({ src: previewSrc, name: attachmentName });
+      return;
+    }
+
+    if (attachmentUrl) {
+      void handleOpenAttachment(attachmentUrl);
+      return;
+    }
+
+    setAttachmentModalNoteId(note.id);
+  }
+
   const attachmentModalNoteContext = useMemo(() => {
     if (attachmentModalNoteId === null) {
       return null;
@@ -3147,16 +3175,24 @@ export default function InvoiceChecklistPage() {
           const detailFromCache = toChecklistDetail(detailCacheSnapshot?.data);
           const payloadHasRequestedChecklist = cachedPayload.selectedChecklist?.id === options.checklistId;
           const selectedSummary = cachedPayload.checklists.find((item) => item.id === options.checklistId) ?? null;
-          if (detailFromCache) {
+          const detailFromCacheLooksHydrating = shouldTreatChecklistDetailAsHydrating({
+            selectedChecklist: detailFromCache,
+            selectedChecklistId: options.checklistId,
+            selectedChecklistSummary: selectedSummary,
+          });
+          if (detailFromCache && !detailFromCacheLooksHydrating) {
             cachedPayload.selectedChecklistId = options.checklistId;
             cachedPayload.selectedChecklist = detailFromCache;
-          } else if (!payloadHasRequestedChecklist) {
+          } else if (!payloadHasRequestedChecklist || detailFromCacheLooksHydrating) {
             // List cache can be fresh while this checklist detail has never been loaded.
             // Force network fetch so switching accounts does not get stuck on empty fallback detail.
             shouldFetchFromNetwork = true;
             if (selectedSummary) {
               cachedPayload.selectedChecklistId = options.checklistId;
               cachedPayload.selectedChecklist = toFallbackChecklistDetail(selectedSummary);
+            }
+            if (detailFromCacheLooksHydrating) {
+              removeBrowserCache(buildChecklistDetailCacheKey(targetPeriodValue, options.checklistId));
             }
           } else if (selectedSummary) {
             cachedPayload.selectedChecklistId = options.checklistId;
@@ -3371,7 +3407,7 @@ export default function InvoiceChecklistPage() {
     status?: string;
     stationStatusById?: Record<number, string>;
   } = {}) => {
-    if (!selectedChecklist) {
+    if (!selectedChecklist || isHydratingSelectedChecklistDetail) {
       return;
     }
     const nextStationStatusById = nextDraft.stationStatusById ?? stationStatusDraftById;
@@ -3411,13 +3447,14 @@ export default function InvoiceChecklistPage() {
   }, [
     checklistNoteDraft,
     checklistStatusDraft,
+    isHydratingSelectedChecklistDetail,
     selectedChecklist,
     selectedChecklistBaseline,
     stationStatusDraftById,
   ]);
 
   function persistActiveChecklistSummaryToCard() {
-    if (!selectedChecklist) {
+    if (!selectedChecklist || isHydratingSelectedChecklistDetail) {
       return;
     }
     const override = buildChecklistCardSummaryOverride(selectedChecklist, stationStatusDraftById);
@@ -3927,12 +3964,6 @@ export default function InvoiceChecklistPage() {
   async function runChecklistSelect(checklistId: string, options?: { fromUserSelection?: boolean }) {
     const fromUserSelection = options?.fromUserSelection === true;
     setSelectedChecklistId(checklistId);
-    if (fromUserSelection && normalizeSearchKeyword(appliedSearch)) {
-      selectionBeforeSearchRef.current = {
-        checklistId,
-        stationId: null,
-      };
-    }
     const selectedSummary = checklists.find((item) => item.id === checklistId) ?? null;
     const localDetail = localChecklistDetailsById[checklistId];
     if (localDetail) {
@@ -3982,11 +4013,27 @@ export default function InvoiceChecklistPage() {
         buildChecklistDetailCacheKey(targetPeriodValue, checklistId),
       );
       const detailFromCache = toChecklistDetail(detailCacheSnapshot?.data);
+      const detailFromCacheLooksHydrating = shouldTreatChecklistDetailAsHydrating({
+        selectedChecklist: detailFromCache,
+        selectedChecklistId: checklistId,
+        selectedChecklistSummary: selectedSummary,
+      });
       if (detailFromCache) {
-        applyChecklistSelection(detailFromCache);
-        setCacheStatus({ source: "cache", fetchedAt: detailCacheSnapshot?.fetchedAt ?? Date.now() });
-        setError(null);
-        return;
+        if (detailFromCacheLooksHydrating) {
+          removeBrowserCache(buildChecklistDetailCacheKey(targetPeriodValue, checklistId));
+        } else {
+          applyChecklistSelection(detailFromCache);
+          setCacheStatus({ source: "cache", fetchedAt: detailCacheSnapshot?.fetchedAt ?? Date.now() });
+          setError(null);
+          return;
+        }
+      }
+      if (detailFromCacheLooksHydrating) {
+        if (selectedSummary) {
+          applyChecklistSelection(toFallbackChecklistDetail(selectedSummary));
+          setError(null);
+          return;
+        }
       }
       if (selectedSummary) {
         applyChecklistSelection(toFallbackChecklistDetail(selectedSummary));
@@ -4010,14 +4057,11 @@ export default function InvoiceChecklistPage() {
     persistActiveChecklistSummaryToCard();
     if (checklistId === selectedChecklistId) {
       const selectedSummary = checklists.find((item) => item.id === checklistId) ?? null;
-      const shouldHydrateFallbackDetail = Boolean(
-        selectedChecklist
-        && selectedChecklist.id === checklistId
-        && selectedChecklist.stations.length === 0
-        && selectedSummary
-        && !selectedSummary.isLocalDraft
-        && (selectedSummary.stationCount > 0 || selectedSummary.mismatchStationCount > 0),
-      );
+      const shouldHydrateFallbackDetail = shouldTreatChecklistDetailAsHydrating({
+        selectedChecklist,
+        selectedChecklistId: checklistId,
+        selectedChecklistSummary: selectedSummary,
+      });
       if (!shouldHydrateFallbackDetail) {
         return;
       }
@@ -4034,12 +4078,6 @@ export default function InvoiceChecklistPage() {
   function handleStationSelect(stationId: number) {
     if (stationId === selectedStationId) {
       return;
-    }
-    if (normalizeSearchKeyword(appliedSearch) && selectedChecklistId) {
-      selectionBeforeSearchRef.current = {
-        checklistId: selectedChecklistId,
-        stationId,
-      };
     }
     runStationSelect(stationId);
   }
@@ -4166,8 +4204,39 @@ export default function InvoiceChecklistPage() {
 
     setIsSavingAllChanges(true);
     try {
-      let activeChecklist: ChecklistDetail | null = selectedChecklist ? cloneChecklistDetail(selectedChecklist) : null;
+      const activeChecklistId = selectedChecklistId ? selectedChecklistId : null;
+      const activeChecklistDraft = activeChecklistId
+        ? (localChecklistDetailsById[activeChecklistId] ?? selectedChecklist ?? null)
+        : null;
+      const activeChecklistBaseline = activeChecklistId
+        ? (localChecklistBaselinesById[activeChecklistId] ?? selectedChecklistBaseline ?? null)
+        : null;
+      let activeChecklist: ChecklistDetail | null = null;
       let targetSelectedChecklistId: string | null = selectedChecklistId;
+      const selectedChecklistDraftSnapshot = activeChecklistDraft
+        ? (() => {
+          const draftDetail = cloneChecklistDetail(activeChecklistDraft);
+          if (!draftDetail) {
+            return null;
+          }
+          return {
+            ...draftDetail,
+            status: checklistStatusDraft || draftDetail.status,
+            note: checklistNoteDraft || draftDetail.note,
+            stations: draftDetail.stations.map((station) => (
+              station.id in stationStatusDraftById
+                ? {
+                    ...station,
+                    status: stationStatusDraftById[station.id] ?? "",
+                  }
+                : station
+            )),
+          };
+        })()
+        : null;
+      activeChecklist = selectedChecklistDraftSnapshot
+        ? cloneChecklistDetail(selectedChecklistDraftSnapshot)
+        : (activeChecklistDraft ? cloneChecklistDetail(activeChecklistDraft) : null);
       const previewGeneratedStationStatusByKey = new Map<string, string>();
       const previewGeneratedStationStatusUpdates: Array<{ stationRowId: number; status: string | null }> = [];
       const previewGeneratedStationDeleteIds: number[] = [];
@@ -4315,17 +4384,26 @@ export default function InvoiceChecklistPage() {
         };
       });
 
+      const activeChecklistHasDirtyFields = Boolean(
+        activeChecklist
+        && activeChecklistBaseline
+        && (
+          asString(activeChecklist.status) !== asString(activeChecklistBaseline.status)
+          || activeChecklist.note.trim() !== activeChecklistBaseline.note.trim()
+        ),
+      );
+
       const checklistUpdates: Array<{ checklistId: string; status?: string | null; note?: string | null }> = [];
-      if (activeChecklist && hasDirtyChecklistFields) {
+      if (activeChecklist && activeChecklistHasDirtyFields) {
         checklistUpdates.push({
           checklistId: activeChecklist.id,
-          status: checklistStatusDraft || null,
-          note: checklistNoteDraft.trim() || null,
+          status: activeChecklist.status || null,
+          note: activeChecklist.note.trim() || null,
         });
       }
 
       const baselinePersistedStationIds = new Set(
-        (selectedChecklistBaseline?.stations ?? [])
+        (activeChecklistBaseline?.stations ?? [])
           .filter((station) => !station.isLocalDraft && station.id > 0)
           .map((station) => station.id),
       );
@@ -4358,6 +4436,14 @@ export default function InvoiceChecklistPage() {
           }
         }
 
+        const activeBaselineStationById = new Map<number, StationItem>();
+        for (const station of activeChecklistBaseline?.stations ?? []) {
+          if (station.isLocalDraft === true) {
+            continue;
+          }
+          activeBaselineStationById.set(station.id, station);
+        }
+
         for (const station of activeChecklist.stations) {
           if (station.isLocalDraft === true) {
             if (station.isGeneratedPreview === true) {
@@ -4378,13 +4464,20 @@ export default function InvoiceChecklistPage() {
         }
 
         const deletedStationIdSet = new Set<number>(stationDeletes);
-        for (const update of dirtyStationStatusEntries.filter((entry) => entry.stationId > 0)) {
-          if (deletedStationIdSet.has(update.stationId)) {
+        for (const station of activeChecklist.stations) {
+          if (station.isLocalDraft === true || station.id <= 0 || deletedStationIdSet.has(station.id)) {
+            continue;
+          }
+          const baselineStation = activeBaselineStationById.get(station.id) ?? null;
+          if (!baselineStation) {
+            continue;
+          }
+          if (asString(baselineStation.status) === asString(station.status)) {
             continue;
           }
           stationUpdates.push({
-            stationRowId: update.stationId,
-            status: update.status || null,
+            stationRowId: station.id,
+            status: station.status || null,
           });
         }
         if (previewGeneratedStationStatusUpdates.length > 0) {
@@ -4400,7 +4493,7 @@ export default function InvoiceChecklistPage() {
       }
 
       const baselineNoteById = new Map<number, NoteItem>();
-      for (const station of selectedChecklistBaseline?.stations ?? []) {
+      for (const station of activeChecklistBaseline?.stations ?? []) {
         if (stationDeletes.includes(station.id)) {
           continue;
         }
@@ -4872,11 +4965,27 @@ export default function InvoiceChecklistPage() {
 
       let selectedChecklistForCache = mergeSavedChecklistDetailWithBaseline(
         selectedChecklistFromBulk,
-        selectedChecklist ?? selectedChecklistBaseline,
+        activeChecklist ?? activeChecklistBaseline,
       );
       if (!selectedChecklistForCache && selectedChecklistIdFromBulk) {
         const selectedSummary = summaryList.find((item) => item.id === selectedChecklistIdFromBulk) ?? null;
         selectedChecklistForCache = selectedSummary ? toFallbackChecklistDetail(selectedSummary) : null;
+      }
+      if (
+        selectedChecklistDraftSnapshot
+        && selectedChecklistIdFromBulk
+        && selectedChecklistDraftSnapshot.id === selectedChecklistIdFromBulk
+      ) {
+        const responseStationHasMeaningfulStatus = selectedChecklistForCache?.stations.some((station) => Boolean(asString(station.status)))
+          ?? false;
+        const draftStationHasMeaningfulStatus = selectedChecklistDraftSnapshot.stations.some((station) => Boolean(asString(station.status)));
+        if (
+          !selectedChecklistForCache
+          || selectedChecklistForCache.stations.length === 0
+          || (!responseStationHasMeaningfulStatus && draftStationHasMeaningfulStatus)
+        ) {
+          selectedChecklistForCache = selectedChecklistDraftSnapshot;
+        }
       }
 
       const finalizedSelectedChecklistForCache = finalizeSavedChecklistDetail(selectedChecklistForCache);
@@ -4891,8 +5000,8 @@ export default function InvoiceChecklistPage() {
         checklists,
         [
           ...Object.values(localChecklistDetailsById),
-          selectedChecklist,
-          selectedChecklistBaseline,
+          activeChecklistDraft,
+          activeChecklistBaseline,
           activeChecklist,
           selectedChecklistForCache,
         ].filter((item): item is ChecklistDetail => item !== null),
@@ -5020,10 +5129,6 @@ export default function InvoiceChecklistPage() {
         );
       }
 
-      if (selectedStationId !== null) {
-        setStationPanelRefreshRequestId((current) => current + 1);
-      }
-
       clearDeferredUpdate();
       setRefreshMessage(null);
       previewRemovedPlannedStationKeysRef.current = new Set();
@@ -5080,10 +5185,9 @@ export default function InvoiceChecklistPage() {
   }
 
   function discardLocalChanges(options?: { reload?: boolean }) {
-    const shouldReload = options?.reload ?? true;
-    const targetPeriodValue = loadedPeriodValue || selectedDraftPeriodValue;
-    const hadDirtyState = hasAnyUnsavedChanges;
     const hadDeferredServerUpdate = hasDeferredUpdate;
+    const shouldReload = options?.reload ?? hadDeferredServerUpdate;
+    const targetPeriodValue = loadedPeriodValue || selectedDraftPeriodValue;
     const checklistIdForReload = isLocalChecklistId(selectedChecklistId) ? null : selectedChecklistId;
 
     resetLocalDrafts();
@@ -5107,7 +5211,7 @@ export default function InvoiceChecklistPage() {
     clearDeferredUpdate();
     setRefreshMessage(null);
 
-    if (shouldReload && targetPeriodValue && (hadDirtyState || hadDeferredServerUpdate)) {
+    if (shouldReload && targetPeriodValue && hadDeferredServerUpdate) {
       void loadData({
         policy: "cache-first",
         periodValue: targetPeriodValue,
@@ -5880,7 +5984,7 @@ export default function InvoiceChecklistPage() {
   const loadingContract = resolveSharedLoadingContract(
     {
       pageInitializing: !hasHydratedPageState,
-      pageRefreshing: isLoadActionOverlayVisible || isSyncingPeriod,
+      pageRefreshing: isLoadActionOverlayVisible,
       cacheChipRefreshing: isChipRefreshing,
     },
     {
@@ -5895,43 +5999,10 @@ export default function InvoiceChecklistPage() {
   const applySearchKeyword = useCallback((rawValue: string) => {
     const normalized = asString(rawValue);
     const normalizedKeyword = normalizeSearchKeyword(normalized);
-    const hadActiveSearch = Boolean(normalizeSearchKeyword(appliedSearch));
 
     const run = async () => {
-      if (normalizedKeyword && !hadActiveSearch) {
-        selectionBeforeSearchRef.current = {
-          checklistId: selectedChecklistId,
-          stationId: selectedStationId,
-        };
-      }
       setDraftSearch(normalized);
       setAppliedSearch(normalized);
-
-      if (!normalizedKeyword && hadActiveSearch) {
-        const snapshot = selectionBeforeSearchRef.current;
-        selectionBeforeSearchRef.current = null;
-        if (snapshot?.checklistId) {
-          const hasSnapshotChecklist = checklists.some((item) => item.id === snapshot.checklistId);
-          if (hasSnapshotChecklist) {
-            pendingStationRestoreAfterChecklistSelectRef.current = snapshot.stationId;
-            setSelectedStationId(null);
-            setIsAddNoteModalOpen(false);
-            setIsAddStationModalOpen(false);
-            setEditingNoteId(null);
-            setDeletingNoteId(null);
-            setDeletingStationId(null);
-            setAttachmentModalNoteId(null);
-            if (snapshot.checklistId !== selectedChecklistId) {
-              await runChecklistSelect(snapshot.checklistId);
-              return;
-            }
-            if (snapshot.stationId !== null && selectedChecklist?.stations.some((station) => station.id === snapshot.stationId)) {
-              setSelectedStationId(snapshot.stationId);
-            }
-            return;
-          }
-        }
-      }
 
       if (!selectedChecklistId) {
         return;
@@ -5985,8 +6056,8 @@ export default function InvoiceChecklistPage() {
 
     void run();
   }, [
-    appliedSearch,
     checklists,
+    normalizedAppliedSearch,
     runChecklistSelect,
     selectedChecklist,
     selectedChecklistId,
@@ -6024,7 +6095,7 @@ export default function InvoiceChecklistPage() {
     if (!normalizedDraft) {
       return;
     }
-    if (normalizeSearchKeyword(normalizedDraft) === normalizeSearchKeyword(appliedSearch)) {
+    if (normalizeSearchKeyword(normalizedDraft) === normalizedAppliedSearch) {
       return;
     }
     const timer = window.setTimeout(() => {
@@ -6033,7 +6104,7 @@ export default function InvoiceChecklistPage() {
     return () => {
       window.clearTimeout(timer);
     };
-  }, [appliedSearch, applySearchKeyword, draftSearch]);
+  }, [applySearchKeyword, draftSearch, normalizedAppliedSearch]);
 
   return (
     <AppPageLayout
@@ -6210,9 +6281,13 @@ export default function InvoiceChecklistPage() {
                   const liveMatchedAll = stationCount > 0 && matchedStationCount === stationCount;
                   const effectiveStatus = active
                     ? (
-                      liveMatchedAll
-                        ? CHECKLIST_STATUS_MATCHED_ALL
-                        : (checklistStatusDraft === CHECKLIST_STATUS_MATCHED_ALL ? "" : checklistStatusDraft)
+                      isHydratingSelectedChecklistDetail
+                        ? item.status
+                        : (
+                          liveMatchedAll
+                            ? CHECKLIST_STATUS_MATCHED_ALL
+                            : (checklistStatusDraft === CHECKLIST_STATUS_MATCHED_ALL ? "" : checklistStatusDraft)
+                        )
                     )
                     : item.status;
                   const statusText = asString(effectiveStatus);
@@ -6221,7 +6296,7 @@ export default function InvoiceChecklistPage() {
                     normalizedStatus === "MATCHED"
                     || normalizedStatus === "MATCHED_ALL"
                     || normalizedStatus === "ALL_MATCHED"
-                    || (active && liveMatchedAll)
+                    || (active && (isHydratingSelectedChecklistDetail || liveMatchedAll))
                   );
                   const isProposalDelete = item.proposalState === "proposed_remove";
                   const isProposalAdd = item.proposalState === "proposed_add";
@@ -6229,7 +6304,7 @@ export default function InvoiceChecklistPage() {
                   const accountTitle = item.accountName
                     ? `${item.accountName} (${item.accountCode})`
                     : item.accountCode;
-                  const itemHasUnsavedChanges = unsavedChecklistIds.has(item.id) || (active && hasUnsavedChanges);
+                  const itemHasUnsavedChanges = unsavedChecklistIds.has(item.id) || (active && hasAnyUnsavedChanges && !isHydratingSelectedChecklistDetail);
                   return (
                     <div
                       key={item.id}
@@ -6335,8 +6410,16 @@ export default function InvoiceChecklistPage() {
             )}
         </SectionCard>
 
-        <div className="relative xl:h-full xl:min-h-0">
-        <SectionCard className="xl:h-full xl:min-h-0" title="Checklist & Stations">
+        {isSyncingPeriod ? (
+          <SectionLoadingOverlay
+            message="Syncing checklist period..."
+            className="z-30"
+          />
+        ) : null}
+
+        <div className="relative isolate xl:col-span-2 xl:h-full xl:min-h-0">
+          <div className="grid gap-4 xl:h-full xl:min-h-0 xl:grid-cols-[minmax(0,1.3fr)_minmax(0,1.1fr)]">
+            <SectionCard className="xl:h-full xl:min-h-0" title="Checklist & Stations">
             {!selectedChecklistForView ? (
               <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
                 Select a checklist account to review details.
@@ -6411,9 +6494,11 @@ export default function InvoiceChecklistPage() {
                       aria-label="Add station"
                     />
                   </div>
-                  {selectedChecklistForView.stations.length === 0 ? (
+                  {selectedChecklistForView.stations.length === 0 || isHydratingSelectedChecklistDetail ? (
                     <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
-                      No stations linked to this checklist yet.
+                      {isHydratingSelectedChecklistDetail
+                        ? "Loading stations for this checklist..."
+                        : "No stations linked to this checklist yet."}
                     </div>
                   ) : filteredStationsForSelectedChecklist.length === 0 ? (
                     <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
@@ -6523,37 +6608,32 @@ export default function InvoiceChecklistPage() {
                 </div>
               </div>
             )}
-        </SectionCard>
-          <SectionLoadingLayer active={isChecklistSelectionLoading} message="Loading checklist stations..." />
-          {isDeletingSelectedChecklist ? (
-            <SectionLoadingOverlay message="Deleting checklist account..." />
-          ) : null}
-        </div>
+            </SectionCard>
 
-        <div className="relative space-y-4 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:gap-4 xl:space-y-0">
-          <SectionCard
-            className="relative xl:max-h-[42%] xl:min-h-[180px] xl:flex-none"
-            contentClassName="xl:min-h-0 xl:overflow-y-auto xl:pr-1"
-            title="Station Contacts"
-            actions={(
-              <div className="flex items-center gap-2">
-                <ActionIconButton
-                  icon={<Monitor />}
-                  tooltip="View Station"
-                  onClick={() => {
-                    if (!selectedStationCode) {
-                      return;
-                    }
-                    setStationCardModalCode(selectedStationCode);
-                    setIsStationCardModalOpen(true);
-                  }}
-                  disabled={!selectedStationCode || isSavingAllChanges}
-                  className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
-                  aria-label="View Station"
-                />
-              </div>
-            )}
-          >
+            <div className="relative z-0 space-y-4 xl:flex xl:h-full xl:min-h-0 xl:flex-col xl:gap-4 xl:space-y-0">
+              <SectionCard
+                className="relative xl:max-h-[42%] xl:min-h-[180px] xl:flex-none"
+                contentClassName="xl:min-h-0 xl:overflow-y-auto xl:pr-1"
+                title="Station Contacts"
+                actions={(
+                  <div className="flex items-center gap-2">
+                    <ActionIconButton
+                      icon={<Monitor />}
+                      tooltip="View Station"
+                      onClick={() => {
+                        if (!selectedStationCode) {
+                          return;
+                        }
+                        setStationCardModalCode(selectedStationCode);
+                        setIsStationCardModalOpen(true);
+                      }}
+                      disabled={!selectedStationCode || isSavingAllChanges}
+                      className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
+                      aria-label="View Station"
+                    />
+                  </div>
+                )}
+              >
               {!selectedStation ? (
                 <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
                   Select a station to view contacts.
@@ -6561,14 +6641,7 @@ export default function InvoiceChecklistPage() {
               ) : (
                 <div className="space-y-3">
                   <div className="space-y-2">
-                    {isHydratingSelectedStationContacts ? (
-                      <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
-                        <div className="flex items-center gap-2">
-                          <Loader2 className="size-4 animate-spin text-slate-500" />
-                          <span>Loading station contacts...</span>
-                        </div>
-                      </div>
-                    ) : selectedStationRepContacts.length === 0 ? (
+                    {selectedStationRepContacts.length === 0 ? (
                       <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
                         No rep contact metadata is currently available for this station.
                       </div>
@@ -6600,26 +6673,26 @@ export default function InvoiceChecklistPage() {
                   </div>
                 </div>
               )}
-          </SectionCard>
-          <SectionLoadingLayer active={isHydratingSelectedStationContacts} message="Loading station contacts..." />
+              <SectionLoadingLayer active={isHydratingSelectedStationContacts} message="Loading station contacts..." />
+              </SectionCard>
 
-          <SectionCard
-            className="relative xl:min-h-0 xl:flex-1"
-            contentClassName="xl:flex xl:min-h-0 xl:flex-1 xl:flex-col"
-            title="Station Notes"
-            actions={(
-              <div className="flex items-center gap-2">
-                <ActionIconButton
-                  icon={<Plus />}
-                  tooltip="Add note"
-                  onClick={handleOpenAddNoteModal}
-                  disabled={!canEditTradsphere || !selectedStation || isSavingAllChanges}
-                  className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
-                  aria-label="Add note"
-                />
-              </div>
-            )}
-          >
+              <SectionCard
+                className="relative xl:min-h-0 xl:flex-1"
+                contentClassName="xl:flex xl:min-h-0 xl:flex-1 xl:flex-col"
+                title="Station Notes"
+                actions={(
+                  <div className="flex items-center gap-2">
+                    <ActionIconButton
+                      icon={<Plus />}
+                      tooltip="Add note"
+                      onClick={handleOpenAddNoteModal}
+                      disabled={!canEditTradsphere || !selectedStation || isSavingAllChanges}
+                      className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
+                      aria-label="Add note"
+                    />
+                  </div>
+                )}
+              >
               {!selectedStation ? (
                 <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
                   Select a station to view notes.
@@ -6628,18 +6701,9 @@ export default function InvoiceChecklistPage() {
                 <div className="flex min-h-0 flex-1 flex-col">
                   <div className="min-h-0 flex-1 space-y-3 xl:overflow-y-auto xl:pr-1">
                     {visibleStationNoteItems.length === 0 ? (
-                      isLoadingSelectedStationNotes ? (
-                        <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
-                          <div className="flex items-center gap-2">
-                            <Loader2 className="size-4 animate-spin text-slate-500" />
-                            <span>Loading station notes...</span>
-                          </div>
-                        </div>
-                      ) : (
-                        <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
-                          No notes yet for this checklist.
-                        </div>
-                      )
+                      <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+                        No notes yet for this checklist.
+                      </div>
                     ) : (
                       visibleStationNoteItems.map(({ note, station }) => {
                         const attachmentCount = note.attachments.length;
@@ -6746,6 +6810,10 @@ export default function InvoiceChecklistPage() {
                                     type="button"
                                     onClick={(event) => {
                                       event.stopPropagation();
+                                      if (attachmentCount === 1) {
+                                        handleOpenNoteAttachment(note);
+                                        return;
+                                      }
                                       setAttachmentModalNoteId(note.id);
                                     }}
                                     className="inline-flex h-6 min-w-6 items-center justify-center gap-1 rounded-full border border-slate-300 bg-slate-50 px-2 text-[11px] font-semibold text-slate-600 hover:bg-slate-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
@@ -6765,8 +6833,15 @@ export default function InvoiceChecklistPage() {
                   </div>
                 </div>
               )}
-          </SectionCard>
-          <SectionLoadingLayer active={isLoadingSelectedStationNotes} message="Loading station notes..." />
+              <SectionLoadingLayer active={isLoadingSelectedStationNotes} message="Loading station notes..." />
+              </SectionCard>
+            </div>
+          </div>
+          <SectionLoadingLayer
+            active={isChecklistSelectionLoading}
+            message="Loading checklist stations..."
+            className="z-30"
+          />
           {isDeletingSelectedChecklist ? (
             <SectionLoadingOverlay message="Deleting checklist account..." />
           ) : null}
@@ -6797,7 +6872,7 @@ export default function InvoiceChecklistPage() {
         <div className="flex w-full justify-end">
           <div className="flex flex-wrap items-center gap-2">
             {(hasAnyUnsavedChanges || isPeriodSyncPreviewPending) ? (
-              <Button variant="outline" onClick={() => discardLocalChanges()} disabled={isSavingAllChanges}>
+              <Button variant="outline" onClick={() => discardLocalChanges({ reload: false })} disabled={isSavingAllChanges}>
                 Revert
               </Button>
             ) : null}
@@ -7313,83 +7388,85 @@ function AddChecklistAccountDialog({
     <>
       <Dialog open={open} onOpenChange={handleDialogOpenChange}>
         <DialogContent
+          className="flex max-h-[90vh] max-w-xl flex-col overflow-hidden rounded-xl bg-white p-6"
           onInteractOutside={(event) => {
             if (shouldBlockOutsideClose({ isBusy, hasUnsavedChanges })) {
               event.preventDefault();
             }
           }}
         >
-          <DialogClose
-            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
-            aria-label="Close add checklist account modal"
-            disabled={isBusy}
-          >
-            <X className="size-4" />
-          </DialogClose>
+          <ModalShell busy={isBusy} busyMessage="Adding checklist account..." className="min-h-0 flex-1">
+            <DialogClose
+              className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
+              aria-label="Close add checklist account modal"
+            >
+              <X className="size-4" />
+            </DialogClose>
 
-          <DialogHeader className="pb-2">
-            <DialogTitle>Add Checklist Account</DialogTitle>
-            <DialogDescription>
-              Add a checklist account row for the selected period.
-            </DialogDescription>
-          </DialogHeader>
+            <DialogHeader className="pb-2">
+              <DialogTitle>Add Checklist Account</DialogTitle>
+              <DialogDescription>
+                Add a checklist account row for the selected period.
+              </DialogDescription>
+            </DialogHeader>
 
-          <div className="space-y-4 pt-1">
-            <LabeledField label="Account Code">
-              <Input
-                value={accountCodeDraft}
-                onChange={(event) => {
-                  setAccountCodeDraft(event.target.value.toUpperCase());
-                  setError(null);
-                }}
-                placeholder="e.g. TAAA"
-                maxLength={10}
-                disabled={disabled || isBusy}
-              />
-            </LabeledField>
+            <div className="space-y-4 pt-1">
+              <LabeledField label="Account Code">
+                <Input
+                  value={accountCodeDraft}
+                  onChange={(event) => {
+                    setAccountCodeDraft(event.target.value.toUpperCase());
+                    setError(null);
+                  }}
+                  placeholder="e.g. TAAA"
+                  maxLength={10}
+                  disabled={disabled || isBusy}
+                />
+              </LabeledField>
 
-            <LabeledField label="Status">
-              <AppDropdown
-                value={statusDraft}
-                onValueChange={(value) => {
-                  setStatusDraft(value);
-                  setError(null);
-                }}
-                options={statusOptions}
-                searchable={false}
-                placeholder=""
-                disabled={disabled || isBusy}
-              />
-            </LabeledField>
+              <LabeledField label="Status">
+                <AppDropdown
+                  value={statusDraft}
+                  onValueChange={(value) => {
+                    setStatusDraft(value);
+                    setError(null);
+                  }}
+                  options={statusOptions}
+                  searchable={false}
+                  placeholder=""
+                  disabled={disabled || isBusy}
+                />
+              </LabeledField>
 
-            <LabeledField label="Note" alignStart>
-              <Textarea
-                value={noteDraft}
-                onChange={(event) => {
-                  setNoteDraft(event.target.value);
-                  setError(null);
-                }}
-                placeholder="Add summary note..."
-                className="min-h-[96px] resize-y"
-                disabled={disabled || isBusy}
-              />
-            </LabeledField>
-          </div>
+              <LabeledField label="Note" alignStart>
+                <Textarea
+                  value={noteDraft}
+                  onChange={(event) => {
+                    setNoteDraft(event.target.value);
+                    setError(null);
+                  }}
+                  placeholder="Add summary note..."
+                  className="min-h-[96px] resize-y"
+                  disabled={disabled || isBusy}
+                />
+              </LabeledField>
+            </div>
 
-          {error ? <p className="text-sm text-rose-600">{error}</p> : null}
+            {error ? <p className="text-sm text-rose-600">{error}</p> : null}
 
-          <DialogFooter>
-            <Button onClick={() => void handleSubmit()} disabled={!canSubmit}>
-              {isBusy ? (
-                <>
-                  <Loader2 className="size-4 animate-spin" />
-                  Adding...
-                </>
-              ) : (
-                "Add Account"
-              )}
-            </Button>
-          </DialogFooter>
+            <DialogFooter>
+              <Button onClick={() => void handleSubmit()} disabled={!canSubmit}>
+                {isBusy ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    Adding...
+                  </>
+                ) : (
+                  "Add Account"
+                )}
+              </Button>
+            </DialogFooter>
+          </ModalShell>
         </DialogContent>
       </Dialog>
 
@@ -7491,84 +7568,86 @@ function AddChecklistStationDialog({
     <>
       <Dialog open={open} onOpenChange={handleDialogOpenChange}>
         <DialogContent
+          className="flex max-h-[90vh] max-w-xl flex-col overflow-hidden rounded-xl bg-white p-6"
           onInteractOutside={(event) => {
             if (shouldBlockOutsideClose({ isBusy, hasUnsavedChanges })) {
               event.preventDefault();
             }
           }}
         >
-          <DialogClose
-            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
-            aria-label="Close add station modal"
-            disabled={isBusy}
-          >
-            <X className="size-4" />
-          </DialogClose>
+          <ModalShell busy={isBusy} busyMessage="Adding station..." className="min-h-0 flex-1">
+            <DialogClose
+              className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
+              aria-label="Close add station modal"
+            >
+              <X className="size-4" />
+            </DialogClose>
 
-          <DialogHeader className="pb-2">
-            <DialogTitle>Add Station</DialogTitle>
-            <DialogDescription>
-              {formatAddChecklistStationSubtitle(checklist)}
-            </DialogDescription>
-          </DialogHeader>
+            <DialogHeader className="pb-2">
+              <DialogTitle>Add Station</DialogTitle>
+              <DialogDescription>
+                {formatAddChecklistStationSubtitle(checklist)}
+              </DialogDescription>
+            </DialogHeader>
 
-          <div className="space-y-4 pt-1">
-            <LabeledField label="Est Num">
-              <Input
-                type="number"
-                inputMode="numeric"
-                value={estNumDraft}
-                onChange={(event) => {
-                  setEstNumDraft(event.target.value);
-                  setError(null);
-                }}
-                placeholder="e.g. 26001"
-                disabled={disabled || isBusy}
-              />
-            </LabeledField>
+            <div className="space-y-4 pt-1">
+              <LabeledField label="Est Num">
+                <Input
+                  type="number"
+                  inputMode="numeric"
+                  value={estNumDraft}
+                  onChange={(event) => {
+                    setEstNumDraft(event.target.value);
+                    setError(null);
+                  }}
+                  placeholder="e.g. 26001"
+                  disabled={disabled || isBusy}
+                />
+              </LabeledField>
 
-            <LabeledField label="Station Code">
-              <Input
-                value={stationCodeDraft}
-                onChange={(event) => {
-                  setStationCodeDraft(event.target.value.toUpperCase());
-                  setError(null);
-                }}
-                placeholder="e.g. WXYZT"
-                maxLength={10}
-                disabled={disabled || isBusy}
-              />
-            </LabeledField>
+              <LabeledField label="Station Code">
+                <Input
+                  value={stationCodeDraft}
+                  onChange={(event) => {
+                    setStationCodeDraft(event.target.value.toUpperCase());
+                    setError(null);
+                  }}
+                  placeholder="e.g. WXYZT"
+                  maxLength={10}
+                  disabled={disabled || isBusy}
+                />
+              </LabeledField>
 
-            <LabeledField label="Status">
-              <AppDropdown
-                value={statusDraft}
-                onValueChange={(value) => {
-                  setStatusDraft(value);
-                  setError(null);
-                }}
-                options={statusOptions}
-                searchable={false}
-                placeholder=""
-                disabled={disabled || isBusy}
-              />
-            </LabeledField>
-          </div>
+              <LabeledField label="Status">
+                <AppDropdown
+                  value={statusDraft}
+                  onValueChange={(value) => {
+                    setStatusDraft(value);
+                    setError(null);
+                  }}
+                  options={statusOptions}
+                  searchable={false}
+                  placeholder=""
+                  disabled={disabled || isBusy}
+                />
+              </LabeledField>
+            </div>
 
-          {error ? <p className="text-sm text-rose-600">{error}</p> : null}
+            {error ? <p className="text-sm text-rose-600">{error}</p> : null}
 
-          <DialogFooter>
-            <Button onClick={handleSubmit} disabled={!canSubmit}>
-              {isBusy ? (
-                <>
-                  <Loader2 className="size-4 animate-spin" />
-                  Adding...
-                </>
-              ) : (
-                "Add Station"
-              )}
-            </Button>
-          </DialogFooter>
+            <DialogFooter>
+              <Button onClick={handleSubmit} disabled={!canSubmit}>
+                {isBusy ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    Adding...
+                  </>
+                ) : (
+                  "Add Station"
+                )}
+              </Button>
+            </DialogFooter>
+          </ModalShell>
         </DialogContent>
       </Dialog>
 
@@ -7884,160 +7963,162 @@ function AddStationNoteDialog({
     <>
       <Dialog open={open} onOpenChange={handleDialogOpenChange}>
         <DialogContent
+          className="flex max-h-[90vh] max-w-3xl flex-col overflow-hidden rounded-xl bg-white p-6"
           onInteractOutside={(event) => {
             if (shouldBlockOutsideClose({ isBusy, hasUnsavedChanges })) {
               event.preventDefault();
             }
           }}
         >
-          <DialogClose
-            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
-            aria-label={isEditMode ? "Close edit station note modal" : "Close add station note modal"}
-            disabled={isBusy}
-          >
-            <X className="size-4" />
-          </DialogClose>
+          <ModalShell busy={isBusy} busyMessage={isEditMode ? "Saving note..." : "Adding note..."} className="min-h-0 flex-1">
+            <DialogClose
+              className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
+              aria-label={isEditMode ? "Close edit station note modal" : "Close add station note modal"}
+            >
+              <X className="size-4" />
+            </DialogClose>
 
-          <DialogHeader className="pb-2">
-            <DialogTitle>{isEditMode ? "Edit Station Note" : "Add Station Note"}</DialogTitle>
-            <DialogDescription>
-              {formatAddNoteStationSubtitle(station)}
-            </DialogDescription>
-          </DialogHeader>
+            <DialogHeader className="pb-2">
+              <DialogTitle>{isEditMode ? "Edit Station Note" : "Add Station Note"}</DialogTitle>
+              <DialogDescription>
+                {formatAddNoteStationSubtitle(station)}
+              </DialogDescription>
+            </DialogHeader>
 
-          <div className="space-y-4 pt-1">
-            <LabeledField label="Amount">
-              <Input
-                type="text"
-                inputMode="decimal"
-                value={amount}
-                onChange={(event) => {
-                  setAmount(event.target.value);
-                  setError(null);
-                }}
-                onBlur={() => {
-                  const evaluated = evaluateAmountExpression(amount);
-                  if (evaluated !== null) {
-                    setAmount(evaluated.toFixed(2));
-                  }
-                }}
-                disabled={disabled || isBusy}
-              />
-            </LabeledField>
-
-            <LabeledField alignStart label="Note">
-              <Textarea
-                value={noteTextDraft}
-                onChange={(event) => {
-                  setNoteTextDraft(event.target.value);
-                  setError(null);
-                }}
-                placeholder={isEditMode ? "Describe the reconciliation item..." : "Describe the reconciliation item..."}
-                className="min-h-[96px]"
-                disabled={disabled || isBusy}
-              />
-            </LabeledField>
-
-            <LabeledField alignStart label="Upload Files">
-              <div
-                onPaste={handleUploadPaste}
-                onDragOver={(event) => {
-                  event.preventDefault();
-                }}
-                onDrop={handleUploadDrop}
-              >
-              <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-blue-200 bg-blue-50/30 px-3 py-4 text-sm text-slate-700 hover:border-blue-300 hover:bg-blue-50/50">
-                <UploadCloud className="size-4 text-blue-600" />
-                Select image(s) or paste screenshot
-                <input
-                  type="file"
-                  accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
-                  multiple
-                  className="hidden"
-                  onChange={(event) => handleFileInputChange(event.target.files)}
+            <div className="space-y-4 pt-1">
+              <LabeledField label="Amount">
+                <Input
+                  type="text"
+                  inputMode="decimal"
+                  value={amount}
+                  onChange={(event) => {
+                    setAmount(event.target.value);
+                    setError(null);
+                  }}
+                  onBlur={() => {
+                    const evaluated = evaluateAmountExpression(amount);
+                    if (evaluated !== null) {
+                      setAmount(evaluated.toFixed(2));
+                    }
+                  }}
                   disabled={disabled || isBusy}
                 />
-              </label>
-              {uploadedAttachmentRows.length ? (
-                <div className="mt-2 space-y-2">
-                  {uploadedAttachmentRows.map((row) => (
-                    <div key={row.key} className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs">
-                      <div className="flex min-w-0 items-center gap-3">
-                        {row.previewSrc && !brokenPreviewByKey[row.key] ? (
-                          <button
-                            type="button"
-                            className="flex h-12 w-12 shrink-0 cursor-zoom-in items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-slate-50"
-                            onClick={() => setPreviewImage({ src: row.previewSrc!, name: row.label })}
-                            disabled={disabled || isBusy}
-                            aria-label={`Preview ${row.label}`}
-                          >
-                            <img
-                              src={row.previewSrc!}
-                              alt={row.label}
-                              className="h-full w-full object-cover"
-                              onError={() => {
-                                setBrokenPreviewByKey((current) => ({ ...current, [row.key]: true }));
+              </LabeledField>
+
+              <LabeledField alignStart label="Note">
+                <Textarea
+                  value={noteTextDraft}
+                  onChange={(event) => {
+                    setNoteTextDraft(event.target.value);
+                    setError(null);
+                  }}
+                  placeholder={isEditMode ? "Describe the reconciliation item..." : "Describe the reconciliation item..."}
+                  className="min-h-[96px]"
+                  disabled={disabled || isBusy}
+                />
+              </LabeledField>
+
+              <LabeledField alignStart label="Upload Files">
+                <div
+                  onPaste={handleUploadPaste}
+                  onDragOver={(event) => {
+                    event.preventDefault();
+                  }}
+                  onDrop={handleUploadDrop}
+                >
+                <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-blue-200 bg-blue-50/30 px-3 py-4 text-sm text-slate-700 hover:border-blue-300 hover:bg-blue-50/50">
+                  <UploadCloud className="size-4 text-blue-600" />
+                  Select image(s) or paste screenshot
+                  <input
+                    type="file"
+                    accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
+                    multiple
+                    className="hidden"
+                    onChange={(event) => handleFileInputChange(event.target.files)}
+                    disabled={disabled || isBusy}
+                  />
+                </label>
+                {uploadedAttachmentRows.length ? (
+                  <div className="mt-2 space-y-2">
+                    {uploadedAttachmentRows.map((row) => (
+                      <div key={row.key} className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs">
+                        <div className="flex min-w-0 items-center gap-3">
+                          {row.previewSrc && !brokenPreviewByKey[row.key] ? (
+                            <button
+                              type="button"
+                              className="flex h-12 w-12 shrink-0 cursor-zoom-in items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-slate-50"
+                              onClick={() => setPreviewImage({ src: row.previewSrc!, name: row.label })}
+                              disabled={disabled || isBusy}
+                              aria-label={`Preview ${row.label}`}
+                            >
+                              <img
+                                src={row.previewSrc!}
+                                alt={row.label}
+                                className="h-full w-full object-cover"
+                                onError={() => {
+                                  setBrokenPreviewByKey((current) => ({ ...current, [row.key]: true }));
+                                }}
+                              />
+                            </button>
+                          ) : row.openUrl ? (
+                            <button
+                              type="button"
+                              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100"
+                              aria-label={`Open ${row.label}`}
+                              onClick={() => {
+                                if (row.openUrl) {
+                                  onOpenAttachment?.(row.openUrl);
+                                }
                               }}
-                            />
-                          </button>
-                        ) : row.openUrl ? (
-                          <button
-                            type="button"
-                            className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100"
-                            aria-label={`Open ${row.label}`}
-                            onClick={() => {
-                              if (row.openUrl) {
-                                onOpenAttachment?.(row.openUrl);
-                              }
-                            }}
-                            disabled={disabled || isBusy}
-                          >
-                            <Paperclip className="size-4" aria-hidden="true" />
-                          </button>
-                        ) : (
-                          <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-500">
-                            <Paperclip className="size-4" aria-hidden="true" />
+                              disabled={disabled || isBusy}
+                            >
+                              <Paperclip className="size-4" aria-hidden="true" />
+                            </button>
+                          ) : (
+                            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-500">
+                              <Paperclip className="size-4" aria-hidden="true" />
+                            </div>
+                          )}
+                          <div className="min-w-0">
+                            <p className="truncate font-medium text-slate-800">{row.label}</p>
+                            <p className="text-slate-500">{row.meta}</p>
                           </div>
-                        )}
-                        <div className="min-w-0">
-                          <p className="truncate font-medium text-slate-800">{row.label}</p>
-                          <p className="text-slate-500">{row.meta}</p>
                         </div>
+                        <ActionIconButton
+                          icon={<Trash2 />}
+                          tooltip="Remove attachment"
+                          onClick={row.remove}
+                          disabled={disabled || isBusy}
+                          className="!h-6 !w-6 !p-0 text-rose-500 hover:text-rose-600 focus-visible:text-rose-600 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-3.5 [&_svg]:!w-3.5 [&_svg]:text-rose-500 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110 hover:[&_svg]:text-rose-600 focus-visible:[&_svg]:text-rose-600"
+                          aria-label={`Remove ${row.label}`}
+                        />
                       </div>
-                      <ActionIconButton
-                        icon={<Trash2 />}
-                        tooltip="Remove attachment"
-                        onClick={row.remove}
-                        disabled={disabled || isBusy}
-                        className="!h-6 !w-6 !p-0 text-rose-500 hover:text-rose-600 focus-visible:text-rose-600 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-3.5 [&_svg]:!w-3.5 [&_svg]:text-rose-500 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110 hover:[&_svg]:text-rose-600 focus-visible:[&_svg]:text-rose-600"
-                        aria-label={`Remove ${row.label}`}
-                      />
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="mt-2 text-xs text-slate-500">No attachments yet. Paste a screenshot here or choose files.</p>
-              )}
-              </div>
-            </LabeledField>
-          </div>
-
-          {error ? <p className="text-sm text-rose-600">{error}</p> : null}
-
-          <DialogFooter>
-            {hasValidDraft || isBusy ? (
-              <Button onClick={handleSubmit} disabled={!canSubmit}>
-                {isBusy ? (
-                  <>
-                    <Loader2 className="size-4 animate-spin" />
-                    Saving...
-                  </>
+                    ))}
+                  </div>
                 ) : (
-                  isEditMode ? "Apply" : "Add Note"
+                  <p className="mt-2 text-xs text-slate-500">No attachments yet. Paste a screenshot here or choose files.</p>
                 )}
-              </Button>
-            ) : null}
-          </DialogFooter>
+                </div>
+              </LabeledField>
+            </div>
+
+            {error ? <p className="text-sm text-rose-600">{error}</p> : null}
+
+            <DialogFooter>
+              {hasValidDraft || isBusy ? (
+                <Button onClick={handleSubmit} disabled={!canSubmit}>
+                  {isBusy ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    isEditMode ? "Apply" : "Add Note"
+                  )}
+                </Button>
+              ) : null}
+            </DialogFooter>
+          </ModalShell>
         </DialogContent>
       </Dialog>
 

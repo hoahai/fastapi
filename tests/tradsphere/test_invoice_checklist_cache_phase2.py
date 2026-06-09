@@ -6,6 +6,7 @@ from apps.tradsphere.api.v1.helpers import config as trad_config
 from apps.tradsphere.api.v1.helpers import dbQueries as dq
 from apps.tradsphere.api.v1.helpers import invoiceChecklists as inv
 from shared import tenantDataCache
+from shared.storage.errors import StorageDeleteError
 
 
 _TABLES = {
@@ -131,6 +132,36 @@ class InvoiceChecklistCacheKeyTests(unittest.TestCase):
         self.assertIn("tradsphere_db_reads::inv_checklist_station_search::", key)
         self.assertIn("checklist_ids=a,z", key)
         self.assertEqual(mock_fetch.call_args.args[1], ("a", "z"))
+
+    def test_invoice_checklist_expected_rows_query_uses_both_week_month_buckets(self):
+        with patch.object(dq, "get_db_tables", return_value=dict(_TABLES)), patch.object(
+            dq, "get_db_read_cache_ttl_seconds", return_value=60
+        ), patch.object(
+            dq,
+            "get_tenant_shared_cache_value",
+            return_value=(None, False),
+        ) as mock_get, patch.object(dq, "fetch_all", return_value=[]) as mock_fetch, patch.object(
+            dq, "set_tenant_shared_cache_value", return_value=True
+        ):
+            rows = dq.list_schedule_invoice_checklist_expected_rows(
+                broadcast_year=2026,
+                broadcast_month=4,
+            )
+
+        self.assertEqual(rows, [])
+        key = mock_get.call_args.kwargs["cache_key"]
+        self.assertIn("tradsphere_db_reads::invoice_checklist_expected_rows::", key)
+        self.assertIn("schema=v4", key)
+        query = str(mock_fetch.call_args.args[0])
+        self.assertIn("DATE_SUB(s.startDate, INTERVAL WEEKDAY(s.startDate) DAY)", query)
+        self.assertIn("DATE_ADD(DATE_SUB(s.startDate, INTERVAL WEEKDAY(s.startDate) DAY), INTERVAL 6 DAY)", query)
+        self.assertIn("YEAR(DATE_SUB(s.startDate, INTERVAL WEEKDAY(s.startDate) DAY)) = %s", query)
+        self.assertIn("MONTH(DATE_SUB(s.startDate, INTERVAL WEEKDAY(s.startDate) DAY)) = %s", query)
+        self.assertIn("YEAR(DATE_ADD(DATE_SUB(s.startDate, INTERVAL WEEKDAY(s.startDate) DAY), INTERVAL 6 DAY)) = %s", query)
+        self.assertIn("MONTH(DATE_ADD(DATE_SUB(s.startDate, INTERVAL WEEKDAY(s.startDate) DAY), INTERVAL 6 DAY)) = %s", query)
+        self.assertNotIn("s.broadcastYear = %s", query)
+        self.assertNotIn("s.broadcastMonth = %s", query)
+        self.assertEqual(mock_fetch.call_args.args[1], (2026, 4, 2026, 4))
 
 
 class InvoiceChecklistDetailQueryTests(unittest.TestCase):
@@ -597,6 +628,46 @@ class InvoiceChecklistSyncInvalidationTests(unittest.TestCase):
         mock_invalidate.assert_called_once()
 
 
+class InvoiceChecklistExpectedPeriodTests(unittest.TestCase):
+    def test_expected_pairs_match_week_start_month(self):
+        schedule_rows = [
+            {
+                "accountCode": "TAAA",
+                "estNum": 2042,
+                "stationCode": "KABC",
+                "flightStart": "2026-04-29",
+                "flightEnd": "2026-05-03",
+                "billingType": "CALENDAR",
+            }
+        ]
+
+        with patch.object(inv, "list_schedule_invoice_checklist_expected_rows", return_value=schedule_rows):
+            april_pairs = inv._build_expected_schedule_pairs_by_account(year=2026, month=4)
+            may_pairs = inv._build_expected_schedule_pairs_by_account(year=2026, month=5)
+
+        self.assertEqual(april_pairs, {"TAAA": {(2042, "KABC")}})
+        self.assertEqual(may_pairs, {})
+
+    def test_expected_pairs_match_broadcast_month_for_broadcast_accounts(self):
+        schedule_rows = [
+            {
+                "accountCode": "TAAA",
+                "estNum": 2042,
+                "stationCode": "KABC",
+                "flightStart": "2026-04-29",
+                "flightEnd": "2026-05-03",
+                "billingType": "BROADCAST",
+            }
+        ]
+
+        with patch.object(inv, "list_schedule_invoice_checklist_expected_rows", return_value=schedule_rows):
+            april_pairs = inv._build_expected_schedule_pairs_by_account(year=2026, month=4)
+            may_pairs = inv._build_expected_schedule_pairs_by_account(year=2026, month=5)
+
+        self.assertEqual(april_pairs, {})
+        self.assertEqual(may_pairs, {"TAAA": {(2042, "KABC")}})
+
+
 class InvoiceChecklistNoteDeleteAttachmentCleanupTests(unittest.TestCase):
     def test_delete_note_cleans_linked_attachments_before_note_delete(self):
         attachment_rows = [
@@ -616,17 +687,20 @@ class InvoiceChecklistNoteDeleteAttachmentCleanupTests(unittest.TestCase):
         ) as mock_list_attachments, patch.object(
             inv, "delete_file"
         ) as mock_delete_file, patch.object(
-            inv, "delete_inv_note_attachment", return_value=1
-        ) as mock_delete_attachment_row, patch.object(
-            inv, "delete_inv_checklist_note", return_value=1
-        ) as mock_delete_note:
+            inv, "save_inv_checklist_bulk_changes", return_value={
+                "checklistIds": {},
+                "stationIds": {},
+                "noteIds": {},
+            }
+        ) as mock_save_bulk:
             result = inv.delete_invoice_checklist_note_data(note_id=5)
 
         self.assertEqual(result, {"deleted": 1, "id": 5})
-        mock_list_attachments.assert_called_once_with(note_id=5, tenant_slug="taaa")
+        mock_list_attachments.assert_called_once_with(note_ids=[5], tenant_slug="taaa")
         mock_delete_file.assert_called_once()
-        mock_delete_attachment_row.assert_called_once_with(attachment_id=21, tenant_slug="taaa")
-        mock_delete_note.assert_called_once_with(note_id=5)
+        mock_save_bulk.assert_called_once()
+        self.assertEqual(mock_save_bulk.call_args.kwargs["note_deletes"], [5])
+        self.assertEqual(mock_save_bulk.call_args.kwargs["tenant_slug"], "taaa")
 
     def test_delete_note_continues_when_storage_delete_fails(self):
         attachment_rows = [
@@ -645,15 +719,17 @@ class InvoiceChecklistNoteDeleteAttachmentCleanupTests(unittest.TestCase):
         ), patch.object(
             inv, "delete_file", side_effect=RuntimeError("delete failed")
         ), patch.object(
-            inv, "delete_inv_note_attachment", return_value=1
-        ) as mock_delete_attachment_row, patch.object(
-            inv, "delete_inv_checklist_note", return_value=1
-        ) as mock_delete_note:
-            result = inv.delete_invoice_checklist_note_data(note_id=5)
+            inv, "save_inv_checklist_bulk_changes", return_value={
+                "checklistIds": {},
+                "stationIds": {},
+                "noteIds": {},
+            }
+        ) as mock_save_bulk:
+            with self.assertRaises(StorageDeleteError):
+                inv.delete_invoice_checklist_note_data(note_id=5)
 
-        self.assertEqual(result, {"deleted": 1, "id": 5})
-        mock_delete_attachment_row.assert_called_once_with(attachment_id=21, tenant_slug="taaa")
-        mock_delete_note.assert_called_once_with(note_id=5)
+        mock_save_bulk.assert_called_once()
+        self.assertEqual(mock_save_bulk.call_args.kwargs["note_deletes"], [5])
 
     def test_delete_note_runs_owner_scope_soft_delete_when_list_is_empty(self):
         with patch.object(inv, "get_tenant_id", return_value="taaa"), patch.object(
@@ -663,14 +739,92 @@ class InvoiceChecklistNoteDeleteAttachmentCleanupTests(unittest.TestCase):
         ), patch.object(
             inv, "list_inv_note_attachments", return_value=[]
         ), patch.object(
-            inv, "soft_delete_app_attachments_for_invoice_note", return_value=1
-        ) as mock_soft_delete, patch.object(
-            inv, "delete_inv_checklist_note", return_value=1
-        ):
+            inv, "save_inv_checklist_bulk_changes", return_value={
+                "checklistIds": {},
+                "stationIds": {},
+                "noteIds": {},
+            }
+        ) as mock_save_bulk:
             result = inv.delete_invoice_checklist_note_data(note_id=5)
 
         self.assertEqual(result, {"deleted": 1, "id": 5})
-        mock_soft_delete.assert_called_once_with(note_id=5, tenant_slug="taaa")
+        mock_save_bulk.assert_called_once()
+        self.assertEqual(mock_save_bulk.call_args.kwargs["note_deletes"], [5])
+
+
+class InvoiceChecklistBulkDeleteTests(unittest.TestCase):
+    def test_delete_station_batches_notes_and_station(self):
+        attachment_rows = [
+            {
+                "attachmentId": 31,
+                "attachmentStorageProvider": "cloudinary",
+                "attachmentStorageKey": "tradsphere/tenants/taaa/invoice-checklist-note/11/a1",
+                "attachmentProviderMetadata": {"resource_type": "image"},
+            },
+            {
+                "attachmentId": 32,
+                "attachmentStorageProvider": "cloudinary",
+                "attachmentStorageKey": "tradsphere/tenants/taaa/invoice-checklist-note/12/a1",
+                "attachmentProviderMetadata": {"resource_type": "image"},
+            },
+        ]
+        with patch.object(inv, "get_tenant_id", return_value="taaa"), patch.object(
+            inv, "get_inv_checklist_station_row", return_value={"id": 7}
+        ), patch.object(
+            inv, "list_inv_checklist_notes", return_value=[{"id": 11}, {"id": 12}]
+        ), patch.object(inv, "list_inv_note_attachments", return_value=attachment_rows) as mock_list_attachments, patch.object(
+            inv, "delete_file"
+        ) as mock_delete_file, patch.object(
+            inv, "save_inv_checklist_bulk_changes", return_value={
+                "checklistIds": {},
+                "stationIds": {},
+                "noteIds": {},
+            }
+        ) as mock_save_bulk:
+            result = inv.delete_invoice_checklist_station_data(station_row_id=7)
+
+        self.assertEqual(result, {"deleted": 1, "id": 7})
+        mock_list_attachments.assert_called_once_with(note_ids=[11, 12], tenant_slug="taaa")
+        self.assertEqual(mock_delete_file.call_count, 2)
+        mock_save_bulk.assert_called_once()
+        self.assertEqual(mock_save_bulk.call_args.kwargs["station_deletes"], [7])
+        self.assertEqual(mock_save_bulk.call_args.kwargs["note_deletes"], [11, 12])
+        self.assertEqual(mock_save_bulk.call_args.kwargs["tenant_slug"], "taaa")
+
+    def test_delete_checklist_batches_related_stations_and_notes(self):
+        attachment_rows = [
+            {
+                "attachmentId": 41,
+                "attachmentStorageProvider": "cloudinary",
+                "attachmentStorageKey": "tradsphere/tenants/taaa/invoice-checklist-note/21/a1",
+                "attachmentProviderMetadata": {"resource_type": "image"},
+            }
+        ]
+        with patch.object(inv, "get_tenant_id", return_value="taaa"), patch.object(
+            inv, "get_inv_checklist_row", return_value={"id": "cid-1"}
+        ), patch.object(
+            inv, "list_inv_checklist_stations", return_value=[{"id": 7}, {"id": 8}]
+        ), patch.object(
+            inv, "list_inv_checklist_notes", return_value=[{"id": 21}]
+        ), patch.object(inv, "list_inv_note_attachments", return_value=attachment_rows) as mock_list_attachments, patch.object(
+            inv, "delete_file"
+        ) as mock_delete_file, patch.object(
+            inv, "save_inv_checklist_bulk_changes", return_value={
+                "checklistIds": {},
+                "stationIds": {},
+                "noteIds": {},
+            }
+        ) as mock_save_bulk:
+            result = inv.delete_invoice_checklist_data(checklist_id="cid-1")
+
+        self.assertEqual(result, {"deleted": 1, "id": "cid-1"})
+        mock_list_attachments.assert_called_once_with(note_ids=[21], tenant_slug="taaa")
+        mock_delete_file.assert_called_once()
+        mock_save_bulk.assert_called_once()
+        self.assertEqual(mock_save_bulk.call_args.kwargs["checklist_deletes"], ["cid-1"])
+        self.assertEqual(mock_save_bulk.call_args.kwargs["station_deletes"], [7, 8])
+        self.assertEqual(mock_save_bulk.call_args.kwargs["note_deletes"], [21])
+        self.assertEqual(mock_save_bulk.call_args.kwargs["tenant_slug"], "taaa")
 
 
 class InvoiceChecklistNoteInsertQueryTests(unittest.TestCase):
@@ -1401,6 +1555,83 @@ class InvoiceChecklistUiLoadRecoveryTests(unittest.TestCase):
 
 
 class InvoiceChecklistBulkSaveDbTests(unittest.TestCase):
+    def test_bulk_save_returns_selected_checklist_detail_with_station_status(self):
+        def _fake_save(*, checklist_creates, checklist_updates, checklist_deletes, station_creates, station_updates, station_deletes, note_creates, note_updates, note_deletes, tenant_slug):
+            del checklist_creates, checklist_updates, checklist_deletes, station_creates, station_updates, station_deletes, note_creates, note_updates, note_deletes, tenant_slug
+            return {"checklistIds": {}, "stationIds": {}, "noteIds": {}}
+
+        def _fake_get_invoice_checklists_data(*, checklist_id=None, account_code=None, year=None, month=None, status=None, include_stations=False, include_notes=False, include_attachments=False):
+            del account_code, year, month, status
+            self.assertEqual(checklist_id, "server-checklist-1")
+            self.assertTrue(include_stations)
+            self.assertTrue(include_notes)
+            self.assertTrue(include_attachments)
+            return {
+                "id": "server-checklist-1",
+                "accountCode": "TAAA",
+                "year": 2026,
+                "month": 4,
+                "status": "OPEN",
+                "note": "April review",
+                "stations": [
+                    {
+                        "id": 910,
+                        "checklistId": "server-checklist-1",
+                        "estNum": 26001,
+                        "stationCode": "KABC",
+                        "status": "MATCHED",
+                        "dateCreated": None,
+                        "dateUpdated": None,
+                        "notes": [],
+                    }
+                ],
+            }
+
+        with patch.object(inv, "save_inv_checklist_bulk_changes", side_effect=_fake_save), patch.object(
+            inv, "get_invoice_checklists_data", side_effect=_fake_get_invoice_checklists_data
+        ), patch.object(
+            inv, "list_invoice_checklists_data",
+            return_value=[
+                {
+                    "id": "server-checklist-1",
+                    "accountCode": "TAAA",
+                    "year": 2026,
+                    "month": 4,
+                    "status": "OPEN",
+                    "note": "April review",
+                    "stationCount": 1,
+                }
+            ],
+        ), patch.object(
+            inv, "list_inv_checklist_station_rows_for_checklists", return_value=[
+                {
+                    "id": 910,
+                    "checklistId": "server-checklist-1",
+                    "status": "MATCHED",
+                }
+            ],
+        ):
+            result = inv.bulk_save_invoice_checklists_data(
+                payload={
+                    "year": 2026,
+                    "month": 4,
+                    "selectedChecklistId": "server-checklist-1",
+                    "createChecklists": [],
+                    "checklistUpdates": [],
+                    "deleteChecklistIds": [],
+                    "createStations": [],
+                    "stationUpdates": [],
+                    "deleteStationIds": [],
+                    "createNotes": [],
+                    "noteUpdates": [],
+                    "deleteNoteIds": [],
+                }
+            )
+
+        self.assertEqual(result["selectedChecklistId"], "server-checklist-1")
+        self.assertEqual(result["selectedChecklist"]["stations"][0]["status"], "MATCHED")
+        self.assertEqual(result["checklists"][0]["matchedStationCount"], 1)
+
     def test_bulk_save_db_write_failure_does_not_invalidate_caches(self):
         class _Cursor:
             def __init__(self):

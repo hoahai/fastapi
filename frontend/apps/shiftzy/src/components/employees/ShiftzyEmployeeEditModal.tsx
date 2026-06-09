@@ -9,6 +9,7 @@ import { canModalClose, shouldBlockOutsideClose } from "@tradsphere/components/u
 import { Textarea } from "@tradsphere/components/ui/textarea";
 import { UnsavedChangesDialog } from "@tradsphere/components/ui/unsaved-changes-dialog";
 import { FormRow } from "@shared/components/form/FormRow";
+import { ModalShell } from "@shared/components";
 import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
 import type { ShiftzyEmployee, ShiftzyPosition } from "@shiftzy/lib/shiftzyApi";
 
@@ -170,136 +171,138 @@ export function ShiftzyEmployeeEditModal({
     <>
       <Dialog open={open} onOpenChange={handleOpenChange}>
         <DialogContent
-          className="w-[calc(100%-1.5rem)] max-w-[680px] rounded-xl bg-white p-6"
+          className="flex max-h-[90vh] w-[calc(100%-1.5rem)] max-w-[680px] flex-col overflow-hidden rounded-xl bg-white p-6"
           onPointerDownOutside={(event) => {
             if (blockOutsideClose) {
               event.preventDefault();
             }
           }}
         >
-          <DialogClose
-            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/70"
-            aria-label="Close employee editor"
-          >
-            <X className="size-4" />
-          </DialogClose>
-
-          <DialogHeader>
-            <DialogTitle>{mode === "create" ? "Add Employee" : "Edit Employee"}</DialogTitle>
-            <DialogDescription>
-              {canEdit
-                ? "Create or update Shiftzy employee metadata used by schedules."
-                : "You have view access only for Shiftzy employees."}
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="mt-4 space-y-3">
-          <FormRow label="Name">
-            <Input
-              value={nameField.value}
-              onChange={nameField.onChange}
-              onBlur={nameField.onBlur}
-              onPaste={(event) => {
-                const pasted = event.clipboardData.getData("text");
-                if (!pasted.trim()) {
-                  return;
-                }
-                event.preventDefault();
-                setForm((current) => ({ ...current, name: toNameCase(pasted) }));
-              }}
-              disabled={inputsDisabled}
-              autoComplete="off"
-            />
-          </FormRow>
-
-          <FormRow label="Area">
-            <AppDropdown
-              value={form.scheduleSection}
-              options={AREA_OPTIONS}
-              placeholder=""
-              searchable={false}
-              onValueChange={(nextValue) => setForm((current) => ({ ...current, scheduleSection: nextValue }))}
-              disabled={inputsDisabled}
-            />
-          </FormRow>
-
-          <FormRow label="Ref Position">
-            <AppDropdown
-              value={form.refPositionCode}
-              options={positionOptions}
-              placeholder=""
-              searchable={false}
-              onValueChange={(nextValue) => setForm((current) => ({ ...current, refPositionCode: nextValue }))}
-              disabled={inputsDisabled}
-            />
-          </FormRow>
-
-          <FormRow label="Note" alignStart>
-            <Textarea
-              rows={3}
-              value={noteField.value}
-              onChange={noteField.onChange}
-              onBlur={noteField.onBlur}
-              disabled={inputsDisabled}
-            />
-          </FormRow>
-
-          <FormRow label="Active">
-            <button
-              type="button"
-              role="switch"
-              aria-checked={form.active}
-              aria-label="Active"
-              onClick={() => {
-                if (inputsDisabled) {
-                  return;
-                }
-                setForm((current) => ({ ...current, active: !current.active }));
-              }}
-              disabled={inputsDisabled}
-              aria-disabled={inputsDisabled}
-              className={`inline-flex h-10 w-fit items-center gap-3 px-1 py-2 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
-                form.active
-                  ? "text-blue-700"
-                  : "text-slate-600"
-              }`}
+          <ModalShell busy={saving} busyMessage="Saving employee..." className="min-h-0 flex-1">
+            <DialogClose
+              className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/70"
+              aria-label="Close employee editor"
             >
-              <span
-                className={`relative inline-flex h-5 w-9 items-center rounded-full transition ${
-                  form.active ? "bg-blue-500" : "bg-slate-300"
-                }`}
-              >
-                <span
-                  className={`inline-block h-4 w-4 rounded-full bg-white shadow transition ${
-                    form.active ? "translate-x-[18px]" : "translate-x-[2px]"
-                  }`}
-                />
-              </span>
-            </button>
-          </FormRow>
-          </div>
+              <X className="size-4" />
+            </DialogClose>
 
-          <DialogFooter className="gap-2">
-            {hasUnsavedChanges && canEdit ? (
-              <Button variant="outline" onClick={handleRevertChanges} disabled={saving}>
-                Revert
-              </Button>
-            ) : null}
-            {hasUnsavedChanges && canSave ? (
-              <Button onClick={() => void handleSubmit()} disabled={!canSave || saving}>
-                {saving ? (
-                  <>
-                    <Loader2 className="size-4 animate-spin" />
-                    Saving...
-                  </>
-                ) : mode === "create" ? (
-                  "Add"
-                ) : (
-                  "Save"
-                )}
-              </Button>
-            ) : null}
-          </DialogFooter>
+            <DialogHeader>
+              <DialogTitle>{mode === "create" ? "Add Employee" : "Edit Employee"}</DialogTitle>
+              <DialogDescription>
+                {canEdit
+                  ? "Create or update Shiftzy employee metadata used by schedules."
+                  : "You have view access only for Shiftzy employees."}
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="mt-4 space-y-3">
+              <FormRow label="Name">
+                <Input
+                  value={nameField.value}
+                  onChange={nameField.onChange}
+                  onBlur={nameField.onBlur}
+                  onPaste={(event) => {
+                    const pasted = event.clipboardData.getData("text");
+                    if (!pasted.trim()) {
+                      return;
+                    }
+                    event.preventDefault();
+                    setForm((current) => ({ ...current, name: toNameCase(pasted) }));
+                  }}
+                  disabled={inputsDisabled}
+                  autoComplete="off"
+                />
+              </FormRow>
+
+              <FormRow label="Area">
+                <AppDropdown
+                  value={form.scheduleSection}
+                  options={AREA_OPTIONS}
+                  placeholder=""
+                  searchable={false}
+                  onValueChange={(nextValue) => setForm((current) => ({ ...current, scheduleSection: nextValue }))}
+                  disabled={inputsDisabled}
+                />
+              </FormRow>
+
+              <FormRow label="Ref Position">
+                <AppDropdown
+                  value={form.refPositionCode}
+                  options={positionOptions}
+                  placeholder=""
+                  searchable={false}
+                  onValueChange={(nextValue) => setForm((current) => ({ ...current, refPositionCode: nextValue }))}
+                  disabled={inputsDisabled}
+                />
+              </FormRow>
+
+              <FormRow label="Note" alignStart>
+                <Textarea
+                  rows={3}
+                  value={noteField.value}
+                  onChange={noteField.onChange}
+                  onBlur={noteField.onBlur}
+                  disabled={inputsDisabled}
+                />
+              </FormRow>
+
+              <FormRow label="Active">
+                <button
+                  type="button"
+                  role="switch"
+                  aria-checked={form.active}
+                  aria-label="Active"
+                  onClick={() => {
+                    if (inputsDisabled) {
+                      return;
+                    }
+                    setForm((current) => ({ ...current, active: !current.active }));
+                  }}
+                  disabled={inputsDisabled}
+                  aria-disabled={inputsDisabled}
+                  className={`inline-flex h-10 w-fit items-center gap-3 px-1 py-2 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring ${
+                    form.active
+                      ? "text-blue-700"
+                      : "text-slate-600"
+                  }`}
+                >
+                  <span
+                    className={`relative inline-flex h-5 w-9 items-center rounded-full transition ${
+                      form.active ? "bg-blue-500" : "bg-slate-300"
+                    }`}
+                  >
+                    <span
+                      className={`inline-block h-4 w-4 rounded-full bg-white shadow transition ${
+                        form.active ? "translate-x-[18px]" : "translate-x-[2px]"
+                      }`}
+                    />
+                  </span>
+                </button>
+              </FormRow>
+            </div>
+
+            <DialogFooter className="gap-2">
+              {hasUnsavedChanges && canEdit ? (
+                <Button variant="outline" onClick={handleRevertChanges} disabled={saving}>
+                  Revert
+                </Button>
+              ) : null}
+              {hasUnsavedChanges && canSave ? (
+                <Button onClick={() => void handleSubmit()} disabled={!canSave || saving}>
+                  {saving ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      Saving...
+                    </>
+                  ) : mode === "create" ? (
+                    "Add"
+                  ) : (
+                    "Save"
+                  )}
+                </Button>
+              ) : null}
+            </DialogFooter>
+          </ModalShell>
         </DialogContent>
       </Dialog>
 

@@ -664,12 +664,18 @@ export function ScheduleTimelineSection({
       });
     }
 
-    groups.sort((left, right) =>
-      left.estNum.localeCompare(right.estNum, "en", {
+    groups.sort((left, right) => {
+      const leftStart = left.rangeStart || "9999-12-31";
+      const rightStart = right.rangeStart || "9999-12-31";
+      const startCompare = leftStart.localeCompare(rightStart);
+      if (startCompare !== 0) {
+        return startCompare;
+      }
+      return left.estNum.localeCompare(right.estNum, "en", {
         numeric: true,
         sensitivity: "base",
-      }),
-    );
+      });
+    });
     return groups;
   }, [esnums, items, weekByStart]);
 

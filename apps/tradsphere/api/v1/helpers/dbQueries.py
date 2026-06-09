@@ -1442,7 +1442,7 @@ def list_schedule_invoice_checklist_expected_rows(
 
     cache_key = _build_db_read_cache_key(
         "invoice_checklist_expected_rows",
-        "schema=v2",
+        "schema=v4",
         f"schedules_table={schedules_table}",
         f"est_nums_table={est_nums_table}",
         f"tradsphere_accounts_table={tradsphere_accounts_table}",
@@ -1456,6 +1456,8 @@ def list_schedule_invoice_checklist_expected_rows(
     if cached_rows is not None:
         return cached_rows
 
+    week_start_expr = "DATE_SUB(s.startDate, INTERVAL WEEKDAY(s.startDate) DAY)"
+    week_end_expr = f"DATE_ADD({week_start_expr}, INTERVAL 6 DAY)"
     query = (
         "SELECT DISTINCT "
         "UPPER(TRIM(en.accountCode)) AS accountCode, "
@@ -1467,13 +1469,23 @@ def list_schedule_invoice_checklist_expected_rows(
         f"FROM {schedules_table} s "
         f"INNER JOIN {est_nums_table} en ON en.estNum = s.estNum "
         f"INNER JOIN {tradsphere_accounts_table} ta ON UPPER(ta.accountCode) = UPPER(en.accountCode) "
-        "WHERE s.broadcastYear = %s "
-        "AND s.broadcastMonth = %s "
+        f"WHERE ("
+        f"YEAR({week_start_expr}) = %s AND MONTH({week_start_expr}) = %s"
+        f" OR YEAR({week_end_expr}) = %s AND MONTH({week_end_expr}) = %s"
+        f") "
         "AND COALESCE(TRIM(en.accountCode), '') <> '' "
         "AND COALESCE(TRIM(s.stationCode), '') <> '' "
         "ORDER BY accountCode ASC, s.estNum ASC, stationCode ASC"
     )
-    rows = fetch_all(query, (normalized_broadcast_year, normalized_broadcast_month))
+    rows = fetch_all(
+        query,
+        (
+            normalized_broadcast_year,
+            normalized_broadcast_month,
+            normalized_broadcast_year,
+            normalized_broadcast_month,
+        ),
+    )
     _set_cached_value(cache_key, rows)
     return rows
 
@@ -1586,7 +1598,7 @@ def list_schedule_station_candidates_for_account_range(
 
     cache_key = _build_db_read_cache_key(
         "traffic_station_candidates",
-        "schema=v1",
+        "schema=v3",
         f"schedules_table={schedules_table}",
         f"est_nums_table={est_nums_table}",
         f"stations_table={stations_table}",
@@ -1629,12 +1641,17 @@ def list_schedule_station_candidates_for_account_range(
         params.extend(normalized_media_types)
 
     query = (
-        "SELECT DISTINCT "
+        "SELECT "
         "s.estNum AS estNum, "
         "en.note AS estNumNote, "
         "en.mediaType AS estNumMedium, "
         "UPPER(TRIM(s.stationCode)) AS stationCode, "
-        "st.name AS stationName "
+        "st.name AS stationName, "
+        "s.startDate AS startDate, "
+        "s.broadcastMonth AS broadcastMonth, "
+        "s.broadcastYear AS broadcastYear, "
+        "s.totalSpot AS totalSpot, "
+        "s.totalGross AS totalGross "
         f"FROM {schedules_table} s "
         f"INNER JOIN {est_nums_table} en ON en.estNum = s.estNum "
         f"LEFT JOIN {stations_table} st ON UPPER(st.code) = UPPER(s.stationCode) "
@@ -1645,7 +1662,7 @@ def list_schedule_station_candidates_for_account_range(
         + est_num_filter_sql
         + language_filter_sql
         + media_type_filter_sql
-        + "ORDER BY stationCode ASC"
+        + "ORDER BY s.estNum ASC, stationCode ASC, s.broadcastYear ASC, s.broadcastMonth ASC, s.startDate ASC, s.id ASC"
     )
     rows = fetch_all(
         query,

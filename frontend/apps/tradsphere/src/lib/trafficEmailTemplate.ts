@@ -113,7 +113,7 @@ function renderTrafficEmailSummaryCard(label: string, valueHtml: string): string
 function renderTrafficEmailLinkPill(href: string, label: string): string {
   const normalizedHref = normalizeHttpUrl(href);
   if (!normalizedHref) {
-    return `<span style="display:inline-block;padding:7px 10px;border:1px solid #D6DCE8;border-radius:999px;background:#F8FAFC;color:#94A3B8;font-size:11px;line-height:1.2;font-weight:600;">Missing</span>`;
+    return `<span style="color:#94A3B8;font-size:12px;line-height:1.2;font-weight:600;">-</span>`;
   }
   const isDriveLink = /(?:drive|docs)\.google\.com/i.test(normalizedHref);
   const background = isDriveLink ? "#FEF3C7" : "#ECFDF5";
@@ -301,7 +301,7 @@ export function buildTrafficEmailHtmlDocument({
       const isci = item.isci.trim() || `Flight ${index + 1}`;
       const noteValue = item.note.trim()
         ? multilineTextToHtml(item.note)
-        : `<span style="color:#94A3B8;">No note</span>`;
+        : `<span style="color:#94A3B8;">-</span>`;
 
       return `
         <tr style="background:${index % 2 === 0 ? "#FFFFFF" : "#F8FAFC"};">
@@ -390,7 +390,7 @@ export function buildTrafficEmailHtmlDocument({
             <tr>
               <td style="padding:20px 32px 0;background:#FFFFFF;">
                 <p style="margin:0 0 10px;font-size:10px;line-height:1.35;letter-spacing:0.12em;text-transform:uppercase;color:#64748B;font-weight:700;">Traffic instructions</p>
-                <div style="margin:0;padding:0 20px;border:1px solid #D9DEE6;border-radius:16px;background:#FFFFFF;">
+                <div style="margin:0;padding:16px 20px;border:1px solid #D9DEE6;border-radius:16px;background:#FFFFFF;">
                   <div style="font-size:14px;line-height:1.75;color:#334155;max-width:44em;">
                     ${safeInstructionsHtml}
                   </div>

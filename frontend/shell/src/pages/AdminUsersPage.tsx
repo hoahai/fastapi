@@ -29,6 +29,7 @@ import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { PageLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
+import { FRONTEND_CACHE_TTL_MS } from "@shared/cache";
 import { useAuth } from "@shared/auth/useAuth";
 
 type RoleItem = {
@@ -185,7 +186,7 @@ const ROLE_GROUP_LABEL: Record<(typeof ROLE_GROUP_ORDER)[number], string> = {
 };
 
 const ADMIN_PAGE_CACHE_KEY = "admin-users:page:v1";
-const ADMIN_PAGE_CACHE_TTL_MS = 2 * 60 * 1000;
+const ADMIN_PAGE_CACHE_TTL_MS = FRONTEND_CACHE_TTL_MS.DEFAULT;
 const EDIT_MODAL_CLEAR_DELAY_MS = 360;
 
 let adminUsersLoadInFlight: Promise<AdminUsersLoadResponse> | null = null;

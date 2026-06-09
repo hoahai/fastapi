@@ -31,10 +31,6 @@ const COMMANDS: Array<{
   { label: "Clear formatting", icon: RemoveFormatting, command: "removeFormat" },
 ];
 
-function emitEditorHtml(editor: HTMLDivElement, onChange: (value: string) => void): void {
-  onChange(normalizeRichTextHtml(editor.innerHTML));
-}
-
 export function RichTextEditor({
   value,
   onChange,
@@ -46,6 +42,7 @@ export function RichTextEditor({
   ariaLabel,
 }: RichTextEditorProps) {
   const editorRef = useRef<HTMLDivElement | null>(null);
+  const pendingInternalValueRef = useRef<string | null>(null);
   const [isFocused, setIsFocused] = useState(false);
   const [selectionState, setSelectionState] = useState({
     bold: false,
@@ -61,6 +58,11 @@ export function RichTextEditor({
   useLayoutEffect(() => {
     const editor = editorRef.current;
     if (!editor) {
+      return;
+    }
+
+    if (pendingInternalValueRef.current === normalizedValue) {
+      pendingInternalValueRef.current = null;
       return;
     }
 
@@ -90,6 +92,12 @@ export function RichTextEditor({
     return () => document.removeEventListener("selectionchange", handleSelectionChange);
   }, []);
 
+  const commitEditorValue = (editor: HTMLDivElement) => {
+    const nextValue = normalizeRichTextHtml(editor.innerHTML);
+    pendingInternalValueRef.current = nextValue;
+    onChange(nextValue);
+  };
+
   const runCommand = (command: RichTextCommand | "removeFormat") => {
     const editor = editorRef.current;
     if (!editor || disabled) {
@@ -99,7 +107,7 @@ export function RichTextEditor({
     editor.focus();
     document.execCommand("styleWithCSS", false, "false");
     document.execCommand(command, false);
-    emitEditorHtml(editor, onChange);
+    commitEditorValue(editor);
   };
 
   const handleInput = () => {
@@ -107,7 +115,7 @@ export function RichTextEditor({
     if (!editor || disabled) {
       return;
     }
-    emitEditorHtml(editor, onChange);
+    commitEditorValue(editor);
   };
 
   const handleBlur = () => {
@@ -119,8 +127,12 @@ export function RichTextEditor({
     if (editor.innerHTML !== sanitized) {
       editor.innerHTML = sanitized;
     }
-    onChange(sanitized);
     setIsFocused(false);
+    if (sanitized === normalizedValue) {
+      return;
+    }
+    pendingInternalValueRef.current = sanitized;
+    onChange(sanitized);
   };
 
   const handlePaste = (event: ReactClipboardEvent<HTMLDivElement>) => {
@@ -130,22 +142,20 @@ export function RichTextEditor({
     }
 
     event.preventDefault();
-    const plainText = event.clipboardData.getData("text/plain");
     const htmlText = event.clipboardData.getData("text/html");
-    const fallbackText = htmlText
-      ? (() => {
-          const temp = document.createElement("div");
-          temp.innerHTML = htmlText;
-          return temp.textContent || "";
-        })()
-      : "";
-    const nextText = plainText || fallbackText;
-    if (!nextText) {
+    const plainText = event.clipboardData.getData("text/plain");
+    const nextHtml = normalizeRichTextHtml(htmlText || plainText);
+    if (!nextHtml) {
       return;
     }
 
-    document.execCommand("insertText", false, nextText);
-    handleInput();
+    const editor = editorRef.current;
+    if (!editor) {
+      return;
+    }
+
+    document.execCommand("insertHTML", false, nextHtml);
+    commitEditorValue(editor);
   };
 
   const editorFrameClassName = cn(

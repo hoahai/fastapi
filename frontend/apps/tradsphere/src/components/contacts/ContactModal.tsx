@@ -16,7 +16,7 @@ import { Input } from "@/components/ui/input";
 import { canModalClose, shouldBlockOutsideClose } from "@/components/ui/modal-close-guard";
 import { Textarea } from "@/components/ui/textarea";
 import { UnsavedChangesDialog } from "@/components/ui/unsaved-changes-dialog";
-import { ModalFooter, Section, SectionHeader } from "@shared/components";
+import { ModalFooter, ModalShell, Section, SectionHeader } from "@shared/components";
 import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
 import {
   normalizeUsPhoneDisplay,
@@ -279,6 +279,10 @@ export function ContactModal({
       return;
     }
 
+    if (isSubmitting) {
+      return;
+    }
+
     if (hasUnsavedChanges && !isSubmitting) {
       pendingServerContactRef.current = initialContact;
       setHasDeferredServerUpdate(true);
@@ -461,27 +465,28 @@ export function ContactModal({
               event.preventDefault();
             }
           }}
-        >
-          <DialogClose
-            className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
-            aria-label="Close contact modal"
           >
-            <X className="size-4" />
-          </DialogClose>
-
-          <DialogHeader>
-            <DialogTitle>{modalTitle}</DialogTitle>
-            <DialogDescription>
-              Manage contact details and review station usage.
-            </DialogDescription>
-          </DialogHeader>
-
-          <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
-            <div
-              className={`grid grid-cols-1 items-start gap-8 ${
-                showUsageSections ? "lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]" : ""
-              }`}
+          <ModalShell busy={isSubmitting} busyMessage="Saving contact..." className="min-h-0 flex-1">
+            <DialogClose
+              className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
+              aria-label="Close contact modal"
             >
+              <X className="size-4" />
+            </DialogClose>
+
+            <DialogHeader>
+              <DialogTitle>{modalTitle}</DialogTitle>
+              <DialogDescription>
+                Manage contact details and review station usage.
+              </DialogDescription>
+            </DialogHeader>
+
+            <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
+              <div
+                className={`grid grid-cols-1 items-start gap-8 ${
+                  showUsageSections ? "lg:grid-cols-[minmax(0,0.9fr)_minmax(0,1.1fr)]" : ""
+                }`}
+              >
                 <Section className="space-y-3">
                   <SectionHeader
                     title="Contact"
@@ -692,52 +697,53 @@ export function ContactModal({
                 ) : null}
             </div>
 
-            {submitError ? <p className="mt-3 text-sm text-rose-600">{submitError}</p> : null}
-            {hasDeferredServerUpdate ? (
-              <p className="mt-3 text-sm text-amber-700">
-                Newer contact data is available and will apply after you save or discard current edits.
-              </p>
-            ) : null}
-          </div>
-
-          <ModalFooter className="mt-4 flex-col gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
-            {mode === "edit" && detailCacheStatusText && onRefreshDetailCache ? (
-              <CacheStatusChip
-                text={detailCacheStatusText}
-                onRefresh={onRefreshDetailCache}
-                disabled={detailCacheRefreshDisabled || detailCacheRefreshing || hasUnsavedChanges || isSubmitting}
-                refreshing={detailCacheRefreshing}
-                refreshLabel="Refresh contact details"
-                tooltipText={
-                  hasUnsavedChanges
-                    ? "Save or discard changes before refreshing detail data."
-                    : "Click to refresh this contact detail data"
-                }
-                className="max-w-[min(90vw,34rem)]"
-              />
-            ) : (
-              <span />
-            )}
-            <div className="flex items-center gap-2">
-              {canEdit && hasUnsavedChanges ? (
-                <Button variant="outline" onClick={handleRevertChanges} disabled={isSubmitting}>
-                  Revert
-                </Button>
-              ) : null}
-              {shouldShowSubmitButton ? (
-                <Button onClick={handleSubmit} disabled={!canSubmit}>
-                  {isSubmitting ? (
-                    <>
-                      <Loader2 className="size-4 animate-spin" />
-                      Saving...
-                    </>
-                  ) : (
-                    submitLabel
-                  )}
-                </Button>
+              {submitError ? <p className="mt-3 text-sm text-rose-600">{submitError}</p> : null}
+              {hasDeferredServerUpdate ? (
+                <p className="mt-3 text-sm text-amber-700">
+                  Newer contact data is available and will apply after you save or discard current edits.
+                </p>
               ) : null}
             </div>
-          </ModalFooter>
+
+            <ModalFooter className="mt-4 flex-col gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
+              {mode === "edit" && detailCacheStatusText && onRefreshDetailCache ? (
+                <CacheStatusChip
+                  text={detailCacheStatusText}
+                  onRefresh={onRefreshDetailCache}
+                  disabled={detailCacheRefreshDisabled || detailCacheRefreshing || hasUnsavedChanges || isSubmitting}
+                  refreshing={detailCacheRefreshing}
+                  refreshLabel="Refresh contact details"
+                  tooltipText={
+                    hasUnsavedChanges
+                      ? "Save or discard changes before refreshing detail data."
+                      : "Click to refresh this contact detail data"
+                  }
+                  className="max-w-[min(90vw,34rem)]"
+                />
+              ) : (
+                <span />
+              )}
+              <div className="flex items-center gap-2">
+                {canEdit && hasUnsavedChanges ? (
+                  <Button variant="outline" onClick={handleRevertChanges} disabled={isSubmitting}>
+                    Revert
+                  </Button>
+                ) : null}
+                {shouldShowSubmitButton ? (
+                  <Button onClick={handleSubmit} disabled={!canSubmit}>
+                    {isSubmitting ? (
+                      <>
+                        <Loader2 className="size-4 animate-spin" />
+                        Saving...
+                      </>
+                    ) : (
+                      submitLabel
+                    )}
+                  </Button>
+                ) : null}
+              </div>
+            </ModalFooter>
+          </ModalShell>
         </DialogContent>
       </Dialog>
 

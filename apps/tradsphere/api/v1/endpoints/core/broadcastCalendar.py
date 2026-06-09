@@ -30,7 +30,7 @@ def get_broadcast_calendar_route(
     result_type: str | None = Query(None, alias="resultType"),
 ):
     """
-    Compute broadcast-calendar fields for a given date or today.
+    Compute broadcast/calendar fields for a given date or today.
 
     Example request:
         GET /api/tradsphere/v1/broadcastCalendar
@@ -48,12 +48,19 @@ def get_broadcast_calendar_route(
             "broadcastMonth": 4,
             "broadcastYear": 2026,
             "beginBroadcastMonth": "2026-03-30",
-            "endBroadcastMonth": "2026-05-03",
-            "numberOfBroadcastWeek": 5,
+            "endBroadcastMonth": "2026-04-26",
+            "numberOfBroadcastWeek": 4,
+            "calendarMonth": 4,
+            "calendarYear": 2026,
+            "beginCalendarMonth": "2026-04-06",
+            "endCalendarMonth": "2026-05-03",
+            "numberOfCalendarWeek": 4,
             "firstDayOfWeek": "2026-04-20",
             "lastDateOfWeek": "2026-04-26",
             "weekNumofMonth": 4,
-            "weekNumofYear": 17
+            "weekNumofYear": 17,
+            "calendarWeekNumofMonth": 3,
+            "calendarWeekNumofYear": 17
           }
         }
 
@@ -70,9 +77,13 @@ def get_broadcast_calendar_route(
         - Requires X-Tenant-Id header
         - Requires valid API key
         - givenDate is optional and must be ISO YYYY-MM-DD when provided
-        - resultType is optional and supports:
+        - resultType is optional and supports broadcast and calendar variants:
           month, year, start_date, end_date, num_of_week, firstdate_of_week,
-          lastdate_of_week, week_num_of_month, week_num_of_year
+          lastdate_of_week, week_num_of_month, week_num_of_year,
+          calendar_month, calendar_year, calendar_start_date, calendar_end_date,
+          calendar_num_of_week, calendar_firstdate_of_week,
+          calendar_lastdate_of_week, calendar_week_num_of_month,
+          calendar_week_num_of_year
     """
     try:
         resolved_date = parse_optional_date(given_date, field="givenDate")

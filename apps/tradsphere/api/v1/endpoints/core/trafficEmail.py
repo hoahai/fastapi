@@ -87,7 +87,8 @@ def send_traffic_email_route(
           "toEmails": ["traffic@example.com"],
           "ccEmails": ["manager@example.com"],
           "subject": "May 2026 Traffic",
-          "body": "<p>Hello team, please see attached traffic links.</p>"
+          "body": "<p>Hello team, please see attached traffic links.</p>",
+          "markSentAfterSend": true
         }
 
     Example response:
@@ -98,6 +99,23 @@ def send_traffic_email_route(
             "email": {
               "sentStatus": "sent",
               "smtpMessageId": "1748219640.123456@example.com"
+            },
+            "detail": {
+              "traffic": {
+                "id": "d9c98f56-54da-4688-bc96-3d3cb6388f5d",
+                "accountCode": "TAAA",
+                "campaign": "Spring Retail Push",
+                "status": "sent"
+              },
+              "flights": [],
+              "stations": [],
+              "email": {
+                "sentStatus": "sent"
+              },
+              "summary": {
+                "totalRotation": 0.0,
+                "rotationWarning": true
+              }
             }
           }
         }
@@ -107,6 +125,7 @@ def send_traffic_email_route(
         - Requires valid API key / bearer session
         - trafficId query param is required and must be UUID v4
         - toEmails + subject + body are required
+        - markSentAfterSend=true also persists traffic status as sent and returns refreshed detail
         - Tenant config must include valid tradsphere.smtp settings
         - Archived traffic cannot be modified
     """

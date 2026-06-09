@@ -5,6 +5,25 @@ export type BroadcastRange = {
   flightEnd: string;
 };
 
+export type BroadcastCalendarInfo = {
+  broadcastMonth: number;
+  broadcastYear: number;
+  beginBroadcastMonth: string;
+  endBroadcastMonth: string;
+  numberOfBroadcastWeek: number;
+  calendarMonth: number;
+  calendarYear: number;
+  beginCalendarMonth: string;
+  endCalendarMonth: string;
+  numberOfCalendarWeek: number;
+  firstDayOfWeek: string;
+  lastDateOfWeek: string;
+  weekNumofMonth: number;
+  weekNumofYear: number;
+  calendarWeekNumofMonth: number;
+  calendarWeekNumofYear: number;
+};
+
 const MIN_SUPPORTED_YEAR = 1901;
 const MAX_SUPPORTED_YEAR = 2155;
 
@@ -33,6 +52,20 @@ function getLastDayOfMonth(year: number, month: number): number {
   return new Date(Date.UTC(year, month, 0)).getUTCDate();
 }
 
+function calendarMonthStart(year: number, month: number): Date {
+  const monthStart = createUtcDate(year, month, 1);
+  if (monthStart.getUTCDay() === 1) {
+    return monthStart;
+  }
+  const offset = 7 - monthStart.getUTCDay();
+  return addDays(monthStart, offset);
+}
+
+function calendarMonthEnd(year: number, month: number): Date {
+  const monthEnd = createUtcDate(year, month, getLastDayOfMonth(year, month));
+  return addDays(mondayOfWeek(monthEnd), 6);
+}
+
 function ensureYear(year: number): void {
   if (!Number.isInteger(year) || year < MIN_SUPPORTED_YEAR || year > MAX_SUPPORTED_YEAR) {
     throw new Error(`Year must be between ${MIN_SUPPORTED_YEAR} and ${MAX_SUPPORTED_YEAR}.`);
@@ -51,9 +84,7 @@ function ensureQuarter(quarter: number): void {
   }
 }
 
-// Mirrors backend TradSphere helper semantics:
-// broadcast month starts at Monday of Gregorian day 1's week and ends
-// at the Sunday of the final full broadcast week in that month.
+// Broadcast buckets anchor on the week-ending Sunday.
 export function getBroadcastMonthRange(month: number, year: number): BroadcastRange {
   ensureMonth(month);
   ensureYear(year);
@@ -76,6 +107,20 @@ export function getBroadcastMonthRange(month: number, year: number): BroadcastRa
   };
 }
 
+// Calendar buckets full weeks by the Monday that starts the week.
+export function getCalendarMonthRange(month: number, year: number): BroadcastRange {
+  ensureMonth(month);
+  ensureYear(year);
+
+  const beginCalendarMonth = calendarMonthStart(year, month);
+  const endCalendarMonth = calendarMonthEnd(year, month);
+
+  return {
+    flightStart: formatUtcDateToIso(beginCalendarMonth),
+    flightEnd: formatUtcDateToIso(endCalendarMonth),
+  };
+}
+
 export function getBroadcastQuarterRange(quarter: 1 | 2 | 3 | 4, year: number): BroadcastRange {
   ensureQuarter(quarter);
   ensureYear(year);
@@ -83,6 +128,20 @@ export function getBroadcastQuarterRange(quarter: 1 | 2 | 3 | 4, year: number): 
   const startMonth = (quarter - 1) * 3 + 1;
   const firstMonthRange = getBroadcastMonthRange(startMonth, year);
   const lastMonthRange = getBroadcastMonthRange(startMonth + 2, year);
+
+  return {
+    flightStart: firstMonthRange.flightStart,
+    flightEnd: lastMonthRange.flightEnd,
+  };
+}
+
+export function getCalendarQuarterRange(quarter: 1 | 2 | 3 | 4, year: number): BroadcastRange {
+  ensureQuarter(quarter);
+  ensureYear(year);
+
+  const startMonth = (quarter - 1) * 3 + 1;
+  const firstMonthRange = getCalendarMonthRange(startMonth, year);
+  const lastMonthRange = getCalendarMonthRange(startMonth + 2, year);
 
   return {
     flightStart: firstMonthRange.flightStart,
@@ -99,6 +158,34 @@ export function getBroadcastYearRange(year: number): BroadcastRange {
   return {
     flightStart: firstMonthRange.flightStart,
     flightEnd: lastMonthRange.flightEnd,
+  };
+}
+
+export function getCalendarYearRange(year: number): BroadcastRange {
+  ensureYear(year);
+
+  const firstMonthRange = getCalendarMonthRange(1, year);
+  const lastMonthRange = getCalendarMonthRange(12, year);
+
+  return {
+    flightStart: firstMonthRange.flightStart,
+    flightEnd: lastMonthRange.flightEnd,
+  };
+}
+
+export function getBroadcastMonthBucket(dateValue: Date): { year: number; month: number } {
+  const sunday = addDays(mondayOfWeek(dateValue), 6);
+  return {
+    year: sunday.getUTCFullYear(),
+    month: sunday.getUTCMonth() + 1,
+  };
+}
+
+export function getCalendarMonthBucket(dateValue: Date): { year: number; month: number } {
+  const monday = mondayOfWeek(dateValue);
+  return {
+    year: monday.getUTCFullYear(),
+    month: monday.getUTCMonth() + 1,
   };
 }
 

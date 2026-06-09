@@ -17,11 +17,12 @@ from apps.tradsphere.api.v1.helpers.accountValidation import (
 )
 from apps.tradsphere.api.v1.helpers.estNums import get_est_num_broadcast_weeks
 from apps.tradsphere.api.v1.helpers.stations import build_rep_contact_full_name, list_stations_data
+from apps.tradsphere.api.v1.helpers.broadcastCalendar import (
+    get_broadcast_month_bucket,
+    get_calendar_month_bucket,
+)
 from apps.tradsphere.api.v1.helpers.dbQueries import (
     count_inv_note_attachments,
-    delete_inv_checklist,
-    delete_inv_checklist_note,
-    delete_inv_checklist_station,
     delete_inv_note_attachment,
     invalidate_inv_checklist_related_cache_for_bulk_write,
     list_inv_checklist_note_detail_rows,
@@ -48,7 +49,6 @@ from apps.tradsphere.api.v1.helpers.dbQueries import (
     list_inv_note_attachments,
     list_schedule_invoice_checklist_expected_rows,
     save_inv_checklist_bulk_changes,
-    soft_delete_app_attachments_for_invoice_note,
     update_inv_checklist,
     update_inv_checklist_note,
     update_inv_checklist_station,
@@ -838,6 +838,65 @@ def update_invoice_checklist_data(*, payload: dict) -> dict:
     return _serialize_datetime_fields(row)
 
 
+def _resolve_tenant_slug() -> str | None:
+    return str(get_tenant_id() or "").strip().lower() or None
+
+
+def _collect_unique_unsigned_ints(rows: list[dict], *, field: str) -> list[int]:
+    output: list[int] = []
+    seen: set[int] = set()
+    for row in rows:
+        raw_value = row.get(field)
+        if raw_value is None:
+            continue
+        try:
+            value = int(raw_value)
+        except (TypeError, ValueError):
+            continue
+        if value <= 0 or value in seen:
+            continue
+        seen.add(value)
+        output.append(value)
+    return output
+
+
+def _delete_invoice_checklist_note_storage_assets(
+    *,
+    note_ids: list[int],
+    tenant_slug: str | None,
+) -> list[int]:
+    if not note_ids:
+        return []
+
+    attachment_rows = _safe_db_call(
+        list_inv_note_attachments,
+        note_ids=note_ids,
+        tenant_slug=tenant_slug,
+    )
+
+    failed_attachment_ids: list[int] = []
+    for attachment_row in attachment_rows:
+        attachment_id_raw = attachment_row.get("attachmentId")
+        if attachment_id_raw is None:
+            continue
+        attachment_id_value = int(attachment_id_raw)
+        storage_provider, storage_key, provider_resource_type, attachment_mime_type = _resolve_attachment_delete_payload(attachment_row)
+        if storage_provider and storage_key:
+            try:
+                delete_file(
+                    app_name="TradSphere",
+                    storage_provider=storage_provider,
+                    payload=DeleteAssetInput(
+                        provider_resource_type=provider_resource_type,
+                        provider_public_id=storage_key,
+                        mime_type=attachment_mime_type,
+                    ),
+                )
+            except Exception:
+                failed_attachment_ids.append(attachment_id_value)
+    return failed_attachment_ids
+
+
 def delete_invoice_checklist_data(*, checklist_id: str) -> dict:
     checklist_id_text = str(checklist_id or "").strip()
     if not checklist_id_text:
@@ -847,17 +906,32 @@ def delete_invoice_checklist_data(*, checklist_id: str) -> dict:
         raise NotFoundError(f"Checklist not found: {checklist_id_text}")
 
     station_rows = _safe_db_call(list_inv_checklist_stations, checklist_id=checklist_id_text)
-    for station_row in station_rows:
-        station_row_id = station_row.get("id")
-        if station_row_id is None:
-            continue
-        delete_invoice_checklist_station_data(station_row_id=int(station_row_id))
-
-    try:
-        deleted = delete_inv_checklist(checklist_id=checklist_id_text)
-    except Exception as exc:
-        raise _map_db_exception(exc) from exc
-    return {"deleted": int(deleted > 0), "id": checklist_id_text}
+    note_rows = _safe_db_call(list_inv_checklist_notes, checklist_id=checklist_id_text)
+    station_ids = _collect_unique_unsigned_ints(station_rows, field="id")
+    note_ids = _collect_unique_unsigned_ints(note_rows, field="id")
+    tenant_slug = _resolve_tenant_slug()
+    failed_attachment_ids = _delete_invoice_checklist_note_storage_assets(
+        note_ids=note_ids,
+        tenant_slug=tenant_slug,
+    )
+    _safe_db_call(
+        save_inv_checklist_bulk_changes,
+        checklist_creates=[],
+        checklist_updates=[],
+        checklist_deletes=[checklist_id_text],
+        station_creates=[],
+        station_updates=[],
+        station_deletes=station_ids,
+        note_creates=[],
+        note_updates=[],
+        note_deletes=note_ids,
+        tenant_slug=tenant_slug,
+    )
+    if failed_attachment_ids:
+        raise StorageDeleteError(
+            f"Failed to delete {len(failed_attachment_ids)} attachment file(s) from storage"
+        )
+    return {"deleted": 1, "id": checklist_id_text}
 
 
 def list_invoice_checklist_stations_data(
@@ -932,17 +1006,30 @@ def delete_invoice_checklist_station_data(*, station_row_id: int) -> dict:
         raise NotFoundError(f"Checklist station not found: {station_id}")
 
     note_rows = _safe_db_call(list_inv_checklist_notes, checklist_station_id=station_id)
-    for note_row in note_rows:
-        note_id_value = note_row.get("id")
-        if note_id_value is None:
-            continue
-        delete_invoice_checklist_note_data(note_id=int(note_id_value))
-
-    try:
-        deleted = delete_inv_checklist_station(station_row_id=station_id)
-    except Exception as exc:
-        raise _map_db_exception(exc) from exc
-    return {"deleted": int(deleted > 0), "id": station_id}
+    note_ids = _collect_unique_unsigned_ints(note_rows, field="id")
+    tenant_slug = _resolve_tenant_slug()
+    failed_attachment_ids = _delete_invoice_checklist_note_storage_assets(
+        note_ids=note_ids,
+        tenant_slug=tenant_slug,
+    )
+    _safe_db_call(
+        save_inv_checklist_bulk_changes,
+        checklist_creates=[],
+        checklist_updates=[],
+        checklist_deletes=[],
+        station_creates=[],
+        station_updates=[],
+        station_deletes=[station_id],
+        note_creates=[],
+        note_updates=[],
+        note_deletes=note_ids,
+        tenant_slug=tenant_slug,
+    )
+    if failed_attachment_ids:
+        raise StorageDeleteError(
+            f"Failed to delete {len(failed_attachment_ids)} attachment file(s) from storage"
+        )
+    return {"deleted": 1, "id": station_id}
 
 
 def list_invoice_checklist_notes_data(
@@ -1067,53 +1154,29 @@ def delete_invoice_checklist_note_data(*, note_id: int) -> dict:
     note_id_value = _ensure_required_unsigned_int(note_id, field="noteId")
     if _safe_db_call(get_inv_checklist_note_row, note_id=note_id_value) is None:
         raise NotFoundError(f"Checklist note not found: {note_id_value}")
-    tenant_slug = str(get_tenant_id() or "").strip().lower() or None
-    attachment_rows = _safe_db_call(
-        list_inv_note_attachments,
-        note_id=note_id_value,
+    tenant_slug = _resolve_tenant_slug()
+    failed_attachment_ids = _delete_invoice_checklist_note_storage_assets(
+        note_ids=[note_id_value],
         tenant_slug=tenant_slug,
     )
-
-    failed_attachment_ids: list[int] = []
-    for attachment_row in attachment_rows:
-        attachment_id_raw = attachment_row.get("attachmentId")
-        if attachment_id_raw is None:
-            continue
-        attachment_id_value = int(attachment_id_raw)
-        storage_provider, storage_key, provider_resource_type, attachment_mime_type = _resolve_attachment_delete_payload(attachment_row)
-        if storage_provider and storage_key:
-            try:
-                delete_file(
-                    app_name="TradSphere",
-                    storage_provider=storage_provider,
-                    payload=DeleteAssetInput(
-                        provider_resource_type=provider_resource_type,
-                        provider_public_id=storage_key,
-                        mime_type=attachment_mime_type,
-                    ),
-                )
-            except Exception:
-                failed_attachment_ids.append(attachment_id_value)
-        _safe_db_call(
-            delete_inv_note_attachment,
-            attachment_id=attachment_id_value,
-            tenant_slug=tenant_slug,
-        )
     _safe_db_call(
-        soft_delete_app_attachments_for_invoice_note,
-        note_id=note_id_value,
+        save_inv_checklist_bulk_changes,
+        checklist_creates=[],
+        checklist_updates=[],
+        checklist_deletes=[],
+        station_creates=[],
+        station_updates=[],
+        station_deletes=[],
+        note_creates=[],
+        note_updates=[],
+        note_deletes=[note_id_value],
         tenant_slug=tenant_slug,
     )
-
-    try:
-        deleted = delete_inv_checklist_note(note_id=note_id_value)
-    except Exception as exc:
-        raise _map_db_exception(exc) from exc
     if failed_attachment_ids:
         raise StorageDeleteError(
             f"Failed to delete {len(failed_attachment_ids)} attachment file(s) from storage"
         )
-    return {"deleted": int(deleted > 0), "id": note_id_value}
+    return {"deleted": 1, "id": note_id_value}
 
 
 def list_invoice_note_attachments_data(
@@ -1965,9 +2028,13 @@ def _build_expected_schedule_pairs_by_account(
             flight_end=end,
             billing_type=str(billing_type or "").strip(),
         )
+        normalized_billing_type = str(billing_type or "").strip().upper()
         for week in weeks:
-            week_end = week["weekEnd"]
-            if int(week_end.year) == int(selected_year) and int(week_end.month) == int(selected_month):
+            if normalized_billing_type == "BROADCAST":
+                week_year, week_month = get_broadcast_month_bucket(week["weekEnd"])
+            else:
+                week_year, week_month = get_calendar_month_bucket(week["weekStart"])
+            if int(week_year) == int(selected_year) and int(week_month) == int(selected_month):
                 return True
         return False
 

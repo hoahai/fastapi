@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { Check, Loader2, Search, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
@@ -18,10 +18,12 @@ import { Textarea } from "@/components/ui/textarea";
 import { UnsavedChangesDialog } from "@/components/ui/unsaved-changes-dialog";
 import { useToast } from "@/components/ui/toast";
 import { useApiRequest } from "@/hooks/useApiRequest";
-import { readBrowserCacheSnapshot, removeBrowserCache, writeBrowserCache } from "@/lib/browserCache";
+import { useOnlineStatus } from "@/hooks/useOnlineStatus";
+import { readBrowserCacheSnapshot, writeBrowserCache } from "@/lib/browserCache";
 import { TRADSPHERE_CACHE_TTL_MS } from "@shared/cache";
-import { ModalCacheFooter } from "@shared/components/modal/ModalCacheFooter";
+import { ModalCacheFooter, ModalShell } from "@shared/components";
 import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
+import { playSuccessSound, primeSuccessSound } from "@shared/utils/audio";
 import {
   normalizeUsPhoneDisplay,
   normalizeUsPhoneOnInput,
@@ -43,7 +45,6 @@ const STATION_DETAIL_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.STATION_DETAIL;
 const STATION_DETAIL_BASE_URL = "/api/tradsphere/v1/stations";
 const STATION_DETAIL_CREATE_URL = "/api/tradsphere/v1/stations/detail";
 const DELIVERY_METHODS_URL = "/api/tradsphere/v1/stations/deliveryMethods";
-const CONTACTS_SELECTOR_URL = "/api/tradsphere/v1/contacts/selector";
 const DEFAULT_MEDIA_TYPE = "TV";
 const DEFAULT_LANGUAGE = "English";
 const DEFAULT_DEADLINE = "10 AM";
@@ -58,6 +59,8 @@ const DELIVERY_METHOD_OPTIONS_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.DELIVERY_ME
 const EXISTING_CONTACTS_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.EXISTING_CONTACTS;
 const DELIVERY_METHOD_OPTIONS_BROWSER_CACHE_KEY = "station-delivery-method-options:v1";
 const EXISTING_CONTACTS_BROWSER_CACHE_KEY = "station-existing-contacts:v1";
+const MIN_EXISTING_CONTACT_SEARCH_LENGTH = 2;
+const EXISTING_CONTACT_SEARCH_DEBOUNCE_MS = 500;
 
 export type StationModalMode = "create" | "edit";
 
@@ -165,6 +168,11 @@ type ExistingContactOption = {
   note: string;
 };
 
+type CachedExistingContactsResult = {
+  contacts: ExistingContactOption[];
+  fetchedAt: number;
+};
+
 type DeliveryMethodOption = {
   id: number;
   name: string;
@@ -213,7 +221,7 @@ type CacheStatus = {
 };
 
 const deliveryMethodOptionsMemoryCache = new Map<string, DeliveryMethodOption[]>();
-const existingContactsMemoryCache = new Map<string, ExistingContactOption[]>();
+const existingContactsMemoryCache = new Map<string, CachedExistingContactsResult>();
 const deliveryMethodUsageMemoryCache = new Map<
   string,
   { updatedAt: number; usage: DeliveryMethodUsageItem[] }
@@ -267,6 +275,10 @@ function resolveTenantCacheScope(headers: HeadersInit): string {
 
 function buildScopedCacheKey(baseKey: string, scope: string): string {
   return `${baseKey}:${scope}`;
+}
+
+function buildSearchScopedCacheKey(baseKey: string, scope: string, query: string): string {
+  return `${baseKey}:${scope}:${encodeURIComponent(query.trim().toLowerCase())}`;
 }
 
 function asString(value: unknown): string {
@@ -1237,7 +1249,7 @@ function upsertDeliveryMethodOption(options: DeliveryMethodOption[], draftMethod
   );
 }
 
-function parseExistingContacts(payload: unknown): ExistingContactOption[] {
+function parseExistingContactSearchResults(payload: unknown): ExistingContactOption[] {
   const data = unwrapData(payload);
   if (!Array.isArray(data)) {
     return [];
@@ -1248,20 +1260,20 @@ function parseExistingContacts(payload: unknown): ExistingContactOption[] {
     if (!isRecord(item)) {
       continue;
     }
-    const id = asNumber(item.contactId ?? item.id);
+    const id = asNumber(item.id);
     if (id === null) {
       continue;
     }
     const firstName = asString(item.firstName);
     const lastName = asString(item.lastName);
-    const fullName = [firstName, lastName].filter(Boolean).join(" ").trim() || asString(item.contactName ?? item.name);
+    const fullName = [firstName, lastName].filter(Boolean).join(" ").trim() || buildContactFullName(item);
 
     parsed.push({
       id,
       firstName,
       lastName,
       fullName,
-      email: asString(item.contactEmail ?? item.email),
+      email: asString(item.email),
       office: asString(item.office),
       cell: asString(item.cell),
       company: asString(item.company),
@@ -1425,14 +1437,11 @@ export function StationModal({
   onDetailLoaded,
 }: StationModalProps) {
   const { requestJson } = useApiRequest();
+  const { isOnline } = useOnlineStatus();
   const toast = useToast();
   const tenantCacheScope = useMemo(() => resolveTenantCacheScope(headers), [headers]);
   const deliveryMethodOptionsCacheKey = useMemo(
     () => buildScopedCacheKey(DELIVERY_METHOD_OPTIONS_BROWSER_CACHE_KEY, tenantCacheScope),
-    [tenantCacheScope],
-  );
-  const existingContactsCacheKey = useMemo(
-    () => buildScopedCacheKey(EXISTING_CONTACTS_BROWSER_CACHE_KEY, tenantCacheScope),
     [tenantCacheScope],
   );
   const [draft, setDraft] = useState<StationModalDraft>(() => createEmptyDraft());
@@ -1507,6 +1516,7 @@ export function StationModal({
     buildAddExistingContactFormState(),
   );
   const [isAddExistingContactDiscardDialogOpen, setIsAddExistingContactDiscardDialogOpen] = useState(false);
+  const existingContactsSearchRequestTokenRef = useRef(0);
 
   const isEditMode = mode === "edit";
   const isReadOnly = !canEdit;
@@ -1597,16 +1607,8 @@ export function StationModal({
   );
 
   const filteredExistingContacts = useMemo(() => {
-    const query = asString(existingContactSearch).toLowerCase();
-    const base = existingContactsCatalog.filter((contact) => !linkedContactIdSet.has(contact.id));
-    if (!query) {
-      return base;
-    }
-
-    return base.filter((contact) =>
-      [contact.fullName, contact.email, contact.company, contact.jobTitle].join(" ").toLowerCase().includes(query),
-    );
-  }, [existingContactSearch, existingContactsCatalog, linkedContactIdSet]);
+    return existingContactsCatalog.filter((contact) => !linkedContactIdSet.has(contact.id));
+  }, [existingContactsCatalog, linkedContactIdSet]);
 
   useEffect(() => {
     if (!open) {
@@ -1906,56 +1908,146 @@ export function StationModal({
     }
   }
 
-  async function loadExistingContacts(force = false) {
-    if (!force && existingContactsCatalog.length > 0) {
-      setExistingContactsCacheStatus((current) => current ?? { source: "cache", fetchedAt: Date.now() });
+  const loadExistingContacts = useCallback(async (searchValue: string, force = false) => {
+    const query = asString(searchValue);
+    const normalizedQuery = query.toLowerCase();
+    const requestToken = ++existingContactsSearchRequestTokenRef.current;
+
+    if (normalizedQuery.length < MIN_EXISTING_CONTACT_SEARCH_LENGTH) {
+      setExistingContactsCatalog([]);
+      setExistingContactsCacheStatus(null);
+      setExistingContactsError(null);
+      setIsLoadingExistingContacts(false);
       return;
     }
-    if (!force) {
-      const memoryCachedContacts = existingContactsMemoryCache.get(tenantCacheScope) ?? null;
-      if (memoryCachedContacts && memoryCachedContacts.length > 0) {
-        setExistingContactsCatalog(memoryCachedContacts);
-        setExistingContactsCacheStatus({ source: "cache", fetchedAt: Date.now() });
-        return;
-      }
 
-      const browserCacheSnapshot = readBrowserCacheSnapshot<unknown>(existingContactsCacheKey);
-      const browserCachedContacts = parseExistingContacts(browserCacheSnapshot?.data);
-      if (browserCachedContacts.length > 0) {
-        existingContactsMemoryCache.set(tenantCacheScope, browserCachedContacts);
-        setExistingContactsCatalog(browserCachedContacts);
-        setExistingContactsCacheStatus({
-          source: "cache",
-          fetchedAt: browserCacheSnapshot?.fetchedAt ?? Date.now(),
-        });
+    const cacheKey = buildSearchScopedCacheKey(EXISTING_CONTACTS_BROWSER_CACHE_KEY, tenantCacheScope, normalizedQuery);
+    const memoryCached = existingContactsMemoryCache.get(cacheKey) ?? null;
+    const browserCacheSnapshot = readBrowserCacheSnapshot<CachedExistingContactsResult>(cacheKey);
+    const browserCached = browserCacheSnapshot?.data ?? null;
+    const cachedResult =
+      memoryCached ?? browserCached ?? null;
+
+    if (!force && cachedResult) {
+      setExistingContactsCatalog(cachedResult.contacts);
+      setExistingContactsCacheStatus({
+        source: "cache",
+        fetchedAt: cachedResult.fetchedAt ?? browserCacheSnapshot?.fetchedAt ?? Date.now(),
+      });
+      setExistingContactsError(null);
+      if (Date.now() - (cachedResult.fetchedAt ?? browserCacheSnapshot?.fetchedAt ?? Date.now()) <= EXISTING_CONTACTS_CACHE_TTL_MS) {
         return;
       }
     }
+
+    if (!isOnline) {
+      if (cachedResult) {
+        setExistingContactsError("You're offline. Showing cached contacts.");
+        return;
+      }
+      setExistingContactsCatalog([]);
+      setExistingContactsCacheStatus(null);
+      setExistingContactsError("You're offline. Connect to search contacts.");
+      return;
+    }
+
     setIsLoadingExistingContacts(true);
     setExistingContactsError(null);
     try {
-      const payload = await requestJson(`${CONTACTS_SELECTOR_URL}?active=true`, {
-        headers,
-        errorToast: false,
-      });
-      const parsedContacts = parseExistingContacts(payload);
-      existingContactsMemoryCache.set(tenantCacheScope, parsedContacts);
-      setExistingContactsCatalog(parsedContacts);
+      const requests: Array<Promise<unknown>> = [];
+      const requestQueries: URLSearchParams[] = [];
+
+      const nameParams = new URLSearchParams();
+      nameParams.set("name", query);
+      nameParams.set("active", "true");
+      requestQueries.push(nameParams);
+
+      const companyParams = new URLSearchParams();
+      companyParams.set("company", query);
+      companyParams.set("active", "true");
+      requestQueries.push(companyParams);
+
+      const stationParams = new URLSearchParams();
+      stationParams.set("station", query);
+      stationParams.set("active", "true");
+      requestQueries.push(stationParams);
+
+      if (query.includes("@")) {
+        const emailParams = new URLSearchParams();
+        emailParams.set("emails", query);
+        emailParams.set("active", "true");
+        requestQueries.push(emailParams);
+      }
+
+      if (/[0-9()+\-]/.test(query)) {
+        const phoneParams = new URLSearchParams();
+        phoneParams.set("phone", query);
+        phoneParams.set("active", "true");
+        requestQueries.push(phoneParams);
+      }
+
+      for (const params of requestQueries) {
+        requests.push(
+          requestJson(`/api/tradsphere/v1/contacts?${params.toString()}`, {
+            headers,
+            errorToast: false,
+          }),
+        );
+      }
+
+      const settled = await Promise.allSettled(requests);
+      if (requestToken !== existingContactsSearchRequestTokenRef.current) {
+        return;
+      }
+
+      const merged = new Map<number, ExistingContactOption>();
+      for (const result of settled) {
+        if (result.status !== "fulfilled") {
+          continue;
+        }
+        for (const contact of parseExistingContactSearchResults(result.value)) {
+          merged.set(contact.id, contact);
+        }
+      }
+
+      const parsedContacts = [...merged.values()].sort((a, b) =>
+        `${a.fullName} ${a.email}`.localeCompare(`${b.fullName} ${b.email}`),
+      );
       const fetchedAt = Date.now();
+      existingContactsMemoryCache.set(cacheKey, {
+        contacts: parsedContacts,
+        fetchedAt,
+      });
+      setExistingContactsCatalog(parsedContacts);
       setExistingContactsCacheStatus({
         source: "network",
         fetchedAt,
       });
-      writeBrowserCache(existingContactsCacheKey, parsedContacts, EXISTING_CONTACTS_CACHE_TTL_MS, {
+      writeBrowserCache(cacheKey, { contacts: parsedContacts, fetchedAt }, EXISTING_CONTACTS_CACHE_TTL_MS, {
         source: "network",
         fetchedAt,
       });
+
+      const hadFailures = settled.some((result) => result.status === "rejected");
+      if (hadFailures && parsedContacts.length > 0) {
+        setExistingContactsError("Showing cached results. Some contact search filters could not refresh.");
+      } else if (parsedContacts.length === 0) {
+        setExistingContactsError(null);
+      }
     } catch (error) {
-      setExistingContactsError(error instanceof Error ? error.message : "Unable to load contacts.");
+      if (requestToken !== existingContactsSearchRequestTokenRef.current) {
+        return;
+      }
+      if (!cachedResult) {
+        setExistingContactsCatalog([]);
+        setExistingContactsError(error instanceof Error ? error.message : "Unable to search contacts.");
+      }
     } finally {
-      setIsLoadingExistingContacts(false);
+      if (requestToken === existingContactsSearchRequestTokenRef.current) {
+        setIsLoadingExistingContacts(false);
+      }
     }
-  }
+  }, [headers, isOnline, requestJson, tenantCacheScope]);
 
   function handleDialogOpenChange(nextOpen: boolean) {
     const allowClose = canModalClose({
@@ -2453,13 +2545,27 @@ export function StationModal({
     setIsContactEditorFullNameManuallyEdited(false);
   }
 
+  function resetAddExistingContactState() {
+    existingContactsSearchRequestTokenRef.current += 1;
+    setIsAddExistingContactOpen(false);
+    setIsAddExistingContactDiscardDialogOpen(false);
+    setExistingContactsCatalog([]);
+    setExistingContactsCacheStatus(null);
+    setExistingContactsError(null);
+    setExistingContactSearch("");
+    setSelectedExistingContactId("");
+    setSelectedExistingContactType(DEFAULT_CONTACT_TYPE);
+    setSelectedExistingPrimaryContact(false);
+    setAddExistingContactBaseline(buildAddExistingContactFormState());
+    setIsLoadingExistingContacts(false);
+  }
+
   function closeAddExistingContact(force = false) {
     if (!force && hasAddExistingContactChanges) {
       setIsAddExistingContactDiscardDialogOpen(true);
       return;
     }
-    setIsAddExistingContactOpen(false);
-    setIsAddExistingContactDiscardDialogOpen(false);
+    resetAddExistingContactState();
   }
 
   function handleAddExistingContactOpenChange(nextOpen: boolean) {
@@ -2476,7 +2582,11 @@ export function StationModal({
       }
       return;
     }
-    setIsAddExistingContactOpen(nextOpen);
+    if (!nextOpen) {
+      resetAddExistingContactState();
+      return;
+    }
+    setIsAddExistingContactOpen(true);
   }
 
   function removeContact(index: number) {
@@ -2491,20 +2601,39 @@ export function StationModal({
     if (isReadOnly) {
       return;
     }
+    existingContactsSearchRequestTokenRef.current += 1;
     const initialState = buildAddExistingContactFormState({
       selectedExistingContactId: "",
       selectedExistingContactType: DEFAULT_CONTACT_TYPE,
       selectedExistingPrimaryContact: false,
     });
+    setExistingContactsCatalog([]);
+    setExistingContactsCacheStatus(null);
+    setExistingContactsError(null);
+    setIsLoadingExistingContacts(false);
     setIsAddExistingContactOpen(true);
     setSelectedExistingContactId(initialState.selectedExistingContactId);
     setSelectedExistingContactType(initialState.selectedExistingContactType);
     setSelectedExistingPrimaryContact(initialState.selectedExistingPrimaryContact);
     setExistingContactSearch("");
     setAddExistingContactBaseline(initialState);
-    setExistingContactsError(null);
-    void loadExistingContacts();
   }
+
+  useEffect(() => {
+    if (!isAddExistingContactOpen) {
+      return;
+    }
+
+    const query = asString(existingContactSearch);
+    const delay = query.trim().length >= MIN_EXISTING_CONTACT_SEARCH_LENGTH ? EXISTING_CONTACT_SEARCH_DEBOUNCE_MS : 0;
+    const timeoutId = window.setTimeout(() => {
+      void loadExistingContacts(query);
+    }, delay);
+
+    return () => {
+      window.clearTimeout(timeoutId);
+    };
+  }, [existingContactSearch, isAddExistingContactOpen, loadExistingContacts]);
 
   useEffect(() => {
     if (!isAddExistingContactOpen) {
@@ -2605,6 +2734,7 @@ export function StationModal({
     }
 
     setSubmitError(null);
+    void primeSuccessSound();
     setIsSubmitting(true);
 
     try {
@@ -2682,14 +2812,13 @@ export function StationModal({
         );
         return nextOptions;
       });
-      existingContactsMemoryCache.delete(tenantCacheScope);
-      removeBrowserCache(existingContactsCacheKey);
       deliveryMethodUsageMemoryCache.clear();
 
       toast.success(
         mode === "create" ? "Station created" : "Station updated",
         `${normalizedStationCode} ${mode === "create" ? "was created" : "was updated"} successfully.`,
       );
+      void playSuccessSound();
 
       const savedContacts = buildStationSaveContacts(nextDraft.contacts);
       await onSuccess?.({
@@ -2784,10 +2913,17 @@ export function StationModal({
     isLoading: isLoadingDeliveryMethods,
     status: deliveryMethodsCacheStatus,
   });
-  const existingContactsStatusText = buildModalCacheStatusText({
-    isLoading: isLoadingExistingContacts,
-    status: existingContactsCacheStatus,
-  });
+  const existingContactsStatusText = (() => {
+    const trimmedSearch = existingContactSearch.trim();
+    if (isAddExistingContactOpen && trimmedSearch.length < MIN_EXISTING_CONTACT_SEARCH_LENGTH) {
+      return "Type at least 2 characters to search contacts.";
+    }
+
+    return buildModalCacheStatusText({
+      isLoading: isLoadingExistingContacts,
+      status: existingContactsCacheStatus,
+    });
+  })();
   const shouldShowSubmitButton = canEdit && (isSubmitting || canSubmit);
   const dialogWidthClass = showDeliveryMethodSection ? "w-[min(88vw,1320px)]" : "w-[min(88vw,980px)]";
 
@@ -2796,11 +2932,6 @@ export function StationModal({
       <Dialog open={open} onOpenChange={handleDialogOpenChange}>
         <DialogContent
           className={`flex max-h-[90vh] ${dialogWidthClass} max-w-none flex-col overflow-hidden rounded-xl bg-white px-8 py-6`}
-          onEscapeKeyDown={(event) => {
-            if (isSubmitting) {
-              event.preventDefault();
-            }
-          }}
           onInteractOutside={(event) => {
             if (isAppDropdownInteractionEvent(event)) {
               event.preventDefault();
@@ -2811,139 +2942,140 @@ export function StationModal({
             }
           }}
         >
-        <DialogClose
-          className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
-          aria-label="Close station modal"
-          disabled={isSubmitting}
-        >
-          <X className="size-4" />
-        </DialogClose>
+          <ModalShell busy={isSubmitting} busyMessage="Saving station..." className="min-h-0 flex-1">
+            <DialogClose
+              className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
+              aria-label="Close station modal"
+            >
+              <X className="size-4" />
+            </DialogClose>
 
-          <DialogHeader>
-            <DialogTitle>{modalTitle}</DialogTitle>
-            <DialogDescription>{description}</DialogDescription>
-          </DialogHeader>
+            <DialogHeader>
+              <DialogTitle>{modalTitle}</DialogTitle>
+              <DialogDescription>{description}</DialogDescription>
+            </DialogHeader>
 
-          <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
-            {isEditMode && !isDetailReady ? (
-              <div className="flex min-h-[420px] flex-col items-center justify-center gap-3 text-center">
-                {detailError ? (
-                  <p className="text-sm text-amber-700">{detailError}</p>
-                ) : (
-                  <>
-                    <Loader2 className="size-5 animate-spin text-slate-500" />
-                    <p className="text-sm text-slate-600">Loading station detail...</p>
-                  </>
-                )}
-              </div>
-            ) : (
-              <div className="grid items-start gap-8 xl:gap-10 [grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr))]">
-                <StationBasicInfoSection
-                  station={draft.station}
-                  isEditMode={isEditMode}
-                  isSubmitting={isSubmitting}
-                  isReadOnly={isReadOnly}
-                  onChange={(next) => {
-                    updateStation(next);
-                  }}
-                />
-
-                {showDeliveryMethodSection ? (
-                  <StationDeliveryMethodSection
-                    deliveryMethod={draft.deliveryMethod}
+            <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
+              {isEditMode && !isDetailReady ? (
+                <div className="flex min-h-[420px] flex-col items-center justify-center gap-3 text-center">
+                  {detailError ? (
+                    <p className="text-sm text-amber-700">{detailError}</p>
+                  ) : (
+                    <>
+                      <Loader2 className="size-5 animate-spin text-slate-500" />
+                      <p className="text-sm text-slate-600">Loading station detail...</p>
+                    </>
+                  )}
+                </div>
+              ) : (
+                <div className="grid items-start gap-8 xl:gap-10 [grid-template-columns:repeat(auto-fit,minmax(min(100%,340px),1fr))]">
+                  <StationBasicInfoSection
+                    station={draft.station}
+                    isEditMode={isEditMode}
                     isSubmitting={isSubmitting}
                     isReadOnly={isReadOnly}
-                    onSelectDeliveryMethod={openDeliveryMethodSelector}
-                    onAddDeliveryMethod={openCreateDeliveryMethodEditor}
-                    onEditDeliveryMethod={openEditDeliveryMethodEditor}
+                    onChange={(next) => {
+                      updateStation(next);
+                    }}
                   />
-                ) : null}
 
-                <StationContactsSection
-                  contacts={draft.contacts}
-                  isSubmitting={isSubmitting}
-                  isReadOnly={isReadOnly}
-                  showHeaderActions={showContactHeaderActions}
-                  showContactActions={showContactCardActions}
-                  showCopyAction={showContactCopyAction}
-                  onAddExistingContact={openAddExistingContactDialog}
-                  onCreateContact={openCreateContactEditor}
-                  onEditContact={openEditContactEditor}
-                  onRemoveContact={removeContact}
-                  onCopyContact={(index) => {
-                    void handleCopyContact(index);
-                  }}
-                />
-              </div>
-            )}
+                  {showDeliveryMethodSection ? (
+                    <StationDeliveryMethodSection
+                      deliveryMethod={draft.deliveryMethod}
+                      isSubmitting={isSubmitting}
+                      isReadOnly={isReadOnly}
+                      onSelectDeliveryMethod={openDeliveryMethodSelector}
+                      onAddDeliveryMethod={openCreateDeliveryMethodEditor}
+                      onEditDeliveryMethod={openEditDeliveryMethodEditor}
+                    />
+                  ) : null}
 
-            {submitError ? <p className="mt-2 text-sm text-rose-600">{submitError}</p> : null}
-          </div>
+                  <StationContactsSection
+                    contacts={draft.contacts}
+                    isSubmitting={isSubmitting}
+                    isReadOnly={isReadOnly}
+                    showHeaderActions={showContactHeaderActions}
+                    showContactActions={showContactCardActions}
+                    showCopyAction={showContactCopyAction}
+                    onAddExistingContact={openAddExistingContactDialog}
+                    onCreateContact={openCreateContactEditor}
+                    onEditContact={openEditContactEditor}
+                    onRemoveContact={removeContact}
+                    onCopyContact={(index) => {
+                      void handleCopyContact(index);
+                    }}
+                  />
+                </div>
+              )}
 
-          {detailStatusText ? (
-            <ModalCacheFooter
-              text={detailStatusText}
-              onRefresh={() => {
-                if (!isLoadingDetail && !isSubmitting && isEditMode && !hasUnsavedChanges) {
-                  setDetailRefreshToken((current) => current + 1);
+              {submitError ? <p className="mt-2 text-sm text-rose-600">{submitError}</p> : null}
+            </div>
+
+            {detailStatusText ? (
+              <ModalCacheFooter
+                text={detailStatusText}
+                onRefresh={() => {
+                  if (!isLoadingDetail && !isSubmitting && isEditMode && !hasUnsavedChanges) {
+                    setDetailRefreshToken((current) => current + 1);
+                  }
+                }}
+                disabled={!isEditMode || isLoadingDetail || isSubmitting || hasUnsavedChanges}
+                refreshing={isRefreshingDetail}
+                refreshLabel="Refresh station detail"
+                tooltipText={
+                  hasUnsavedChanges
+                    ? "Save or discard your edits before refreshing station detail."
+                    : "Click to refresh this data"
                 }
-              }}
-              disabled={!isEditMode || isLoadingDetail || isSubmitting || hasUnsavedChanges}
-              refreshing={isRefreshingDetail}
-              refreshLabel="Refresh station detail"
-              tooltipText={
-                hasUnsavedChanges
-                  ? "Save or discard your edits before refreshing station detail."
-                  : "Click to refresh this data"
-              }
-              actions={
-                <>
-                  {canEdit && hasUnsavedChanges ? (
-                    <Button variant="outline" onClick={revertStationDraft} disabled={isSubmitting}>
-                      Revert
-                    </Button>
-                  ) : null}
-                  {shouldShowSubmitButton ? (
-                    <Button onClick={handleSubmit} disabled={!canSubmit}>
-                      {isSubmitting ? (
-                        <>
-                          <Loader2 className="size-4 animate-spin" />
-                          Saving...
-                        </>
-                      ) : (
-                        submitLabel
-                      )}
-                    </Button>
-                  ) : null}
-                </>
-              }
-            />
-          ) : (
-            <DialogFooter className="gap-2">
-              {canEdit && hasUnsavedChanges ? (
-                <Button variant="outline" onClick={revertStationDraft} disabled={isSubmitting}>
-                  Revert
-                </Button>
-              ) : null}
-              {shouldShowSubmitButton ? (
-                <Button onClick={handleSubmit} disabled={!canSubmit}>
-                  {isSubmitting ? (
-                    <>
-                      <Loader2 className="size-4 animate-spin" />
-                      Saving...
-                    </>
-                  ) : (
-                    submitLabel
-                  )}
-                </Button>
-              ) : null}
-            </DialogFooter>
-          )}
-          {hasDeferredDetailUpdate ? (
-            <p className="mt-2 text-sm text-amber-700">
-              Newer station detail is available and will apply after your current edits are saved or discarded.
-            </p>
-          ) : null}
+                actions={
+                  <>
+                    {canEdit && hasUnsavedChanges ? (
+                      <Button variant="outline" onClick={revertStationDraft} disabled={isSubmitting}>
+                        Revert
+                      </Button>
+                    ) : null}
+                    {shouldShowSubmitButton ? (
+                      <Button onClick={handleSubmit} disabled={!canSubmit}>
+                        {isSubmitting ? (
+                          <>
+                            <Loader2 className="size-4 animate-spin" />
+                            Saving...
+                          </>
+                        ) : (
+                          submitLabel
+                        )}
+                      </Button>
+                    ) : null}
+                  </>
+                }
+              />
+            ) : (
+              <DialogFooter className="gap-2">
+                {canEdit && hasUnsavedChanges ? (
+                  <Button variant="outline" onClick={revertStationDraft} disabled={isSubmitting}>
+                    Revert
+                  </Button>
+                ) : null}
+                {shouldShowSubmitButton ? (
+                  <Button onClick={handleSubmit} disabled={!canSubmit}>
+                    {isSubmitting ? (
+                      <>
+                        <Loader2 className="size-4 animate-spin" />
+                        Saving...
+                      </>
+                    ) : (
+                      submitLabel
+                    )}
+                  </Button>
+                ) : null}
+              </DialogFooter>
+            )}
+            {hasDeferredDetailUpdate ? (
+              <p className="mt-2 text-sm text-amber-700">
+                Newer station detail is available and will apply after your current edits are saved or discarded.
+              </p>
+            ) : null}
+          </ModalShell>
         </DialogContent>
 
         <UnsavedChangesDialog
@@ -3684,32 +3816,33 @@ export function StationModal({
             </div>
 
             {existingContactsError ? <p className="text-sm text-rose-600">{existingContactsError}</p> : null}
-
-            <DialogFooter className="gap-2">
-              {canEdit && hasAddExistingContactChanges ? (
-                <Button variant="outline" onClick={revertAddExistingContact} disabled={isReadOnly}>
-                  Revert
-                </Button>
-              ) : null}
-              {canEdit && canAddExistingContact ? (
-                <Button size="sm" onClick={addExistingContactToDraft} disabled={isReadOnly}>
-                  Add
-                </Button>
-              ) : null}
-            </DialogFooter>
           </div>
 
           <ModalCacheFooter
             text={existingContactsStatusText}
             onRefresh={() => {
               if (!isLoadingExistingContacts) {
-                void loadExistingContacts(true);
+                void loadExistingContacts(existingContactSearch, true);
               }
             }}
             disabled={isLoadingExistingContacts}
             refreshing={isLoadingExistingContacts}
             refreshLabel="Refresh contacts"
             tooltipText="Click to refresh this data"
+            actions={
+              <>
+                {canEdit && hasAddExistingContactChanges ? (
+                  <Button variant="outline" onClick={revertAddExistingContact} disabled={isReadOnly}>
+                    Revert
+                  </Button>
+                ) : null}
+                {canEdit && canAddExistingContact ? (
+                  <Button onClick={addExistingContactToDraft} disabled={isReadOnly}>
+                    Add
+                  </Button>
+                ) : null}
+              </>
+            }
           />
         </DialogContent>
       </Dialog>

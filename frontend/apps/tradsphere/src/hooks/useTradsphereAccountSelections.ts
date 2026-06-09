@@ -123,6 +123,10 @@ export function useTradsphereAccountSelections({
     [isOnline, loadErrorMessage, requestHeaders, requestJson, requestOptions],
   );
 
+  const refreshSelections = useCallback(async () => {
+    await loadSelections("network-only");
+  }, [loadSelections]);
+
   useEffect(() => {
     if (!autoLoad) {
       return;
@@ -138,5 +142,6 @@ export function useTradsphereAccountSelections({
     isOfflineSelections,
     selectionsCacheStatus,
     loadSelections,
+    refreshSelections,
   };
 }

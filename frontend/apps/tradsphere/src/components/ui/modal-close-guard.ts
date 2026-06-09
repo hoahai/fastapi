@@ -6,15 +6,10 @@ type ModalCloseGuardParams = {
 
 export function canModalClose({
   nextOpen,
-  isBusy = false,
   hasUnsavedChanges = false,
 }: ModalCloseGuardParams): boolean {
   if (nextOpen) {
     return true;
-  }
-
-  if (isBusy) {
-    return false;
   }
 
   if (!hasUnsavedChanges) {
@@ -31,5 +26,9 @@ export function shouldBlockOutsideClose({
   isBusy?: boolean;
   hasUnsavedChanges?: boolean;
 }): boolean {
-  return isBusy || hasUnsavedChanges;
+  if (isBusy) {
+    return false;
+  }
+
+  return hasUnsavedChanges;
 }

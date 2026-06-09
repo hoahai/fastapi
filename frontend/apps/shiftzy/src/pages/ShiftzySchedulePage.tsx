@@ -21,6 +21,7 @@ import { FloatingActionMenu, type FloatingActionMenuItem } from "@shared/compone
 import { Button } from "@tradsphere/components/ui/button";
 import { AppDropdown } from "@tradsphere/components/ui/app-dropdown";
 import { Dialog, DialogClose, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from "@tradsphere/components/ui/dialog";
+import { ModalShell } from "@shared/components";
 import { useToast } from "@shell/components/ui/toast";
 import { useApiRequest } from "@shared/hooks/useApiRequest";
 import {
@@ -321,7 +322,7 @@ export default function ShiftzySchedulePage() {
   const pendingChangeIds = useMemo(() => Object.keys(pendingScheduleIds), [pendingScheduleIds]);
   const pendingDeletedIds = useMemo(() => Object.keys(pendingDeletedScheduleIds), [pendingDeletedScheduleIds]);
   const hasPendingChanges = pendingChangeIds.length > 0 || pendingDeletedIds.length > 0;
-  const hasBusyAction = loadingPage || refreshing || savingChanges || duplicatingSchedules || exportingSchedulesPdf;
+  const hasBusyAction = loadingPage || refreshing || backgroundRefreshing || savingChanges || duplicatingSchedules || exportingSchedulesPdf;
   const canExportSchedulesPdf = Boolean(selectedWeekNo && state === "ready" && schedules.length > 0);
   const canSubmitDuplicate = Boolean(
     duplicateFromWeekNo
@@ -464,7 +465,11 @@ export default function ShiftzySchedulePage() {
     };
   }
 
-  async function loadSchedulesForWeek(weekNo: number, background = false): Promise<void> {
+  async function loadSchedulesForWeek(
+    weekNo: number,
+    options: { forceNetwork?: boolean } = {},
+  ): Promise<void> {
+    const forceNetwork = options.forceNetwork === true;
     const cacheScope = getCacheScope();
     const cachedWeekSnapshot = readCacheSnapshot<ShiftzySchedule[]>(getWeekScheduleCacheKey(weekNo), {
       namespace: SHIFTZY_CACHE_NAMESPACE,
@@ -473,20 +478,39 @@ export default function ShiftzySchedulePage() {
       allowExpired: true,
     });
     const cachedWeekRows = Array.isArray(cachedWeekSnapshot?.data) ? cachedWeekSnapshot?.data : null;
+    const hasFreshCachedWeek = Boolean(cachedWeekRows && !cachedWeekSnapshot?.isExpired);
 
-    if (!background) {
-      setState("loading");
+    if (!forceNetwork && hasFreshCachedWeek) {
+      applyServerSchedules(cachedWeekRows!, { preservePending: true });
+      setState(cachedWeekRows!.length ? "ready" : "empty");
+      setError(null);
+      setRefreshMessage(null);
+      setCacheStatus({
+        source: "cache",
+        fetchedAt: cachedWeekSnapshot?.fetchedAt ?? Date.now(),
+      });
+      setLoadingPage(false);
+      setRefreshing(false);
+      setBackgroundRefreshing(false);
+      return;
+    }
+
+    if (forceNetwork) {
+      setRefreshing(true);
       setBackgroundRefreshing(false);
     } else {
-      setRefreshing(true);
+      setRefreshing(false);
+      setBackgroundRefreshing(true);
+      setState(cachedWeekRows ? (cachedWeekRows.length ? "ready" : "empty") : "loading");
       if (cachedWeekRows) {
         applyServerSchedules(cachedWeekRows, { preservePending: true });
-        setState(cachedWeekRows.length ? "ready" : "empty");
         setError(null);
         setCacheStatus({
           source: "cache",
           fetchedAt: cachedWeekSnapshot?.fetchedAt ?? Date.now(),
         });
+      } else {
+        setSchedules([]);
       }
     }
     const requestToken = ++requestTokenRef.current;
@@ -710,7 +734,7 @@ export default function ShiftzySchedulePage() {
       return;
     }
     setSelectedWeekNo(nextWeekNo);
-    await loadSchedulesForWeek(nextWeekNo, true);
+    await loadSchedulesForWeek(nextWeekNo);
   }
 
   function handleOpenEdit(schedule: ShiftzySchedule) {
@@ -905,7 +929,7 @@ export default function ShiftzySchedulePage() {
         await deleteShiftzySchedules(requestJson, deletedIds);
       }
       if (selectedWeekNo) {
-        await loadSchedulesForWeek(selectedWeekNo, true);
+        await loadSchedulesForWeek(selectedWeekNo, { forceNetwork: true });
       }
       setCacheStatus({ source: "network", fetchedAt: Date.now() });
     } catch (saveError) {
@@ -939,7 +963,7 @@ export default function ShiftzySchedulePage() {
       });
       setIsDuplicateModalOpen(false);
       setSelectedWeekNo(duplicateToWeekNo);
-      await loadSchedulesForWeek(duplicateToWeekNo, true);
+      await loadSchedulesForWeek(duplicateToWeekNo, { forceNetwork: true });
       setCacheStatus({ source: "network", fetchedAt: Date.now() });
     } catch (duplicateError) {
       setRefreshMessage(duplicateError instanceof Error ? duplicateError.message : "Could not duplicate schedules.");
@@ -1043,7 +1067,8 @@ export default function ShiftzySchedulePage() {
   const loadingContract = resolveSharedLoadingContract(
     {
       pageInitializing: !hasSessionToken || loadingPage,
-      pageRefreshing: refreshing || backgroundRefreshing,
+      pageRefreshing: refreshing,
+      sectionLoading: backgroundRefreshing,
       cacheChipRefreshing: isChipRefreshOverlayVisible,
     },
     {
@@ -1051,6 +1076,7 @@ export default function ShiftzySchedulePage() {
         ? "Preparing authenticated session..."
         : "Preparing Shiftzy schedule workspace...",
       pageRefreshing: "Refreshing Shiftzy board...",
+      sectionLoading: "Refreshing Shiftzy board...",
       cacheChipRefreshing: "Refreshing Shiftzy board...",
     },
   );
@@ -1061,7 +1087,7 @@ export default function ShiftzySchedulePage() {
     }
     setIsChipRefreshOverlayVisible(true);
     try {
-      await loadSchedulesForWeek(selectedWeekNo, true);
+      await loadSchedulesForWeek(selectedWeekNo, { forceNetwork: true });
     } finally {
       setIsChipRefreshOverlayVisible(false);
     }
@@ -1083,8 +1109,8 @@ export default function ShiftzySchedulePage() {
         <PageCacheFooter
           text={cacheStatusText}
           onRefresh={handleRefreshFromChip}
-          disabled={refreshing || loadingPage || savingChanges || hasPendingChanges || isChipRefreshOverlayVisible}
-          refreshing={refreshing || savingChanges || isChipRefreshOverlayVisible}
+          disabled={refreshing || backgroundRefreshing || loadingPage || savingChanges || hasPendingChanges || isChipRefreshOverlayVisible}
+          refreshing={refreshing || backgroundRefreshing || savingChanges || isChipRefreshOverlayVisible}
           refreshLabel="Refresh Shiftzy board"
           tooltipText="Reload schedules for selected week"
           containerClassName="w-full"
@@ -1394,6 +1420,7 @@ export default function ShiftzySchedulePage() {
             </>
           ) : null}
         </div>
+        <SectionLoadingLayer active={loadingContract.sectionOverlayActive} message={loadingContract.sectionOverlayMessage} />
       </section>
 
       <section className="relative overflow-hidden rounded-2xl border border-blue-100 bg-white/90 p-4 shadow-soft">
@@ -1409,7 +1436,6 @@ export default function ShiftzySchedulePage() {
             icon={<Users className="size-4 text-blue-600" />}
           />
         </div>
-        <SectionLoadingLayer active={loadingContract.sectionOverlayActive} message={loadingContract.sectionOverlayMessage} />
       </section>
 
       <ShiftzyScheduleEditModal
@@ -1428,73 +1454,72 @@ export default function ShiftzySchedulePage() {
       <Dialog
         open={isDuplicateModalOpen}
         onOpenChange={(nextOpen) => {
-          if (duplicatingSchedules) {
-            return;
-          }
           setIsDuplicateModalOpen(nextOpen);
         }}
       >
-        <DialogContent className="max-w-[520px] rounded-xl bg-white p-6">
-          <DialogClose
-            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/70"
-            aria-label="Close duplicate schedules modal"
-          >
-            <X className="size-4" />
-          </DialogClose>
-          <DialogHeader>
-            <DialogTitle>Duplicate schedules</DialogTitle>
-            <DialogDescription>
-              Copy schedules from one week to another week.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="mt-4 space-y-3">
-            <FormRow label="From Week">
-              <AppDropdown
-                value={duplicateFromWeekNo ? String(duplicateFromWeekNo) : ""}
-                options={weekOptions}
-                searchable={false}
-                placeholder=""
-                ariaLabel="From week"
-                onValueChange={(nextValue) => {
-                  const nextWeekNo = Number(nextValue);
-                  if (!Number.isFinite(nextWeekNo) || nextWeekNo <= 0) {
-                    return;
-                  }
-                  setDuplicateFromWeekNo(nextWeekNo);
-                }}
-                disabled={duplicatingSchedules}
-              />
-            </FormRow>
-            <FormRow label="To Week">
-              <AppDropdown
-                value={duplicateToWeekNo ? String(duplicateToWeekNo) : ""}
-                options={weekOptions}
-                searchable={false}
-                placeholder=""
-                ariaLabel="To week"
-                onValueChange={(nextValue) => {
-                  const nextWeekNo = Number(nextValue);
-                  if (!Number.isFinite(nextWeekNo) || nextWeekNo <= 0) {
-                    return;
-                  }
-                  setDuplicateToWeekNo(nextWeekNo);
-                }}
-                disabled={duplicatingSchedules}
-              />
-            </FormRow>
-          </div>
-          <DialogFooter>
-            <Button onClick={() => void handleDuplicateSchedules()} disabled={!canSubmitDuplicate || duplicatingSchedules}>
-              {duplicatingSchedules ? (
-                <>
-                  <Loader2 className="size-4 animate-spin" />
-                  Duplicating...
-                </>
-              ) : (
-                "Duplicate schedules"
-              )}
-            </Button>
-          </DialogFooter>
+        <DialogContent className="flex max-h-[90vh] max-w-[520px] flex-col overflow-hidden rounded-xl bg-white p-6">
+          <ModalShell busy={duplicatingSchedules} busyMessage="Duplicating schedules..." className="min-h-0 flex-1">
+            <DialogClose
+              className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/70"
+              aria-label="Close duplicate schedules modal"
+            >
+              <X className="size-4" />
+            </DialogClose>
+            <DialogHeader>
+              <DialogTitle>Duplicate schedules</DialogTitle>
+              <DialogDescription>
+                Copy schedules from one week to another week.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="mt-4 space-y-3">
+              <FormRow label="From Week">
+                <AppDropdown
+                  value={duplicateFromWeekNo ? String(duplicateFromWeekNo) : ""}
+                  options={weekOptions}
+                  searchable={false}
+                  placeholder=""
+                  ariaLabel="From week"
+                  onValueChange={(nextValue) => {
+                    const nextWeekNo = Number(nextValue);
+                    if (!Number.isFinite(nextWeekNo) || nextWeekNo <= 0) {
+                      return;
+                    }
+                    setDuplicateFromWeekNo(nextWeekNo);
+                  }}
+                  disabled={duplicatingSchedules}
+                />
+              </FormRow>
+              <FormRow label="To Week">
+                <AppDropdown
+                  value={duplicateToWeekNo ? String(duplicateToWeekNo) : ""}
+                  options={weekOptions}
+                  searchable={false}
+                  placeholder=""
+                  ariaLabel="To week"
+                  onValueChange={(nextValue) => {
+                    const nextWeekNo = Number(nextValue);
+                    if (!Number.isFinite(nextWeekNo) || nextWeekNo <= 0) {
+                      return;
+                    }
+                    setDuplicateToWeekNo(nextWeekNo);
+                  }}
+                  disabled={duplicatingSchedules}
+                />
+              </FormRow>
+            </div>
+            <DialogFooter>
+              <Button onClick={() => void handleDuplicateSchedules()} disabled={!canSubmitDuplicate || duplicatingSchedules}>
+                {duplicatingSchedules ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    Duplicating...
+                  </>
+                ) : (
+                  "Duplicate schedules"
+                )}
+              </Button>
+            </DialogFooter>
+          </ModalShell>
         </DialogContent>
       </Dialog>
 

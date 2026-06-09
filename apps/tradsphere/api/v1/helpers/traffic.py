@@ -15,6 +15,7 @@ from apps.tradsphere.api.v1.helpers.accountValidation import (
     ensure_tradsphere_account_codes_exist,
     require_account_code,
 )
+from apps.tradsphere.api.v1.helpers.broadcastCalendar import get_calendar_month_bucket
 from apps.tradsphere.api.v1.helpers.config import get_smtp_settings
 from apps.tradsphere.api.v1.helpers.dbQueries import (
     delete_traffic_flight,
@@ -38,6 +39,7 @@ from apps.tradsphere.api.v1.helpers.dbQueries import (
     upsert_traffic_email,
 )
 from apps.tradsphere.api.v1.helpers.stations import list_stations_data
+from apps.tradsphere.api.v1.helpers.stations import map_station_names_by_codes
 from shared.smtp import SmtpSendError, SmtpSettings, send_smtp_email
 from shared.normalization import normalize_optional_note_text as _normalize_optional_note_text
 from shared.tenant import get_tenant_id
@@ -435,6 +437,254 @@ def _build_rotation_summary(*, total_rotation: Decimal) -> dict[str, object]:
     }
 
 
+def _to_non_negative_int(value: object, *, default: int = 0) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return int(default)
+    return parsed
+
+
+def _to_decimal(value: object, *, default: Decimal = Decimal("0")) -> Decimal:
+    text = str(value if value is not None else "").strip()
+    if not text:
+        return default
+    try:
+        parsed = Decimal(text)
+    except (InvalidOperation, ValueError):
+        return default
+    if not parsed.is_finite():
+        return default
+    return parsed
+
+
+def _format_station_candidate_month_label(*, year: int, month: int) -> str:
+    month_names = [
+        "",
+        "JAN",
+        "FEB",
+        "MAR",
+        "APR",
+        "MAY",
+        "JUN",
+        "JUL",
+        "AUG",
+        "SEP",
+        "OCT",
+        "NOV",
+        "DEC",
+    ]
+    if year < 1000 or month < 1 or month > 12:
+        return ""
+    return f"{month_names[month]}'{str(year)[-2:]}"
+
+
+def _get_station_candidate_month_key(*, start_date: str) -> tuple[int, int] | None:
+    text = str(start_date or "").strip()
+    if not text:
+        return None
+    try:
+        parsed = date.fromisoformat(text[:10])
+    except ValueError:
+        return None
+    return get_calendar_month_bucket(parsed)
+
+
+def _build_station_candidate_summary(rows: list[dict]) -> dict[str, object]:
+    month_keys: set[tuple[int, int]] = set()
+    row_map: dict[tuple[int, str], dict[str, object]] = {}
+
+    for row in rows:
+        if not isinstance(row, dict):
+            continue
+
+        est_num = _to_non_negative_int(row.get("estNum"), default=-1)
+        station_code = str(row.get("stationCode") or "").strip().upper()
+        if est_num < 0 or not station_code:
+            continue
+
+        month_key = _get_station_candidate_month_key(start_date=row.get("startDate"))
+        if month_key is None:
+            continue
+
+        broadcast_year, broadcast_month = month_key
+        month_keys.add((broadcast_year, broadcast_month))
+        row_key = (est_num, station_code)
+        row_entry = row_map.get(row_key)
+        if row_entry is None:
+            row_entry = {
+                "estNum": est_num,
+                "stationCode": station_code,
+                "stationName": str(row.get("stationName") or "").strip() or None,
+                "_cells": {},
+            }
+            row_map[row_key] = row_entry
+        elif not row_entry.get("stationName"):
+            station_name = str(row.get("stationName") or "").strip() or None
+            if station_name:
+                row_entry["stationName"] = station_name
+
+        cells = row_entry["_cells"]
+        if not isinstance(cells, dict):
+            cells = {}
+            row_entry["_cells"] = cells
+        cell = cells.get(month_key)
+        if cell is None:
+            cell = {
+                "monthKey": f"{broadcast_year:04d}-{broadcast_month:02d}",
+                "year": broadcast_year,
+                "month": broadcast_month,
+                "label": _format_station_candidate_month_label(
+                    year=broadcast_year,
+                    month=broadcast_month,
+                ),
+                "hasSchedule": False,
+                "hasSpot": False,
+                "scheduleCount": 0,
+                "totalSpot": 0,
+                "totalGross": Decimal("0"),
+            }
+            cells[month_key] = cell
+
+        cell["hasSchedule"] = True
+        cell["scheduleCount"] = max(0, _to_non_negative_int(cell.get("scheduleCount"), default=0)) + 1
+        total_spot = max(0, _to_non_negative_int(row.get("totalSpot"), default=0))
+        cell["totalSpot"] = max(0, _to_non_negative_int(cell.get("totalSpot"), default=0)) + total_spot
+        cell["totalGross"] = _to_decimal(cell.get("totalGross"), default=Decimal("0")) + _to_decimal(
+            row.get("totalGross"),
+            default=Decimal("0"),
+        )
+        if total_spot > 0:
+            cell["hasSpot"] = True
+
+    months = [
+        {
+            "monthKey": f"{year:04d}-{month:02d}",
+            "year": year,
+            "month": month,
+            "label": _format_station_candidate_month_label(year=year, month=month),
+        }
+        for year, month in sorted(month_keys)
+    ]
+    month_key_order = [(month["year"], month["month"]) for month in months]
+
+    rows_out: list[dict[str, object]] = []
+    for row_key in sorted(row_map.keys()):
+        row_entry = row_map[row_key]
+        cells = row_entry.get("_cells")
+        cells_by_key = cells if isinstance(cells, dict) else {}
+        ordered_cells: list[dict[str, object]] = []
+        for month_key in month_key_order:
+            cell = cells_by_key.get(month_key)
+            if isinstance(cell, dict):
+                ordered_cells.append(
+                    {
+                        "monthKey": str(cell.get("monthKey") or ""),
+                        "year": _to_non_negative_int(cell.get("year"), default=0),
+                        "month": _to_non_negative_int(cell.get("month"), default=0),
+                        "label": str(cell.get("label") or ""),
+                        "hasSchedule": bool(cell.get("hasSchedule")),
+                        "hasSpot": bool(cell.get("hasSpot")),
+                        "scheduleCount": _to_non_negative_int(cell.get("scheduleCount"), default=0),
+                        "totalSpot": _to_non_negative_int(cell.get("totalSpot"), default=0),
+                        "totalGrossText": f"${_to_decimal(cell.get('totalGross'), default=Decimal('0')).quantize(Decimal('0.01'), rounding=ROUND_HALF_UP):.2f}",
+                    }
+                )
+                continue
+
+            year, month = month_key
+            ordered_cells.append(
+                {
+                    "monthKey": f"{year:04d}-{month:02d}",
+                    "year": year,
+                    "month": month,
+                    "label": _format_station_candidate_month_label(year=year, month=month),
+                    "hasSchedule": False,
+                    "hasSpot": False,
+                    "scheduleCount": 0,
+                    "totalSpot": 0,
+                    "totalGrossText": "$0.00",
+                }
+            )
+
+        rows_out.append(
+            {
+                "estNum": int(row_entry.get("estNum") or 0),
+                "stationCode": str(row_entry.get("stationCode") or "").strip().upper(),
+                "stationName": row_entry.get("stationName"),
+                "monthCells": ordered_cells,
+            }
+        )
+
+    return {
+        "months": months,
+        "rows": rows_out,
+    }
+
+
+def _build_traffic_list_item_from_detail(detail: dict) -> dict:
+    traffic_row = detail.get("traffic") if isinstance(detail, dict) else {}
+    flights = detail.get("flights") if isinstance(detail, dict) else []
+    stations = detail.get("stations") if isinstance(detail, dict) else []
+    email = detail.get("email") if isinstance(detail, dict) else None
+    summary = detail.get("summary") if isinstance(detail, dict) else {}
+    traffic_serialized = _serialize_traffic_row(traffic_row if isinstance(traffic_row, dict) else {})
+
+    station_codes = [
+        str(station.get("stationCode") or "").strip().upper()
+        for station in stations
+        if isinstance(station, dict) and str(station.get("stationCode") or "").strip()
+    ]
+    station_name_by_code = map_station_names_by_codes(station_codes)
+    search_stations = _merge_search_tokens(
+        station_codes,
+        [
+            str(station_name_by_code.get(code, "") or "").strip().upper()
+            for code in station_codes
+            if str(station_name_by_code.get(code, "") or "").strip()
+        ],
+    )
+    search_emails = _extract_email_search_values(
+        (email or {}).get("toEmails") if isinstance(email, dict) else None,
+        (email or {}).get("ccEmails") if isinstance(email, dict) else None,
+        (email or {}).get("bccEmails") if isinstance(email, dict) else None,
+    )
+    search_iscis: list[str] = []
+    seen_iscis: set[str] = set()
+    for flight in flights:
+        if not isinstance(flight, dict):
+            continue
+        isci = str(flight.get("isci") or "").strip().upper()
+        if not isci or isci in seen_iscis:
+            continue
+        seen_iscis.add(isci)
+        search_iscis.append(isci)
+
+    return {
+        "id": traffic_serialized.get("id", ""),
+        "accountCode": traffic_serialized.get("accountCode", ""),
+        "campaign": traffic_serialized.get("campaign", ""),
+        "searchCampaign": str(traffic_serialized.get("campaign") or "").lower(),
+        "status": traffic_serialized.get("status", "draft"),
+        "note": traffic_serialized.get("note"),
+        "dateCreated": traffic_serialized.get("dateCreated"),
+        "dateUpdated": traffic_serialized.get("dateUpdated"),
+        "flightCount": int(summary.get("flightCount") or 0),
+        "stationCount": int(summary.get("stationCount") or 0),
+        "emailSentStatus": email.get("sentStatus") if isinstance(email, dict) else None,
+        "emailSentAt": _to_iso_text(email.get("sentAt")) if isinstance(email, dict) else None,
+        "searchIscis": search_iscis,
+        "searchStations": search_stations,
+        "searchEmails": search_emails,
+        "summary": {
+            "totalRotation": float(_safe_decimal(summary.get("totalRotation")).quantize(_ROTATION_QUANT, rounding=ROUND_HALF_UP)),
+            "rotationWarning": bool(summary.get("rotationWarning")),
+            "rotationWarningMessage": summary.get("rotationWarningMessage"),
+            "warnings": summary.get("warnings") if isinstance(summary.get("warnings"), list) else [],
+        },
+    }
+
+
 def _serialize_traffic_row(row: dict) -> dict:
     return {
         "id": str(row.get("id") or "").strip(),
@@ -768,6 +1018,7 @@ def list_station_candidates_for_flight_range_data(
         languages=normalized_languages,
         media_types=normalized_media_types,
     )
+    summary = _build_station_candidate_summary(rows)
 
     station_codes: list[str] = []
     stations: list[dict] = []
@@ -864,6 +1115,8 @@ def list_station_candidates_for_flight_range_data(
         "summary": {
             "candidateCount": len(stations),
             "estNumCount": len(est_num_candidates),
+            "months": summary["months"],
+            "rows": summary["rows"],
         },
     }
 
@@ -1489,9 +1742,17 @@ def send_traffic_email_data(*, traffic_id: str, payload: dict, sent_by_user_id: 
         },
     )
     row = _safe_db_call(get_traffic_email_row, traffic_id=normalized_traffic_id)
+    if bool(payload.get("markSentAfterSend")):
+        _safe_db_call(
+            update_traffic,
+            traffic_id=normalized_traffic_id,
+            fields={"status": "sent"},
+        )
+    detail = get_traffic_detail_data(traffic_id=normalized_traffic_id)
     return {
         "trafficId": normalized_traffic_id,
         "email": _serialize_email_row(row),
+        "detail": detail,
     }
 
 
@@ -1965,4 +2226,5 @@ def bulk_save_traffic_data(*, payload: dict, sent_by_user_id: str | None = None)
     return {
         "trafficId": normalized_traffic_id,
         "detail": detail,
+        "trafficListItem": _build_traffic_list_item_from_detail(detail),
     }

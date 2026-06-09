@@ -23,7 +23,7 @@ import {
   writeBrowserCache,
 } from "@/lib/browserCache";
 import { buildAuthHeaders as buildSharedAuthHeaders } from "@shared/api/authHeaders";
-import { shouldFetchNetwork, type CachePolicy } from "@shared/cache";
+import { FRONTEND_CACHE_TTL_MS, shouldFetchNetwork, type CachePolicy } from "@shared/cache";
 import { useAuth } from "@shared/auth/useAuth";
 import { shouldProtectFrontendAuth } from "@shared/auth/guards";
 import { hasAppEditAccess } from "@shared/auth/permissions";
@@ -35,8 +35,8 @@ import { PageMessageStack, type StackMessage } from "@shared/components/status/M
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
 import { hasAtLeastOneSearchCriterion, shouldFetchSubmittedSearchNetwork } from "@shared/search";
 
-const CONTACTS_SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
-const CONTACT_DETAIL_CACHE_TTL_MS = 5 * 60 * 1000;
+const CONTACTS_SEARCH_CACHE_TTL_MS = FRONTEND_CACHE_TTL_MS.DEFAULT;
+const CONTACT_DETAIL_CACHE_TTL_MS = FRONTEND_CACHE_TTL_MS.DEFAULT;
 const CONTACTS_SEARCH_COLLECTION_PREFIX = "contacts:search:";
 const CONTACTS_SEARCH_COLLECTION_LIMIT = 40;
 const CONTACTS_PAGE_CODE = "contacts";
@@ -228,6 +228,39 @@ function buildSearchCacheKey(params: ContactSearchFormValues, scopeKey: string):
 
 function buildContactDetailCacheKey(contactId: number): string {
   return `contacts:detail:${contactId}:v1`;
+}
+
+function mergeContactDetailFallback(baseContact: ContactRecord, detailContact: ContactRecord): ContactRecord {
+  return {
+    ...baseContact,
+    ...detailContact,
+    firstName: asString(detailContact.firstName) || asString(baseContact.firstName),
+    lastName: asString(detailContact.lastName) || asString(baseContact.lastName),
+    fullName: asString(detailContact.fullName) || asString(baseContact.fullName),
+    company: asString(detailContact.company) || asString(baseContact.company),
+    jobTitle: asString(detailContact.jobTitle) || asString(baseContact.jobTitle),
+    office: asString(detailContact.office) || asString(baseContact.office),
+    cell: asString(detailContact.cell) || asString(baseContact.cell),
+    note: asString(detailContact.note) || asString(baseContact.note),
+    stationCodes: detailContact.stationCodes.length ? detailContact.stationCodes : baseContact.stationCodes,
+    contactTypes: detailContact.contactTypes.length ? detailContact.contactTypes : baseContact.contactTypes,
+    usage: detailContact.usage.length ? detailContact.usage : baseContact.usage,
+    usedByAccounts: detailContact.usedByAccounts.length ? detailContact.usedByAccounts : baseContact.usedByAccounts,
+    usedByEstNums: detailContact.usedByEstNums.length ? detailContact.usedByEstNums : baseContact.usedByEstNums,
+    usedByStationCount:
+      typeof detailContact.usedByStationCount === "number"
+        ? detailContact.usedByStationCount
+        : baseContact.usedByStationCount,
+    usedByAccountCount:
+      typeof detailContact.usedByAccountCount === "number"
+        ? detailContact.usedByAccountCount
+        : baseContact.usedByAccountCount,
+    usedByEstNumCount:
+      typeof detailContact.usedByEstNumCount === "number"
+        ? detailContact.usedByEstNumCount
+        : baseContact.usedByEstNumCount,
+    isPrimaryContact: detailContact.isPrimaryContact || baseContact.isPrimaryContact,
+  };
 }
 
 function normalizeContactRecords(items: unknown): ContactRecord[] {
@@ -1088,6 +1121,40 @@ function applyUpdatedContactToResults(
   return sortContactRecords([...withoutCurrent, nextContact]);
 }
 
+function buildUpdatedContactDetail(
+  currentContact: ContactRecord | null,
+  payload: ContactModalSubmitPayload,
+): ContactRecord | null {
+  if (!currentContact || payload.id === null) {
+    return currentContact;
+  }
+
+  if (Math.trunc(payload.id) !== currentContact.id) {
+    return currentContact;
+  }
+
+  const normalizedEmail = asString(payload.form.email).toLowerCase();
+  const normalizedFirstName = asString(payload.form.firstName);
+  const normalizedLastName = asString(payload.form.lastName);
+  const normalizedFullName =
+    asString(payload.form.fullName) ||
+    [normalizedFirstName, normalizedLastName].filter(Boolean).join(" ").trim();
+
+  return {
+    ...currentContact,
+    email: normalizedEmail,
+    firstName: normalizedFirstName,
+    lastName: normalizedLastName,
+    fullName: normalizedFullName,
+    company: asString(payload.form.company),
+    jobTitle: asString(payload.form.jobTitle),
+    office: asString(payload.form.office),
+    cell: asString(payload.form.cell),
+    note: asString(payload.form.note),
+    active: Boolean(payload.form.active),
+  };
+}
+
 function applyCreatedContactToResults(
   currentContacts: ContactRecord[],
   submitted: SubmittedSearch,
@@ -1290,7 +1357,7 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
     }
 
     if (normalizedSnapshotDetail.length > 0 && options.policy !== "network-only") {
-      const cached = normalizedSnapshotDetail[0];
+      const cached = mergeContactDetailFallback(normalizedBase, normalizedSnapshotDetail[0]);
       setModalContact(cached);
       setModalDetailCacheStatus({
         source: "cache",
@@ -1650,6 +1717,9 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
         await loadSearchData({ policy: "network-only" }, submittedSearch);
       }
     } else {
+      modalDetailRequestTokenRef.current += 1;
+      setIsModalDetailRefreshing(false);
+
       await requestJson("/api/tradsphere/v1/contacts", {
         method: "PUT",
         headers: requestHeaders,
@@ -1659,6 +1729,20 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
         },
         successToast: "Contact updated",
       });
+      const nextModalContact = buildUpdatedContactDetail(modalContact, payload);
+      if (nextModalContact) {
+        const fetchedAt = Date.now();
+        setModalContact(nextModalContact);
+        setModalDetailCacheStatus({
+          source: "network",
+          fetchedAt,
+        });
+        writeBrowserCache(buildContactDetailCacheKey(nextModalContact.id), nextModalContact, CONTACT_DETAIL_CACHE_TTL_MS, {
+          source: "network",
+          fetchedAt,
+        });
+      }
+
       if (!submittedSearch) {
         return;
       }

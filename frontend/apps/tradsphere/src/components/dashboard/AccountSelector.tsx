@@ -14,6 +14,7 @@ interface AccountSelectorProps {
   isLoadingAccount: boolean;
   isRefreshingAccount?: boolean;
   isSavingAccount: boolean;
+  loadButtonLabel?: string;
   onAccountChange: (value: string) => void;
   onLoad: () => void;
 }
@@ -26,6 +27,7 @@ export function AccountSelector({
   isLoadingAccount,
   isRefreshingAccount = false,
   isSavingAccount,
+  loadButtonLabel = "Load",
   onAccountChange,
   onLoad,
 }: AccountSelectorProps) {
@@ -65,8 +67,13 @@ export function AccountSelector({
               <Spinner />
               Loading
             </>
+          ) : isRefreshingAccount ? (
+            <>
+              <Spinner />
+              Refreshing
+            </>
           ) : (
-            "Load"
+            loadButtonLabel
           )}
         </Button>
       </div>

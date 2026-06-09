@@ -6,6 +6,7 @@ import { Spinner } from "@/components/ui/spinner";
 import { useApiRequest } from "@/hooks/useApiRequest";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { readBrowserCacheSnapshot, writeBrowserCache } from "@/lib/browserCache";
+import { FRONTEND_CACHE_TTL_MS } from "@shared/cache";
 import { SectionCard } from "@shared/components";
 import { roleLabel } from "@shared/auth/accessAssignments";
 import { useAuth } from "@shared/auth/useAuth";
@@ -139,7 +140,7 @@ function formatRelativeTime(timestamp: number): string {
   return `${days} day${days > 1 ? "s" : ""} ago`;
 }
 
-const PAGE_PERMISSIONS_CACHE_TTL_MS = 2 * 60 * 1000;
+const PAGE_PERMISSIONS_CACHE_TTL_MS = FRONTEND_CACHE_TTL_MS.DEFAULT;
 
 export function TradspherePermissionDetailsSection({
   appCode,

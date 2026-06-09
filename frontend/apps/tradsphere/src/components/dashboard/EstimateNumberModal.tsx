@@ -25,7 +25,7 @@ import { UnsavedChangesDialog } from "@/components/ui/unsaved-changes-dialog";
 import { useApiRequest, type ApiRequestOptions } from "@/hooks/useApiRequest";
 import { readBrowserCacheSnapshot, writeBrowserCache } from "@/lib/browserCache";
 import { TRADSPHERE_CACHE_TTL_MS } from "@shared/cache";
-import { ModalCacheFooter } from "@shared/components/modal/ModalCacheFooter";
+import { ModalCacheFooter, ModalShell } from "@shared/components";
 import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
 
 import { FlightDateRangeField } from "./FlightDateRangeField";
@@ -978,11 +978,6 @@ export function EstimateNumberModal({
     <Dialog open={open} onOpenChange={handleDialogOpenChange}>
       <DialogContent
         className="max-w-[620px] rounded-xl bg-white p-6"
-        onEscapeKeyDown={(event) => {
-          if (isSubmitting) {
-            event.preventDefault();
-          }
-        }}
         onInteractOutside={(event) => {
           if (
             shouldBlockOutsideClose({
@@ -994,32 +989,32 @@ export function EstimateNumberModal({
           }
         }}
       >
-        <DialogClose
-          className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
-          aria-label="Close estimate number modal"
-          disabled={isSubmitting}
-        >
-          <X className="size-4" />
-        </DialogClose>
+        <ModalShell busy={isSubmitting} busyMessage="Saving estimate number..." className="min-h-0 flex-1">
+          <DialogClose
+            className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
+            aria-label="Close estimate number modal"
+          >
+            <X className="size-4" />
+          </DialogClose>
 
-        <DialogHeader>
-          <DialogTitle>{modalTitle}</DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
-        </DialogHeader>
+          <DialogHeader>
+            <DialogTitle>{modalTitle}</DialogTitle>
+            <DialogDescription>{description}</DialogDescription>
+          </DialogHeader>
 
-        {isEditMode && !isDetailReady ? (
-          <div className="mt-8 flex min-h-52 flex-col items-center justify-center gap-3 text-center">
-            {detailError ? (
-              <p className="text-sm text-amber-700">{detailError}</p>
-            ) : (
-              <>
-                <Loader2 className="size-5 animate-spin text-slate-500" />
-                <p className="text-sm text-slate-600">Loading estimate number...</p>
-              </>
-            )}
-          </div>
-        ) : (
-          <div className="mt-4 space-y-4">
+          {isEditMode && !isDetailReady ? (
+            <div className="mt-8 flex min-h-52 flex-col items-center justify-center gap-3 text-center">
+              {detailError ? (
+                <p className="text-sm text-amber-700">{detailError}</p>
+              ) : (
+                <>
+                  <Loader2 className="size-5 animate-spin text-slate-500" />
+                  <p className="text-sm text-slate-600">Loading estimate number...</p>
+                </>
+              )}
+            </div>
+          ) : (
+            <div className="mt-4 space-y-4">
             <LabeledField
               label={
                 <>
@@ -1143,45 +1138,46 @@ export function EstimateNumberModal({
           </div>
         )}
 
-        {submitError ? <p className="mt-2 text-sm text-rose-600">{submitError}</p> : null}
+          {submitError ? <p className="mt-2 text-sm text-rose-600">{submitError}</p> : null}
 
-        {detailStatusText ? (
-          <ModalCacheFooter
-            text={detailStatusText}
-            onRefresh={() => {
-              if (!isLoadingDetail && !isSubmitting && isEditMode && !hasUnsavedChanges) {
-                setDetailRefreshToken((current) => current + 1);
+          {detailStatusText ? (
+            <ModalCacheFooter
+              text={detailStatusText}
+              onRefresh={() => {
+                if (!isLoadingDetail && !isSubmitting && isEditMode && !hasUnsavedChanges) {
+                  setDetailRefreshToken((current) => current + 1);
+                }
+              }}
+              disabled={!isEditMode || isLoadingDetail || isSubmitting || hasUnsavedChanges}
+              refreshing={isRefreshingDetail}
+              refreshLabel="Refresh estimate detail"
+              tooltipText={
+                hasUnsavedChanges
+                  ? "Save or discard your edits before refreshing estimate detail."
+                  : "Click to refresh this data"
               }
-            }}
-            disabled={!isEditMode || isLoadingDetail || isSubmitting || hasUnsavedChanges}
-            refreshing={isRefreshingDetail}
-            refreshLabel="Refresh estimate detail"
-            tooltipText={
-              hasUnsavedChanges
-                ? "Save or discard your edits before refreshing estimate detail."
-                : "Click to refresh this data"
-            }
-            actions={shouldShowFooterActions ? footerActions : null}
-          />
-        ) : shouldShowSubmitButton ? (
-          <DialogFooter>
-            <Button onClick={handleSubmit} disabled={isSubmitting}>
-              {isSubmitting ? (
-                <>
-                  <Loader2 className="size-4 animate-spin" />
-                  Saving...
-                </>
-              ) : (
-                submitLabel
-              )}
-            </Button>
-          </DialogFooter>
-        ) : null}
-        {hasDeferredDetailUpdate ? (
-          <p className="mt-2 text-sm text-amber-700">
-            Newer estimate data is available and will apply after your current edits are saved or discarded.
-          </p>
-        ) : null}
+              actions={shouldShowFooterActions ? footerActions : null}
+            />
+          ) : shouldShowSubmitButton ? (
+            <DialogFooter>
+              <Button onClick={handleSubmit} disabled={isSubmitting}>
+                {isSubmitting ? (
+                  <>
+                    <Loader2 className="size-4 animate-spin" />
+                    Saving...
+                  </>
+                ) : (
+                  submitLabel
+                )}
+              </Button>
+            </DialogFooter>
+          ) : null}
+          {hasDeferredDetailUpdate ? (
+            <p className="mt-2 text-sm text-amber-700">
+              Newer estimate data is available and will apply after your current edits are saved or discarded.
+            </p>
+          ) : null}
+        </ModalShell>
       </DialogContent>
 
       <UnsavedChangesDialog

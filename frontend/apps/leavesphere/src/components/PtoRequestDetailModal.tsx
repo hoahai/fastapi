@@ -18,6 +18,7 @@ import { canModalClose, shouldBlockOutsideClose } from "@tradsphere/components/u
 import { Textarea } from "@tradsphere/components/ui/textarea";
 import { UnsavedChangesDialog } from "@tradsphere/components/ui/unsaved-changes-dialog";
 import { LeaveSpherePtoStatusChip } from "@leavesphere/components/PtoStatusChip";
+import { ModalShell } from "@shared/components";
 import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
 
 import type { LeaveSpherePtoRequest, LeaveSpherePtoStatus, LeaveSpherePtoType } from "@leavesphere/lib/ptoMocks";
@@ -446,98 +447,94 @@ export function LeaveSpherePtoRequestDetailModal({
   return (
     <Dialog open={open} onOpenChange={handleDialogOpenChange}>
       <DialogContent
-        className={isMyPtoDetailLayout ? "max-w-3xl" : "max-w-2xl"}
-        onEscapeKeyDown={(event) => {
-          if (shouldBlockOutsideClose({ isBusy: saving, hasUnsavedChanges })) {
-            event.preventDefault();
-          }
-        }}
+        className={`${isMyPtoDetailLayout ? "max-w-3xl" : "max-w-2xl"} flex max-h-[90vh] flex-col overflow-hidden rounded-xl bg-white p-6`}
         onInteractOutside={(event) => {
           if (shouldBlockOutsideClose({ isBusy: saving, hasUnsavedChanges })) {
             event.preventDefault();
           }
         }}
       >
-        <DialogClose
-          className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
-          aria-label="Close PTO request modal"
-          disabled={saving}
-        >
-          <X className="size-4" />
-        </DialogClose>
+        <ModalShell busy={saving} busyMessage="Saving PTO request..." className="min-h-0 flex-1">
+          <DialogClose
+            className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
+            aria-label="Close PTO request modal"
+          >
+            <X className="size-4" />
+          </DialogClose>
 
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
-        </DialogHeader>
+          <DialogHeader>
+            <DialogTitle>{title}</DialogTitle>
+            <DialogDescription>{description}</DialogDescription>
+          </DialogHeader>
 
-        {isMyPtoDetailLayout ? (
-          <div className="mt-4 space-y-4">
-            {(details || request) ? (
-              <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3">
-                <div className="flex flex-wrap items-start justify-between gap-3">
-                  <div className="min-w-0 flex-1">
-                    {details}
+          {isMyPtoDetailLayout ? (
+            <div className="mt-4 space-y-4">
+              {(details || request) ? (
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3">
+                  <div className="flex flex-wrap items-start justify-between gap-3">
+                    <div className="min-w-0 flex-1">
+                      {details}
+                    </div>
+                    {request ? (
+                      <LeaveSpherePtoStatusChip
+                        status={request.status}
+                        label={statusLabel(request.status)}
+                        className="px-2.5 py-1 text-xs"
+                      />
+                    ) : null}
                   </div>
-                  {request ? (
-                    <LeaveSpherePtoStatusChip
-                      status={request.status}
-                      label={statusLabel(request.status)}
-                      className="px-2.5 py-1 text-xs"
-                    />
-                  ) : null}
                 </div>
-              </div>
-            ) : null}
+              ) : null}
 
-            <div className="space-y-3">
-              {formFields}
+              <div className="space-y-3">
+                {formFields}
+              </div>
+
+              {extraContent ? (
+                <div className="border-t border-slate-200 pt-3">
+                  {extraContent}
+                </div>
+              ) : null}
             </div>
+          ) : (
+            <div className="mt-4 space-y-4">
+              {details}
+              <div className="space-y-3">{formFields}</div>
 
-            {extraContent ? (
-              <div className="border-t border-slate-200 pt-3">
-                {extraContent}
-              </div>
-            ) : null}
-          </div>
-        ) : (
-          <div className="mt-4 space-y-4">
-            {details}
-            <div className="space-y-3">{formFields}</div>
+              {request ? (
+                <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs text-slate-600">
+                  Status:
+                  {" "}
+                  <LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} className="font-semibold" />
+                </div>
+              ) : null}
 
-            {request ? (
-              <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs text-slate-600">
-                Status:
-                {" "}
-                <LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} className="font-semibold" />
-              </div>
-            ) : null}
+              {extraContent}
+            </div>
+          )}
 
-            {extraContent}
-          </div>
-        )}
+          {formError ? (
+            <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
+              {formError}
+            </div>
+          ) : null}
 
-        {formError ? (
-          <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
-            {formError}
-          </div>
-        ) : null}
-
-        <DialogFooter className="gap-2">
-          {footerActions}
-          <div className="flex items-center gap-2">
-            {hasUnsavedChanges ? (
-              <Button variant="outline" onClick={handleRevertChanges} disabled={saving}>
-                Revert
-              </Button>
-            ) : null}
-            {shouldShowSubmitButton ? (
-              <Button onClick={() => void handleSave()} disabled={saving || !canSave}>
-                {saving ? "Saving..." : saveLabel}
-              </Button>
-            ) : null}
-          </div>
-        </DialogFooter>
+          <DialogFooter className="gap-2">
+            {footerActions}
+            <div className="flex items-center gap-2">
+              {hasUnsavedChanges ? (
+                <Button variant="outline" onClick={handleRevertChanges} disabled={saving}>
+                  Revert
+                </Button>
+              ) : null}
+              {shouldShowSubmitButton ? (
+                <Button onClick={() => void handleSave()} disabled={saving || !canSave}>
+                  {saving ? "Saving..." : saveLabel}
+                </Button>
+              ) : null}
+            </div>
+          </DialogFooter>
+        </ModalShell>
       </DialogContent>
 
       <UnsavedChangesDialog

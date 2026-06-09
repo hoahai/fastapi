@@ -21,6 +21,8 @@ Reusable cache utilities for all frontend apps under `frontend/`.
 
 ## Shared TTLs
 - Shared TTL constants live in `frontend/shared/cache/ttl.ts`.
+- Frontend cache defaults are 7 days unless a key is overridden.
+- Optional overrides live in `frontend/shared/cache/frontendTtlOverrides.ts`.
 - Tradsphere uses `TRADSPHERE_CACHE_TTL_MS` to avoid duplicated per-file TTL literals.
 
 ## Policies

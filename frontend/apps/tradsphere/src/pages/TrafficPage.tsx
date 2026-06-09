@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { memo, useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { AlertTriangle, Archive, Copy, Eye, Link2, Loader2, Pencil, Plus, RefreshCw, Send, Table2, Trash2, Unlink, Unlock, X } from "lucide-react";
 
 import { ActionIconButton } from "@/components/dashboard/ActionIconButton";
@@ -38,6 +38,7 @@ import {
 } from "@/lib/trafficEmailTemplate";
 import { useTradsphereAccountSelections } from "@/hooks/useTradsphereAccountSelections";
 import { DateInputField } from "@/components/dashboard/FlightDateRangeField";
+import { ModalShell } from "@shared/components";
 import { buildAuthHeaders as buildSharedAuthHeaders } from "@shared/api/authHeaders";
 import { useAuth } from "@shared/auth/useAuth";
 import { shouldProtectFrontendAuth } from "@shared/auth/guards";
@@ -53,13 +54,16 @@ import { Tooltip } from "@shared/components/actions/Tooltip";
 import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
 import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
+import { EmailChipsInput } from "@shared/components/form/EmailChipsInput";
 import { RichTextEditor } from "@shared/components/RichTextEditor";
 import { SectionCard } from "@shared/components/layout/SectionCard";
 import { ModalCacheFooter } from "@shared/components/modal/ModalCacheFooter";
 import { PageLoadingLayer, SectionLoadingLayer, SectionLoadingOverlay } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, SectionMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
+import { isLikelyEmailAddress, mergeUniqueEmails } from "@shared/utils/email";
 import { normalizeRichTextHtml } from "@shared/utils/richText";
+import { playSuccessSound, primeSuccessSound } from "@shared/utils/audio";
 
 type CacheStatus = {
   source: "cache" | "network";
@@ -73,6 +77,7 @@ type TrafficSummary = {
   id: string;
   accountCode: string;
   campaign: string;
+  searchCampaign: string;
   status: TrafficStatus;
   note: string | null;
   dateCreated: string | null;
@@ -228,6 +233,10 @@ type TrafficDraftSession = {
   draft: TrafficDetail;
 };
 
+type UpdateDraftOptions = {
+  applyAutoReadyToEmail?: boolean;
+};
+
 type OptimisticTrafficRemovalSnapshot = {
   trafficId: string;
   previousList: TrafficSummary[];
@@ -246,6 +255,39 @@ type TrafficStationCandidate = {
   contactsSnapshot: Record<string, unknown> | null;
 };
 
+type TrafficStationCandidateSummaryMonth = {
+  monthKey: string;
+  year: number;
+  month: number;
+  label: string;
+};
+
+type TrafficStationCandidateSummaryCell = {
+  monthKey: string;
+  year: number;
+  month: number;
+  label: string;
+  hasSchedule: boolean;
+  hasSpot: boolean;
+  scheduleCount: number;
+  totalSpot: number;
+  totalGrossText: string;
+};
+
+type TrafficStationCandidateSummaryRow = {
+  estNum: number;
+  stationCode: string;
+  stationName: string | null;
+  monthCells: TrafficStationCandidateSummaryCell[];
+};
+
+type TrafficStationCandidatesSummary = {
+  candidateCount: number;
+  estNumCount: number;
+  months: TrafficStationCandidateSummaryMonth[];
+  rows: TrafficStationCandidateSummaryRow[];
+};
+
 type TrafficStationCandidatesPayload = {
   accountCode: string;
   flightStart: string;
@@ -257,10 +299,12 @@ type TrafficStationCandidatesPayload = {
     stationCount: number;
   }>;
   stations: TrafficStationCandidate[];
-  summary: {
-    candidateCount: number;
-    estNumCount: number;
-  };
+  summary: TrafficStationCandidatesSummary;
+};
+
+type TrafficStationCandidatesFetchResult = {
+  payload: TrafficStationCandidatesPayload;
+  cacheStatus: CacheStatus | null;
 };
 
 type TrafficWorkspaceTab = "workflow" | "email";
@@ -271,6 +315,25 @@ type TrafficEmailWorkspaceDraft = TrafficEmailWorkspacePayload & {
   instructionsTouched: boolean;
 };
 
+type TrafficListItemProps = {
+  item: TrafficSummary;
+  active: boolean;
+  displayCampaign: string;
+  displayStatus: TrafficStatus;
+  isDraft: boolean;
+  itemHasUnsavedChanges: boolean;
+  isDeletingCard: boolean;
+  isSelectionLocked: boolean;
+  canEditTradsphere: boolean;
+  isSaving: boolean;
+  isLoadingAccountTraffic: boolean;
+  isLoadingDetail: boolean;
+  isDuplicatingTraffic: boolean;
+  onSelectTraffic: (trafficId: string) => void;
+  onDuplicateTraffic: (trafficId: string) => void;
+  onOpenTrafficRemovalDialog: (trafficId: string, mode: TrafficRemovalMode) => void;
+};
+
 const TRAFFIC_LIST_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.MAIN_LOAD;
 const TRAFFIC_DETAIL_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.MAIN_LOAD;
 const TRAFFIC_STATION_CANDIDATES_CACHE_TTL_MS = TRADSPHERE_CACHE_TTL_MS.SCHEDULE_TIMELINE;
@@ -279,6 +342,8 @@ const SELECTED_ACCOUNT_STORAGE_KEY = "tradsphere.traffic.selectedAccount.v1";
 const SELECTED_BY_ACCOUNT_STORAGE_KEY = "tradsphere.traffic.selectedByAccount.v1";
 const TRAFFIC_PAGE_STATE_CODE = "traffic";
 const DEFERRED_REFRESH_MESSAGE = "Latest traffic data loaded in the background. Save or revert local changes to apply it.";
+const DEFAULT_TEST_EMAIL_RECIPIENT = "hai@theautoadagency.com";
+const DEFAULT_TRAFFIC_CC_EMAILS = ["hai@theautoadagency.com"];
 const STATUS_OPTIONS: Array<{ value: TrafficStatus; label: string }> = [
   { value: "draft", label: "Draft" },
   { value: "ready", label: "Ready" },
@@ -346,6 +411,946 @@ function TrafficLockBanner({
   );
 }
 
+type TrafficWorkspaceModeTabsProps = {
+  activeTab: TrafficWorkspaceTab;
+  onChangeTab: (tab: TrafficWorkspaceTab) => void;
+};
+
+const TrafficWorkspaceModeTabs = memo(function TrafficWorkspaceModeTabs({
+  activeTab,
+  onChangeTab,
+}: TrafficWorkspaceModeTabsProps) {
+  return (
+    <div className="flex justify-start">
+      <div
+        role="tablist"
+        aria-label="Traffic workspace mode"
+        className="grid w-full grid-cols-2 gap-1.5 rounded-xl border border-blue-200 bg-gradient-to-r from-blue-50/80 via-indigo-50/40 to-violet-50/70 p-1.5 sm:w-auto sm:min-w-[32rem]"
+      >
+        {EMAIL_WORKSPACE_TABS.map((tab) => {
+          const isActive = activeTab === tab.value;
+          const tabIcon = tab.value === "workflow" ? <Table2 className="size-3.5" /> : <Send className="size-3.5" />;
+          return (
+            <button
+              key={tab.value}
+              id={`traffic-workspace-tab-${tab.value}`}
+              role="tab"
+              aria-selected={isActive}
+              aria-controls={`traffic-workspace-panel-${tab.value}`}
+              type="button"
+              onClick={() => onChangeTab(tab.value)}
+              className={[
+                "inline-flex w-full items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300",
+                isActive
+                  ? "border-blue-200 bg-white text-blue-700 shadow-sm"
+                  : "border-transparent bg-transparent text-slate-600 hover:border-blue-100 hover:bg-white/70 hover:text-blue-700",
+              ].join(" ")}
+            >
+              {tabIcon}
+              {tab.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+});
+
+const TrafficListItemCard = memo(function TrafficListItemCard({
+  item,
+  active,
+  displayCampaign,
+  displayStatus,
+  isDraft,
+  itemHasUnsavedChanges,
+  isDeletingCard,
+  isSelectionLocked,
+  canEditTradsphere,
+  isSaving,
+  isLoadingAccountTraffic,
+  isLoadingDetail,
+  isDuplicatingTraffic,
+  onSelectTraffic,
+  onDuplicateTraffic,
+  onOpenTrafficRemovalDialog,
+}: TrafficListItemProps) {
+  const shouldHardDelete = itemHasUnsavedChanges || isDraft;
+  const isLockedTrafficCard = ["sent", "confirmed"].includes(asString(displayStatus).toLowerCase());
+
+  return (
+    <div
+      role="button"
+      aria-disabled={isDeletingCard || isSelectionLocked}
+      tabIndex={0}
+      onClick={() => {
+        if (isDeletingCard || isSelectionLocked) {
+          return;
+        }
+        onSelectTraffic(item.id);
+      }}
+      onKeyDown={(event) => {
+        if (isDeletingCard || isSelectionLocked) {
+          return;
+        }
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onSelectTraffic(item.id);
+        }
+      }}
+      className={[
+        "group w-full rounded-xl border px-3 py-3 text-left transition",
+        isDeletingCard || isSelectionLocked ? "cursor-not-allowed opacity-70" : "",
+        active
+          ? "border-blue-300 bg-blue-50/70"
+          : "border-blue-100 bg-white hover:border-blue-200 hover:bg-blue-50/30",
+      ].join(" ")}
+    >
+      <div className="flex items-center justify-between gap-3">
+        <div className="min-w-0">
+          <p className="truncate text-sm font-semibold text-slate-900">{displayCampaign || "Untitled campaign"}</p>
+          <span className={`mt-1 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusChipClass(displayStatus)}`}>
+            {toTrafficStatusLabel(displayStatus)}
+          </span>
+          {itemHasUnsavedChanges ? (
+            <span className="ml-1 inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
+              Unsaved
+            </span>
+          ) : null}
+        </div>
+        <div className="flex items-center">
+          <div className="flex items-center gap-0.5 transition-opacity duration-150 max-md:opacity-100 md:pointer-events-none md:opacity-0 md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100">
+            <ActionIconButton
+              icon={isDuplicatingTraffic ? <Loader2 className="animate-spin" /> : <Copy />}
+              tooltip={isDuplicatingTraffic ? "Duplicating traffic..." : "Duplicate Traffic"}
+              aria-label={isDuplicatingTraffic ? "Duplicating traffic" : "Duplicate Traffic"}
+              title={isDuplicatingTraffic ? "Duplicating traffic" : "Duplicate Traffic"}
+              onClick={(event) => {
+                event.stopPropagation();
+                if (isDuplicatingTraffic) {
+                  return;
+                }
+                void onDuplicateTraffic(item.id);
+              }}
+              disabled={!canEditTradsphere || isSaving || isDeletingCard || isLoadingAccountTraffic || isLoadingDetail || isDuplicatingTraffic || isLockedTrafficCard}
+              className="!h-6 !w-6 !rounded-full !p-0 text-blue-500 hover:!bg-blue-50 hover:!scale-105 hover:text-blue-600 focus-visible:!bg-blue-50 focus-visible:!scale-105 focus-visible:text-blue-600 [&_svg]:!h-3.5 [&_svg]:!w-3.5 [&_svg]:text-blue-500 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110 hover:[&_svg]:text-blue-600 focus-visible:[&_svg]:text-blue-600"
+            />
+            <ActionIconButton
+              icon={isDeletingCard ? <Loader2 className="animate-spin" /> : (shouldHardDelete ? <Trash2 /> : <Archive />)}
+              tooltip={isDeletingCard ? "Removing traffic..." : (shouldHardDelete ? "Delete Traffic" : "Archive Traffic")}
+              aria-label={isDeletingCard ? "Removing traffic" : (shouldHardDelete ? "Delete Traffic" : "Archive Traffic")}
+              title={isDeletingCard ? "Removing traffic" : (shouldHardDelete ? "Delete Traffic" : "Archive Traffic")}
+              onClick={(event) => {
+                event.stopPropagation();
+                if (isDeletingCard) {
+                  return;
+                }
+                if (shouldHardDelete) {
+                  onOpenTrafficRemovalDialog(item.id, "delete");
+                  return;
+                }
+                onOpenTrafficRemovalDialog(item.id, "archive");
+              }}
+              disabled={!canEditTradsphere || isSaving || isDeletingCard || isLoadingAccountTraffic || isLoadingDetail || isLockedTrafficCard}
+              className="!h-6 !w-6 !rounded-full !p-0 text-rose-500 hover:!bg-rose-50 hover:!scale-105 hover:text-rose-600 focus-visible:!bg-rose-50 focus-visible:!scale-105 focus-visible:text-rose-600 [&_svg]:!h-3.5 [&_svg]:!w-3.5 [&_svg]:text-rose-500 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110 hover:[&_svg]:text-rose-600 focus-visible:[&_svg]:text-rose-600"
+            />
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+});
+
+type TrafficFlightsSectionProps = {
+  activeAccountCode: string;
+  activeDraft: TrafficDetail | null;
+  canEditTradsphere: boolean;
+  isSaving: boolean;
+  isTrafficEditingLocked: boolean;
+  onAddFlight: () => void;
+  onEditFlight: (flightId: number) => void;
+  onDuplicateFlight: (flightId: number) => void;
+  onRemoveFlight: (flightId: number) => void;
+};
+
+const TrafficFlightsSection = memo(function TrafficFlightsSection({
+  activeAccountCode,
+  activeDraft,
+  canEditTradsphere,
+  isSaving,
+  isTrafficEditingLocked,
+  onAddFlight,
+  onEditFlight,
+  onDuplicateFlight,
+  onRemoveFlight,
+}: TrafficFlightsSectionProps) {
+  return (
+    <SectionCard
+      title="Flights"
+      actions={(
+        <ActionIconButton
+          icon={<Plus />}
+          tooltip="Add Flight"
+          aria-label="Add Flight"
+          title="Add Flight"
+          onClick={onAddFlight}
+          disabled={!canEditTradsphere || isSaving || isTrafficEditingLocked}
+          className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
+        />
+      )}
+      contentClassName="space-y-3"
+    >
+      {!activeAccountCode ? (
+        <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+          Select an account to view flights.
+        </div>
+      ) : !activeDraft ? (
+        <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+          Select a traffic record to manage flights.
+        </div>
+      ) : (
+        <>
+          {activeDraft.flights.length > 0 && activeDraft.summary.rotationWarning ? (
+            <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
+              <div className="flex items-start gap-2">
+                <AlertTriangle className="mt-0.5 size-4 shrink-0" />
+                <p>{activeDraft.summary.rotationWarningMessage || "Total rotation is not 100.00%."}</p>
+              </div>
+            </div>
+          ) : null}
+          {activeDraft.flights.length === 0 ? (
+            <div className="rounded-lg border border-dashed border-slate-200 bg-white px-3 py-4 text-sm text-slate-600">
+              No flight rows yet.
+            </div>
+          ) : (
+            <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+              <table className="min-w-full text-left text-xs">
+                <thead className="bg-slate-50 text-slate-600">
+                  <tr>
+                    <th className="px-3 py-2 font-semibold">Flight</th>
+                    <th className="px-3 py-2 font-semibold">Medium</th>
+                    <th className="px-3 py-2 font-semibold">Language</th>
+                    <th className="px-3 py-2 font-semibold">Length</th>
+                    <th className="px-3 py-2 font-semibold">ISCI</th>
+                    <th className="px-3 py-2 font-semibold">Rotation</th>
+                    <th className="px-3 py-2 text-center font-semibold">File</th>
+                    <th className="px-3 py-2 text-center font-semibold">Script</th>
+                    <th className="px-3 py-2 text-right font-semibold"></th>
+                  </tr>
+                </thead>
+                <tbody>
+                  {activeDraft.flights.map((flight) => {
+                    const isDraftFlight = flight.id < 0;
+                    return (
+                      <tr
+                        key={flight.id}
+                        onClick={() => {
+                          onEditFlight(flight.id);
+                        }}
+                        className={`group cursor-pointer border-t border-slate-200 text-slate-700 transition ${isDraftFlight ? "bg-amber-50/70 hover:bg-amber-100/70" : "hover:bg-blue-50/40"}`}
+                      >
+                        <td className="whitespace-nowrap px-3 py-2">{formatFlightRangeForTable(flight.flightStart, flight.flightEnd)}</td>
+                        <td className="whitespace-nowrap px-3 py-2">{flight.medium || "-"}</td>
+                        <td className="whitespace-nowrap px-3 py-2">
+                          <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${languageChipClass(flight.language)}`}>
+                            {normalizeFlightLanguageValue(flight.language)}
+                          </span>
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-2">{formatLengthValue(flight.length)}</td>
+                        <td className="whitespace-nowrap px-3 py-2">{flight.isci || "-"}</td>
+                        <td className="whitespace-nowrap px-3 py-2">{formatRotationValue(flight.rotation)}</td>
+                        <td className="whitespace-nowrap px-3 py-2 text-center">
+                          {normalizeExternalUrl(flight.fileUrl) ? (
+                            <TooltipTarget text="Click to open file">
+                              <a
+                                href={normalizeExternalUrl(flight.fileUrl)}
+                                target="_blank"
+                                rel="noreferrer"
+                                onClick={(event) => event.stopPropagation()}
+                                className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100"
+                              >
+                                <Link2 className="size-3" />
+                                Linked
+                              </a>
+                            </TooltipTarget>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                              <Unlink className="size-3" />
+                              Missing
+                            </span>
+                          )}
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-2 text-center">
+                          {normalizeExternalUrl(flight.scriptUrl) ? (
+                            <TooltipTarget text="Click to open script">
+                              <a
+                                href={normalizeExternalUrl(flight.scriptUrl)}
+                                target="_blank"
+                                rel="noreferrer"
+                                onClick={(event) => event.stopPropagation()}
+                                className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100"
+                              >
+                                <Link2 className="size-3" />
+                                Linked
+                              </a>
+                            </TooltipTarget>
+                          ) : (
+                            <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
+                              <Unlink className="size-3" />
+                              Missing
+                            </span>
+                          )}
+                        </td>
+                        <td className="px-3 py-2 text-right">
+                          <div className="inline-flex items-center gap-0.5">
+                            <ActionIconButton
+                              icon={<Copy />}
+                              tooltip="Duplicate flight row"
+                              aria-label="Duplicate flight row"
+                              title="Duplicate flight row"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                onDuplicateFlight(flight.id);
+                              }}
+                              disabled={!canEditTradsphere || isSaving || isTrafficEditingLocked}
+                              className="!h-6 !w-6 !rounded-full !p-0 text-blue-500 hover:!bg-blue-50 hover:!scale-105 hover:text-blue-600 focus-visible:!bg-blue-50 focus-visible:!scale-105 focus-visible:text-blue-600 [&_svg]:!h-3.5 [&_svg]:!w-3.5"
+                            />
+                            <ActionIconButton
+                              icon={<Trash2 />}
+                              tooltip="Delete flight row"
+                              aria-label="Delete flight row"
+                              title="Delete flight row"
+                              onClick={(event) => {
+                                event.stopPropagation();
+                                onRemoveFlight(flight.id);
+                              }}
+                              disabled={!canEditTradsphere || isSaving || isTrafficEditingLocked}
+                              className="!h-6 !w-6 !rounded-full !p-0 text-rose-500 hover:!bg-rose-50 hover:!scale-105 hover:text-rose-600 focus-visible:!bg-rose-50 focus-visible:!scale-105 focus-visible:text-rose-600 [&_svg]:!h-3.5 [&_svg]:!w-3.5"
+                            />
+                          </div>
+                        </td>
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+          )}
+        </>
+      )}
+    </SectionCard>
+  );
+});
+
+type TrafficStationsSectionProps = {
+  activeAccountCode: string;
+  activeDraft: TrafficDetail | null;
+  canEditTradsphere: boolean;
+  isSaving: boolean;
+  isTrafficEditingLocked: boolean;
+  isConfirmedLocked: boolean;
+  isStationAutoSyncing: boolean;
+  isScheduleTimelineLoading: boolean;
+  isLoadingAccountTraffic: boolean;
+  isOnline: boolean;
+  timelineAccountCode: string;
+  stationSyncFlightRange: { flightStart: string; flightEnd: string } | null;
+  sortedStations: TrafficStation[];
+  stationLookupMetaByCode: Record<string, StationLookupMeta>;
+  stationContactEmailsById: Record<string, string[]>;
+  stationDeliveryStatusRestoreMap: Record<number, string>;
+  stationConfirmedStatusRestoreMap: Record<number, string>;
+  onManualStationSync: () => void;
+  onOpenScheduleTimeline: () => void;
+  onAddStation: () => void;
+  onEditStation: (stationId: number) => void;
+  onOpenDeliveryMethodDetail: (stationCode: string) => void;
+  onCopyStationContacts: (emails: string[]) => void;
+  onToggleStationDeliveryStatus: (stationId: number) => void;
+  onToggleStationConfirmedStatus: (stationId: number) => void;
+  onRemoveStation: (stationId: number) => void;
+};
+
+const TrafficStationsSection = memo(function TrafficStationsSection({
+  activeAccountCode,
+  activeDraft,
+  canEditTradsphere,
+  isSaving,
+  isTrafficEditingLocked,
+  isConfirmedLocked,
+  isStationAutoSyncing,
+  isScheduleTimelineLoading,
+  isLoadingAccountTraffic,
+  isOnline,
+  timelineAccountCode,
+  stationSyncFlightRange,
+  sortedStations,
+  stationLookupMetaByCode,
+  stationContactEmailsById,
+  stationDeliveryStatusRestoreMap,
+  stationConfirmedStatusRestoreMap,
+  onManualStationSync,
+  onOpenScheduleTimeline,
+  onAddStation,
+  onEditStation,
+  onOpenDeliveryMethodDetail,
+  onCopyStationContacts,
+  onToggleStationDeliveryStatus,
+  onToggleStationConfirmedStatus,
+  onRemoveStation,
+}: TrafficStationsSectionProps) {
+  return (
+    <SectionCard
+      title="Stations"
+      actions={(
+        <div className="flex items-center gap-1">
+          <ActionIconButton
+            icon={isStationAutoSyncing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
+            tooltip="Sync stations from flight date range"
+            aria-label="Sync stations from flight date range"
+            title="Sync stations from flight date range"
+            onClick={onManualStationSync}
+            disabled={
+              !activeDraft
+              || !stationSyncFlightRange
+              || !canEditTradsphere
+              || isSaving
+              || isStationAutoSyncing
+              || isTrafficEditingLocked
+              || !isOnline
+            }
+            className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
+          />
+          <ActionIconButton
+            icon={(isScheduleTimelineLoading || isStationAutoSyncing) ? <Loader2 className="animate-spin" /> : <Table2 />}
+            tooltip="View Schedule Timeline"
+            aria-label="View Schedule Timeline"
+            title="View Schedule Timeline"
+            onClick={onOpenScheduleTimeline}
+            disabled={!timelineAccountCode || !stationSyncFlightRange || isLoadingAccountTraffic || isStationAutoSyncing || isTrafficEditingLocked}
+            className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
+          />
+          <ActionIconButton
+            icon={<Plus />}
+            tooltip="Add Station"
+            aria-label="Add Station"
+            title="Add Station"
+            onClick={onAddStation}
+            disabled={!canEditTradsphere || isSaving || isTrafficEditingLocked}
+            className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
+          />
+        </div>
+      )}
+      contentClassName="space-y-3"
+    >
+      <div className="relative min-h-[5.5rem]">
+        {!activeAccountCode ? (
+          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+            Select an account to view stations.
+          </div>
+        ) : !activeDraft ? (
+          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+            Select a traffic record to manage stations.
+          </div>
+        ) : sortedStations.length === 0 ? (
+          <div className="rounded-lg border border-dashed border-slate-200 bg-white px-3 py-4 text-sm text-slate-600">
+            No station rows yet.
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
+            <table className="min-w-full text-left text-xs">
+              <thead className="bg-slate-50 text-slate-600">
+                <tr>
+                  <th className="px-3 py-2 font-semibold">Station</th>
+                  <th className="px-3 py-2 text-center font-semibold">Language</th>
+                  <th className="px-3 py-2 text-center font-semibold">Delivery Method</th>
+                  <th className="px-3 py-2 font-semibold">Contacts</th>
+                  <th className="px-3 py-2 text-center font-semibold">Delivery Status</th>
+                  <th className="px-3 py-2 text-center font-semibold">Confirmed Status</th>
+                  <th className="px-3 py-2 text-right font-semibold"></th>
+                </tr>
+              </thead>
+              <tbody>
+                {sortedStations.map((station) => (
+                  <tr
+                    key={station.id}
+                    onClick={() => {
+                      if (isConfirmedLocked) {
+                        return;
+                      }
+                      onEditStation(station.id);
+                    }}
+                    className={`group border-t border-slate-200 text-slate-700 transition ${isConfirmedLocked ? "cursor-not-allowed" : "cursor-pointer hover:bg-blue-50/40"}`}
+                  >
+                    <td className="whitespace-nowrap px-3 py-2">
+                      {formatStationDisplayLabel(station.stationCode, stationLookupMetaByCode[asString(station.stationCode).toUpperCase()])}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 text-center">
+                      {(() => {
+                        const stationLanguage = stationLookupMetaByCode[asString(station.stationCode).toUpperCase()]?.language || "";
+                        if (!stationLanguage) {
+                          return "-";
+                        }
+                        return (
+                          <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${languageChipClass(stationLanguage)}`}>
+                            {stationLanguage}
+                          </span>
+                        );
+                      })()}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 text-center">
+                      <button
+                        type="button"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          if (isTrafficEditingLocked) {
+                            return;
+                          }
+                          onOpenDeliveryMethodDetail(station.stationCode);
+                        }}
+                        className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium transition focus-visible:outline-none focus-visible:ring-2 ${deliveryMethodChipClass(station.deliveryMethod)}`}
+                      >
+                        {station.deliveryMethod || "View"}
+                      </button>
+                    </td>
+                    <td className="px-3 py-2 min-w-[14rem]">
+                      {(() => {
+                        const allEmails = stationContactEmailsById[String(station.id)] ?? [];
+                        return (
+                          <StationContactsCell
+                            emails={allEmails}
+                            onCopy={() => {
+                              if (isTrafficEditingLocked) {
+                                return;
+                              }
+                              void onCopyStationContacts(allEmails);
+                            }}
+                          />
+                        );
+                      })()}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 text-center">
+                      {(() => {
+                        const deliveryStatusValue = asString(station.deliveryStatus).toLowerCase();
+                        const hasDeliveryRestore = Object.prototype.hasOwnProperty.call(stationDeliveryStatusRestoreMap, station.id);
+                        const deliveryStatusInteractive = canEditTradsphere && !isSaving && !isConfirmedLocked && (deliveryStatusValue !== "ready_to_email" || hasDeliveryRestore);
+                        const deliveryStatusChip = (
+                          <button
+                            type="button"
+                            onClick={deliveryStatusInteractive ? (event) => {
+                              event.stopPropagation();
+                              onToggleStationDeliveryStatus(station.id);
+                            } : undefined}
+                            disabled={!deliveryStatusInteractive}
+                            aria-pressed={deliveryStatusValue === "ready_to_email"}
+                            aria-disabled={!deliveryStatusInteractive}
+                            className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium transition focus-visible:outline-none focus-visible:ring-2 ${stationStatusChipClass(station.deliveryStatus)} ${deliveryStatusInteractive ? "cursor-pointer hover:brightness-95" : "cursor-default opacity-80"}`}
+                          >
+                            {formatStatusOptionLabel(station.deliveryStatus)}
+                          </button>
+                        );
+
+                        if (!deliveryStatusInteractive) {
+                          return deliveryStatusChip;
+                        }
+
+                        return (
+                          <TooltipTarget
+                            text={
+                              deliveryStatusValue === "ready_to_email"
+                                ? "Click to restore the original delivery status."
+                                : "Click to mark Ready To Email. Click again to restore the original value."
+                            }
+                            placement="top"
+                          >
+                            {deliveryStatusChip}
+                          </TooltipTarget>
+                        );
+                      })()}
+                    </td>
+                    <td className="whitespace-nowrap px-3 py-2 text-center">
+                      {(() => {
+                        const confirmedStatusValue = asString(station.confirmedStatus).toLowerCase();
+                        const hasConfirmedRestore = Object.prototype.hasOwnProperty.call(stationConfirmedStatusRestoreMap, station.id);
+                        const confirmedStatusInteractive = canEditTradsphere && !isSaving && !isConfirmedLocked && (confirmedStatusValue !== "confirmed" || hasConfirmedRestore);
+                        const confirmedStatusChip = (
+                          <button
+                            type="button"
+                            onClick={confirmedStatusInteractive ? (event) => {
+                              event.stopPropagation();
+                              onToggleStationConfirmedStatus(station.id);
+                            } : undefined}
+                            disabled={!confirmedStatusInteractive}
+                            aria-pressed={confirmedStatusValue === "confirmed"}
+                            aria-disabled={!confirmedStatusInteractive}
+                            className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium transition focus-visible:outline-none focus-visible:ring-2 ${stationStatusChipClass(station.confirmedStatus)} ${confirmedStatusInteractive ? "cursor-pointer hover:brightness-95" : "cursor-default opacity-80"}`}
+                          >
+                            {formatStatusOptionLabel(station.confirmedStatus)}
+                          </button>
+                        );
+
+                        if (!confirmedStatusInteractive) {
+                          return confirmedStatusChip;
+                        }
+
+                        return (
+                          <TooltipTarget
+                            text={
+                              confirmedStatusValue === "confirmed"
+                                ? "Click to restore the original confirmation status."
+                                : "Click to mark Confirmed. Click again to restore the original value."
+                            }
+                            placement="top"
+                          >
+                            {confirmedStatusChip}
+                          </TooltipTarget>
+                        );
+                      })()}
+                    </td>
+                    <td className="px-3 py-2 text-right">
+                      <ActionIconButton
+                        icon={<Trash2 />}
+                        tooltip="Delete station row"
+                        aria-label="Delete station row"
+                        title="Delete station row"
+                        onClick={(event) => {
+                          event.stopPropagation();
+                          onRemoveStation(station.id);
+                        }}
+                        disabled={!canEditTradsphere || isSaving || isTrafficEditingLocked}
+                        className="!h-6 !w-6 !rounded-full !p-0 text-rose-500 hover:!bg-rose-50 hover:!scale-105 hover:text-rose-600 focus-visible:!bg-rose-50 focus-visible:!scale-105 focus-visible:text-rose-600 [&_svg]:!h-3.5 [&_svg]:!w-3.5"
+                      />
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        )}
+        {isStationAutoSyncing ? (
+          <SectionLoadingOverlay message="Auto-syncing stations from schedule..." />
+        ) : null}
+      </div>
+    </SectionCard>
+  );
+});
+
+type TrafficEmailWorkspaceSectionProps = {
+  activeAccountCode: string;
+  activeDraft: TrafficDetail | null;
+  activeEmailWorkspace: TrafficEmailWorkspaceDraft | null;
+  canEditTradsphere: boolean;
+  isSaving: boolean;
+  isEmailLocked: boolean;
+  isSendingEmail: boolean;
+  isMarkingTrafficSent: boolean;
+  isUnlockingTraffic: boolean;
+  emailLockBannerKind: TrafficLockBannerKind | null;
+  emailWorkspacePrimaryActionLabel: string;
+  contactNameByEmail: Record<string, string>;
+  onOpenEmailPreviewModal: () => void;
+  onUnlockTraffic: () => void;
+  onOpenDownloadLinkNoteModal: (rowIndex: number) => void;
+  onCommitEmailWorkspace: (workspace: TrafficEmailWorkspaceDraft) => void;
+  onUpdateDraft: (updater: (current: TrafficDetail) => TrafficDetail) => void;
+};
+
+const TrafficEmailWorkspaceSection = memo(function TrafficEmailWorkspaceSection({
+  activeAccountCode,
+  activeDraft,
+  activeEmailWorkspace,
+  canEditTradsphere,
+  isSaving,
+  isEmailLocked,
+  isSendingEmail,
+  isMarkingTrafficSent,
+  isUnlockingTraffic,
+  emailLockBannerKind,
+  emailWorkspacePrimaryActionLabel,
+  contactNameByEmail,
+  onOpenEmailPreviewModal,
+  onUnlockTraffic,
+  onOpenDownloadLinkNoteModal,
+  onCommitEmailWorkspace,
+  onUpdateDraft,
+}: TrafficEmailWorkspaceSectionProps) {
+  return (
+    <SectionCard
+      id="traffic-workspace-panel-email"
+      title={(
+        <div className="space-y-1">
+          <p>Email Workspace</p>
+          <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${emailStatusChipClass(activeDraft?.email?.sentStatus || "draft")}`}>
+            {formatStatusOptionLabel(activeDraft?.email?.sentStatus || "draft")}
+          </span>
+        </div>
+      )}
+      actions={(
+        <div className="flex items-center gap-1">
+          <ActionIconButton
+            icon={isSendingEmail ? <Loader2 className="animate-spin" /> : (isEmailLocked ? <Eye /> : <Send />)}
+            tooltip={isSendingEmail ? "Sending email..." : emailWorkspacePrimaryActionLabel}
+            aria-label={isSendingEmail ? "Sending email" : emailWorkspacePrimaryActionLabel}
+            title={isSendingEmail ? "Sending email..." : emailWorkspacePrimaryActionLabel}
+            onClick={onOpenEmailPreviewModal}
+            disabled={
+              !canEditTradsphere
+              || !activeDraft
+              || !activeDraft.email
+              || !activeEmailWorkspace
+              || isSaving
+              || isSendingEmail
+              || isMarkingTrafficSent
+            }
+            className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
+          />
+        </div>
+      )}
+      contentClassName="space-y-4"
+    >
+      {!activeAccountCode ? (
+        <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+          Select an account to view the email draft.
+        </div>
+      ) : !activeDraft ? (
+        <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+          Select a traffic record to manage the email draft.
+        </div>
+      ) : !activeEmailWorkspace ? (
+        <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+          Email workspace is unavailable for this traffic record.
+        </div>
+      ) : (
+        <>
+          <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3">
+            {emailLockBannerKind ? (
+              <>
+                <TrafficLockBanner
+                  kind={emailLockBannerKind}
+                  isUnlocking={isUnlockingTraffic}
+                  disabled={!canEditTradsphere || isSaving || isUnlockingTraffic}
+                  onUnlock={() => {
+                    onUnlockTraffic();
+                  }}
+                />
+                <div className="h-3" />
+              </>
+            ) : null}
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Recipients</p>
+            <p className="mt-1 text-xs text-slate-500">Manage recipients and draft subject.</p>
+            <div className="mt-3 space-y-2">
+              <EmailChipsInput
+                value={activeDraft.email?.toEmails || []}
+                placeholder="To emails"
+                disabled={!canEditTradsphere || isSaving || isEmailLocked}
+                labelByEmail={contactNameByEmail}
+                onChange={(nextEmails) => {
+                  if (!activeDraft.email) {
+                    return;
+                  }
+                  onUpdateDraft((current) => ({
+                    ...current,
+                    email: current.email
+                      ? {
+                          ...current.email,
+                          toEmails: nextEmails,
+                        }
+                      : current.email,
+                  }));
+                }}
+              />
+              <div className="grid gap-2 md:grid-cols-2">
+                <EmailChipsInput
+                  value={activeDraft.email?.ccEmails || []}
+                  placeholder="CC emails"
+                  disabled={!canEditTradsphere || isSaving || isEmailLocked}
+                  labelByEmail={contactNameByEmail}
+                  onChange={(nextEmails) => {
+                    if (!activeDraft.email) {
+                      return;
+                    }
+                    onUpdateDraft((current) => ({
+                      ...current,
+                      email: current.email
+                        ? {
+                            ...current.email,
+                            ccEmails: nextEmails,
+                          }
+                        : current.email,
+                    }));
+                  }}
+                />
+                <EmailChipsInput
+                  value={activeDraft.email?.bccEmails || []}
+                  placeholder="BCC emails"
+                  disabled={!canEditTradsphere || isSaving || isEmailLocked}
+                  labelByEmail={contactNameByEmail}
+                  onChange={(nextEmails) => {
+                    if (!activeDraft.email) {
+                      return;
+                    }
+                    onUpdateDraft((current) => ({
+                      ...current,
+                      email: current.email
+                        ? {
+                            ...current.email,
+                            bccEmails: nextEmails,
+                          }
+                        : current.email,
+                    }));
+                  }}
+                />
+              </div>
+              <Input
+                value={activeDraft.email?.subject || ""}
+                placeholder="Email subject"
+                disabled={!canEditTradsphere || isSaving || isEmailLocked}
+                onChange={(event) => {
+                  if (!activeDraft.email) {
+                    return;
+                  }
+                  onUpdateDraft((current) => ({
+                    ...current,
+                    email: current.email
+                      ? {
+                          ...current.email,
+                          subject: event.target.value,
+                        }
+                      : current.email,
+                  }));
+                }}
+              />
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-white p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Body Content</p>
+            <p className="mt-1 text-xs text-slate-500">Main message shown in the email body. Use the toolbar to format text.</p>
+            <RichTextEditor
+              value={activeEmailWorkspace.bodyContent}
+              placeholder="Email body"
+              className="mt-3"
+              editorMinHeight="130px"
+              disabled={!canEditTradsphere || isSaving || isEmailLocked}
+              onChange={(nextValue) => {
+                onCommitEmailWorkspace({
+                  ...activeEmailWorkspace,
+                  bodyContent: nextValue,
+                  bodyTouched: true,
+                });
+              }}
+            />
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-white p-3">
+            <div>
+              <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Download Links</p>
+              <p className="mt-1 text-xs text-slate-500">
+                ISCI, File URL, and Script URL are auto-synced from Flights. To update these values, edit the corresponding flight row.
+              </p>
+            </div>
+            <div className="mt-3">
+              {activeEmailWorkspace.downloadLinks.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">
+                  No flights found. Add flight rows to auto-generate this section.
+                </div>
+              ) : (
+                <div className="overflow-x-auto rounded-lg border border-slate-200">
+                  <table className="min-w-full text-left text-xs">
+                    <thead className="bg-slate-50 text-slate-600">
+                      <tr>
+                        <th className="px-3 py-2 font-semibold">ISCI</th>
+                        <th className="px-3 py-2 font-semibold">File URL</th>
+                        <th className="px-3 py-2 font-semibold">Script URL</th>
+                        <th className="px-3 py-2 font-semibold">Note</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {activeEmailWorkspace.downloadLinks.map((item, index) => {
+                        const fileUrl = normalizeExternalUrl(item.fileUrl);
+                        const scriptUrl = normalizeExternalUrl(item.scriptUrl);
+                        const notePreview = formatDownloadLinkNotePreview(item.note);
+                        const hasNote = Boolean(notePreview);
+                        return (
+                          <tr key={`download-link-${item.flightId ?? index}`} className="border-t border-slate-200 text-slate-700">
+                            <td className="whitespace-nowrap px-3 py-2.5 align-middle">{asString(item.isci) || "—"}</td>
+                            <td className="px-3 py-2.5 align-middle">
+                              {fileUrl ? (
+                                <a
+                                  href={fileUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-blue-700 hover:text-blue-800 hover:underline"
+                                >
+                                  Open file
+                                </a>
+                              ) : (
+                                <span className="text-slate-400">Missing</span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2.5 align-middle">
+                              {scriptUrl ? (
+                                <a
+                                  href={scriptUrl}
+                                  target="_blank"
+                                  rel="noreferrer"
+                                  className="text-blue-700 hover:text-blue-800 hover:underline"
+                                >
+                                  Open script
+                                </a>
+                              ) : (
+                                <span className="text-slate-400">Missing</span>
+                              )}
+                            </td>
+                            <td className="px-3 py-2.5 align-middle">
+                              <div className="flex items-center gap-2">
+                                <div className="min-w-0 flex-1 whitespace-pre-wrap break-words text-xs leading-5 text-slate-700">
+                                  {hasNote ? asString(item.note).trim() : <span className="text-slate-400">—</span>}
+                                </div>
+                                <ActionIconButton
+                                  icon={<Pencil />}
+                                  tooltip={hasNote ? "Edit note" : "Add note"}
+                                  aria-label={hasNote ? "Edit note" : "Add note"}
+                                  title={hasNote ? `Edit note: ${notePreview}` : "Add note"}
+                                  onClick={() => onOpenDownloadLinkNoteModal(index)}
+                                  disabled={!canEditTradsphere || isSaving || isEmailLocked}
+                                  className="!h-8 !w-8 !shrink-0 !rounded-full !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-3.5 [&_svg]:!w-3.5"
+                                />
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              )}
+            </div>
+          </div>
+
+          <div className="rounded-xl border border-slate-200 bg-white p-3">
+            <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Traffic Instructions</p>
+            <p className="mt-1 text-xs text-slate-500">Example: Air ASAP, Expired date, and airing guidance. Use the toolbar to format text.</p>
+            <RichTextEditor
+              value={activeEmailWorkspace.instructionsContent}
+              placeholder="Air ASAP"
+              className="mt-3"
+              editorMinHeight="120px"
+              disabled={!canEditTradsphere || isSaving || isEmailLocked}
+              onChange={(nextValue) => {
+                onCommitEmailWorkspace({
+                  ...activeEmailWorkspace,
+                  instructionsContent: nextValue,
+                  instructionsTouched: true,
+                });
+              }}
+            />
+          </div>
+        </>
+      )}
+    </SectionCard>
+  );
+});
+
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
 }
@@ -402,20 +1407,6 @@ function asStringArray(value: unknown): string[] {
     }
     seen.add(normalized);
     output.push(normalized);
-  }
-  return output;
-}
-
-function splitEmailList(raw: string): string[] {
-  const seen = new Set<string>();
-  const output: string[] = [];
-  for (const part of raw.split(/[;,\n]+/g)) {
-    const email = part.trim().toLowerCase();
-    if (!email || seen.has(email)) {
-      continue;
-    }
-    seen.add(email);
-    output.push(email);
   }
   return output;
 }
@@ -492,38 +1483,96 @@ function normalizeSearchKeyword(value: string): string {
   return asString(value).toLowerCase();
 }
 
+function areStringArraysEqual(left: string[], right: string[]): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (left.length !== right.length) {
+    return false;
+  }
+  for (let index = 0; index < left.length; index += 1) {
+    if (left[index] !== right[index]) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function areRotationSummariesEqual(left: RotationSummary, right: RotationSummary): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (
+    left.totalRotation !== right.totalRotation
+    || left.rotationWarning !== right.rotationWarning
+    || left.rotationWarningMessage !== right.rotationWarningMessage
+    || left.warnings.length !== right.warnings.length
+  ) {
+    return false;
+  }
+  for (let index = 0; index < left.warnings.length; index += 1) {
+    const leftWarning = left.warnings[index];
+    const rightWarning = right.warnings[index];
+    if (leftWarning.code !== rightWarning.code || leftWarning.message !== rightWarning.message) {
+      return false;
+    }
+  }
+  return true;
+}
+
+function areNormalizedFlightsEqual(left: Record<string, unknown> | null, right: Record<string, unknown> | null): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (!left || !right) {
+    return false;
+  }
+  return (
+    left.flightStart === right.flightStart
+    && left.flightEnd === right.flightEnd
+    && left.medium === right.medium
+    && left.language === right.language
+    && left.length === right.length
+    && left.isci === right.isci
+    && left.rotation === right.rotation
+    && left.fileUrl === right.fileUrl
+    && left.scriptUrl === right.scriptUrl
+    && left.note === right.note
+  );
+}
+
+function areNormalizedStationsEqual(left: Record<string, unknown> | null, right: Record<string, unknown> | null): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (!left || !right) {
+    return false;
+  }
+  return (
+    left.stationCode === right.stationCode
+    && left.deliveryStatus === right.deliveryStatus
+    && left.confirmedStatus === right.confirmedStatus
+    && left.note === right.note
+  );
+}
+
 function trafficMatchesSearch(item: TrafficSummary, keyword: string): boolean {
   if (!keyword) {
     return true;
   }
-  const campaign = asString(item.campaign).toLowerCase();
-  if (campaign.includes(keyword)) {
+  if (item.searchCampaign.includes(keyword)) {
     return true;
   }
-  if (item.searchIscis.some((isci) => asString(isci).toLowerCase().includes(keyword))) {
+  if (item.searchIscis.some((isci) => isci.includes(keyword))) {
     return true;
   }
-  if (item.searchStations.some((station) => asString(station).toLowerCase().includes(keyword))) {
+  if (item.searchStations.some((station) => station.includes(keyword))) {
     return true;
   }
-  if (item.searchEmails.some((email) => asString(email).toLowerCase().includes(keyword))) {
+  if (item.searchEmails.some((email) => email.includes(keyword))) {
     return true;
   }
   return false;
-}
-
-function mergeUniqueEmails(base: string[], additions: string[]): string[] {
-  const seen = new Set<string>();
-  const output: string[] = [];
-  for (const item of [...base, ...additions]) {
-    const normalized = asString(item).toLowerCase();
-    if (!normalized || seen.has(normalized)) {
-      continue;
-    }
-    seen.add(normalized);
-    output.push(normalized);
-  }
-  return output;
 }
 
 function resolveEarliestFlightStartIso(flights: TrafficFlight[]): string {
@@ -590,6 +1639,35 @@ function formatMonthYearFromIsoDate(isoDate: string): string {
     "December",
   ][monthIndex];
   return `${monthName} ${year}`;
+}
+
+function formatBroadcastMonthLabel(year: number, month: number): string {
+  const monthNames = [
+    "",
+    "JAN",
+    "FEB",
+    "MAR",
+    "APR",
+    "MAY",
+    "JUN",
+    "JUL",
+    "AUG",
+    "SEP",
+    "OCT",
+    "NOV",
+    "DEC",
+  ];
+  if (!Number.isFinite(year) || !Number.isFinite(month) || month < 1 || month > 12) {
+    return "";
+  }
+  return `${monthNames[month]}'${String(Math.trunc(year)).slice(-2)}`;
+}
+
+function formatSpotTooltipText(spotCount: number, grossText: string): string {
+  const count = Math.max(0, Math.trunc(spotCount));
+  const label = count === 1 ? "spot" : "spots";
+  const amount = asString(grossText) || "$0.00";
+  return `${count} ${label} (${amount})`;
 }
 
 function buildDefaultTrafficEmailSubject(detail: TrafficDetail, accountName: string): string {
@@ -723,6 +1801,45 @@ function normalizeRotationSummary(payload: unknown): RotationSummary {
   };
 }
 
+function normalizeTrafficSummary(raw: unknown): TrafficSummary | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+
+  const id = asString(raw.id);
+  if (!id) {
+    return null;
+  }
+
+  return {
+    id,
+    accountCode: asString(raw.accountCode).toUpperCase(),
+    campaign: asString(raw.campaign),
+    searchCampaign: asString(raw.searchCampaign || raw.campaign).toLowerCase(),
+    status: (asString(raw.status).toLowerCase() as TrafficStatus) || "draft",
+    note: asNullableString(raw.note),
+    dateCreated: asNullableString(raw.dateCreated),
+    dateUpdated: asNullableString(raw.dateUpdated),
+    flightCount: Math.max(0, Math.trunc(asNumber(raw.flightCount, 0))),
+    stationCount: Math.max(0, Math.trunc(asNumber(raw.stationCount, 0))),
+    emailSentStatus: asNullableString(raw.emailSentStatus),
+    emailSentAt: asNullableString(raw.emailSentAt),
+    searchIscis: normalizeSearchTokenList(
+      [raw.searchIscis, raw.isciSearch],
+      { toUpper: true },
+    ),
+    searchStations: normalizeSearchTokenList(
+      [raw.searchStations, raw.stationCodeSearch, raw.stationNameSearch],
+      { toUpper: true },
+    ),
+    searchEmails: normalizeSearchTokenList(
+      [raw.searchEmails, raw.searchToEmails, raw.searchCcEmails, raw.searchBccEmails],
+      { toLower: true },
+    ),
+    summary: normalizeRotationSummary(raw.summary),
+  };
+}
+
 function normalizeTrafficSummaryList(payload: unknown): TrafficSummary[] {
   const data = unwrapData(payload);
   if (!Array.isArray(data)) {
@@ -730,38 +1847,22 @@ function normalizeTrafficSummaryList(payload: unknown): TrafficSummary[] {
   }
 
   return data
-    .filter(isRecord)
-    .map((item) => {
-      const id = asString(item.id);
-      const statusRaw = asString(item.status).toLowerCase() as TrafficStatus;
-      return {
-        id,
-        accountCode: asString(item.accountCode).toUpperCase(),
-        campaign: asString(item.campaign),
-        status: statusRaw || "draft",
-        note: asNullableString(item.note),
-        dateCreated: asNullableString(item.dateCreated),
-        dateUpdated: asNullableString(item.dateUpdated),
-        flightCount: Math.max(0, Math.trunc(asNumber(item.flightCount, 0))),
-        stationCount: Math.max(0, Math.trunc(asNumber(item.stationCount, 0))),
-        emailSentStatus: asNullableString(item.emailSentStatus),
-        emailSentAt: asNullableString(item.emailSentAt),
-        searchIscis: normalizeSearchTokenList(
-          [item.searchIscis, item.isciSearch],
-          { toUpper: true },
-        ),
-        searchStations: normalizeSearchTokenList(
-          [item.searchStations, item.stationCodeSearch, item.stationNameSearch],
-          { toUpper: true },
-        ),
-        searchEmails: normalizeSearchTokenList(
-          [item.searchEmails, item.searchToEmails, item.searchCcEmails, item.searchBccEmails],
-          { toLower: true },
-        ),
-        summary: normalizeRotationSummary(item.summary),
-      };
-    })
-    .filter((row) => row.id.length > 0);
+    .map((item) => normalizeTrafficSummary(item))
+    .filter((row): row is TrafficSummary => Boolean(row));
+}
+
+function normalizeTrafficListItemFromBulkSave(payload: unknown): TrafficSummary | null {
+  const data = unwrapData(payload);
+  if (!isRecord(data)) {
+    return null;
+  }
+  if ("trafficListItem" in data) {
+    return normalizeTrafficSummary(data.trafficListItem);
+  }
+  if ("trafficSummary" in data) {
+    return normalizeTrafficSummary(data.trafficSummary);
+  }
+  return normalizeTrafficSummary(data);
 }
 
 function normalizeTrafficEmail(raw: unknown): TrafficEmail | null {
@@ -784,6 +1885,94 @@ function normalizeTrafficEmail(raw: unknown): TrafficEmail | null {
     lastSendError: asNullableString(raw.lastSendError),
     dateCreated: asNullableString(raw.dateCreated),
     dateUpdated: asNullableString(raw.dateUpdated),
+  };
+}
+
+function normalizeTrafficStationCandidateSummaryMonth(raw: unknown): TrafficStationCandidateSummaryMonth | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+  const year = Math.max(0, Math.trunc(asNumber(raw.year, 0)));
+  const month = Math.max(0, Math.trunc(asNumber(raw.month, 0)));
+  const monthKey = asString(raw.monthKey);
+  const label = asString(raw.label) || formatBroadcastMonthLabel(year, month);
+  if (!monthKey || !label || year < 1000 || month < 1 || month > 12) {
+    return null;
+  }
+  return {
+    monthKey,
+    year,
+    month,
+    label,
+  };
+}
+
+function normalizeTrafficStationCandidateSummaryCell(raw: unknown): TrafficStationCandidateSummaryCell | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+  const year = Math.max(0, Math.trunc(asNumber(raw.year, 0)));
+  const month = Math.max(0, Math.trunc(asNumber(raw.month, 0)));
+  const monthKey = asString(raw.monthKey);
+  const label = asString(raw.label) || formatBroadcastMonthLabel(year, month);
+  if (!monthKey || !label || year < 1000 || month < 1 || month > 12) {
+    return null;
+  }
+  return {
+    monthKey,
+    year,
+    month,
+    label,
+    hasSchedule: Boolean(raw.hasSchedule),
+    hasSpot: Boolean(raw.hasSpot),
+    scheduleCount: Math.max(0, Math.trunc(asNumber(raw.scheduleCount, 0))),
+    totalSpot: Math.max(0, Math.trunc(asNumber(raw.totalSpot, 0))),
+    totalGrossText: asString(raw.totalGrossText) || "$0.00",
+  };
+}
+
+function normalizeTrafficStationCandidateSummaryRow(raw: unknown): TrafficStationCandidateSummaryRow | null {
+  if (!isRecord(raw)) {
+    return null;
+  }
+  const estNum = Math.trunc(asNumber(raw.estNum, -1));
+  const stationCode = asString(raw.stationCode).toUpperCase();
+  if (!Number.isFinite(estNum) || estNum < 0 || !stationCode) {
+    return null;
+  }
+  const monthCells = Array.isArray(raw.monthCells)
+    ? raw.monthCells
+      .map((cell) => normalizeTrafficStationCandidateSummaryCell(cell))
+      .filter((cell): cell is TrafficStationCandidateSummaryCell => Boolean(cell))
+    : [];
+  return {
+    estNum,
+    stationCode,
+    stationName: asNullableString(raw.stationName),
+    monthCells,
+  };
+}
+
+function normalizeTrafficStationCandidatesSummary(raw: unknown): TrafficStationCandidatesSummary {
+  if (!isRecord(raw)) {
+    return {
+      candidateCount: 0,
+      estNumCount: 0,
+      months: [],
+      rows: [],
+    };
+  }
+  const monthsRaw = Array.isArray(raw.months) ? raw.months : [];
+  const rowsRaw = Array.isArray(raw.rows) ? raw.rows : [];
+  return {
+    candidateCount: Math.max(0, Math.trunc(asNumber(raw.candidateCount, 0))),
+    estNumCount: Math.max(0, Math.trunc(asNumber(raw.estNumCount, 0))),
+    months: monthsRaw
+      .map((item) => normalizeTrafficStationCandidateSummaryMonth(item))
+      .filter((item): item is TrafficStationCandidateSummaryMonth => Boolean(item)),
+    rows: rowsRaw
+      .map((item) => normalizeTrafficStationCandidateSummaryRow(item))
+      .filter((item): item is TrafficStationCandidateSummaryRow => Boolean(item)),
   };
 }
 
@@ -914,7 +2103,7 @@ function normalizeTrafficStationCandidates(payload: unknown): TrafficStationCand
   const estNums = estNumsRaw
     .filter(isRecord)
     .map((item) => ({
-      estNum: Math.max(0, Math.trunc(asNumber(item.estNum, -1))),
+      estNum: Math.trunc(asNumber(item.estNum, -1)),
       note: asNullableString(item.note),
       medium: asNullableString(asString(item.medium).toUpperCase()),
       stationCount: Math.max(0, Math.trunc(asNumber(item.stationCount, 0))),
@@ -926,10 +2115,7 @@ function normalizeTrafficStationCandidates(payload: unknown): TrafficStationCand
     flightEnd,
     estNums,
     stations,
-    summary: {
-      candidateCount: Math.max(0, Math.trunc(asNumber(isRecord(data.summary) ? data.summary.candidateCount : stations.length, stations.length))),
-      estNumCount: Math.max(0, Math.trunc(asNumber(isRecord(data.summary) ? data.summary.estNumCount : estNums.length, estNums.length))),
-    },
+    summary: normalizeTrafficStationCandidatesSummary(data.summary),
   };
 }
 
@@ -1186,16 +2372,11 @@ function buildTrafficStationCandidatesCacheKey(params: {
   const mediumsKey = mediums.length > 0
     ? [...new Set(mediums.map((medium) => canonicalFlightMediumForCandidates(medium)))].sort().join(",")
     : "*";
-  return `traffic:station-candidates:${accountCode}:${flightStart}:${flightEnd}:estNums=${estNumsKey}:languages=${languagesKey}:mediums=${mediumsKey}:v1`;
+  return `traffic:station-candidates:${accountCode}:${flightStart}:${flightEnd}:estNums=${estNumsKey}:languages=${languagesKey}:mediums=${mediumsKey}:v3`;
 }
 
 function isLocalTrafficId(trafficId: string): boolean {
   return asString(trafficId).startsWith(LOCAL_TRAFFIC_ID_PREFIX);
-}
-
-function isLikelyEmailAddress(value: string): boolean {
-  const normalized = asString(value).trim();
-  return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(normalized);
 }
 
 function buildLocalTrafficId(): string {
@@ -1242,6 +2423,7 @@ function buildListSummaryFromDetail(
     id: detail.traffic.id,
     accountCode: detail.traffic.accountCode,
     campaign: detail.traffic.campaign,
+    searchCampaign: asString(detail.traffic.campaign).toLowerCase(),
     status: detail.traffic.status,
     note: detail.traffic.note,
     dateCreated: detail.traffic.dateCreated,
@@ -1260,6 +2442,29 @@ function buildListSummaryFromDetail(
       warnings: detail.summary.warnings,
     },
   };
+}
+
+function upsertTrafficSummaryInList(
+  currentList: TrafficSummary[],
+  summary: TrafficSummary,
+  sourceDraftId: string | null,
+  trafficId: string,
+  isLocalDraft: boolean,
+): TrafficSummary[] {
+  const normalizedSourceDraftId = asString(sourceDraftId);
+  const normalizedTrafficId = asString(trafficId);
+  let changed = false;
+  const nextList = currentList.map((item) => {
+    if (item.id !== normalizedSourceDraftId && item.id !== normalizedTrafficId) {
+      return item;
+    }
+    changed = true;
+    return summary;
+  });
+  if (!changed && isLocalDraft) {
+    return [summary, ...currentList];
+  }
+  return changed ? nextList : currentList;
 }
 
 function computeSummary(detail: TrafficDetail): TrafficDetail {
@@ -1638,7 +2843,7 @@ function syncTrafficEmailRecipientsFromStations(previousDetail: TrafficDetail, n
     return nextDetail;
   }
   const nextToEmails = buildStationEmailRecipients(nextDetail.stations);
-  if (JSON.stringify(nextToEmails) === JSON.stringify(nextDetail.email.toEmails)) {
+  if (areStringArraysEqual(nextToEmails, nextDetail.email.toEmails)) {
     return nextDetail;
   }
   return {
@@ -1785,131 +2990,6 @@ function StationContactsCell({
         text={tooltipText}
       />
     </>
-  );
-}
-
-function EmailChipsInput({
-  value,
-  onChange,
-  placeholder,
-  disabled,
-  labelByEmail,
-}: {
-  value: string[];
-  onChange: (nextEmails: string[]) => void;
-  placeholder: string;
-  disabled: boolean;
-  labelByEmail: Record<string, string>;
-}) {
-  const [draftValue, setDraftValue] = useState("");
-  const [allChipsSelected, setAllChipsSelected] = useState(false);
-  const allEmailsText = useMemo(
-    () => value.map((entry) => asString(entry).toLowerCase()).filter(Boolean).join(", "),
-    [value],
-  );
-
-  const commitDraft = useCallback(() => {
-    const parsed = splitEmailList(draftValue);
-    if (parsed.length > 0) {
-      onChange(mergeUniqueEmails(value, parsed));
-    }
-    setDraftValue("");
-    setAllChipsSelected(false);
-  }, [draftValue, onChange, value]);
-
-  return (
-    <div
-      className={[
-        "flex min-h-10 w-full flex-wrap items-center gap-1 rounded-md border border-input bg-background px-2 py-1 text-sm ring-offset-background",
-        disabled ? "cursor-not-allowed opacity-70" : "focus-within:ring-2 focus-within:ring-ring focus-within:ring-offset-2",
-      ].join(" ")}
-    >
-      {value.map((email) => {
-        const normalizedEmail = asString(email).toLowerCase();
-        const displayLabel = asString(labelByEmail[normalizedEmail]) || normalizedEmail;
-        return (
-          <TooltipTarget
-            key={normalizedEmail}
-            text={displayLabel === normalizedEmail ? normalizedEmail : `${displayLabel} <${normalizedEmail}>`}
-          >
-            <span
-              className={[
-                "inline-flex items-center gap-1 rounded-full border px-2 py-0.5 text-xs font-medium",
-                allChipsSelected
-                  ? "border-blue-300 bg-blue-100 text-blue-800"
-                  : "border-slate-200 bg-slate-100 text-slate-700",
-              ].join(" ")}
-            >
-              <span className="max-w-[14rem] truncate">{displayLabel}</span>
-              {!disabled ? (
-                <button
-                  type="button"
-                  onClick={() => onChange(value.filter((entry) => asString(entry).toLowerCase() !== normalizedEmail))}
-                  className="inline-flex size-4 items-center justify-center rounded-full text-slate-500 transition hover:bg-slate-200 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring"
-                  aria-label={`Remove ${normalizedEmail}`}
-                >
-                  <X className="size-3" />
-                </button>
-              ) : null}
-            </span>
-          </TooltipTarget>
-        );
-      })}
-      <input
-        value={draftValue}
-        onChange={(event) => {
-          setDraftValue(event.target.value);
-          if (allChipsSelected) {
-            setAllChipsSelected(false);
-          }
-        }}
-        onBlur={commitDraft}
-        onCopy={(event) => {
-          if (!allChipsSelected || !allEmailsText) {
-            return;
-          }
-          event.preventDefault();
-          event.clipboardData.setData("text/plain", allEmailsText);
-        }}
-        onPaste={(event) => {
-          const pasted = event.clipboardData.getData("text");
-          if (!/[;,\n]/.test(pasted)) {
-            return;
-          }
-          event.preventDefault();
-          if (allChipsSelected) {
-            setAllChipsSelected(false);
-          }
-          const parsed = splitEmailList(pasted);
-          if (parsed.length > 0) {
-            onChange(mergeUniqueEmails(value, parsed));
-          }
-        }}
-        onKeyDown={(event) => {
-          const isSelectAllShortcut = (event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "a";
-          if (isSelectAllShortcut && allEmailsText) {
-            event.preventDefault();
-            setAllChipsSelected(true);
-            return;
-          }
-          if (event.key === "Enter" || event.key === "Tab" || event.key === "," || event.key === ";") {
-            event.preventDefault();
-            commitDraft();
-            return;
-          }
-          if (event.key === "Backspace" && !draftValue && value.length > 0) {
-            event.preventDefault();
-            if (allChipsSelected) {
-              setAllChipsSelected(false);
-            }
-            onChange(value.slice(0, -1));
-          }
-        }}
-        placeholder={value.length === 0 ? placeholder : ""}
-        disabled={disabled}
-        className="min-w-[9rem] flex-1 border-0 bg-transparent px-1 py-1 text-sm outline-none placeholder:text-muted-foreground disabled:cursor-not-allowed"
-      />
-    </div>
   );
 }
 
@@ -2164,6 +3244,85 @@ function buildTrafficEmailWorkspaceFromDetail(detail: TrafficDetail): TrafficEma
   };
 }
 
+function TrafficStationCandidateSummaryTable({
+  summary,
+}: {
+  summary: TrafficStationCandidatesSummary;
+}) {
+  if (summary.months.length === 0 || summary.rows.length === 0) {
+    return null;
+  }
+
+  return (
+    <div className="w-full space-y-2 rounded-md border border-slate-200 bg-slate-50/80 p-2">
+      <div className="flex items-center justify-between gap-2 text-[11px] text-slate-600">
+        <span>
+          {summary.rows.length} station row(s) across {summary.months.length} broadcast month(s)
+        </span>
+        <span>Has schedule / spot by broadcast month</span>
+      </div>
+      <div className="max-h-72 w-full overflow-auto rounded-md border border-slate-200 bg-white">
+        <table className="w-full min-w-full border-collapse text-xs">
+          <thead className="sticky top-0 z-10 bg-slate-100">
+            <tr className="text-slate-700">
+              <th className="border-b border-r border-slate-200 bg-slate-100 px-3 py-2 text-left font-semibold">
+                Estnum
+              </th>
+              <th className="border-b border-r border-slate-200 bg-slate-100 px-3 py-2 text-left font-semibold">
+                Station
+              </th>
+              {summary.months.map((month) => (
+                <th
+                  key={month.monthKey}
+                  className="min-w-[96px] border-b border-r border-slate-200 px-3 py-2 text-center font-semibold last:border-r-0"
+                >
+                  {month.label}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {summary.rows.map((row) => (
+              <tr key={`${row.estNum}:${row.stationCode}`} className="odd:bg-white even:bg-slate-50">
+                <td className="border-b border-r border-slate-200 px-3 py-2 font-mono text-slate-700">
+                  {row.estNum}
+                </td>
+                <td className="border-b border-r border-slate-200 px-3 py-2">
+                  <div className="font-medium text-slate-800">
+                    {row.stationName || row.stationCode}
+                  </div>
+                  {row.stationName && row.stationName !== row.stationCode ? (
+                    <div className="text-[11px] text-slate-500">{row.stationCode}</div>
+                  ) : null}
+                </td>
+                {row.monthCells.map((cell) => {
+                  const hasMatch = cell.hasSchedule || cell.hasSpot;
+                  const title = formatSpotTooltipText(cell.totalSpot, cell.totalGrossText);
+                  return (
+                    <td key={cell.monthKey} className="border-b border-r border-slate-200 px-3 py-2 text-center last:border-r-0">
+                      <TooltipTarget text={title}>
+                        <span
+                          className={[
+                            "inline-flex items-center justify-center font-semibold",
+                            hasMatch ? "text-blue-600" : "text-slate-300",
+                          ].join(" ")}
+                          aria-label={title}
+                        >
+                          {hasMatch ? "✓" : "—"}
+                        </span>
+                      </TooltipTarget>
+                    </td>
+                  );
+                })}
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
 export default function TrafficPage() {
   const { requestJson } = useApiRequest();
   const auth = useAuth();
@@ -2215,6 +3374,7 @@ export default function TrafficPage() {
     isLoadingSelections,
     isRefreshingSelections,
     selectionsError,
+    refreshSelections,
   } = useTradsphereAccountSelections({
     requestJson,
     requestHeaders,
@@ -2231,6 +3391,10 @@ export default function TrafficPage() {
     }
     return map;
   }, [accountSelections]);
+  const accountNameByCodeRef = useRef<Record<string, string>>(accountNameByCode);
+  useEffect(() => {
+    accountNameByCodeRef.current = accountNameByCode;
+  }, [accountNameByCode]);
 
   const [trafficList, setTrafficList] = useState<TrafficSummary[]>([]);
   const [draftTrafficSearch, setDraftTrafficSearch] = useState("");
@@ -2243,7 +3407,10 @@ export default function TrafficPage() {
   const [isLoadingAccountTraffic, setIsLoadingAccountTraffic] = useState(false);
   const [isRefreshingAccountTraffic, setIsRefreshingAccountTraffic] = useState(false);
   const [isLoadingDetail, setIsLoadingDetail] = useState(false);
+  const [isRefreshingDetail, setIsRefreshingDetail] = useState(false);
+  const isDetailBusy = isLoadingDetail || isRefreshingDetail;
   const [isLoadActionOverlayVisible, setIsLoadActionOverlayVisible] = useState(false);
+  const [isSelectorRefreshOverlayVisible, setIsSelectorRefreshOverlayVisible] = useState(false);
   const [isChipRefreshOverlayVisible, setIsChipRefreshOverlayVisible] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
   const [isSendingEmail, setIsSendingEmail] = useState(false);
@@ -2252,11 +3419,7 @@ export default function TrafficPage() {
   const [isUnlockingTraffic, setIsUnlockingTraffic] = useState(false);
   const [isTrafficConfirmDialogOpen, setIsTrafficConfirmDialogOpen] = useState(false);
   const [trafficConfirmTargetTrafficId, setTrafficConfirmTargetTrafficId] = useState<string | null>(null);
-  const [emailSendSuccessPrompt, setEmailSendSuccessPrompt] = useState<{
-    trafficId: string;
-    recipientCount: number;
-    askMarkSent: boolean;
-  } | null>(null);
+  const [isSendEmailConfirmationOpen, setIsSendEmailConfirmationOpen] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
   const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null);
@@ -2269,11 +3432,12 @@ export default function TrafficPage() {
   const [activeWorkspaceTab, setActiveWorkspaceTab] = useState<TrafficWorkspaceTab>("workflow");
   const [isEmailPreviewOpen, setIsEmailPreviewOpen] = useState(false);
   const [isTestEmailModalOpen, setIsTestEmailModalOpen] = useState(false);
-  const [testEmailTo, setTestEmailTo] = useState("");
+  const [testEmailTo, setTestEmailTo] = useState<string[]>([DEFAULT_TEST_EMAIL_RECIPIENT]);
   const [emailWorkspaceByTrafficId, setEmailWorkspaceByTrafficId] = useState<Record<string, TrafficEmailWorkspaceDraft>>({});
   const [isDownloadLinkNoteModalOpen, setIsDownloadLinkNoteModalOpen] = useState(false);
   const [activeDownloadLinkNoteIndex, setActiveDownloadLinkNoteIndex] = useState<number | null>(null);
   const [downloadLinkNoteDraft, setDownloadLinkNoteDraft] = useState("");
+  const [isDownloadLinkNoteDiscardDialogOpen, setIsDownloadLinkNoteDiscardDialogOpen] = useState(false);
   const [isScheduleTimelineModalOpen, setIsScheduleTimelineModalOpen] = useState(false);
   const [isScheduleTimelineLoading, setIsScheduleTimelineLoading] = useState(false);
   const [flightModalMode, setFlightModalMode] = useState<RowModalMode>("create");
@@ -2292,6 +3456,7 @@ export default function TrafficPage() {
   const [selectedFlightStationSyncEstNums, setSelectedFlightStationSyncEstNums] = useState<number[]>([]);
   const [flightStationSyncSelectionsByTrafficId, setFlightStationSyncSelectionsByTrafficId] = useState<Record<string, number[]>>({});
   const [isFlightStationSyncCandidatesLoading, setIsFlightStationSyncCandidatesLoading] = useState(false);
+  const [flightStationSyncCacheStatus, setFlightStationSyncCacheStatus] = useState<CacheStatus | null>(null);
   const [flightStationSyncDialogSource, setFlightStationSyncDialogSource] = useState<FlightStationSyncDialogSource>("flight_update");
   const [isSyncMissingStationsDialogOpen, setIsSyncMissingStationsDialogOpen] = useState(false);
   const [pendingSyncMissingStationsCodes, setPendingSyncMissingStationsCodes] = useState<string[]>([]);
@@ -2336,6 +3501,7 @@ export default function TrafficPage() {
   const flightFileUrlInputRef = useRef<HTMLInputElement | null>(null);
   const flightScriptUrlInputRef = useRef<HTMLInputElement | null>(null);
   const flightNoteTextareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const downloadLinkNoteTextareaRef = useRef<HTMLTextAreaElement | null>(null);
   const stationDeliveryStatusFieldRef = useRef<HTMLDivElement | null>(null);
   const stationConfirmedStatusFieldRef = useRef<HTMLDivElement | null>(null);
   const stationNoteTextareaRef = useRef<HTMLTextAreaElement | null>(null);
@@ -2412,6 +3578,7 @@ export default function TrafficPage() {
 
   const activeAccountCode = asString(loadedAccountCode).toUpperCase();
   const selectedAccountCodeNormalized = asString(selectedAccountCode).toUpperCase();
+  const selectedAccountIsLoaded = Boolean(activeAccountCode && selectedAccountCodeNormalized === activeAccountCode);
   const hasPendingAccountSelectionAfterLoad = Boolean(
     activeAccountCode
     && selectedAccountCodeNormalized
@@ -2495,7 +3662,6 @@ export default function TrafficPage() {
     archiveTargetTrafficId
     && deletingTrafficIdSet.has(archiveTargetTrafficId),
   );
-  const isDuplicatingTraffic = Boolean(duplicatingTrafficId);
   const timelineAccountCode = asString(activeDraft?.traffic.accountCode).toUpperCase();
   const persistedTrafficStatus = asString(detailBaseline?.traffic.status).toLowerCase();
   const currentTrafficStatus = asString(detailDraft?.traffic.status || detailBaseline?.traffic.status).toLowerCase();
@@ -2526,25 +3692,29 @@ export default function TrafficPage() {
   const timelineAnchorEnd = stationSyncFlightRange?.flightEnd ?? null;
   const shouldShowSaveActions = canEditTradsphere && (hasAnyUnsavedChanges || isSaving);
   const hasFlightModalChanges = useMemo(() => {
-    return JSON.stringify(normalizeFlightForCompare(flightModalBaseline)) !== JSON.stringify(normalizeFlightForCompare(flightModalDraft));
+    return !areNormalizedFlightsEqual(
+      normalizeFlightForCompare(flightModalBaseline),
+      normalizeFlightForCompare(flightModalDraft),
+    );
   }, [flightModalBaseline, flightModalDraft]);
   const hasStationModalChanges = useMemo(() => {
-    const baseline = stationModalBaseline;
-    const draft = stationModalDraft;
-    if (!baseline || !draft) {
-      return Boolean(baseline || draft);
-    }
-    return JSON.stringify({
-      stationCode: asString(baseline.stationCode).toUpperCase(),
-      deliveryStatus: asString(baseline.deliveryStatus).toLowerCase(),
-      confirmedStatus: asString(baseline.confirmedStatus).toLowerCase(),
-      note: typeof baseline.note === "string" ? baseline.note : asString(baseline.note || ""),
-    }) !== JSON.stringify({
-      stationCode: asString(draft.stationCode).toUpperCase(),
-      deliveryStatus: asString(draft.deliveryStatus).toLowerCase(),
-      confirmedStatus: asString(draft.confirmedStatus).toLowerCase(),
-      note: typeof draft.note === "string" ? draft.note : asString(draft.note || ""),
-    });
+    const baseline = stationModalBaseline
+      ? {
+          stationCode: asString(stationModalBaseline.stationCode).toUpperCase(),
+          deliveryStatus: asString(stationModalBaseline.deliveryStatus).toLowerCase(),
+          confirmedStatus: asString(stationModalBaseline.confirmedStatus).toLowerCase(),
+          note: typeof stationModalBaseline.note === "string" ? stationModalBaseline.note : asString(stationModalBaseline.note || ""),
+        }
+      : null;
+    const draft = stationModalDraft
+      ? {
+          stationCode: asString(stationModalDraft.stationCode).toUpperCase(),
+          deliveryStatus: asString(stationModalDraft.deliveryStatus).toLowerCase(),
+          confirmedStatus: asString(stationModalDraft.confirmedStatus).toLowerCase(),
+          note: typeof stationModalDraft.note === "string" ? stationModalDraft.note : asString(stationModalDraft.note || ""),
+        }
+      : null;
+    return !areNormalizedStationsEqual(baseline, draft);
   }, [stationModalBaseline, stationModalDraft]);
   const canSaveFlightModal = Boolean(
     canEditTradsphere
@@ -2590,8 +3760,8 @@ export default function TrafficPage() {
       && !isSendingEmail
       && !isMarkingTrafficSent
       && !isDeletingTraffic
-      && !isLoadingAccountTraffic
-      && !isLoadingDetail,
+    && !isLoadingAccountTraffic
+    && !isDetailBusy,
   );
   const activeTrafficId = asString(activeDraft?.traffic.id);
   const activeEmailWorkspace = useMemo(() => {
@@ -2626,14 +3796,24 @@ export default function TrafficPage() {
     }
     return activeEmailWorkspace.downloadLinks[activeDownloadLinkNoteIndex] ?? null;
   }, [activeDownloadLinkNoteIndex, activeEmailWorkspace]);
+  const hasDownloadLinkNoteChanges = useMemo(() => {
+    if (!activeDownloadLinkNoteEntry) {
+      return false;
+    }
+    return asString(downloadLinkNoteDraft).trim() !== asString(activeDownloadLinkNoteEntry.note || "").trim();
+  }, [activeDownloadLinkNoteEntry, downloadLinkNoteDraft]);
+  const canSaveDownloadLinkNote = Boolean(
+    canEditTradsphere
+      && !isSaving
+      && !isEmailLocked
+      && activeDownloadLinkNoteEntry
+      && hasDownloadLinkNoteChanges,
+  );
   const canSendTrafficEmail = useMemo(() => {
     if (!canEditTradsphere || isSaving || isSendingEmail || isMarkingTrafficSent || isEmailLocked) {
       return false;
     }
     if (!activeDraft?.email || !activeEmailWorkspace || !activeTrafficId) {
-      return false;
-    }
-    if (isLocalTrafficId(activeTrafficId)) {
       return false;
     }
     return true;
@@ -2654,9 +3834,6 @@ export default function TrafficPage() {
     if (!activeDraft?.email || !activeEmailWorkspace || !activeTrafficId) {
       return false;
     }
-    if (isLocalTrafficId(activeTrafficId)) {
-      return false;
-    }
     return true;
   }, [
     activeDraft,
@@ -2674,10 +3851,7 @@ export default function TrafficPage() {
     if (!activeDraft?.email || !activeEmailWorkspace || !activeTrafficId) {
       return false;
     }
-    if (isLocalTrafficId(activeTrafficId)) {
-      return false;
-    }
-    return isLikelyEmailAddress(testEmailTo);
+    return testEmailTo.length === 1 && isLikelyEmailAddress(testEmailTo[0] ?? "");
   }, [
     activeDraft,
     activeEmailWorkspace,
@@ -2687,12 +3861,70 @@ export default function TrafficPage() {
     isSendingTestEmail,
     testEmailTo,
   ]);
+  const activeTrafficNeedsSaveBeforeSending = useMemo(() => {
+    if (!detailDraft || !detailBaseline) {
+      return false;
+    }
+    const trafficId = asString(detailDraft.traffic.id);
+    if (!trafficId) {
+      return false;
+    }
+    return isLocalTrafficId(trafficId) || hasTrafficDetailChanges(detailBaseline, detailDraft);
+  }, [detailBaseline, detailDraft]);
+  const sendTrafficEmailDisabledReason = useMemo(() => {
+    if (!activeDraft?.email || !activeEmailWorkspace || !activeTrafficId) {
+      return "Open a traffic record with an email draft first.";
+    }
+    if (isSendingTestEmail) {
+      return "Wait for the test email to finish sending before sending.";
+    }
+    if (isSaving) {
+      return "Save traffic changes first.";
+    }
+    if (isSendingEmail) {
+      return "Email is currently sending.";
+    }
+    if (isMarkingTrafficSent) {
+      return "Traffic is being marked sent.";
+    }
+    return "Send email is unavailable right now.";
+  }, [
+    activeDraft?.email,
+    activeEmailWorkspace,
+    activeTrafficId,
+    isMarkingTrafficSent,
+    isSaving,
+    isSendingEmail,
+    isSendingTestEmail,
+  ]);
+  const sendTrafficTestEmailDisabledReason = useMemo(() => {
+    if (!activeDraft?.email || !activeEmailWorkspace || !activeTrafficId) {
+      return "Open a traffic record with an email draft first.";
+    }
+    if (isSendingEmail) {
+      return "Wait for the main email send to finish before sending a test email.";
+    }
+    if (isSaving) {
+      return "Save traffic changes first.";
+    }
+    if (isSendingTestEmail) {
+      return "Test email is currently sending.";
+    }
+    return "Send test email is unavailable right now.";
+  }, [
+    activeDraft?.email,
+    activeEmailWorkspace,
+    activeTrafficId,
+    isSaving,
+    isSendingEmail,
+    isSendingTestEmail,
+  ]);
 
   const cacheStatusText = useMemo(() => {
     if (isDeletingTraffic) {
       return "Removing traffic...";
     }
-    if (isRefreshingAccountTraffic || isLoadingDetail) {
+    if (isRefreshingAccountTraffic || isDetailBusy) {
       return "Refreshing...";
     }
     if (!isOnline && cacheStatus) {
@@ -2702,7 +3934,7 @@ export default function TrafficPage() {
       return `Data source: ${cacheStatus.source}. Last updated ${formatRelativeTime(cacheStatus.fetchedAt)}.`;
     }
     return "No cached data yet";
-  }, [cacheStatus, isDeletingTraffic, isLoadingDetail, isOnline, isRefreshingAccountTraffic]);
+  }, [cacheStatus, isDeletingTraffic, isDetailBusy, isOnline, isRefreshingAccountTraffic]);
 
   const visibleRefreshMessage = useMemo(() => {
     if (refreshMessage === DEFERRED_REFRESH_MESSAGE && !hasUnsavedChanges) {
@@ -2797,7 +4029,7 @@ export default function TrafficPage() {
   }, [draftSessionsByTrafficId]);
 
   const applyDetailState = useCallback((detail: TrafficDetail | null) => {
-    const cloned = applyDefaultTrafficEmailSubject(cloneDetail(detail), accountNameByCode);
+    const cloned = applyDefaultTrafficEmailSubject(cloneDetail(detail), accountNameByCodeRef.current);
     setDetailBaseline((current) => {
       if (buildFingerprint(current) === buildFingerprint(cloned)) {
         return current;
@@ -2822,7 +4054,7 @@ export default function TrafficPage() {
         return next;
       });
     }
-  }, [accountNameByCode, upsertSelectedByAccount]);
+  }, [upsertSelectedByAccount]);
 
   const applyListState = useCallback((accountCode: string, list: TrafficSummary[], preferredId?: string | null) => {
     setTrafficList(list);
@@ -2842,6 +4074,8 @@ export default function TrafficPage() {
     if (!normalizedTrafficId) {
       setDetailBaseline(null);
       setDetailDraft(null);
+      setIsLoadingDetail(false);
+      setIsRefreshingDetail(false);
       return;
     }
 
@@ -2855,6 +4089,7 @@ export default function TrafficPage() {
 
     if (shouldUseCache && cachedDetail) {
       const cachedFetchedAt = cacheSnapshot?.fetchedAt ?? Date.now();
+      setIsRefreshingDetail(shouldFetchFromNetwork);
       const applied = applyOrDefer(() => {
         applyDetailState(cachedDetail);
         setCacheStatus({
@@ -2868,10 +4103,12 @@ export default function TrafficPage() {
       setIsLoadingDetail(false);
     } else {
       setIsLoadingDetail(true);
+      setIsRefreshingDetail(false);
     }
 
     if (!shouldFetchFromNetwork) {
       setIsLoadingDetail(false);
+      setIsRefreshingDetail(false);
       return;
     }
 
@@ -2882,6 +4119,7 @@ export default function TrafficPage() {
         setRefreshMessage("You're offline. Showing cached traffic.");
       }
       setIsLoadingDetail(false);
+      setIsRefreshingDetail(false);
       return;
     }
 
@@ -2899,6 +4137,7 @@ export default function TrafficPage() {
       if (!normalized) {
         setError("Traffic detail response was invalid.");
         setIsLoadingDetail(false);
+        setIsRefreshingDetail(false);
         return;
       }
 
@@ -2928,6 +4167,7 @@ export default function TrafficPage() {
     } finally {
       if (requestId === detailRequestIdRef.current) {
         setIsLoadingDetail(false);
+        setIsRefreshingDetail(false);
       }
     }
   }, [applyDetailState, applyOrDefer, isOnline, requestHeaders, requestJson]);
@@ -2940,7 +4180,7 @@ export default function TrafficPage() {
     languages?: FlightLanguage[];
     mediums?: string[];
     preferCache?: boolean;
-  }): Promise<TrafficStationCandidatesPayload | null> => {
+  }): Promise<TrafficStationCandidatesFetchResult | null> => {
     const accountCode = asString(params.accountCode).toUpperCase();
     const flightStart = asString(params.flightStart);
     const flightEnd = asString(params.flightEnd);
@@ -2965,7 +4205,13 @@ export default function TrafficPage() {
       ? normalizeTrafficStationCandidates({ data: cacheSnapshot.data })
       : null;
     if (params.preferCache && cached) {
-      return cached;
+      return {
+        payload: cached,
+        cacheStatus: {
+          source: "cache",
+          fetchedAt: cacheSnapshot?.fetchedAt ?? Date.now(),
+        },
+      };
     }
 
     const query = new URLSearchParams({
@@ -2991,20 +4237,83 @@ export default function TrafficPage() {
       });
       const normalized = normalizeTrafficStationCandidates(payload);
       if (normalized) {
+        const fetchedAt = Date.now();
         writeBrowserCache(cacheKey, normalized, TRAFFIC_STATION_CANDIDATES_CACHE_TTL_MS, {
           source: "network",
-          fetchedAt: Date.now(),
+          fetchedAt,
         });
-        return normalized;
+        return {
+          payload: normalized,
+          cacheStatus: {
+            source: "network",
+            fetchedAt,
+          },
+        };
       }
-      return cached;
+      return cached
+        ? {
+            payload: cached,
+            cacheStatus: {
+              source: "cache",
+              fetchedAt: cacheSnapshot?.fetchedAt ?? Date.now(),
+            },
+          }
+        : null;
     } catch (error) {
       if (cached) {
-        return cached;
+        return {
+          payload: cached,
+          cacheStatus: {
+            source: "cache",
+            fetchedAt: cacheSnapshot?.fetchedAt ?? Date.now(),
+          },
+        };
       }
       throw error;
     }
   }, [requestHeaders, requestJson]);
+
+  const loadFlightStationSyncCandidates = useCallback(async (
+    params: {
+      trafficId: string;
+      accountCode: string;
+      flightStart: string;
+      flightEnd: string;
+      estNums?: number[];
+      languages?: FlightLanguage[];
+      mediums?: string[];
+      forceRefreshCandidates?: boolean;
+    },
+    options: {
+      preferCache: boolean;
+      preserveSelection?: number[];
+    },
+  ): Promise<TrafficStationCandidatesPayload | null> => {
+    setIsFlightStationSyncCandidatesLoading(true);
+    try {
+      const result = await requestStationCandidatesWithCache({
+        accountCode: params.accountCode,
+        flightStart: params.flightStart,
+        flightEnd: params.flightEnd,
+        estNums: params.estNums,
+        languages: params.languages,
+        mediums: params.mediums,
+        preferCache: options.preferCache,
+      });
+      if (!result) {
+        return null;
+      }
+      setFlightStationSyncCandidates(result.payload);
+      setFlightStationSyncCacheStatus(result.cacheStatus);
+      const availableEstNums = normalizeEstNumList(result.payload.estNums.map((item) => item.estNum));
+      const preserved = normalizeEstNumList(options.preserveSelection ?? []);
+      const nextSelection = preserved.filter((value) => availableEstNums.includes(value));
+      setSelectedFlightStationSyncEstNums(nextSelection.length > 0 ? nextSelection : availableEstNums);
+      return result.payload;
+    } finally {
+      setIsFlightStationSyncCandidatesLoading(false);
+    }
+  }, [requestStationCandidatesWithCache]);
 
   const loadAccountTraffic = useCallback(async (
     accountCodeRaw: string,
@@ -3249,7 +4558,7 @@ export default function TrafficPage() {
     };
   }, [hasAnyUnsavedChanges]);
 
-  const updateDraft = useCallback((updater: (current: TrafficDetail) => TrafficDetail) => {
+  const updateDraft = useCallback((updater: (current: TrafficDetail) => TrafficDetail, options?: UpdateDraftOptions) => {
     setDetailDraft((current) => {
       if (!current) {
         return current;
@@ -3257,7 +4566,9 @@ export default function TrafficPage() {
       const previousDetail = cloneDetail(current) as TrafficDetail;
       const nextDetail = updater(cloneDetail(current) as TrafficDetail);
       const withAutoSyncedSubject = syncAutoTrafficEmailSubject(previousDetail, nextDetail, accountNameByCode);
-      const withAutoReadyToEmail = applyAutoReadyToEmailFromFlights(withAutoSyncedSubject);
+      const withAutoReadyToEmail = options?.applyAutoReadyToEmail === true
+        ? applyAutoReadyToEmailFromFlights(withAutoSyncedSubject)
+        : withAutoSyncedSubject;
       const withDefaultSubject = applyDefaultTrafficEmailSubject(withAutoReadyToEmail, accountNameByCode);
       const withStationSyncedToEmails = syncTrafficEmailRecipientsFromStations(previousDetail, withDefaultSubject as TrafficDetail);
       return computeSummary(withStationSyncedToEmails as TrafficDetail);
@@ -3270,9 +4581,10 @@ export default function TrafficPage() {
       return;
     }
     setTrafficList((current) => current.map((item) => item.id === trafficId
-      ? {
+        ? {
           ...item,
           campaign: patch.campaign ?? item.campaign,
+          searchCampaign: patch.campaign !== undefined ? asString(patch.campaign).toLowerCase() : item.searchCampaign,
           status: patch.status ?? item.status,
         }
       : item));
@@ -3283,6 +4595,16 @@ export default function TrafficPage() {
     if (!trafficId) {
       return;
     }
+    const currentDetail = detailDraftRef.current ?? detailBaselineRef.current;
+    const nextDetail = currentDetail && asString(currentDetail.traffic.id) === trafficId
+      ? computeSummary({
+          ...currentDetail,
+          traffic: {
+            ...currentDetail.traffic,
+            status: nextStatus,
+          },
+        })
+      : null;
 
     const applyStatus = (current: TrafficDetail | null): TrafficDetail | null => {
       if (!current || asString(current.traffic.id) !== trafficId) {
@@ -3326,13 +4648,32 @@ export default function TrafficPage() {
         },
       };
     });
+    if (nextDetail) {
+      writeBrowserCache(buildTrafficDetailCacheKey(trafficId), nextDetail, TRAFFIC_DETAIL_CACHE_TTL_MS, {
+        source: "network",
+        fetchedAt: Date.now(),
+      });
+      setTrafficList((current) => {
+        let changed = false;
+        const nextSummary = buildListSummaryFromDetail(nextDetail, stationLookupMetaByCode);
+        const nextList = current.map((item) => {
+          if (item.id !== trafficId) {
+            return item;
+          }
+          changed = true;
+          return nextSummary;
+        });
+        return changed ? nextList : current;
+      });
+    }
     updateTrafficCardSummary(trafficId, { status: nextStatus });
-  }, [computeSummary, updateTrafficCardSummary]);
+  }, [computeSummary, stationLookupMetaByCode, updateTrafficCardSummary]);
 
   const handleToggleStationConfirmedStatus = useCallback((stationId: number) => {
     if (!canEditTradsphere || isSaving || isConfirmedLocked) {
       return;
     }
+    let nextStations: TrafficStation[] | null = null;
     updateDraft((current) => {
       const target = current.stations.find((item) => item.id === stationId);
       if (!target) {
@@ -3341,7 +4682,7 @@ export default function TrafficPage() {
       const currentConfirmedStatus = asString(target.confirmedStatus).toLowerCase();
       const baselineStation = detailBaselineRef.current?.stations.find((item) => item.id === stationId) ?? null;
       const baselineConfirmedStatus = asString(baselineStation?.confirmedStatus).toLowerCase();
-      const nextStations = current.stations.map((item) => {
+      const nextStationsDraft = current.stations.map((item) => {
         if (item.id !== stationId) {
           return item;
         }
@@ -3362,12 +4703,16 @@ export default function TrafficPage() {
           confirmedStatus: "confirmed",
         };
       });
+      nextStations = nextStationsDraft;
       return {
         ...current,
-        stations: nextStations,
+        stations: nextStationsDraft,
       };
     });
-  }, [canEditTradsphere, isConfirmedLocked, isSaving, updateDraft]);
+    if (nextStations) {
+      maybePromptConfirmTrafficStatus(nextStations);
+    }
+  }, [canEditTradsphere, isConfirmedLocked, isSaving, maybePromptConfirmTrafficStatus, updateDraft]);
 
   const handleToggleStationDeliveryStatus = useCallback((stationId: number) => {
     if (!canEditTradsphere || isSaving || isConfirmedLocked) {
@@ -3493,6 +4838,55 @@ export default function TrafficPage() {
     }));
   }, [accountNameByCode, activeDraft, activeTrafficId, updateDraft]);
 
+  const refreshEmailInstructionsFromFlights = useCallback((nextFlights: TrafficFlight[], options?: { force?: boolean }) => {
+    const activeEmailDraft = activeDraft?.email;
+    if (!activeEmailDraft || !activeTrafficId) {
+      return;
+    }
+
+    const nextInstructionsContent = normalizeRichTextHtml(buildDefaultTrafficInstructionsText(nextFlights));
+    const accountCode = asString(activeDraft.traffic.accountCode).toUpperCase();
+    const accountLabel = accountNameByCode[accountCode] || accountCode || "Tradsphere";
+
+    setEmailWorkspaceByTrafficId((current) => {
+      const existing = current[activeTrafficId];
+      if (!existing || existing.instructionsContent === nextInstructionsContent) {
+        return current;
+      }
+      if (!options?.force && existing.instructionsTouched) {
+        return current;
+      }
+      const nextWorkspace: TrafficEmailWorkspaceDraft = {
+        ...existing,
+        instructionsContent: nextInstructionsContent,
+      };
+      const nextBodyValue = persistTrafficEmailBody({
+        workspace: {
+          bodyContent: nextWorkspace.bodyContent,
+          instructionsContent: nextWorkspace.instructionsContent,
+          downloadLinks: nextWorkspace.downloadLinks,
+        },
+        subject: asString(activeEmailDraft.subject),
+        accountLabel,
+        campaignLabel: asString(activeDraft.traffic.campaign),
+        statusLabel: formatStatusOptionLabel(activeDraft.traffic.status),
+      });
+      updateDraft((currentDraft) => ({
+        ...currentDraft,
+        email: currentDraft.email
+          ? {
+              ...currentDraft.email,
+              body: nextBodyValue,
+            }
+          : currentDraft.email,
+      }));
+      return {
+        ...current,
+        [activeTrafficId]: nextWorkspace,
+      };
+    });
+  }, [accountNameByCode, activeDraft, activeTrafficId, updateDraft]);
+
   const handleOpenDownloadLinkNoteModal = useCallback((rowIndex: number) => {
     const row = activeEmailWorkspace?.downloadLinks[rowIndex];
     if (!row) {
@@ -3500,19 +4894,26 @@ export default function TrafficPage() {
     }
     setActiveDownloadLinkNoteIndex(rowIndex);
     setDownloadLinkNoteDraft(asString(row.note || ""));
+    setIsDownloadLinkNoteDiscardDialogOpen(false);
     setIsDownloadLinkNoteModalOpen(true);
   }, [activeEmailWorkspace]);
 
-  const handleCloseDownloadLinkNoteModal = useCallback(() => {
+  const closeDownloadLinkNoteModal = useCallback(() => {
     setIsDownloadLinkNoteModalOpen(false);
     setActiveDownloadLinkNoteIndex(null);
     setDownloadLinkNoteDraft("");
+    setIsDownloadLinkNoteDiscardDialogOpen(false);
   }, []);
 
-  const handleSaveDownloadLinkNote = useCallback(() => {
+  const commitDownloadLinkNote = useCallback(() => {
     if (!activeEmailWorkspace || activeDownloadLinkNoteIndex === null) {
-      return;
+      return false;
     }
+    const currentNote = asString(activeEmailWorkspace.downloadLinks[activeDownloadLinkNoteIndex]?.note || "");
+    if (currentNote.trim() === asString(downloadLinkNoteDraft).trim()) {
+      return false;
+    }
+
     const nextLinks = activeEmailWorkspace.downloadLinks.map((entry, entryIndex) => entryIndex === activeDownloadLinkNoteIndex
       ? { ...entry, note: downloadLinkNoteDraft }
       : entry);
@@ -3520,8 +4921,27 @@ export default function TrafficPage() {
       ...activeEmailWorkspace,
       downloadLinks: nextLinks,
     });
-    handleCloseDownloadLinkNoteModal();
-  }, [activeDownloadLinkNoteIndex, activeEmailWorkspace, commitEmailWorkspace, downloadLinkNoteDraft, handleCloseDownloadLinkNoteModal]);
+    return true;
+  }, [activeDownloadLinkNoteIndex, activeEmailWorkspace, commitEmailWorkspace, downloadLinkNoteDraft]);
+
+  const handleDownloadLinkNoteModalOpenChange = useCallback((open: boolean) => {
+    if (open) {
+      setIsDownloadLinkNoteModalOpen(true);
+      return;
+    }
+    const allowClose = canModalClose({
+      nextOpen: open,
+      isBusy: isSaving || isEmailLocked,
+      hasUnsavedChanges: hasDownloadLinkNoteChanges,
+    });
+    if (!allowClose) {
+      if (hasDownloadLinkNoteChanges && !isSaving && !isEmailLocked) {
+        setIsDownloadLinkNoteDiscardDialogOpen(true);
+      }
+      return;
+    }
+    closeDownloadLinkNoteModal();
+  }, [closeDownloadLinkNoteModal, hasDownloadLinkNoteChanges, isEmailLocked, isSaving]);
 
   useEffect(() => {
     if (activeDraft) {
@@ -3531,6 +4951,7 @@ export default function TrafficPage() {
     setIsDownloadLinkNoteModalOpen(false);
     setActiveDownloadLinkNoteIndex(null);
     setDownloadLinkNoteDraft("");
+    setIsDownloadLinkNoteDiscardDialogOpen(false);
   }, [activeDraft]);
 
   useEffect(() => {
@@ -3562,15 +4983,16 @@ export default function TrafficPage() {
         }
         const shouldUpdate = (
           item.campaign !== nextSummary.campaign
+          || item.searchCampaign !== nextSummary.searchCampaign
           || item.status !== nextSummary.status
           || item.flightCount !== nextSummary.flightCount
           || item.stationCount !== nextSummary.stationCount
           || item.emailSentStatus !== nextSummary.emailSentStatus
           || item.emailSentAt !== nextSummary.emailSentAt
-          || JSON.stringify(item.searchIscis) !== JSON.stringify(nextSummary.searchIscis)
-          || JSON.stringify(item.searchStations) !== JSON.stringify(nextSummary.searchStations)
-          || JSON.stringify(item.searchEmails) !== JSON.stringify(nextSummary.searchEmails)
-          || JSON.stringify(item.summary) !== JSON.stringify(nextSummary.summary)
+          || !areStringArraysEqual(item.searchIscis, nextSummary.searchIscis)
+          || !areStringArraysEqual(item.searchStations, nextSummary.searchStations)
+          || !areStringArraysEqual(item.searchEmails, nextSummary.searchEmails)
+          || !areRotationSummariesEqual(item.summary, nextSummary.summary)
         );
         if (!shouldUpdate) {
           return item;
@@ -3795,11 +5217,164 @@ export default function TrafficPage() {
     };
   }, [accountNameByCode]);
 
+  const saveTrafficDetailForEmail = useCallback(async (draftDetail: TrafficDetail, baselineDetail: TrafficDetail | null) => {
+    const validationError = validateForSave(draftDetail);
+    if (validationError) {
+      setError(validationError);
+      throw new Error(validationError);
+    }
+
+    setIsSaving(true);
+    setError(null);
+
+    try {
+      const requestBody = buildBulkSaveRequestForDetail(draftDetail, baselineDetail);
+      const bulkSavePayload = await requestJson("/api/tradsphere/v1/traffic/bulk-save", {
+        method: "POST",
+        headers: requestHeaders,
+        body: requestBody.body,
+        successToast: false,
+      });
+
+      const bulkSaveData = isRecord(unwrapData(bulkSavePayload)) ? unwrapData(bulkSavePayload) : null;
+      const bulkDetail = normalizeTrafficDetail({
+        data: isRecord(bulkSaveData) && isRecord(bulkSaveData.detail)
+          ? bulkSaveData.detail
+          : unwrapData(bulkSavePayload),
+      });
+      const trafficId = asString(
+        (isRecord(bulkSaveData) ? bulkSaveData.trafficId : "")
+        || bulkDetail?.traffic.id
+        || (requestBody.isLocalDraft ? "" : requestBody.draftTrafficId),
+      );
+      if (!bulkDetail || !trafficId) {
+        throw new Error("Failed to save traffic record.");
+      }
+
+      const computedDetail = computeSummary(bulkDetail);
+      const sourceDraftId = requestBody.draftTrafficId;
+      const fetchedAt = Date.now();
+      writeBrowserCache(buildTrafficDetailCacheKey(trafficId), computedDetail, TRAFFIC_DETAIL_CACHE_TTL_MS, {
+        source: "network",
+        fetchedAt,
+      });
+      if (requestBody.isLocalDraft && sourceDraftId && sourceDraftId !== trafficId) {
+        removeBrowserCache(buildTrafficDetailCacheKey(sourceDraftId));
+      }
+
+      const nextSummary = normalizeTrafficListItemFromBulkSave(bulkSavePayload)
+        ?? buildListSummaryFromDetail(computedDetail, stationLookupMetaByCode);
+      setTrafficList((current) => {
+        let changed = false;
+        const nextList = current.map((item) => {
+          if (item.id !== sourceDraftId && item.id !== trafficId) {
+            return item;
+          }
+          changed = true;
+          return nextSummary;
+        });
+        if (!changed && requestBody.isLocalDraft) {
+          return [nextSummary, ...current];
+        }
+        return changed ? nextList : current;
+      });
+
+      if (requestBody.isLocalDraft && sourceDraftId && sourceDraftId !== trafficId) {
+        setEmailWorkspaceByTrafficId((current) => {
+          const existing = current[sourceDraftId];
+          if (!existing) {
+            return current;
+          }
+          const next = { ...current };
+          delete next[sourceDraftId];
+          if (!(trafficId in next)) {
+            next[trafficId] = existing;
+          }
+          return next;
+        });
+        setFlightStationSyncSelectionsByTrafficId((current) => {
+          const existing = current[sourceDraftId];
+          if (!existing) {
+            return current;
+          }
+          const next = { ...current };
+          delete next[sourceDraftId];
+          if (!(trafficId in next)) {
+            next[trafficId] = normalizeEstNumList(existing);
+          }
+          return next;
+        });
+      }
+
+      setDraftSessionsByTrafficId((current) => {
+        const next = { ...current };
+        let changed = false;
+        if (sourceDraftId in next) {
+          delete next[sourceDraftId];
+          changed = true;
+        }
+        if (trafficId in next) {
+          delete next[trafficId];
+          changed = true;
+        }
+        return changed ? next : current;
+      });
+
+      setDetailBaseline((current) => {
+        if (!current) {
+          return current;
+        }
+        const currentTrafficId = asString(current.traffic.id);
+        if (currentTrafficId !== sourceDraftId && currentTrafficId !== trafficId) {
+          return current;
+        }
+        return cloneDetail(computedDetail);
+      });
+      setDetailDraft((current) => {
+        if (!current) {
+          return current;
+        }
+        const currentTrafficId = asString(current.traffic.id);
+        if (currentTrafficId !== sourceDraftId && currentTrafficId !== trafficId) {
+          return current;
+        }
+        return cloneDetail(computedDetail);
+      });
+      setSelectedTrafficId((current) => {
+        if (current === sourceDraftId || current === trafficId) {
+          return trafficId;
+        }
+        return current;
+      });
+      upsertSelectedByAccount(activeAccountCode, trafficId);
+      setCacheStatus({ source: "network", fetchedAt });
+
+      return {
+        trafficId,
+        detail: computedDetail,
+      };
+    } catch (saveError) {
+      throw saveError;
+    } finally {
+      setIsSaving(false);
+    }
+  }, [
+    activeAccountCode,
+    buildBulkSaveRequestForDetail,
+    computeSummary,
+    requestHeaders,
+    requestJson,
+    stationLookupMetaByCode,
+    upsertSelectedByAccount,
+    validateForSave,
+  ]);
+
   const handleSaveAll = useCallback(async () => {
     if (!canSaveChanges) {
       return;
     }
     stashCurrentDraftSession();
+    void primeSuccessSound();
 
     const targetsById = new Map<string, { baseline: TrafficDetail | null; draft: TrafficDetail }>();
     for (const [trafficId, session] of Object.entries(draftSessionsByTrafficId)) {
@@ -3842,6 +5417,12 @@ export default function TrafficPage() {
         detail: TrafficDetail;
         oldCacheKey?: string;
       }> = [];
+      const savedTrafficListWrites: Array<{
+        trafficId: string;
+        sourceDraftId: string;
+        summary: TrafficSummary;
+        isLocalDraft: boolean;
+      }> = [];
       for (const target of saveTargets) {
         const requestBody = buildBulkSaveRequestForDetail(target.draft, target.baseline);
         const bulkSavePayload = await requestJson("/api/tradsphere/v1/traffic/bulk-save", {
@@ -3869,12 +5450,20 @@ export default function TrafficPage() {
 
         if (bulkDetail) {
           const computedDetail = computeSummary(bulkDetail);
+          const nextSummary = normalizeTrafficListItemFromBulkSave(bulkSavePayload)
+            ?? buildListSummaryFromDetail(computedDetail, stationLookupMetaByCode);
           savedTrafficCacheWrites.push({
             cacheKey: buildTrafficDetailCacheKey(trafficId),
             detail: computedDetail,
             oldCacheKey: requestBody.isLocalDraft && requestBody.draftTrafficId && requestBody.draftTrafficId !== trafficId
               ? buildTrafficDetailCacheKey(requestBody.draftTrafficId)
               : undefined,
+          });
+          savedTrafficListWrites.push({
+            trafficId,
+            sourceDraftId: requestBody.draftTrafficId,
+            summary: nextSummary,
+            isLocalDraft: requestBody.isLocalDraft,
           });
         }
 
@@ -3916,11 +5505,38 @@ export default function TrafficPage() {
         setSelectedTrafficId(nextSelectedId);
         upsertSelectedByAccount(activeAccountCode, nextSelectedId);
       }
-      if (activeAccountCode) {
-        await loadAccountTraffic(activeAccountCode, "network-first", {
-          selectedIdOverride: nextSelectedId,
-          deferWhenDirty: false,
-        });
+
+      let nextTrafficList = trafficList;
+      let nextSelectedSavedDetail: TrafficDetail | null = null;
+      for (const saved of savedTrafficListWrites) {
+        nextTrafficList = upsertTrafficSummaryInList(
+          nextTrafficList,
+          saved.summary,
+          saved.sourceDraftId,
+          saved.trafficId,
+          saved.isLocalDraft,
+        );
+        if (nextSelectedId && (saved.sourceDraftId === nextSelectedId || saved.trafficId === nextSelectedId)) {
+          const matchingCacheWrite = savedTrafficCacheWrites.find((entry) => entry.cacheKey === buildTrafficDetailCacheKey(saved.trafficId));
+          if (matchingCacheWrite) {
+            nextSelectedSavedDetail = cloneDetail(matchingCacheWrite.detail);
+          }
+        }
+      }
+      if (savedTrafficListWrites.length > 0) {
+        const fetchedAt = Date.now();
+        setTrafficList(nextTrafficList);
+        setCacheStatus({ source: "network", fetchedAt });
+        if (activeAccountCode) {
+          writeBrowserCache(buildTrafficListCacheKey(activeAccountCode), nextTrafficList, TRAFFIC_LIST_CACHE_TTL_MS, {
+            source: "network",
+            fetchedAt,
+          });
+        }
+      }
+      if (nextSelectedSavedDetail) {
+        setDetailBaseline(cloneDetail(nextSelectedSavedDetail));
+        setDetailDraft(cloneDetail(nextSelectedSavedDetail));
       }
 
       for (const cacheWrite of savedTrafficCacheWrites) {
@@ -3935,6 +5551,7 @@ export default function TrafficPage() {
 
       setRefreshMessage(null);
       clearDeferredUpdate();
+      void playSuccessSound();
       toast.success(
         "Traffic saved",
         `${saveTargets.length} traffic record(s) saved.`,
@@ -3952,15 +5569,43 @@ export default function TrafficPage() {
     detailDraft,
     draftSessionsByTrafficId,
     hasUnsavedChanges,
-    loadAccountTraffic,
     requestHeaders,
     requestJson,
     selectedTrafficId,
     stashCurrentDraftSession,
+    stationLookupMetaByCode,
+    trafficList,
     toast,
     upsertSelectedByAccount,
     validateForSave,
   ]);
+
+  const handleSaveShortcut = useCallback((event: KeyboardEvent) => {
+    const key = asString(event.key).toLowerCase();
+    if (!(event.metaKey || event.ctrlKey) || key !== "s") {
+      return;
+    }
+
+    event.preventDefault();
+    event.stopPropagation();
+
+    if (!canSaveChanges) {
+      return;
+    }
+
+    void handleSaveAll();
+  }, [canSaveChanges, handleSaveAll]);
+
+  useEffect(() => {
+    const onKeyDown = (event: KeyboardEvent) => {
+      handleSaveShortcut(event);
+    };
+
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => {
+      window.removeEventListener("keydown", onKeyDown, true);
+    };
+  }, [handleSaveShortcut]);
 
   const resolveDiscardAllUnsavedState = useCallback(() => {
     const activeDraftId = asString(detailDraft?.traffic.id);
@@ -4234,7 +5879,7 @@ export default function TrafficPage() {
           return detail;
         }
         const nextToEmails = buildStationEmailRecipients(detail.stations);
-        if (JSON.stringify(nextToEmails) === JSON.stringify(detail.email.toEmails)) {
+        if (areStringArraysEqual(nextToEmails, detail.email.toEmails)) {
           return detail;
         }
         return {
@@ -4291,6 +5936,7 @@ export default function TrafficPage() {
     if (stationLookupQueryCode) {
       setStationLookupRefreshToken((current) => current + 1);
     }
+    await refreshSelections();
     await loadAccountTraffic(activeAccountCode, "network-first", {
       selectedIdOverride: selectedTrafficId,
       deferWhenDirty: false,
@@ -4299,7 +5945,7 @@ export default function TrafficPage() {
       trafficId: targetTrafficId,
       stationCodes: targetStationCodes,
     });
-  }, [activeAccountCode, activeDraft?.stations, activeDraft?.traffic.id, loadAccountTraffic, refreshStationRowsFromMaster, selectedTrafficId, stationLookupQueryCode]);
+  }, [activeAccountCode, activeDraft?.stations, activeDraft?.traffic.id, loadAccountTraffic, refreshSelections, refreshStationRowsFromMaster, selectedTrafficId, stationLookupQueryCode]);
 
   const handleRefreshFromChip = useCallback(async () => {
     setIsChipRefreshOverlayVisible(true);
@@ -4383,7 +6029,7 @@ export default function TrafficPage() {
         return detail;
       }
       const nextToEmails = mergeUniqueEmails(detail.email.toEmails, pending.emails);
-      if (JSON.stringify(nextToEmails) === JSON.stringify(detail.email.toEmails)) {
+      if (areStringArraysEqual(nextToEmails, detail.email.toEmails)) {
         return detail;
       }
       return {
@@ -4407,17 +6053,35 @@ export default function TrafficPage() {
     if (!targetAccountCode) {
       return;
     }
-    setIsLoadActionOverlayVisible(true);
+    const cacheSnapshot = readBrowserCacheSnapshot<TrafficSummary[]>(buildTrafficListCacheKey(targetAccountCode));
+    const hasCachedList = normalizeTrafficSummaryList(cacheSnapshot?.data).length > 0;
+    if (!hasCachedList) {
+      setIsLoadActionOverlayVisible(true);
+    }
     try {
       setLoadedAccountCode(targetAccountCode);
-      await loadAccountTraffic(targetAccountCode, "network-first", {
+      await loadAccountTraffic(targetAccountCode, "stale-while-revalidate", {
         selectedIdOverride: selectedTrafficByAccount[targetAccountCode] || null,
         deferWhenDirty: false,
       });
     } finally {
-      setIsLoadActionOverlayVisible(false);
+      if (!hasCachedList) {
+        setIsLoadActionOverlayVisible(false);
+      }
     }
   }, [loadAccountTraffic, selectedAccountCode, selectedTrafficByAccount]);
+
+  const handleRefreshFromSelector = useCallback(async () => {
+    if (!activeAccountCode) {
+      return;
+    }
+    setIsSelectorRefreshOverlayVisible(true);
+    try {
+      await handleRefresh();
+    } finally {
+      setIsSelectorRefreshOverlayVisible(false);
+    }
+  }, [activeAccountCode, handleRefresh]);
 
   const handleAccountChange = useCallback((nextAccountCodeRaw: string) => {
     const nextAccountCode = asString(nextAccountCodeRaw).toUpperCase();
@@ -4476,7 +6140,7 @@ export default function TrafficPage() {
         id: 0,
         trafficId: localTrafficId,
         toEmails: [],
-        ccEmails: [],
+        ccEmails: [...DEFAULT_TRAFFIC_CC_EMAILS],
         bccEmails: [],
         subject: "",
         body: "",
@@ -4612,7 +6276,7 @@ export default function TrafficPage() {
 
   const handleDuplicateTraffic = useCallback(async (trafficIdRaw: string) => {
     const trafficId = asString(trafficIdRaw);
-    if (!trafficId || !canEditTradsphere || isSaving || isLoadingAccountTraffic || isLoadingDetail) {
+    if (!trafficId || !canEditTradsphere || isSaving || isLoadingAccountTraffic || isDetailBusy) {
       return;
     }
     if (duplicatingTrafficId) {
@@ -4651,7 +6315,7 @@ export default function TrafficPage() {
     canEditTradsphere,
     duplicatingTrafficId,
     isLoadingAccountTraffic,
-    isLoadingDetail,
+    isDetailBusy,
     isSaving,
     resolveTrafficDetailForDuplicate,
     stashCurrentDraftSession,
@@ -4732,7 +6396,7 @@ export default function TrafficPage() {
 
   const openTrafficRemovalDialog = useCallback((trafficIdRaw: string, mode: TrafficRemovalMode) => {
     const trafficId = asString(trafficIdRaw);
-    if (!trafficId || !canEditTradsphere || isSaving || isLoadingAccountTraffic || isLoadingDetail) {
+    if (!trafficId || !canEditTradsphere || isSaving || isLoadingAccountTraffic || isDetailBusy) {
       return;
     }
     if (deletingTrafficIdSet.has(trafficId)) {
@@ -4741,11 +6405,11 @@ export default function TrafficPage() {
     setArchiveTargetTrafficId(trafficId);
     setArchiveDialogMode(mode);
     setIsArchiveDialogOpen(true);
-  }, [canEditTradsphere, deletingTrafficIdSet, isLoadingAccountTraffic, isLoadingDetail, isSaving]);
+  }, [canEditTradsphere, deletingTrafficIdSet, isDetailBusy, isLoadingAccountTraffic, isSaving]);
 
   const handleArchiveTraffic = useCallback(async () => {
     const targetTrafficId = asString(archiveTargetTrafficId) || asString(detailDraft?.traffic.id);
-    if (!targetTrafficId || !canEditTradsphere || isSaving || isLoadingAccountTraffic || isLoadingDetail) {
+    if (!targetTrafficId || !canEditTradsphere || isSaving || isLoadingAccountTraffic || isDetailBusy) {
       return;
     }
     if (deletingTrafficIdSet.has(targetTrafficId)) {
@@ -4804,7 +6468,7 @@ export default function TrafficPage() {
     detailDraft,
     handleRemoveTrafficLocally,
     isLoadingAccountTraffic,
-    isLoadingDetail,
+    isDetailBusy,
     isSaving,
     loadTrafficDetail,
     requestHeaders,
@@ -4866,7 +6530,7 @@ export default function TrafficPage() {
     if (action.type === "account") {
       setSelectedAccountCode(action.accountCode);
       setLoadedAccountCode(action.accountCode);
-      await loadAccountTraffic(action.accountCode, "network-first", {
+      await loadAccountTraffic(action.accountCode, "stale-while-revalidate", {
         selectedIdOverride: selectedTrafficByAccount[action.accountCode] || null,
         deferWhenDirty: false,
       });
@@ -4886,7 +6550,7 @@ export default function TrafficPage() {
       return;
     }
     if (action.type === "refresh") {
-      await handleRefreshFromChip();
+      await handleRefreshFromSelector();
       return;
     }
     if (action.type === "route") {
@@ -4944,7 +6608,7 @@ export default function TrafficPage() {
 
     setIsStationAutoSyncing(true);
     try {
-      const normalized = await requestStationCandidatesWithCache({
+      const normalizedResult = await requestStationCandidatesWithCache({
         accountCode,
         flightStart,
         flightEnd,
@@ -4953,6 +6617,7 @@ export default function TrafficPage() {
         mediums,
         preferCache: true,
       });
+      const normalized = normalizedResult?.payload ?? null;
       if (!normalized) {
         toast.info("No station candidates returned");
         return;
@@ -5180,10 +6845,10 @@ export default function TrafficPage() {
     setFlightStationSyncDialogSource(source);
     setPendingFlightStationSync(params);
     setFlightStationSyncCandidates(null);
+    setFlightStationSyncCacheStatus(null);
     setSelectedFlightStationSyncEstNums(
       normalizeEstNumList(flightStationSyncSelectionsByTrafficId[params.trafficId]),
     );
-    setIsFlightStationSyncCandidatesLoading(true);
     setIsFlightStationSyncSelectOpen(true);
     const requestedLanguages = normalizeFlightLanguageList(params.languages);
     const requestedMediums = normalizeFlightMediumList(params.mediums);
@@ -5197,15 +6862,23 @@ export default function TrafficPage() {
       : fallbackMediums;
     const shouldForceNetworkCandidates = source === "flight_update" && Boolean(params.forceRefreshCandidates);
     const preferCacheForDialog = !shouldForceNetworkCandidates;
-    void requestStationCandidatesWithCache({
-      accountCode,
-      flightStart: params.flightStart,
-      flightEnd: params.flightEnd,
-      languages,
-      mediums,
-      preferCache: preferCacheForDialog,
-    })
-      .then((payload) => {
+    void (async () => {
+      try {
+        const payload = await loadFlightStationSyncCandidates(
+          {
+            trafficId: params.trafficId,
+            accountCode,
+            flightStart: params.flightStart,
+            flightEnd: params.flightEnd,
+            languages,
+            mediums,
+            forceRefreshCandidates: params.forceRefreshCandidates,
+          },
+          {
+            preferCache: preferCacheForDialog,
+            preserveSelection: flightStationSyncSelectionsByTrafficId[params.trafficId],
+          },
+        );
         if (!payload) {
           toast.error(
             "Unable to load estimate numbers",
@@ -5213,26 +6886,63 @@ export default function TrafficPage() {
           );
           setPendingFlightStationSync(null);
           setIsFlightStationSyncSelectOpen(false);
-          return;
         }
-        setFlightStationSyncCandidates(payload);
-        const availableEstNums = normalizeEstNumList(payload.estNums.map((item) => item.estNum));
-        const remembered = normalizeEstNumList(flightStationSyncSelectionsByTrafficId[params.trafficId]);
-        const rememberedAvailable = remembered.filter((value) => availableEstNums.includes(value));
-        setSelectedFlightStationSyncEstNums(rememberedAvailable.length > 0 ? rememberedAvailable : availableEstNums);
-      })
-      .catch((loadError) => {
+      } catch (loadError) {
         toast.error(
           "Unable to load estimate numbers",
           getTrafficErrorMessage(loadError, "Estimate-number candidates could not be loaded."),
         );
         setPendingFlightStationSync(null);
         setIsFlightStationSyncSelectOpen(false);
-      })
-      .finally(() => {
-        setIsFlightStationSyncCandidatesLoading(false);
-      });
-  }, [activeAccountCode, detailDraft?.flights, flightStationSyncSelectionsByTrafficId, requestStationCandidatesWithCache, toast]);
+      }
+    })();
+  }, [activeAccountCode, detailDraft?.flights, flightStationSyncSelectionsByTrafficId, loadFlightStationSyncCandidates, toast]);
+
+  const flightStationSyncCacheStatusText = useMemo(() => {
+    if (isFlightStationSyncCandidatesLoading && !flightStationSyncCacheStatus) {
+      return "Loading matching estimate numbers...";
+    }
+    if (!pendingFlightStationSync) {
+      return "No estimate-number candidates loaded.";
+    }
+    if (!isOnline && flightStationSyncCacheStatus) {
+      return `Offline. Showing cached data from ${formatRelativeTime(flightStationSyncCacheStatus.fetchedAt)}.`;
+    }
+    if (isFlightStationSyncCandidatesLoading && flightStationSyncCacheStatus) {
+      return `Refreshing estimate numbers from ${formatRelativeTime(flightStationSyncCacheStatus.fetchedAt)}.`;
+    }
+    if (flightStationSyncCacheStatus) {
+      return `Data source: ${flightStationSyncCacheStatus.source}. Last updated ${formatRelativeTime(flightStationSyncCacheStatus.fetchedAt)}.`;
+    }
+    return "No cached data yet";
+  }, [flightStationSyncCacheStatus, isFlightStationSyncCandidatesLoading, isOnline, pendingFlightStationSync]);
+
+  const handleRefreshFlightStationSyncCandidates = useCallback(() => {
+    if (!pendingFlightStationSync || isFlightStationSyncCandidatesLoading) {
+      return;
+    }
+    void loadFlightStationSyncCandidates(
+      {
+        trafficId: pendingFlightStationSync.trafficId,
+        accountCode: activeAccountCode,
+        flightStart: pendingFlightStationSync.flightStart,
+        flightEnd: pendingFlightStationSync.flightEnd,
+        estNums: pendingFlightStationSync.estNums,
+        languages: pendingFlightStationSync.languages,
+        mediums: pendingFlightStationSync.mediums,
+        forceRefreshCandidates: true,
+      },
+      {
+        preferCache: false,
+        preserveSelection: selectedFlightStationSyncEstNums,
+      },
+    ).catch((loadError) => {
+      toast.error(
+        "Unable to refresh estimate numbers",
+        getTrafficErrorMessage(loadError, "Estimate-number candidates could not be refreshed."),
+      );
+    });
+  }, [activeAccountCode, isFlightStationSyncCandidatesLoading, loadFlightStationSyncCandidates, pendingFlightStationSync, selectedFlightStationSyncEstNums, toast]);
 
   const handleManualStationSync = useCallback(() => {
     if (!activeDraft || isStationAutoSyncing) {
@@ -5332,12 +7042,14 @@ export default function TrafficPage() {
       dateCreated: null,
       dateUpdated: null,
     };
+    const nextFlights = [...detailDraft.flights, duplicatedFlight];
     updateDraft((current) => {
       return {
         ...current,
-        flights: [...current.flights, duplicatedFlight],
+        flights: nextFlights,
       };
-    });
+    }, { applyAutoReadyToEmail: true });
+    refreshEmailInstructionsFromFlights(nextFlights, { force: true });
   }
 
   function removeFlightDraft(flightId: number) {
@@ -5357,7 +7069,8 @@ export default function TrafficPage() {
     updateDraft((current) => ({
       ...current,
       flights: current.flights.filter((item) => item.id !== flightId),
-    }));
+    }), { applyAutoReadyToEmail: true });
+    refreshEmailInstructionsFromFlights(remainingFlights, { force: true });
     if (currentDetail && nextSyncRange) {
       const remainingLanguages = resolveFlightLanguagesFromFlights(
         remainingFlights,
@@ -5407,7 +7120,11 @@ export default function TrafficPage() {
             ? current.stations.map((station) => ({ ...station, deliveryStatus: "" }))
             : current.stations,
       };
-    });
+    }, { applyAutoReadyToEmail: true });
+    refreshEmailInstructionsFromFlights(
+      currentDetail?.flights.filter((item) => item.id !== flightId) ?? [],
+      { force: true },
+    );
     if (currentDetail) {
       const remainingFlights = currentDetail.flights.filter((item) => item.id !== flightId);
       const nextSyncRange = resolveFlightRangeFromFlights(remainingFlights);
@@ -5461,6 +7178,7 @@ export default function TrafficPage() {
       fileUrl: normalizedFileUrl,
       scriptUrl: asNullableString(normalizedScriptUrl),
     };
+    const currentFlights = detailDraft?.flights ?? [];
 
     let nextFlightForSync: {
       trafficId: string;
@@ -5478,6 +7196,7 @@ export default function TrafficPage() {
         ...sanitizedFlightDraft,
         id: nextTempId,
       };
+      const nextFlights = [...currentFlights, nextFlight];
       nextFlightForSync = {
         trafficId: nextFlight.trafficId,
         flightStart: nextFlight.flightStart,
@@ -5488,8 +7207,9 @@ export default function TrafficPage() {
       };
       updateDraft((current) => ({
         ...current,
-        flights: [...current.flights, nextFlight],
-      }));
+        flights: nextFlights,
+      }), { applyAutoReadyToEmail: true });
+      refreshEmailInstructionsFromFlights(nextFlights, { force: true });
     } else if (flightModalBaseline) {
       const shouldForceRefreshCandidates = (
         asString(flightModalBaseline.flightStart) !== asString(sanitizedFlightDraft.flightStart)
@@ -5497,6 +7217,9 @@ export default function TrafficPage() {
         || normalizeFlightLanguageValue(flightModalBaseline.language) !== normalizeFlightLanguageValue(sanitizedFlightDraft.language)
         || canonicalFlightMediumForCandidates(flightModalBaseline.medium) !== canonicalFlightMediumForCandidates(sanitizedFlightDraft.medium)
       );
+      const nextFlights = currentFlights.map((item) => (
+        item.id === flightModalBaseline.id ? { ...sanitizedFlightDraft, id: item.id } : item
+      ));
       nextFlightForSync = {
         trafficId: sanitizedFlightDraft.trafficId,
         flightStart: sanitizedFlightDraft.flightStart,
@@ -5507,8 +7230,9 @@ export default function TrafficPage() {
       };
       updateDraft((current) => ({
         ...current,
-        flights: current.flights.map((item) => item.id === flightModalBaseline.id ? { ...sanitizedFlightDraft, id: item.id } : item),
-      }));
+        flights: nextFlights,
+      }), { applyAutoReadyToEmail: true });
+      refreshEmailInstructionsFromFlights(nextFlights, { force: true });
     }
 
     setIsFlightModalOpen(false);
@@ -5559,16 +7283,6 @@ export default function TrafficPage() {
     });
   }
 
-  function handleSelectAllFlightStationSyncEstNums() {
-    setSelectedFlightStationSyncEstNums(
-      (flightStationSyncCandidates?.estNums ?? []).map((item) => item.estNum),
-    );
-  }
-
-  function handleClearFlightStationSyncEstNums() {
-    setSelectedFlightStationSyncEstNums([]);
-  }
-
   function handleOpenFlightSyncSchedulePreview(estNum: number, note: string | null) {
     setFlightSyncPreviewEstnum({
       estnum: Math.max(0, Math.trunc(asNumber(estNum, 0))),
@@ -5597,7 +7311,7 @@ export default function TrafficPage() {
     }
   }
 
-  function addStationDraft() {
+  const addStationDraft = useCallback(() => {
     if (!detailDraft) {
       return;
     }
@@ -5609,9 +7323,9 @@ export default function TrafficPage() {
     setStationModalError(null);
     setIsStationDiscardDialogOpen(false);
     setIsStationModalOpen(true);
-  }
+  }, [detailDraft]);
 
-  function editStationDraft(stationId: number) {
+  const editStationDraft = useCallback((stationId: number) => {
     if (!detailDraft) {
       return;
     }
@@ -5627,14 +7341,14 @@ export default function TrafficPage() {
     setStationModalError(null);
     setIsStationDiscardDialogOpen(false);
     setIsStationModalOpen(true);
-  }
+  }, [detailDraft]);
 
-  function removeStationDraft(stationId: number) {
+  const removeStationDraft = useCallback((stationId: number) => {
     updateDraft((current) => ({
       ...current,
       stations: current.stations.filter((item) => item.id !== stationId),
     }));
-  }
+  }, [updateDraft]);
 
   function maybePromptConfirmTrafficStatus(nextStations: TrafficStation[]) {
     if (!detailDraft) {
@@ -5836,11 +7550,11 @@ export default function TrafficPage() {
       if (!changed) {
         return current;
       }
-      return {
-        ...current,
-        stations: nextStations,
-      };
-    });
+        return {
+          ...current,
+          stations: nextStations,
+        };
+      }, { applyAutoReadyToEmail: true });
   }, [updateDraft]);
 
   useEffect(() => {
@@ -6219,6 +7933,13 @@ export default function TrafficPage() {
     setIsDeliveryMethodDialogOpen(true);
   }, []);
 
+  const handleOpenScheduleTimelineModal = useCallback(() => {
+    if (!timelineAccountCode || !stationSyncFlightRange) {
+      return;
+    }
+    setIsScheduleTimelineModalOpen(true);
+  }, [stationSyncFlightRange, timelineAccountCode]);
+
   const handleCopyStationContacts = useCallback(async (emails: string[]) => {
     if (!emails.length) {
       toast.info("No contact emails available");
@@ -6260,23 +7981,51 @@ export default function TrafficPage() {
     }
   }, [activeEmailPreviewHtml, toast]);
 
-  const handleSendTrafficEmail = useCallback(async () => {
+  const markTrafficStatusSentById = useCallback(async (trafficId: string) => {
+    if (!trafficId || isLocalTrafficId(trafficId)) {
+      return false;
+    }
+
+    setIsMarkingTrafficSent(true);
+    setError(null);
+    try {
+      const nextStatus: TrafficStatus = "sent";
+      const payload = await requestJson(`/api/tradsphere/v1/traffic?id=${encodeURIComponent(trafficId)}`, {
+        method: "PUT",
+        headers: requestHeaders,
+        body: { status: nextStatus },
+        successToast: false,
+      });
+      const data = unwrapData(payload);
+      const persistedStatus = asString(isRecord(data) ? data.status : "").toLowerCase() || nextStatus;
+      applyTrafficStatusToLoadedState(trafficId, persistedStatus as TrafficStatus);
+      return true;
+    } catch (statusError) {
+      const message = getTrafficErrorMessage(statusError, "Failed to update traffic status.");
+      setError(message);
+      toast.error("Status update failed", message);
+      return false;
+    } finally {
+      setIsMarkingTrafficSent(false);
+    }
+  }, [applyTrafficStatusToLoadedState, requestHeaders, requestJson, toast]);
+
+  const sendTrafficEmailForDetail = useCallback(async (
+    draftDetail: TrafficDetail,
+    trafficId: string,
+    options?: { markSentAfterSend?: boolean },
+  ) => {
     if (!canEditTradsphere || isSaving || isSendingEmail || isMarkingTrafficSent || isEmailLocked) {
       return;
     }
-    if (!activeDraft?.email || !activeEmailWorkspace || !activeTrafficId) {
+    if (!draftDetail.email || !activeEmailWorkspace || !trafficId) {
       toast.info("Select a traffic record", "Open a traffic record with an email draft before sending.");
       return;
     }
-    if (isLocalTrafficId(activeTrafficId)) {
-      toast.info("Save before sending", "This traffic draft must be saved before sending email.");
-      return;
-    }
-
-    const toEmails = asStringArray(activeDraft.email.toEmails).map((item) => item.toLowerCase());
-    const ccEmails = asStringArray(activeDraft.email.ccEmails).map((item) => item.toLowerCase());
-    const bccEmails = asStringArray(activeDraft.email.bccEmails).map((item) => item.toLowerCase());
-    const subject = asString(activeDraft.email.subject);
+    const toEmails = asStringArray(draftDetail.email.toEmails).map((item) => item.toLowerCase());
+    const ccEmails = asStringArray(draftDetail.email.ccEmails).map((item) => item.toLowerCase());
+    const bccEmails = asStringArray(draftDetail.email.bccEmails).map((item) => item.toLowerCase());
+    const subject = asString(draftDetail.email.subject);
     if (toEmails.length === 0) {
       toast.error("Missing recipients", "Add at least one To email before sending.");
       return;
@@ -6286,7 +8035,7 @@ export default function TrafficPage() {
       return;
     }
 
-    const accountCode = asString(activeDraft.traffic.accountCode).toUpperCase();
+    const accountCode = asString(draftDetail.traffic.accountCode).toUpperCase();
     const accountLabel = accountNameByCode[accountCode] || accountCode || "Tradsphere";
     const body = persistTrafficEmailBody({
       workspace: {
@@ -6296,8 +8045,8 @@ export default function TrafficPage() {
       },
       subject,
       accountLabel,
-      campaignLabel: asString(activeDraft.traffic.campaign),
-      statusLabel: formatStatusOptionLabel(activeDraft.traffic.status),
+      campaignLabel: asString(draftDetail.traffic.campaign),
+      statusLabel: formatStatusOptionLabel(draftDetail.traffic.status),
     });
     if (!asString(body)) {
       toast.error("Missing email body", "Email body is required before sending.");
@@ -6305,10 +8054,15 @@ export default function TrafficPage() {
     }
 
     setIsSendingEmail(true);
+    const shouldMarkSent = Boolean(options?.markSentAfterSend)
+      && asString(draftDetail.traffic.status).toLowerCase() !== "sent";
+    if (shouldMarkSent) {
+      setIsMarkingTrafficSent(true);
+    }
     setError(null);
     try {
       const responsePayload = await requestJson(
-        `/api/tradsphere/v1/traffic/email/send?trafficId=${encodeURIComponent(activeTrafficId)}`,
+        `/api/tradsphere/v1/traffic/email/send?trafficId=${encodeURIComponent(trafficId)}`,
         {
           method: "POST",
           headers: requestHeaders,
@@ -6318,70 +8072,132 @@ export default function TrafficPage() {
             bccEmails,
             subject,
             body,
+            markSentAfterSend: shouldMarkSent,
           },
           successToast: false,
         },
       );
       const responseData = unwrapData(responsePayload);
-      const nextEmail = normalizeTrafficEmail(
-        isRecord(responseData) && isRecord(responseData.email)
-          ? responseData.email
+      const nextDetail = normalizeTrafficDetail(
+        isRecord(responseData) && isRecord(responseData.detail)
+          ? responseData.detail
           : responseData,
       );
-      if (!nextEmail) {
-        throw new Error("Invalid email send response.");
-      }
+      if (nextDetail) {
+        const computedDetail = computeSummary(nextDetail);
+        const nextSummary = buildListSummaryFromDetail(computedDetail, stationLookupMetaByCode);
+        let nextTrafficList = trafficList;
+        setTrafficList((current) => {
+          const next = upsertTrafficSummaryInList(current, nextSummary, trafficId, trafficId, false);
+          nextTrafficList = next;
+          return next;
+        });
+        if (activeAccountCode) {
+          writeBrowserCache(buildTrafficListCacheKey(activeAccountCode), nextTrafficList, TRAFFIC_LIST_CACHE_TTL_MS, {
+            source: "network",
+            fetchedAt: Date.now(),
+          });
+        }
+        setDetailBaseline((current) => {
+          if (!current || asString(current.traffic.id) !== trafficId) {
+            return current;
+          }
+          return cloneDetail(computedDetail);
+        });
+        setDetailDraft((current) => {
+          if (!current || asString(current.traffic.id) !== trafficId) {
+            return current;
+          }
+          return cloneDetail(computedDetail);
+        });
+        setDraftSessionsByTrafficId((current) => {
+          const session = current[trafficId];
+          if (!session) {
+            return current;
+          }
+          return {
+            ...current,
+            [trafficId]: {
+              baseline: session.baseline
+                ? (cloneDetail(computedDetail) as TrafficDetail)
+                : session.baseline,
+              draft: cloneDetail(computedDetail) as TrafficDetail,
+            },
+          };
+        });
+      } else {
+        const nextEmail = normalizeTrafficEmail(
+          isRecord(responseData) && isRecord(responseData.email)
+            ? responseData.email
+            : responseData,
+        );
+        if (!nextEmail) {
+          throw new Error("Invalid email send response.");
+        }
 
-      setDetailBaseline((current) => {
-        if (!current || asString(current.traffic.id) !== activeTrafficId) {
-          return current;
-        }
-        return computeSummary({
-          ...current,
-          email: nextEmail,
+        setDetailBaseline((current) => {
+          if (!current || asString(current.traffic.id) !== trafficId) {
+            return current;
+          }
+          return computeSummary({
+            ...current,
+            email: nextEmail,
+          });
         });
-      });
-      setDetailDraft((current) => {
-        if (!current || asString(current.traffic.id) !== activeTrafficId) {
-          return current;
-        }
-        return computeSummary({
-          ...current,
-          email: nextEmail,
+        setDetailDraft((current) => {
+          if (!current || asString(current.traffic.id) !== trafficId) {
+            return current;
+          }
+          return computeSummary({
+            ...current,
+            email: nextEmail,
+          });
         });
-      });
-      setDraftSessionsByTrafficId((current) => {
-        const session = current[activeTrafficId];
-        if (!session) {
-          return current;
+        setDraftSessionsByTrafficId((current) => {
+          const session = current[trafficId];
+          if (!session) {
+            return current;
+          }
+          return {
+            ...current,
+            [trafficId]: {
+              baseline: session.baseline
+                ? computeSummary({
+                    ...session.baseline,
+                    email: nextEmail,
+                  })
+                : session.baseline,
+              draft: computeSummary({
+                ...session.draft,
+                email: nextEmail,
+              }),
+            },
+          };
+        });
+        if (shouldMarkSent) {
+          const markedSent = await markTrafficStatusSentById(trafficId);
+          toast.success(
+            "Email sent",
+            markedSent
+              ? "Traffic email was sent and the status was marked as Sent."
+              : "Traffic email was sent successfully.",
+          );
+          setIsEmailPreviewOpen(false);
+          return;
         }
-        return {
-          ...current,
-          [activeTrafficId]: {
-            baseline: session.baseline
-              ? computeSummary({
-                  ...session.baseline,
-                  email: nextEmail,
-                })
-              : session.baseline,
-            draft: computeSummary({
-              ...session.draft,
-              email: nextEmail,
-            }),
-          },
-        };
-      });
-      setEmailSendSuccessPrompt({
-        trafficId: activeTrafficId,
-        recipientCount: toEmails.length,
-        askMarkSent: asString(activeDraft.traffic.status).toLowerCase() !== "sent",
-      });
+      }
+      toast.success(
+        "Email sent",
+        shouldMarkSent
+          ? "Traffic email was sent and the status was marked as Sent."
+          : "Traffic email was sent successfully.",
+      );
       setIsEmailPreviewOpen(false);
     } catch (sendError) {
       const message = getTrafficErrorMessage(sendError, "Failed to send email.");
       const attemptAt = new Date().toISOString();
       const applyFailedSendState = (current: TrafficDetail | null): TrafficDetail | null => {
-        if (!current || asString(current.traffic.id) !== activeTrafficId || !current.email) {
+        if (!current || asString(current.traffic.id) !== trafficId || !current.email) {
           return current;
         }
         return computeSummary({
@@ -6401,27 +8217,78 @@ export default function TrafficPage() {
       toast.error("Send failed", message);
     } finally {
       setIsSendingEmail(false);
+      if (shouldMarkSent) {
+        setIsMarkingTrafficSent(false);
+      }
     }
   }, [
-    activeDraft,
     activeEmailWorkspace,
-    activeTrafficId,
+    activeAccountCode,
     accountNameByCode,
     canEditTradsphere,
+    buildListSummaryFromDetail,
     isEmailLocked,
     isSaving,
     isSendingEmail,
     isMarkingTrafficSent,
+    markTrafficStatusSentById,
+    stationLookupMetaByCode,
     requestHeaders,
     requestJson,
+    trafficList,
     toast,
+    upsertTrafficSummaryInList,
+  ]);
+
+  const handleSendTrafficEmail = useCallback(() => {
+    if (!canEditTradsphere || isSaving || isSendingEmail || isMarkingTrafficSent || isEmailLocked) {
+      return;
+    }
+    if (!activeDraft?.email || !activeEmailWorkspace || !activeTrafficId) {
+      toast.info("Select a traffic record", "Open a traffic record with an email draft before sending.");
+      return;
+    }
+    setIsSendEmailConfirmationOpen(true);
+  }, [
+    activeDraft,
+    activeEmailWorkspace,
+    activeTrafficId,
+    canEditTradsphere,
+    isEmailLocked,
+    isMarkingTrafficSent,
+    isSaving,
+    isSendingEmail,
+    sendTrafficEmailForDetail,
+    toast,
+  ]);
+
+  const handleConfirmSendTrafficEmail = useCallback(async (markSentAfterSend: boolean) => {
+    setIsSendEmailConfirmationOpen(false);
+    if (!detailDraft || !activeDraft?.email || !activeEmailWorkspace || !activeTrafficId) {
+      return;
+    }
+    if (activeTrafficNeedsSaveBeforeSending) {
+      const saved = await saveTrafficDetailForEmail(detailDraft, detailBaseline);
+      await sendTrafficEmailForDetail(saved.detail, saved.trafficId, { markSentAfterSend });
+      return;
+    }
+    await sendTrafficEmailForDetail(detailDraft, activeTrafficId, { markSentAfterSend });
+  }, [
+    activeDraft?.email,
+    activeEmailWorkspace,
+    activeTrafficNeedsSaveBeforeSending,
+    activeTrafficId,
+    detailBaseline,
+    detailDraft,
+    saveTrafficDetailForEmail,
+    sendTrafficEmailForDetail,
   ]);
 
   const handleOpenTestEmailModal = useCallback(() => {
     if (!canOpenTrafficTestEmailModal) {
       return;
     }
-    setTestEmailTo("");
+    setTestEmailTo([DEFAULT_TEST_EMAIL_RECIPIENT]);
     setIsTestEmailModalOpen(true);
   }, [canOpenTrafficTestEmailModal]);
 
@@ -6430,7 +8297,7 @@ export default function TrafficPage() {
       return;
     }
 
-    const toEmail = asString(testEmailTo).trim().toLowerCase();
+    const toEmail = asString(testEmailTo[0]).trim().toLowerCase();
     if (!isLikelyEmailAddress(toEmail)) {
       toast.error("Invalid test email", "Enter a valid email address for the test recipient.");
       return;
@@ -6504,41 +8371,6 @@ export default function TrafficPage() {
     setIsTestEmailModalOpen(false);
     setIsEmailPreviewOpen(true);
   }, [activeDraft, activeEmailWorkspace]);
-
-  const handleMarkTrafficStatusSentAfterEmail = useCallback(async () => {
-    const prompt = emailSendSuccessPrompt;
-    if (!prompt) {
-      return;
-    }
-    const trafficId = asString(prompt.trafficId);
-    if (!trafficId || isLocalTrafficId(trafficId)) {
-      setEmailSendSuccessPrompt(null);
-      return;
-    }
-
-    setIsMarkingTrafficSent(true);
-    setError(null);
-    try {
-      const nextStatus: TrafficStatus = "sent";
-      const payload = await requestJson(`/api/tradsphere/v1/traffic?id=${encodeURIComponent(trafficId)}`, {
-        method: "PUT",
-        headers: requestHeaders,
-        body: { status: nextStatus },
-        successToast: false,
-      });
-      const data = unwrapData(payload);
-      const persistedStatus = asString(isRecord(data) ? data.status : "").toLowerCase() || nextStatus;
-      applyTrafficStatusToLoadedState(trafficId, persistedStatus as TrafficStatus);
-      setEmailSendSuccessPrompt(null);
-      toast.success("Traffic status updated", "Traffic status has been marked as Sent.");
-    } catch (statusError) {
-      const message = getTrafficErrorMessage(statusError, "Failed to update traffic status.");
-      setError(message);
-      toast.error("Status update failed", message);
-    } finally {
-      setIsMarkingTrafficSent(false);
-    }
-  }, [applyTrafficStatusToLoadedState, emailSendSuccessPrompt, requestHeaders, requestJson, toast]);
 
   const handleUnlockTraffic = useCallback(async () => {
     const trafficId = asString(activeTrafficId);
@@ -6711,19 +8543,32 @@ export default function TrafficPage() {
   }, [appliedTrafficSearch, applyTrafficSearchKeyword, draftTrafficSearch]);
 
   const isGridActionOverlayVisible = isSaving || isSendingEmail;
-  const gridActionOverlayMessage = isSaving ? "Saving traffic changes..." : "Sending email...";
+  const sectionOverlayMessage = isSaving
+    ? "Saving traffic changes..."
+    : isSendingEmail
+      ? "Sending email..."
+      : isSelectorRefreshOverlayVisible
+        ? "Refreshing traffic data..."
+        : isRefreshingDetail
+          ? "Refreshing traffic detail..."
+          : isLoadingDetail
+            ? "Loading traffic detail..."
+            : "Loading...";
+  const detailOverlayMessage = isRefreshingDetail
+    ? "Refreshing traffic detail..."
+    : "Loading traffic detail...";
   const loadingContract = resolveSharedLoadingContract(
     {
       pageInitializing: !hasHydratedPageState,
       pageRefreshing: isLoadActionOverlayVisible,
       cacheChipRefreshing: isChipRefreshOverlayVisible,
-      sectionLoading: isGridActionOverlayVisible,
+      sectionLoading: isGridActionOverlayVisible || isSelectorRefreshOverlayVisible,
     },
     {
       pageInitializing: "Preparing traffic workspace...",
       pageRefreshing: "Loading traffic data...",
       cacheChipRefreshing: "Loading latest traffic data...",
-      sectionLoading: gridActionOverlayMessage,
+      sectionLoading: sectionOverlayMessage,
     },
   );
 
@@ -6749,8 +8594,23 @@ export default function TrafficPage() {
             }
             void handleRefreshFromChip();
           }}
-          disabled={!activeAccountCode || !isOnline || isSaving || isDeletingTraffic || isLoadingAccountTraffic || isLoadingDetail}
-          refreshing={isDeletingTraffic || isRefreshingAccountTraffic || isLoadingDetail}
+          disabled={
+            !activeAccountCode ||
+            !isOnline ||
+            isSaving ||
+            isDeletingTraffic ||
+            isLoadingAccountTraffic ||
+            isRefreshingSelections ||
+            isChipRefreshOverlayVisible ||
+            isDetailBusy
+          }
+          refreshing={
+            isDeletingTraffic ||
+            isRefreshingSelections ||
+            isRefreshingAccountTraffic ||
+            isChipRefreshOverlayVisible ||
+            isDetailBusy
+          }
           refreshLabel="Refresh traffic data"
           tooltipText={
             isDeletingTraffic
@@ -6778,6 +8638,7 @@ export default function TrafficPage() {
           isLoadingAccount={isLoadingAccountTraffic}
           isRefreshingAccount={isRefreshingSelections || isRefreshingAccountTraffic}
           isSavingAccount={isSaving}
+          loadButtonLabel={selectedAccountIsLoaded ? "Refresh" : "Load"}
           onAccountChange={handleAccountChange}
           onLoad={() => {
             const targetAccountCode = asString(selectedAccountCode).toUpperCase();
@@ -6790,6 +8651,10 @@ export default function TrafficPage() {
             if (hasAnyUnsavedChanges) {
               setPendingAction({ type: "refresh" });
               setIsUnsavedDialogOpen(true);
+              return;
+            }
+            if (targetAccountCode && targetAccountCode === activeAccountCode) {
+              void handleRefreshFromSelector();
               return;
             }
             void handleLoadFromSelector();
@@ -6866,94 +8731,29 @@ export default function TrafficPage() {
             ) : (
               filteredTrafficList.map((item) => {
                 const active = item.id === selectedTrafficId;
-                const isDraft = asString(item.status).toLowerCase() === "draft";
-                const itemHasUnsavedChanges = unsavedTrafficIds.has(item.id);
-                const shouldHardDelete = itemHasUnsavedChanges || isDraft;
-                const isDeletingCard = deletingTrafficIdSet.has(item.id);
-                const displayCampaign = active && activeDraft ? activeDraft.traffic.campaign : item.campaign;
-                const displayStatus = active && activeDraft ? activeDraft.traffic.status : item.status;
-                const isLockedTrafficCard = ["sent", "confirmed"].includes(asString(displayStatus).toLowerCase());
+                const activeDraftMatchesRow = active && activeDraft?.traffic.id === item.id;
+                const displayCampaign = activeDraftMatchesRow ? activeDraft.traffic.campaign : item.campaign;
+                const displayStatus = activeDraftMatchesRow ? activeDraft.traffic.status : item.status;
                 return (
-                  <div
+                  <TrafficListItemCard
                     key={item.id}
-                    role="button"
-                    aria-disabled={isDeletingCard}
-                    tabIndex={0}
-                    onClick={() => {
-                      if (isDeletingCard) {
-                        return;
-                      }
-                      handleSelectTraffic(item.id);
-                    }}
-                    onKeyDown={(event) => {
-                      if (isDeletingCard) {
-                        return;
-                      }
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        handleSelectTraffic(item.id);
-                      }
-                    }}
-                    className={[
-                      "group w-full rounded-xl border px-3 py-3 text-left transition",
-                      isDeletingCard ? "cursor-not-allowed opacity-70" : "",
-                      active
-                        ? "border-blue-300 bg-blue-50/70"
-                        : "border-blue-100 bg-white hover:border-blue-200 hover:bg-blue-50/30",
-                    ].join(" ")}
-                  >
-                    <div className="flex items-center justify-between gap-3">
-                      <div className="min-w-0">
-                        <p className="truncate text-sm font-semibold text-slate-900">{displayCampaign || "Untitled campaign"}</p>
-                        <span className={`mt-1 inline-flex rounded-full border px-2 py-0.5 text-[11px] font-semibold ${statusChipClass(displayStatus)}`}>
-                          {toTrafficStatusLabel(displayStatus)}
-                        </span>
-                        {itemHasUnsavedChanges ? (
-                          <span className="ml-1 inline-flex rounded-full border border-amber-200 bg-amber-50 px-2 py-0.5 text-[11px] font-semibold text-amber-800">
-                            Unsaved
-                          </span>
-                        ) : null}
-                      </div>
-                      <div className="flex items-center">
-                        <div className="flex items-center gap-0.5 transition-opacity duration-150 max-md:opacity-100 md:pointer-events-none md:opacity-0 md:group-hover:pointer-events-auto md:group-hover:opacity-100 md:group-focus-within:pointer-events-auto md:group-focus-within:opacity-100">
-                            <ActionIconButton
-                              icon={duplicatingTrafficId === item.id ? <Loader2 className="animate-spin" /> : <Copy />}
-                              tooltip={duplicatingTrafficId === item.id ? "Duplicating traffic..." : "Duplicate Traffic"}
-                              aria-label={duplicatingTrafficId === item.id ? "Duplicating traffic" : "Duplicate Traffic"}
-                            title={duplicatingTrafficId === item.id ? "Duplicating traffic" : "Duplicate Traffic"}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              if (duplicatingTrafficId === item.id) {
-                                return;
-                              }
-                              void handleDuplicateTraffic(item.id);
-                            }}
-                              disabled={!canEditTradsphere || isSaving || isDeletingCard || isLoadingAccountTraffic || isLoadingDetail || isDuplicatingTraffic || isLockedTrafficCard}
-                            className="!h-6 !w-6 !rounded-full !p-0 text-blue-500 hover:!bg-blue-50 hover:!scale-105 hover:text-blue-600 focus-visible:!bg-blue-50 focus-visible:!scale-105 focus-visible:text-blue-600 [&_svg]:!h-3.5 [&_svg]:!w-3.5 [&_svg]:text-blue-500 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110 hover:[&_svg]:text-blue-600 focus-visible:[&_svg]:text-blue-600"
-                          />
-                          <ActionIconButton
-                            icon={isDeletingCard ? <Loader2 className="animate-spin" /> : (shouldHardDelete ? <Trash2 /> : <Archive />)}
-                            tooltip={isDeletingCard ? "Removing traffic..." : (shouldHardDelete ? "Delete Traffic" : "Archive Traffic")}
-                            aria-label={isDeletingCard ? "Removing traffic" : (shouldHardDelete ? "Delete Traffic" : "Archive Traffic")}
-                            title={isDeletingCard ? "Removing traffic" : (shouldHardDelete ? "Delete Traffic" : "Archive Traffic")}
-                            onClick={(event) => {
-                              event.stopPropagation();
-                              if (isDeletingCard) {
-                                return;
-                              }
-                              if (shouldHardDelete) {
-                                openTrafficRemovalDialog(item.id, "delete");
-                                return;
-                              }
-                              openTrafficRemovalDialog(item.id, "archive");
-                            }}
-                            disabled={!canEditTradsphere || isSaving || isDeletingCard || isLoadingAccountTraffic || isLoadingDetail || isLockedTrafficCard}
-                            className="!h-6 !w-6 !rounded-full !p-0 text-rose-500 hover:!bg-rose-50 hover:!scale-105 hover:text-rose-600 focus-visible:!bg-rose-50 focus-visible:!scale-105 focus-visible:text-rose-600 [&_svg]:!h-3.5 [&_svg]:!w-3.5 [&_svg]:text-rose-500 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110 hover:[&_svg]:text-rose-600 focus-visible:[&_svg]:text-rose-600"
-                          />
-                        </div>
-                      </div>
-                    </div>
-                  </div>
+                    item={item}
+                    active={active}
+                    displayCampaign={displayCampaign}
+                    displayStatus={displayStatus}
+                    isDraft={asString(item.status).toLowerCase() === "draft"}
+                    itemHasUnsavedChanges={unsavedTrafficIds.has(item.id)}
+                    isDeletingCard={deletingTrafficIdSet.has(item.id)}
+                    isSelectionLocked={active && isDetailBusy}
+                    canEditTradsphere={canEditTradsphere}
+                    isSaving={isSaving}
+                    isLoadingAccountTraffic={isLoadingAccountTraffic}
+                    isLoadingDetail={isDetailBusy}
+                    isDuplicatingTraffic={duplicatingTrafficId === item.id}
+                    onSelectTraffic={handleSelectTraffic}
+                    onDuplicateTraffic={handleDuplicateTraffic}
+                    onOpenTrafficRemovalDialog={openTrafficRemovalDialog}
+                  />
                 );
               })
             )}
@@ -6971,799 +8771,189 @@ export default function TrafficPage() {
             </SectionCard>
           ) : (
             <>
-          <div className="flex justify-start">
-            <div
-              role="tablist"
-              aria-label="Traffic workspace mode"
-              className="grid w-full grid-cols-2 gap-1.5 rounded-xl border border-blue-200 bg-gradient-to-r from-blue-50/80 via-indigo-50/40 to-violet-50/70 p-1.5 sm:w-auto sm:min-w-[32rem]"
-            >
-              {EMAIL_WORKSPACE_TABS.map((tab) => {
-                const isActive = activeWorkspaceTab === tab.value;
-                const tabIcon = tab.value === "workflow" ? <Table2 className="size-3.5" /> : <Send className="size-3.5" />;
-                return (
-                  <button
-                    key={tab.value}
-                    id={`traffic-workspace-tab-${tab.value}`}
-                    role="tab"
-                    aria-selected={isActive}
-                    aria-controls={`traffic-workspace-panel-${tab.value}`}
-                    type="button"
-                    onClick={() => setActiveWorkspaceTab(tab.value)}
-                    className={[
-                      "inline-flex w-full items-center justify-center gap-2 rounded-lg border px-3 py-2 text-xs font-semibold transition duration-150 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300",
-                      isActive
-                        ? "border-blue-200 bg-white text-blue-700 shadow-sm"
-                        : "border-transparent bg-transparent text-slate-600 hover:border-blue-100 hover:bg-white/70 hover:text-blue-700",
-                    ].join(" ")}
-                  >
-                    {tabIcon}
-                    {tab.label}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+          <TrafficWorkspaceModeTabs activeTab={activeWorkspaceTab} onChangeTab={setActiveWorkspaceTab} />
 
           {activeWorkspaceTab === "workflow" ? (
-            <>
-          <SectionCard
-            id="traffic-workspace-panel-workflow"
-            title="Traffic Details"
-            actions={(
-                <ActionIconButton
-                  icon={<Archive />}
-                  tooltip="Archive Traffic"
-                  aria-label="Archive Traffic"
-                  title="Archive Traffic"
-                onClick={() => {
-                  if (!selectedTrafficId) {
-                    return;
-                  }
-                  openTrafficRemovalDialog(selectedTrafficId, "archive");
-                }}
-                disabled={!selectedTrafficId || !canEditTradsphere || isSaving || isDeletingSelectedTraffic || hasUnsavedChanges || isTrafficEditingLocked}
-                className="!h-7 !w-7 !p-0 text-rose-600 hover:text-rose-700 focus-visible:text-rose-700 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:text-rose-600 hover:[&_svg]:text-rose-700 focus-visible:[&_svg]:text-rose-700"
-              />
-            )}
-            contentClassName="space-y-4"
-          >
-            {!activeAccountCode ? (
-              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-sm text-slate-600">
-                Select an account to view traffic details.
-              </div>
-            ) : !activeDraft ? (
-              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-sm text-slate-600">
-                Select a traffic record from the left panel.
-              </div>
-            ) : (
-              <>
-                {trafficLockBannerKind ? (
-                  <TrafficLockBanner
-                    kind={trafficLockBannerKind}
-                    isUnlocking={isUnlockingTraffic}
-                    disabled={!canEditTradsphere || isSaving || isUnlockingTraffic}
-                    onUnlock={() => {
-                      void handleUnlockTraffic();
-                    }}
-                  />
-                ) : null}
-
-                <div className="grid gap-3 sm:grid-cols-2">
-                  <label className="space-y-1 text-sm">
-                    <span className="text-slate-600">Campaign</span>
-                    <Input
-                      value={activeDraft.traffic.campaign}
-                      disabled={!canEditTradsphere || isSaving || isTrafficEditingLocked}
-                      onChange={(event) => {
-                        const nextCampaign = event.target.value;
-                        updateDraft((current) => ({
-                          ...current,
-                          traffic: {
-                            ...current.traffic,
-                            campaign: nextCampaign,
-                          },
-                        }));
-                        updateTrafficCardSummary(activeDraft.traffic.id, { campaign: nextCampaign });
+            <div className="relative space-y-4">
+              <div className="space-y-4">
+                <SectionCard
+                  id="traffic-workspace-panel-workflow"
+                  title="Traffic Details"
+                  actions={(
+                    <ActionIconButton
+                      icon={<Archive />}
+                      tooltip="Archive Traffic"
+                      aria-label="Archive Traffic"
+                      title="Archive Traffic"
+                      onClick={() => {
+                        if (!selectedTrafficId) {
+                          return;
+                        }
+                        openTrafficRemovalDialog(selectedTrafficId, "archive");
                       }}
+                      disabled={!selectedTrafficId || !canEditTradsphere || isSaving || isDeletingSelectedTraffic || hasUnsavedChanges || isTrafficEditingLocked}
+                      className="!h-7 !w-7 !p-0 text-rose-600 hover:text-rose-700 focus-visible:text-rose-700 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:text-rose-600 hover:[&_svg]:text-rose-700 focus-visible:[&_svg]:text-rose-700"
                     />
-                  </label>
-
-                  <label className="space-y-1 text-sm">
-                    <span className="text-slate-600">Status</span>
-                    <AppDropdown
-                      value={activeDraft.traffic.status}
-                      onValueChange={(value) => {
-                        const nextStatus = value as TrafficStatus;
-                        updateDraft((current) => ({
-                          ...current,
-                          traffic: {
-                            ...current.traffic,
-                            status: nextStatus,
-                          },
-                        }));
-                        updateTrafficCardSummary(activeDraft.traffic.id, { status: nextStatus });
-                      }}
-                      options={STATUS_OPTIONS}
-                      searchable={false}
-                      disabled={!canEditTradsphere || isSaving || isConfirmedSavedLocked}
-                    />
-                  </label>
-                </div>
-
-                <label className="space-y-1 text-sm">
-                  <span className="text-slate-600">Note</span>
-                  <Textarea
-                    value={activeDraft.traffic.note || ""}
-                    className="min-h-[88px]"
-                    disabled={!canEditTradsphere || isSaving || isTrafficEditingLocked}
-                    onChange={(event) => updateDraft((current) => ({
-                      ...current,
-                      traffic: {
-                        ...current.traffic,
-                        note: event.target.value,
-                      },
-                    }))}
-                  />
-                </label>
-              </>
-            )}
-          </SectionCard>
-
-          <SectionCard
-            title="Flights"
-            actions={(
-              <ActionIconButton
-                icon={<Plus />}
-                tooltip="Add Flight"
-                aria-label="Add Flight"
-                title="Add Flight"
-                onClick={addFlightDraft}
-                disabled={!canEditTradsphere || isSaving || isTrafficEditingLocked}
-                className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
-              />
-            )}
-            contentClassName="space-y-3"
-          >
-            {!activeAccountCode ? (
-              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
-                Select an account to view flights.
-              </div>
-            ) : !activeDraft ? (
-              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
-                Select a traffic record to manage flights.
-              </div>
-            ) : (
-              <>
-                {activeDraft.flights.length > 0 && activeDraft.summary.rotationWarning ? (
-                  <div className="rounded-xl border border-amber-200 bg-amber-50 px-4 py-3 text-sm text-amber-800">
-                    <div className="flex items-start gap-2">
-                      <AlertTriangle className="mt-0.5 size-4 shrink-0" />
-                      <p>{activeDraft.summary.rotationWarningMessage || "Total rotation is not 100.00%."}</p>
+                  )}
+                  contentClassName="space-y-4"
+                >
+                  {!activeAccountCode ? (
+                    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-sm text-slate-600">
+                      Select an account to view traffic details.
                     </div>
-                  </div>
-                ) : null}
-                {activeDraft.flights.length === 0 ? (
-                  <div className="rounded-lg border border-dashed border-slate-200 bg-white px-3 py-4 text-sm text-slate-600">
-                    No flight rows yet.
-                  </div>
-                ) : (
-                  <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-                    <table className="min-w-full text-left text-xs">
-                      <thead className="bg-slate-50 text-slate-600">
-                        <tr>
-                          <th className="px-3 py-2 font-semibold">Flight</th>
-                          <th className="px-3 py-2 font-semibold">Medium</th>
-                          <th className="px-3 py-2 font-semibold">Language</th>
-                          <th className="px-3 py-2 font-semibold">Length</th>
-                          <th className="px-3 py-2 font-semibold">ISCI</th>
-                          <th className="px-3 py-2 font-semibold">Rotation</th>
-                          <th className="px-3 py-2 font-semibold">File</th>
-                          <th className="px-3 py-2 font-semibold">Script</th>
-                          <th className="px-3 py-2 text-right font-semibold"></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {activeDraft.flights.map((flight) => (
-                          (() => {
-                            const isDraftFlight = flight.id < 0;
-                            return (
-                          <tr
-                            key={flight.id}
-                            onClick={() => {
-                              editFlightDraft(flight.id);
-                            }}
-                            className={`group cursor-pointer border-t border-slate-200 text-slate-700 transition ${isDraftFlight ? "bg-amber-50/70 hover:bg-amber-100/70" : "hover:bg-blue-50/40"}`}
-                          >
-                            <td className="whitespace-nowrap px-3 py-2">{formatFlightRangeForTable(flight.flightStart, flight.flightEnd)}</td>
-                            <td className="whitespace-nowrap px-3 py-2">{flight.medium || "-"}</td>
-                            <td className="whitespace-nowrap px-3 py-2">
-                              <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${languageChipClass(flight.language)}`}>
-                                {normalizeFlightLanguageValue(flight.language)}
-                              </span>
-                            </td>
-                            <td className="whitespace-nowrap px-3 py-2">{formatLengthValue(flight.length)}</td>
-                            <td className="whitespace-nowrap px-3 py-2">{flight.isci || "-"}</td>
-                            <td className="whitespace-nowrap px-3 py-2">{formatRotationValue(flight.rotation)}</td>
-                            <td className="whitespace-nowrap px-3 py-2">
-                              {normalizeExternalUrl(flight.fileUrl) ? (
-                                <a
-                                  href={normalizeExternalUrl(flight.fileUrl)}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  onClick={(event) => event.stopPropagation()}
-                                  className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100"
-                                >
-                                  <Link2 className="size-3" />
-                                  Linked
-                                </a>
-                              ) : (
-                                <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
-                                  <Unlink className="size-3" />
-                                  Missing
-                                </span>
-                              )}
-                            </td>
-                            <td className="whitespace-nowrap px-3 py-2">
-                              {normalizeExternalUrl(flight.scriptUrl) ? (
-                                <a
-                                  href={normalizeExternalUrl(flight.scriptUrl)}
-                                  target="_blank"
-                                  rel="noreferrer"
-                                  onClick={(event) => event.stopPropagation()}
-                                  className="inline-flex items-center gap-1 rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700 hover:bg-emerald-100"
-                                >
-                                  <Link2 className="size-3" />
-                                  Linked
-                                </a>
-                              ) : (
-                                <span className="inline-flex items-center gap-1 rounded-full border border-slate-200 bg-slate-100 px-2 py-0.5 text-[11px] font-medium text-slate-600">
-                                  <Unlink className="size-3" />
-                                  Missing
-                                </span>
-                              )}
-                            </td>
-                            <td className="px-3 py-2 text-right">
-                              <div className="inline-flex items-center gap-0.5">
-                                <ActionIconButton
-                                  icon={<Copy />}
-                                  tooltip="Duplicate flight row"
-                                  aria-label="Duplicate flight row"
-                                  title="Duplicate flight row"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    duplicateFlightDraft(flight.id);
-                                  }}
-                                  disabled={!canEditTradsphere || isSaving || isTrafficEditingLocked}
-                                  className="!h-6 !w-6 !rounded-full !p-0 text-blue-500 hover:!bg-blue-50 hover:!scale-105 hover:text-blue-600 focus-visible:!bg-blue-50 focus-visible:!scale-105 focus-visible:text-blue-600 [&_svg]:!h-3.5 [&_svg]:!w-3.5"
-                                />
-                                <ActionIconButton
-                                  icon={<Trash2 />}
-                                  tooltip="Delete flight row"
-                                  aria-label="Delete flight row"
-                                  title="Delete flight row"
-                                  onClick={(event) => {
-                                    event.stopPropagation();
-                                    removeFlightDraft(flight.id);
-                                  }}
-                                  disabled={!canEditTradsphere || isSaving || isTrafficEditingLocked}
-                                  className="!h-6 !w-6 !rounded-full !p-0 text-rose-500 hover:!bg-rose-50 hover:!scale-105 hover:text-rose-600 focus-visible:!bg-rose-50 focus-visible:!scale-105 focus-visible:text-rose-600 [&_svg]:!h-3.5 [&_svg]:!w-3.5"
-                                />
-                              </div>
-                            </td>
-                          </tr>
-                            );
-                          })()
-                        ))}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
-              </>
-            )}
-          </SectionCard>
+                  ) : !activeDraft ? (
+                    <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-sm text-slate-600">
+                      Select a traffic record from the left panel.
+                    </div>
+                  ) : (
+                    <>
+                      {trafficLockBannerKind ? (
+                        <TrafficLockBanner
+                          kind={trafficLockBannerKind}
+                          isUnlocking={isUnlockingTraffic}
+                          disabled={!canEditTradsphere || isSaving || isUnlockingTraffic}
+                          onUnlock={() => {
+                            void handleUnlockTraffic();
+                          }}
+                        />
+                      ) : null}
 
-          <SectionCard
-            title="Station"
-            actions={(
-              <div className="flex items-center gap-1">
-                <ActionIconButton
-                  icon={isStationAutoSyncing ? <Loader2 className="animate-spin" /> : <RefreshCw />}
-                  tooltip="Sync stations from flight date range"
-                  aria-label="Sync stations from flight date range"
-                  title="Sync stations from flight date range"
-                  onClick={handleManualStationSync}
-                    disabled={
-                      !activeDraft
-                      || !stationSyncFlightRange
-                      || !canEditTradsphere
-                      || isSaving
-                      || isStationAutoSyncing
-                      || isTrafficEditingLocked
-                      || !isOnline
-                    }
-                  className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
+                      <div className="grid gap-3 sm:grid-cols-2">
+                        <label className="space-y-1 text-sm">
+                          <span className="text-slate-600">Campaign</span>
+                          <Input
+                            value={activeDraft.traffic.campaign}
+                            disabled={!canEditTradsphere || isSaving || isTrafficEditingLocked}
+                            onChange={(event) => {
+                              const nextCampaign = event.target.value;
+                              updateDraft((current) => ({
+                                ...current,
+                                traffic: {
+                                  ...current.traffic,
+                                  campaign: nextCampaign,
+                                },
+                              }));
+                              updateTrafficCardSummary(activeDraft.traffic.id, { campaign: nextCampaign });
+                            }}
+                          />
+                        </label>
+
+                        <label className="space-y-1 text-sm">
+                          <span className="text-slate-600">Status</span>
+                          <AppDropdown
+                            value={activeDraft.traffic.status}
+                            onValueChange={(value) => {
+                              const nextStatus = value as TrafficStatus;
+                              updateDraft((current) => ({
+                                ...current,
+                                traffic: {
+                                  ...current.traffic,
+                                  status: nextStatus,
+                                },
+                              }));
+                              updateTrafficCardSummary(activeDraft.traffic.id, { status: nextStatus });
+                            }}
+                            options={STATUS_OPTIONS}
+                            searchable={false}
+                            disabled={!canEditTradsphere || isSaving || isConfirmedSavedLocked}
+                          />
+                        </label>
+                      </div>
+
+                      <label className="space-y-1 text-sm">
+                        <span className="text-slate-600">Note</span>
+                        <Textarea
+                          value={activeDraft.traffic.note || ""}
+                          className="min-h-[88px]"
+                          disabled={!canEditTradsphere || isSaving || isTrafficEditingLocked}
+                          onChange={(event) => updateDraft((current) => ({
+                            ...current,
+                            traffic: {
+                              ...current.traffic,
+                              note: event.target.value,
+                            },
+                          }))}
+                        />
+                      </label>
+                    </>
+                  )}
+                </SectionCard>
+
+                <TrafficFlightsSection
+                  activeAccountCode={activeAccountCode}
+                  activeDraft={activeDraft}
+                  canEditTradsphere={canEditTradsphere}
+                  isSaving={isSaving}
+                  isTrafficEditingLocked={isTrafficEditingLocked}
+                  onAddFlight={addFlightDraft}
+                  onEditFlight={editFlightDraft}
+                  onDuplicateFlight={duplicateFlightDraft}
+                  onRemoveFlight={removeFlightDraft}
                 />
-                <ActionIconButton
-                  icon={(isScheduleTimelineLoading || isStationAutoSyncing) ? <Loader2 className="animate-spin" /> : <Table2 />}
-                  tooltip="View Schedule Timeline"
-                  aria-label="View Schedule Timeline"
-                  title="View Schedule Timeline"
-                  onClick={() => {
-                    if (!timelineAccountCode || !stationSyncFlightRange) {
-                      return;
-                    }
-                    setIsScheduleTimelineModalOpen(true);
-                  }}
-                  disabled={!timelineAccountCode || !stationSyncFlightRange || isLoadingAccountTraffic || isStationAutoSyncing || isTrafficEditingLocked}
-                  className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
-                />
-                <ActionIconButton
-                  icon={<Plus />}
-                  tooltip="Add Station"
-                  aria-label="Add Station"
-                  title="Add Station"
-                  onClick={addStationDraft}
-                  disabled={!canEditTradsphere || isSaving || isTrafficEditingLocked}
-                  className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
+
+                <TrafficStationsSection
+                  activeAccountCode={activeAccountCode}
+                  activeDraft={activeDraft}
+                  canEditTradsphere={canEditTradsphere}
+                  isSaving={isSaving}
+                  isTrafficEditingLocked={isTrafficEditingLocked}
+                  isConfirmedLocked={isConfirmedLocked}
+                  isStationAutoSyncing={isStationAutoSyncing}
+                  isScheduleTimelineLoading={isScheduleTimelineLoading}
+                  isLoadingAccountTraffic={isLoadingAccountTraffic}
+                  isOnline={isOnline}
+                  timelineAccountCode={timelineAccountCode}
+                  stationSyncFlightRange={stationSyncFlightRange}
+                  sortedStations={sortedStations}
+                  stationLookupMetaByCode={stationLookupMetaByCode}
+                  stationContactEmailsById={stationContactEmailsById}
+                  stationDeliveryStatusRestoreMap={stationDeliveryStatusRestoreRef.current}
+                  stationConfirmedStatusRestoreMap={stationConfirmedStatusRestoreRef.current}
+                  onManualStationSync={handleManualStationSync}
+                  onOpenScheduleTimeline={handleOpenScheduleTimelineModal}
+                  onAddStation={addStationDraft}
+                  onEditStation={editStationDraft}
+                  onOpenDeliveryMethodDetail={handleOpenDeliveryMethodDetail}
+                  onCopyStationContacts={handleCopyStationContacts}
+                  onToggleStationDeliveryStatus={handleToggleStationDeliveryStatus}
+                  onToggleStationConfirmedStatus={handleToggleStationConfirmedStatus}
+                  onRemoveStation={removeStationDraft}
                 />
               </div>
-            )}
-            contentClassName="space-y-3"
-          >
-            <div className="relative min-h-[5.5rem]">
-              {!activeAccountCode ? (
-                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
-                  Select an account to view stations.
-                </div>
-              ) : !activeDraft ? (
-                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
-                  Select a traffic record to manage stations.
-                </div>
-              ) : activeDraft.stations.length === 0 ? (
-                <div className="rounded-lg border border-dashed border-slate-200 bg-white px-3 py-4 text-sm text-slate-600">
-                  No station rows yet.
-                </div>
-              ) : (
-                <div className="overflow-x-auto rounded-xl border border-slate-200 bg-white">
-                  <table className="min-w-full text-left text-xs">
-                    <thead className="bg-slate-50 text-slate-600">
-                      <tr>
-                        <th className="px-3 py-2 font-semibold">Station</th>
-                        <th className="px-3 py-2 font-semibold">Language</th>
-                        <th className="px-3 py-2 font-semibold">Delivery Method</th>
-                        <th className="px-3 py-2 font-semibold">Contacts</th>
-                        <th className="px-3 py-2 font-semibold">Delivery Status</th>
-                        <th className="px-3 py-2 font-semibold">Confirmed Status</th>
-                        <th className="px-3 py-2 text-right font-semibold"></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {sortedStations.map((station) => (
-                        <tr
-                          key={station.id}
-                          onClick={() => {
-                            if (isConfirmedLocked) {
-                              return;
-                            }
-                            editStationDraft(station.id);
-                          }}
-                          className={`group border-t border-slate-200 text-slate-700 transition ${isConfirmedLocked ? "cursor-not-allowed" : "cursor-pointer hover:bg-blue-50/40"}`}
-                        >
-                          <td className="whitespace-nowrap px-3 py-2">
-                            {formatStationDisplayLabel(station.stationCode, stationLookupMetaByCode[asString(station.stationCode).toUpperCase()])}
-                          </td>
-                          <td className="whitespace-nowrap px-3 py-2">
-                            {(() => {
-                              const stationLanguage = stationLookupMetaByCode[asString(station.stationCode).toUpperCase()]?.language || "";
-                              if (!stationLanguage) {
-                                return "-";
-                              }
-                              return (
-                                <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${languageChipClass(stationLanguage)}`}>
-                                  {stationLanguage}
-                                </span>
-                              );
-                            })()}
-                          </td>
-                          <td className="whitespace-nowrap px-3 py-2">
-                            <button
-                              type="button"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                if (isTrafficEditingLocked) {
-                                  return;
-                                }
-                                handleOpenDeliveryMethodDetail(station.stationCode);
-                              }}
-                              className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium transition focus-visible:outline-none focus-visible:ring-2 ${deliveryMethodChipClass(station.deliveryMethod)}`}
-                            >
-                              {station.deliveryMethod || "View"}
-                            </button>
-                          </td>
-                          <td className="px-3 py-2 min-w-[14rem]">
-                            {(() => {
-                              const allEmails = stationContactEmailsById[String(station.id)] ?? [];
-                              return (
-                                <StationContactsCell
-                                  emails={allEmails}
-                                  onCopy={() => {
-                                    if (isTrafficEditingLocked) {
-                                      return;
-                                    }
-                                    void handleCopyStationContacts(allEmails);
-                                  }}
-                                />
-                              );
-                            })()}
-                          </td>
-                          <td className="whitespace-nowrap px-3 py-2">
-                            {(() => {
-                              const deliveryStatusValue = asString(station.deliveryStatus).toLowerCase();
-                              const hasDeliveryRestore = Object.prototype.hasOwnProperty.call(stationDeliveryStatusRestoreRef.current, station.id);
-                              const deliveryStatusInteractive = canEditTradsphere && !isSaving && !isConfirmedLocked && (deliveryStatusValue !== "ready_to_email" || hasDeliveryRestore);
-                              const deliveryStatusChip = (
-                                <button
-                                  type="button"
-                                  onClick={deliveryStatusInteractive ? (event) => {
-                                    event.stopPropagation();
-                                    handleToggleStationDeliveryStatus(station.id);
-                                  } : undefined}
-                                  disabled={!deliveryStatusInteractive}
-                                  aria-pressed={deliveryStatusValue === "ready_to_email"}
-                                  aria-disabled={!deliveryStatusInteractive}
-                                  className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium transition focus-visible:outline-none focus-visible:ring-2 ${stationStatusChipClass(station.deliveryStatus)} ${deliveryStatusInteractive ? "cursor-pointer hover:brightness-95" : "cursor-default opacity-80"}`}
-                                >
-                                  {formatStatusOptionLabel(station.deliveryStatus)}
-                                </button>
-                              );
-
-                              if (!deliveryStatusInteractive) {
-                                return deliveryStatusChip;
-                              }
-
-                              return (
-                                <TooltipTarget
-                                  text={
-                                    deliveryStatusValue === "ready_to_email"
-                                      ? "Click to restore the original delivery status."
-                                      : "Click to mark Ready To Email. Click again to restore the original value."
-                                  }
-                                  placement="top"
-                                >
-                                  {deliveryStatusChip}
-                                </TooltipTarget>
-                              );
-                            })()}
-                          </td>
-                          <td className="whitespace-nowrap px-3 py-2">
-                            {(() => {
-                              const confirmedStatusValue = asString(station.confirmedStatus).toLowerCase();
-                              const hasConfirmedRestore = Object.prototype.hasOwnProperty.call(stationConfirmedStatusRestoreRef.current, station.id);
-                              const confirmedStatusInteractive = canEditTradsphere && !isSaving && !isConfirmedLocked && (confirmedStatusValue !== "confirmed" || hasConfirmedRestore);
-                              const confirmedStatusChip = (
-                                <button
-                                  type="button"
-                                  onClick={confirmedStatusInteractive ? (event) => {
-                                    event.stopPropagation();
-                                    handleToggleStationConfirmedStatus(station.id);
-                                  } : undefined}
-                                  disabled={!confirmedStatusInteractive}
-                                  aria-pressed={confirmedStatusValue === "confirmed"}
-                                  aria-disabled={!confirmedStatusInteractive}
-                                  className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium transition focus-visible:outline-none focus-visible:ring-2 ${stationStatusChipClass(station.confirmedStatus)} ${confirmedStatusInteractive ? "cursor-pointer hover:brightness-95" : "cursor-default opacity-80"}`}
-                                >
-                                  {formatStatusOptionLabel(station.confirmedStatus)}
-                                </button>
-                              );
-
-                              if (!confirmedStatusInteractive) {
-                                return confirmedStatusChip;
-                              }
-
-                              return (
-                                <TooltipTarget
-                                  text={
-                                    confirmedStatusValue === "confirmed"
-                                      ? "Click to restore the original confirmation status."
-                                      : "Click to mark Confirmed. Click again to restore the original value."
-                                  }
-                                  placement="top"
-                                >
-                                  {confirmedStatusChip}
-                                </TooltipTarget>
-                              );
-                            })()}
-                          </td>
-                          <td className="px-3 py-2 text-right">
-                            <ActionIconButton
-                              icon={<Trash2 />}
-                              tooltip="Delete station row"
-                              aria-label="Delete station row"
-                              title="Delete station row"
-                              onClick={(event) => {
-                                event.stopPropagation();
-                                removeStationDraft(station.id);
-                              }}
-                              disabled={!canEditTradsphere || isSaving || isTrafficEditingLocked}
-                              className="!h-6 !w-6 !rounded-full !p-0 text-rose-500 hover:!bg-rose-50 hover:!scale-105 hover:text-rose-600 focus-visible:!bg-rose-50 focus-visible:!scale-105 focus-visible:text-rose-600 [&_svg]:!h-3.5 [&_svg]:!w-3.5"
-                            />
-                          </td>
-                        </tr>
-                      ))}
-                    </tbody>
-                  </table>
-                </div>
-              )}
-              {isStationAutoSyncing ? (
-                <SectionLoadingOverlay message="Auto-syncing stations from schedule..." />
-              ) : null}
             </div>
-          </SectionCard>
-            </>
           ) : null}
 
           {activeWorkspaceTab === "email" ? (
-            <SectionCard
-            id="traffic-workspace-panel-email"
-            title={(
-              <div className="space-y-1">
-                <p>Email Workspace</p>
-                <span className={`inline-flex rounded-full border px-2 py-0.5 text-[11px] font-medium ${emailStatusChipClass(activeDraft?.email?.sentStatus || "draft")}`}>
-                  {formatStatusOptionLabel(activeDraft?.email?.sentStatus || "draft")}
-                </span>
-              </div>
-            )}
-            actions={(
-              <div className="flex items-center gap-1">
-                <ActionIconButton
-                  icon={isSendingEmail ? <Loader2 className="animate-spin" /> : (isEmailLocked ? <Eye /> : <Send />)}
-                  tooltip={isSendingEmail ? "Sending email..." : emailWorkspacePrimaryActionLabel}
-                  aria-label={isSendingEmail ? "Sending email" : emailWorkspacePrimaryActionLabel}
-                  title={isSendingEmail ? "Sending email..." : emailWorkspacePrimaryActionLabel}
-                  onClick={() => {
-                    handleOpenEmailPreviewModal();
-                  }}
-                  disabled={
-                    !canEditTradsphere
-                      || !activeDraft
-                    || !activeDraft.email
-                    || !activeEmailWorkspace
-                    || isSaving
-                    || isSendingEmail
-                    || isMarkingTrafficSent
-                  }
-                  className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
-                />
-              </div>
-            )}
-            contentClassName="space-y-4"
-          >
-            {!activeAccountCode ? (
-              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
-                Select an account to view the email draft.
-              </div>
-            ) : !activeDraft ? (
-              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
-                Select a traffic record to manage the email draft.
-              </div>
-            ) : !activeEmailWorkspace ? (
-              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
-                Email workspace is unavailable for this traffic record.
-              </div>
-            ) : (
-              <>
-              <div className="rounded-xl border border-blue-100 bg-blue-50/40 p-3">
-                  {emailLockBannerKind ? (
-                    <>
-                      <TrafficLockBanner
-                        kind={emailLockBannerKind}
-                        isUnlocking={isUnlockingTraffic}
-                        disabled={!canEditTradsphere || isSaving || isUnlockingTraffic}
-                        onUnlock={() => {
-                          void handleUnlockTraffic();
-                        }}
-                      />
-                      <div className="h-3" />
-                    </>
-                  ) : null}
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Recipients</p>
-                  <p className="mt-1 text-xs text-slate-500">Manage recipients and draft subject.</p>
-                  <div className="mt-3 space-y-2">
-                    <EmailChipsInput
-                      value={activeDraft.email?.toEmails || []}
-                      placeholder="To emails"
-                      disabled={!canEditTradsphere || isSaving || isEmailLocked}
-                      labelByEmail={contactNameByEmail}
-                      onChange={(nextEmails) => updateDraft((current) => ({
-                        ...current,
-                        email: current.email
-                          ? {
-                              ...current.email,
-                              toEmails: nextEmails,
-                            }
-                          : current.email,
-                      }))}
-                    />
-                    <div className="grid gap-2 md:grid-cols-2">
-                      <EmailChipsInput
-                        value={activeDraft.email?.ccEmails || []}
-                        placeholder="CC emails"
-                        disabled={!canEditTradsphere || isSaving || isEmailLocked}
-                        labelByEmail={contactNameByEmail}
-                        onChange={(nextEmails) => updateDraft((current) => ({
-                          ...current,
-                          email: current.email
-                            ? {
-                                ...current.email,
-                                ccEmails: nextEmails,
-                              }
-                            : current.email,
-                        }))}
-                      />
-                      <EmailChipsInput
-                        value={activeDraft.email?.bccEmails || []}
-                        placeholder="BCC emails"
-                        disabled={!canEditTradsphere || isSaving || isEmailLocked}
-                        labelByEmail={contactNameByEmail}
-                        onChange={(nextEmails) => updateDraft((current) => ({
-                          ...current,
-                          email: current.email
-                            ? {
-                                ...current.email,
-                                bccEmails: nextEmails,
-                              }
-                            : current.email,
-                        }))}
-                      />
-                    </div>
-                    <Input
-                      value={activeDraft.email?.subject || ""}
-                      placeholder="Email subject"
-                      disabled={!canEditTradsphere || isSaving || isEmailLocked}
-                      onChange={(event) => updateDraft((current) => ({
-                        ...current,
-                        email: current.email
-                          ? {
-                              ...current.email,
-                              subject: event.target.value,
-                            }
-                          : current.email,
-                      }))}
-                    />
-                  </div>
-                </div>
-
-                <div className="rounded-xl border border-slate-200 bg-white p-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Body Content</p>
-                  <p className="mt-1 text-xs text-slate-500">Main message shown in the email body. Use the toolbar to format text.</p>
-                  <RichTextEditor
-                    value={activeEmailWorkspace.bodyContent}
-                    placeholder="Email body"
-                    className="mt-3"
-                    editorMinHeight="130px"
-                    disabled={!canEditTradsphere || isSaving || isEmailLocked}
-                    onChange={(nextValue) => {
-                      const nextWorkspace: TrafficEmailWorkspaceDraft = {
-                        ...activeEmailWorkspace,
-                        bodyContent: nextValue,
-                        bodyTouched: true,
-                      };
-                      commitEmailWorkspace(nextWorkspace);
-                    }}
-                  />
-                </div>
-
-                <div className="rounded-xl border border-slate-200 bg-white p-3">
-                  <div>
-                    <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Download Links</p>
-                    <p className="mt-1 text-xs text-slate-500">
-                      ISCI, File URL, and Script URL are auto-synced from Flights. To update these values, edit the corresponding flight row.
-                    </p>
-                  </div>
-                  <div className="mt-3">
-                    {activeEmailWorkspace.downloadLinks.length === 0 ? (
-                      <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-xs text-slate-500">
-                        No flights found. Add flight rows to auto-generate this section.
-                      </div>
-                    ) : (
-                      <div className="overflow-x-auto rounded-lg border border-slate-200">
-                        <table className="min-w-full text-left text-xs">
-                          <thead className="bg-slate-50 text-slate-600">
-                            <tr>
-                              <th className="px-3 py-2 font-semibold">ISCI</th>
-                              <th className="px-3 py-2 font-semibold">File URL</th>
-                              <th className="px-3 py-2 font-semibold">Script URL</th>
-                              <th className="px-3 py-2 font-semibold">Note</th>
-                            </tr>
-                          </thead>
-                          <tbody>
-                            {activeEmailWorkspace.downloadLinks.map((item, index) => {
-                              const fileUrl = normalizeExternalUrl(item.fileUrl);
-                              const scriptUrl = normalizeExternalUrl(item.scriptUrl);
-                              const notePreview = formatDownloadLinkNotePreview(item.note);
-                              const hasNote = Boolean(notePreview);
-                              return (
-                                <tr key={`download-link-${item.flightId ?? index}`} className="border-t border-slate-200 text-slate-700">
-                                  <td className="whitespace-nowrap px-3 py-2.5 align-middle">{asString(item.isci) || "—"}</td>
-                                  <td className="px-3 py-2.5 align-middle">
-                                    {fileUrl ? (
-                                      <a
-                                        href={fileUrl}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="text-blue-700 hover:text-blue-800 hover:underline"
-                                      >
-                                        Open file
-                                      </a>
-                                    ) : (
-                                      <span className="text-slate-400">Missing</span>
-                                    )}
-                                  </td>
-                                  <td className="px-3 py-2.5 align-middle">
-                                    {scriptUrl ? (
-                                      <a
-                                        href={scriptUrl}
-                                        target="_blank"
-                                        rel="noreferrer"
-                                        className="text-blue-700 hover:text-blue-800 hover:underline"
-                                      >
-                                        Open script
-                                      </a>
-                                    ) : (
-                                      <span className="text-slate-400">Missing</span>
-                                    )}
-                                  </td>
-                                  <td className="px-3 py-2.5 align-middle">
-                                    {hasNote ? (
-                                      <span className="mr-2 inline-flex rounded-full border border-emerald-200 bg-emerald-50 px-2 py-0.5 text-[11px] font-medium text-emerald-700">
-                                        Note added
-                                      </span>
-                                    ) : null}
-                                    <ActionIconButton
-                                      icon={<Pencil />}
-                                      tooltip={hasNote ? "Edit note" : "Add note"}
-                                      aria-label={hasNote ? "Edit note" : "Add note"}
-                                      title={hasNote ? `Edit note: ${notePreview}` : "Add note"}
-                                      onClick={() => handleOpenDownloadLinkNoteModal(index)}
-                                      disabled={!canEditTradsphere || isSaving || isEmailLocked}
-                                      className="!h-8 !w-8 !rounded-full !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-3.5 [&_svg]:!w-3.5"
-                                    />
-                                  </td>
-                                </tr>
-                              );
-                            })}
-                          </tbody>
-                        </table>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                <div className="rounded-xl border border-slate-200 bg-white p-3">
-                  <p className="text-xs font-semibold uppercase tracking-wide text-slate-600">Traffic Instructions</p>
-                  <p className="mt-1 text-xs text-slate-500">Example: Air ASAP, Expired date, and airing guidance. Use the toolbar to format text.</p>
-                  <RichTextEditor
-                    value={activeEmailWorkspace.instructionsContent}
-                    placeholder="Air ASAP"
-                    className="mt-3"
-                    editorMinHeight="120px"
-                    disabled={!canEditTradsphere || isSaving || isEmailLocked}
-                    onChange={(nextValue) => {
-                      const nextWorkspace: TrafficEmailWorkspaceDraft = {
-                        ...activeEmailWorkspace,
-                        instructionsContent: nextValue,
-                        instructionsTouched: true,
-                      };
-                      commitEmailWorkspace(nextWorkspace);
-                    }}
-                  />
-                </div>
-              </>
-            )}
-          </SectionCard>
+            <div className="relative">
+              <TrafficEmailWorkspaceSection
+                activeAccountCode={activeAccountCode}
+                activeDraft={activeDraft}
+                activeEmailWorkspace={activeEmailWorkspace}
+                canEditTradsphere={canEditTradsphere}
+                isSaving={isSaving}
+                isEmailLocked={isEmailLocked}
+                isSendingEmail={isSendingEmail}
+                isMarkingTrafficSent={isMarkingTrafficSent}
+                isUnlockingTraffic={isUnlockingTraffic}
+                emailLockBannerKind={emailLockBannerKind}
+                emailWorkspacePrimaryActionLabel={emailWorkspacePrimaryActionLabel}
+                contactNameByEmail={contactNameByEmail}
+                onOpenEmailPreviewModal={handleOpenEmailPreviewModal}
+                onUnlockTraffic={() => {
+                  void handleUnlockTraffic();
+                }}
+                onOpenDownloadLinkNoteModal={handleOpenDownloadLinkNoteModal}
+                onCommitEmailWorkspace={commitEmailWorkspace}
+                onUpdateDraft={updateDraft}
+              />
+            </div>
           ) : null}
             </>
           )}
+          <SectionLoadingLayer
+            active={isDetailBusy}
+            message={detailOverlayMessage}
+          />
           {isDeletingSelectedTraffic ? (
             <SectionLoadingOverlay message="Deleting traffic..." />
           ) : null}
@@ -7903,24 +9093,48 @@ export default function TrafficPage() {
                   )}
                 </Button>
                 {!isEmailLocked ? (
-                  <Button
-                    onClick={() => {
-                      void handleSendTrafficEmail();
-                    }}
-                    disabled={!canSendTrafficEmail || isSendingTestEmail}
-                  >
-                    {isSendingEmail ? (
-                      <>
-                        <Loader2 className="size-4 animate-spin" />
-                        Sending...
-                      </>
-                    ) : (
-                      <>
-                        <Send className="size-4" />
-                        Send
-                      </>
-                    )}
-                  </Button>
+                  !canSendTrafficEmail || isSendingTestEmail ? (
+                    <TooltipTarget text={sendTrafficEmailDisabledReason}>
+                      <span className="inline-flex">
+                        <Button
+                          onClick={() => {
+                            void handleSendTrafficEmail();
+                          }}
+                          disabled
+                        >
+                          {isSendingEmail ? (
+                            <>
+                              <Loader2 className="size-4 animate-spin" />
+                              Sending...
+                            </>
+                          ) : (
+                            <>
+                              <Send className="size-4" />
+                              Send
+                            </>
+                          )}
+                        </Button>
+                      </span>
+                    </TooltipTarget>
+                  ) : (
+                    <Button
+                      onClick={() => {
+                        void handleSendTrafficEmail();
+                      }}
+                    >
+                      {isSendingEmail ? (
+                        <>
+                          <Loader2 className="size-4 animate-spin" />
+                          Sending...
+                        </>
+                      ) : (
+                        <>
+                          <Send className="size-4" />
+                          Send
+                        </>
+                      )}
+                    </Button>
+                  )
                 ) : null}
               </div>
             </div>
@@ -7996,7 +9210,7 @@ export default function TrafficPage() {
             )}
             {activeTrafficId && isLocalTrafficId(activeTrafficId) ? (
               <p className="mt-2 text-xs text-amber-700">
-                Save this traffic draft first. Sending is available after the record has a persisted traffic ID.
+                This traffic draft will be saved first when you send email.
               </p>
             ) : null}
           </div>
@@ -8013,60 +9227,63 @@ export default function TrafficPage() {
       </Dialog>
 
       <Dialog
-        open={isTestEmailModalOpen}
+        open={isSendEmailConfirmationOpen}
         onOpenChange={(open) => {
-          setIsTestEmailModalOpen(open);
+          if (isSaving || isSendingEmail || isMarkingTrafficSent) {
+            return;
+          }
+          setIsSendEmailConfirmationOpen(open);
         }}
       >
         <DialogContent className="max-w-lg">
           <DialogClose
-            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            aria-label="Close test email modal"
+            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
+            aria-label="Close send traffic email dialog"
+            disabled={isSaving || isSendingEmail || isMarkingTrafficSent}
           >
             <X className="size-4" />
           </DialogClose>
-          <DialogHeader className="pr-8">
-            <DialogTitle>Send Test Email</DialogTitle>
+          <DialogHeader>
+            <DialogTitle>Send traffic email?</DialogTitle>
             <DialogDescription>
-              Send a one-off copy to a single recipient. The message includes a visible test-email notice.
+              Choose whether a successful send should also mark the traffic status as Sent.
             </DialogDescription>
           </DialogHeader>
-          <div className="space-y-2">
-            <label className="space-y-1 text-sm">
-              <span className="text-slate-600">Test recipient</span>
-              <Input
-                value={testEmailTo}
-                placeholder="test@example.com"
-                autoFocus
-                disabled={!canOpenTrafficTestEmailModal || isSendingTestEmail}
-                onChange={(event) => setTestEmailTo(event.target.value)}
-              />
-            </label>
-            <p className="text-xs text-slate-500">
-              This does not change the saved traffic email state.
+          {activeTrafficNeedsSaveBeforeSending ? (
+            <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
+              Any unsaved changes in the selected traffic will be saved before the email is sent.
             </p>
-          </div>
+          ) : null}
           <DialogFooter>
             <Button
-              variant="outline"
-              onClick={() => setIsTestEmailModalOpen(false)}
-              disabled={isSendingTestEmail}
-            >
-              Cancel
-            </Button>
-            <Button
+              variant="secondary"
               onClick={() => {
-                void handleSendTrafficTestEmail();
+                void handleConfirmSendTrafficEmail(false);
               }}
-              disabled={!canSendTrafficTestEmail}
+              disabled={isSaving || isSendingEmail}
             >
-              {isSendingTestEmail ? (
+              {isSaving || isSendingEmail ? (
                 <>
                   <Loader2 className="size-4 animate-spin" />
                   Sending...
                 </>
               ) : (
-                "Send Test Email"
+                "Send without marking"
+              )}
+            </Button>
+            <Button
+              onClick={() => {
+                void handleConfirmSendTrafficEmail(true);
+              }}
+              disabled={isSaving || isSendingEmail}
+            >
+              {isMarkingTrafficSent ? (
+                <>
+                  <Loader2 className="size-4 animate-spin" />
+                  Sending...
+                </>
+              ) : (
+                "Mark as Sent and Send"
               )}
             </Button>
           </DialogFooter>
@@ -8074,86 +9291,203 @@ export default function TrafficPage() {
       </Dialog>
 
       <Dialog
-        open={isDownloadLinkNoteModalOpen}
+        open={isTestEmailModalOpen}
         onOpenChange={(open) => {
-          if (!open) {
-            handleCloseDownloadLinkNoteModal();
-            return;
-          }
-          setIsDownloadLinkNoteModalOpen(true);
+          setIsTestEmailModalOpen(open);
         }}
       >
-        <DialogContent className="max-w-xl">
-          <DialogClose
-            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            aria-label="Close download note modal"
-          >
-            <X className="size-4" />
-          </DialogClose>
-          <DialogHeader className="pr-8">
-            <DialogTitle>{activeDownloadLinkNoteEntry?.note ? "Edit Download Note" : "Add Download Note"}</DialogTitle>
-            <DialogDescription>
-              {activeDownloadLinkNoteEntry
-                ? `ISCI: ${asString(activeDownloadLinkNoteEntry.isci) || "-"}. This note appears in the Download Links email table.`
-                : "Add a short note for this flight download item."}
-            </DialogDescription>
-          </DialogHeader>
-          <div className="space-y-2">
-            <label className="space-y-1 text-sm">
-              <span className="text-slate-600">Note</span>
-              <Textarea
-                value={downloadLinkNoteDraft}
-                placeholder="Add a custom note for this flight download item"
-                className="min-h-[130px]"
-                disabled={!canEditTradsphere || isSaving || isEmailLocked}
-                onChange={(event) => setDownloadLinkNoteDraft(event.target.value)}
-              />
-            </label>
-          </div>
-          <DialogFooter className="gap-2">
-            <Button variant="outline" onClick={handleCloseDownloadLinkNoteModal}>
-              Cancel
-            </Button>
-            {activeDownloadLinkNoteEntry && downloadLinkNoteDraft !== asString(activeDownloadLinkNoteEntry.note || "") ? (
+        <DialogContent className="flex max-h-[90vh] max-w-lg flex-col overflow-hidden rounded-xl bg-white p-6">
+          <ModalShell busy={isSendingTestEmail} busyMessage="Sending test email..." className="min-h-0 flex-1">
+            <DialogClose
+              className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label="Close test email modal"
+            >
+              <X className="size-4" />
+            </DialogClose>
+            <DialogHeader className="pr-8">
+              <DialogTitle>Send Test Email</DialogTitle>
+              <DialogDescription>
+                Send a one-off copy to a single recipient. The message includes a visible test-email notice.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2">
+              <label className="space-y-1 text-sm">
+                <span className="text-slate-600">Test recipient</span>
+                <EmailChipsInput
+                  value={testEmailTo}
+                  onChange={(nextEmails) => setTestEmailTo(nextEmails.slice(0, 1))}
+                  placeholder="test@example.com"
+                  disabled={!canOpenTrafficTestEmailModal || isSendingTestEmail}
+                  labelByEmail={contactNameByEmail}
+                  autoFocus
+                />
+              </label>
+              <p className="text-xs text-slate-500">
+                This does not change the saved traffic email state.
+              </p>
+            </div>
+            <DialogFooter>
               <Button
                 variant="outline"
-                onClick={() => setDownloadLinkNoteDraft(asString(activeDownloadLinkNoteEntry.note || ""))}
-                disabled={isSaving || isEmailLocked}
+                onClick={() => setIsTestEmailModalOpen(false)}
+                disabled={isSendingTestEmail}
               >
-                Revert
+                Cancel
               </Button>
-            ) : null}
-            <Button
-              onClick={handleSaveDownloadLinkNote}
-              disabled={!canEditTradsphere || isSaving || isEmailLocked || activeDownloadLinkNoteIndex === null}
-            >
-              Save Note
-            </Button>
-          </DialogFooter>
+              {!canSendTrafficTestEmail ? (
+                <TooltipTarget text={sendTrafficTestEmailDisabledReason}>
+                  <span className="inline-flex">
+                    <Button
+                      onClick={() => {
+                        void handleSendTrafficTestEmail();
+                      }}
+                      disabled
+                    >
+                      {isSendingTestEmail ? (
+                        <>
+                          <Loader2 className="size-4 animate-spin" />
+                          Sending...
+                        </>
+                      ) : (
+                        "Send Test Email"
+                      )}
+                    </Button>
+                  </span>
+                </TooltipTarget>
+              ) : (
+                <Button
+                  onClick={() => {
+                    void handleSendTrafficTestEmail();
+                  }}
+                >
+                  {isSendingTestEmail ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      Sending...
+                    </>
+                  ) : (
+                    "Send Test Email"
+                  )}
+                </Button>
+              )}
+            </DialogFooter>
+          </ModalShell>
         </DialogContent>
       </Dialog>
 
+      <Dialog
+        open={isDownloadLinkNoteModalOpen}
+        onOpenChange={handleDownloadLinkNoteModalOpenChange}
+      >
+        <DialogContent
+          className="flex max-h-[90vh] max-w-xl flex-col overflow-hidden rounded-xl bg-white p-6"
+          onOpenAutoFocus={(event) => {
+            event.preventDefault();
+            requestAnimationFrame(() => {
+              const element = downloadLinkNoteTextareaRef.current;
+              if (!element) {
+                return;
+              }
+              element.focus();
+              element.select();
+            });
+          }}
+          onInteractOutside={(event) => {
+            if (shouldBlockOutsideClose({ isBusy: isSaving || isEmailLocked, hasUnsavedChanges: hasDownloadLinkNoteChanges })) {
+              event.preventDefault();
+            }
+          }}
+        >
+          <ModalShell busy={isSaving} busyMessage="Saving download note..." className="min-h-0 flex-1">
+            <DialogClose
+              className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label="Close download note modal"
+            >
+              <X className="size-4" />
+            </DialogClose>
+            <DialogHeader className="pr-8">
+              <DialogTitle>{activeDownloadLinkNoteEntry?.note ? "Edit Download Note" : "Add Download Note"}</DialogTitle>
+              <DialogDescription>
+                {activeDownloadLinkNoteEntry
+                  ? `ISCI: ${asString(activeDownloadLinkNoteEntry.isci) || "-"}. This note appears in the Download Links email table.`
+                  : "Add a short note for this flight download item."}
+              </DialogDescription>
+            </DialogHeader>
+            <div className="space-y-2">
+              <label className="space-y-1 text-sm">
+                <span className="text-slate-600">Note</span>
+                <Textarea
+                  ref={downloadLinkNoteTextareaRef}
+                  value={downloadLinkNoteDraft}
+                  placeholder="Add a custom note for this flight download item"
+                  className="min-h-[130px]"
+                  disabled={!canEditTradsphere || isSaving || isEmailLocked}
+                  onChange={(event) => setDownloadLinkNoteDraft(event.target.value)}
+                />
+              </label>
+            </div>
+            <DialogFooter className="gap-2">
+              {canEditTradsphere && hasDownloadLinkNoteChanges ? (
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setDownloadLinkNoteDraft(asString(activeDownloadLinkNoteEntry?.note || ""));
+                  }}
+                  disabled={isSaving || isEmailLocked}
+                >
+                  Revert
+                </Button>
+              ) : null}
+              {canSaveDownloadLinkNote ? (
+                <Button
+                  onClick={() => {
+                    if (!commitDownloadLinkNote()) {
+                      return;
+                    }
+                    closeDownloadLinkNoteModal();
+                  }}
+                >
+                  Save Changes
+                </Button>
+              ) : null}
+            </DialogFooter>
+          </ModalShell>
+        </DialogContent>
+      </Dialog>
+
+      <UnsavedChangesDialog
+        open={isDownloadLinkNoteDiscardDialogOpen}
+        onKeepEditing={() => {
+          setIsDownloadLinkNoteDiscardDialogOpen(false);
+        }}
+        onDiscardChanges={() => {
+          setIsDownloadLinkNoteDiscardDialogOpen(false);
+          closeDownloadLinkNoteModal();
+        }}
+      />
+
       <Dialog open={isFlightModalOpen} onOpenChange={handleFlightModalOpenChange}>
         <DialogContent
+          className="flex max-h-[90vh] flex-col overflow-hidden rounded-xl bg-white p-6"
           onInteractOutside={(event) => {
             if (shouldBlockOutsideClose({ isBusy: isSaving, hasUnsavedChanges: hasFlightModalChanges })) {
               event.preventDefault();
             }
           }}
         >
-          <DialogClose
-            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
-            aria-label="Close flight modal"
-            disabled={isSaving}
-          >
-            <X className="size-4" />
-          </DialogClose>
-          <DialogHeader className="pb-2">
-            <DialogTitle>{flightModalMode === "create" ? "Add Flight" : "Edit Flight"}</DialogTitle>
-            <DialogDescription>
-              Update flight scheduling and delivery references.
-            </DialogDescription>
-          </DialogHeader>
+          <ModalShell busy={isSaving} busyMessage="Saving flight..." className="min-h-0 flex-1">
+            <DialogClose
+              className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label="Close flight modal"
+            >
+              <X className="size-4" />
+            </DialogClose>
+            <DialogHeader className="pb-2">
+              <DialogTitle>{flightModalMode === "create" ? "Add Flight" : "Edit Flight"}</DialogTitle>
+              <DialogDescription>
+                Update flight scheduling and delivery references.
+              </DialogDescription>
+            </DialogHeader>
           <div className="space-y-3 pt-1">
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="space-y-1 text-sm">
@@ -8376,18 +9710,19 @@ export default function TrafficPage() {
             </label>
           </div>
           {flightModalError ? <p className="text-sm text-rose-600">{flightModalError}</p> : null}
-          <DialogFooter className="gap-2">
-            {canEditTradsphere && hasFlightModalChanges ? (
-              <Button variant="outline" onClick={revertFlightModalChanges} disabled={isSaving || isFlightModalReadOnly}>
-                Revert
-              </Button>
-            ) : null}
-            {canSubmitFlightModal ? (
-              <Button onClick={saveFlightModal}>
-                {flightModalMode === "create" ? "Add" : "Save"}
-              </Button>
-            ) : null}
-          </DialogFooter>
+            <DialogFooter className="gap-2">
+              {canEditTradsphere && hasFlightModalChanges ? (
+                <Button variant="outline" onClick={revertFlightModalChanges} disabled={isSaving || isFlightModalReadOnly}>
+                  Revert
+                </Button>
+              ) : null}
+              {canSubmitFlightModal ? (
+                <Button onClick={saveFlightModal}>
+                  {flightModalMode === "create" ? "Add" : "Save"}
+                </Button>
+              ) : null}
+            </DialogFooter>
+          </ModalShell>
         </DialogContent>
       </Dialog>
 
@@ -8516,6 +9851,12 @@ export default function TrafficPage() {
         }}
       >
         <DialogContent>
+          <DialogClose
+            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
+            aria-label="Close station sync modal"
+          >
+            <X className="size-4" />
+          </DialogClose>
           <DialogHeader>
             <DialogTitle>Select Estimate Numbers To Sync Stations</DialogTitle>
             <DialogDescription>
@@ -8532,29 +9873,9 @@ export default function TrafficPage() {
               </div>
             ) : (flightStationSyncCandidates?.estNums.length ?? 0) > 0 ? (
               <>
-                <div className="flex items-center justify-between gap-2 text-xs text-slate-600">
-                  <span>
-                    {(flightStationSyncCandidates?.estNums.length ?? 0)} estimate number(s) found in this flight range.
-                  </span>
-                  <div className="flex items-center gap-2">
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="h-7 px-2 text-xs"
-                      onClick={handleSelectAllFlightStationSyncEstNums}
-                    >
-                      Select All
-                    </Button>
-                    <Button
-                      type="button"
-                      variant="outline"
-                      className="h-7 px-2 text-xs"
-                      onClick={handleClearFlightStationSyncEstNums}
-                    >
-                      Clear
-                    </Button>
-                  </div>
-                </div>
+                {flightStationSyncCandidates?.summary ? (
+                  <TrafficStationCandidateSummaryTable summary={flightStationSyncCandidates.summary} />
+                ) : null}
                 <div className="max-h-72 space-y-2 overflow-y-auto rounded-md border border-slate-200 p-2">
                   {(flightStationSyncCandidates?.estNums ?? []).map((item) => {
                     const checked = selectedFlightStationSyncEstNums.includes(item.estNum);
@@ -8605,28 +9926,47 @@ export default function TrafficPage() {
                           Preview
                         </Button>
                       </div>
-                    );
-                  })}
+                      );
+                    })}
+                </div>
+                <div className="text-xs text-slate-600">
+                  {(flightStationSyncCandidates?.estNums.length ?? 0)} estimate number(s) found in this flight range.
                 </div>
               </>
-            ) : (
-              <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
-                No estimate numbers found for this flight range. Sync is skipped.
-              </p>
-            )}
+          ) : (
+            <p className="rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
+              No estimate numbers found for this flight range. Sync is skipped.
+            </p>
+          )}
           </div>
-          <DialogFooter>
-            <Button variant="outline" onClick={() => handleResolveFlightStationSyncSelection(false)}>
-              Skip Sync
-            </Button>
-            <Button
-              className="bg-slate-900 text-white hover:bg-slate-800"
-              disabled={isFlightStationSyncCandidatesLoading || selectedFlightStationSyncEstNums.length === 0}
-              onClick={() => handleResolveFlightStationSyncSelection(true)}
-            >
-              Sync Selected ({selectedFlightStationSyncEstNums.length})
-            </Button>
-          </DialogFooter>
+          <ModalCacheFooter
+            text={flightStationSyncCacheStatusText}
+            onRefresh={handleRefreshFlightStationSyncCandidates}
+            disabled={!pendingFlightStationSync || isFlightStationSyncCandidatesLoading}
+            refreshing={isFlightStationSyncCandidatesLoading}
+            refreshLabel="Refresh estimate numbers"
+            tooltipText={
+              !pendingFlightStationSync
+                ? "Load a flight date range before refreshing estimate numbers."
+                : isOnline
+                  ? "Click to refresh estimate numbers"
+                  : "Offline. Reconnect to refresh estimate numbers."
+            }
+            actions={(
+              <>
+                <Button variant="outline" onClick={() => handleResolveFlightStationSyncSelection(false)}>
+                  Skip Sync
+                </Button>
+                <Button
+                  className="bg-slate-900 text-white hover:bg-slate-800"
+                  disabled={isFlightStationSyncCandidatesLoading || selectedFlightStationSyncEstNums.length === 0}
+                  onClick={() => handleResolveFlightStationSyncSelection(true)}
+                >
+                  Sync Selected ({selectedFlightStationSyncEstNums.length})
+                </Button>
+              </>
+            )}
+          />
         </DialogContent>
       </Dialog>
 
@@ -8646,37 +9986,38 @@ export default function TrafficPage() {
 
       <Dialog open={isStationModalOpen} onOpenChange={handleStationModalOpenChange}>
         <DialogContent
+          className="flex max-h-[90vh] flex-col overflow-hidden rounded-xl bg-white p-6"
           onInteractOutside={(event) => {
             if (shouldBlockOutsideClose({ isBusy: isSaving, hasUnsavedChanges: hasStationModalChanges })) {
               event.preventDefault();
             }
           }}
         >
-          <DialogClose
-            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
-            aria-label="Close station modal"
-            disabled={isSaving}
-          >
-            <X className="size-4" />
-          </DialogClose>
-          <DialogHeader className="pb-2">
-            <DialogTitle>{stationModalMode === "create" ? "Add Station" : "Edit Station"}</DialogTitle>
-            <DialogDescription>
-              Update delivery workflow and confirmation tracking for this station row.
-            </DialogDescription>
-          </DialogHeader>
-          <SectionMessageStack
-            className="pt-1"
-            messages={[
-              ...(stationLookupError
-                ? [{ id: "traffic-station-lookup-error", variant: "error" as const, message: stationLookupError }]
-                : []),
-              ...(stationModalError
-                ? [{ id: "traffic-station-modal-error", variant: "error" as const, message: stationModalError }]
-                : []),
-            ]}
-          />
-          <div className="space-y-6 pt-1">
+          <ModalShell busy={isSaving} busyMessage="Saving station..." className="min-h-0 flex-1">
+            <DialogClose
+              className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              aria-label="Close station modal"
+            >
+              <X className="size-4" />
+            </DialogClose>
+            <DialogHeader className="pb-2">
+              <DialogTitle>{stationModalMode === "create" ? "Add Station" : "Edit Station"}</DialogTitle>
+              <DialogDescription>
+                Update delivery workflow and confirmation tracking for this station row.
+              </DialogDescription>
+            </DialogHeader>
+            <SectionMessageStack
+              className="pt-1"
+              messages={[
+                ...(stationLookupError
+                  ? [{ id: "traffic-station-lookup-error", variant: "error" as const, message: stationLookupError }]
+                  : []),
+                ...(stationModalError
+                  ? [{ id: "traffic-station-modal-error", variant: "error" as const, message: stationModalError }]
+                  : []),
+              ]}
+            />
+            <div className="space-y-6 pt-1">
             <section className="min-w-0 space-y-3">
               <div className="flex min-h-10 items-center justify-between gap-3 border-b border-slate-200 pb-2">
                 <h4 className="text-sm font-semibold text-slate-800">Station Info</h4>
@@ -8830,20 +10171,21 @@ export default function TrafficPage() {
               </div>
             </section>
           </div>
-          <ModalCacheFooter
-            text={stationLookupStatusText}
-            onRefresh={() => {
-              if (!stationLookupQueryCode || isStationLookupLoading) {
-                return;
-              }
-              setStationLookupRefreshToken((current) => current + 1);
-            }}
-            disabled={!stationLookupQueryCode || isStationLookupLoading}
-            refreshing={isStationLookupLoading}
-            refreshLabel="Refresh station info"
-            tooltipText={stationLookupQueryCode ? "Click to refresh this data" : "Enter a station code to load station info."}
-            actions={canEditTradsphere && (hasStationModalChanges || canSubmitStationModal) ? stationModalFooterActions : null}
-          />
+            <ModalCacheFooter
+              text={stationLookupStatusText}
+              onRefresh={() => {
+                if (!stationLookupQueryCode || isStationLookupLoading) {
+                  return;
+                }
+                setStationLookupRefreshToken((current) => current + 1);
+              }}
+              disabled={!stationLookupQueryCode || isStationLookupLoading}
+              refreshing={isStationLookupLoading}
+              refreshLabel="Refresh station info"
+              tooltipText={stationLookupQueryCode ? "Click to refresh this data" : "Enter a station code to load station info."}
+              actions={canEditTradsphere && (hasStationModalChanges || canSubmitStationModal) ? stationModalFooterActions : null}
+            />
+          </ModalShell>
         </DialogContent>
       </Dialog>
 
@@ -9021,55 +10363,6 @@ export default function TrafficPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog
-        open={Boolean(emailSendSuccessPrompt)}
-        onOpenChange={(open) => {
-          if (isMarkingTrafficSent) {
-            return;
-          }
-          if (!open) {
-            setEmailSendSuccessPrompt(null);
-          }
-        }}
-      >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Email sent successfully</DialogTitle>
-            <DialogDescription>
-              SMTP delivery succeeded for {emailSendSuccessPrompt?.recipientCount ?? 0} recipient(s).
-              {emailSendSuccessPrompt?.askMarkSent
-                ? " Do you want to mark this traffic status as Sent now?"
-                : ""}
-            </DialogDescription>
-          </DialogHeader>
-          <DialogFooter>
-            <Button
-              variant="outline"
-              disabled={isMarkingTrafficSent}
-              onClick={() => setEmailSendSuccessPrompt(null)}
-            >
-              {emailSendSuccessPrompt?.askMarkSent ? "Not now" : "Close"}
-            </Button>
-            {emailSendSuccessPrompt?.askMarkSent ? (
-              <Button
-                disabled={isMarkingTrafficSent}
-                onClick={() => {
-                  void handleMarkTrafficStatusSentAfterEmail();
-                }}
-              >
-                {isMarkingTrafficSent ? (
-                  <>
-                    <Loader2 className="size-4 animate-spin" />
-                    Updating...
-                  </>
-                ) : (
-                  "Mark status as Sent"
-                )}
-              </Button>
-            ) : null}
-          </DialogFooter>
-        </DialogContent>
-      </Dialog>
       <PageLoadingLayer
         active={loadingContract.pageOverlayActive}
         message={loadingContract.pageOverlayMessage}

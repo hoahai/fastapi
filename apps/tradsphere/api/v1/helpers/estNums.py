@@ -9,6 +9,7 @@ from apps.tradsphere.api.v1.helpers.accountValidation import (
     invalidate_validation_cache,
 )
 from apps.tradsphere.api.v1.helpers.broadcastCalendar import (
+    get_broadcast_month_bucket,
     get_broadcast_weeks_in_range,
 )
 from apps.tradsphere.api.v1.helpers.accounts import list_accounts
@@ -378,9 +379,7 @@ def _row_matches_broadcast_period(
         billing_type=billing_type,
     )
     for week in weeks:
-        week_end = week["weekEnd"]
-        broadcast_year = week_end.year
-        broadcast_month = week_end.month
+        broadcast_year, broadcast_month = get_broadcast_month_bucket(week["weekEnd"])
         broadcast_quarter = ((broadcast_month - 1) // 3) + 1
         if year is not None and broadcast_year != year:
             continue
@@ -409,9 +408,7 @@ def _build_broadcast_months_years_for_range(
     years: list[int] = []
     months_by_year: OrderedDict[int, list[int]] = OrderedDict()
     for week in weeks:
-        week_end = week["weekEnd"]
-        broadcast_month = int(week_end.month)
-        broadcast_year = int(week_end.year)
+        broadcast_year, broadcast_month = get_broadcast_month_bucket(week["weekEnd"])
         year_months = months_by_year.setdefault(broadcast_year, [])
         if broadcast_month not in year_months:
             year_months.append(broadcast_month)

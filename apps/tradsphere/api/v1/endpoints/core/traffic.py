@@ -271,6 +271,29 @@ def bulk_save_traffic_route(
           "meta": {"timestamp": "2026-05-23T10:00:00+07:00", "duration_ms": 8},
           "data": {
             "trafficId": "d9c98f56-54da-4688-bc96-3d3cb6388f5d",
+            "trafficListItem": {
+              "id": "d9c98f56-54da-4688-bc96-3d3cb6388f5d",
+              "accountCode": "TAAA",
+              "campaign": "Spring Retail Push",
+              "searchCampaign": "spring retail push",
+              "status": "draft",
+              "note": "Save all updates together",
+              "dateCreated": "2026-05-23T10:00:00+07:00",
+              "dateUpdated": "2026-05-23T10:00:00+07:00",
+              "flightCount": 1,
+              "stationCount": 2,
+              "emailSentStatus": "draft",
+              "emailSentAt": null,
+              "searchIscis": ["TAAA260611EH"],
+              "searchStations": ["KABC", "ABC LOS ANGELES"],
+              "searchEmails": ["traffic@kabc.com"],
+              "summary": {
+                "totalRotation": 55.0,
+                "rotationWarning": true,
+                "rotationWarningMessage": "Total rotation is 55.00%; expected 100.00%",
+                "warnings": []
+              }
+            },
             "detail": {
               "traffic": {
                 "id": "d9c98f56-54da-4688-bc96-3d3cb6388f5d",

@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { EstimateNumberResults } from "@/components/estnums/EstimateNumberResults";
 import {
   EstimateNumberSearch,
@@ -25,7 +25,7 @@ import {
   removeBrowserCacheByPrefix,
   writeBrowserCache,
 } from "@/lib/browserCache";
-import { type CachePolicy } from "@shared/cache";
+import { FRONTEND_CACHE_TTL_MS, type CachePolicy } from "@shared/cache";
 import { buildAuthHeaders as buildSharedAuthHeaders } from "@shared/api/authHeaders";
 import { useAuth } from "@shared/auth/useAuth";
 import { shouldProtectFrontendAuth } from "@shared/auth/guards";
@@ -39,7 +39,7 @@ import { resolveSharedLoadingContract } from "@shared/components/status/loadingC
 import { hasAtLeastOneSearchCriterion, shouldFetchSubmittedSearchNetwork } from "@shared/search";
 
 const SEARCH_LIMIT = 50;
-const SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
+const SEARCH_CACHE_TTL_MS = FRONTEND_CACHE_TTL_MS.DEFAULT;
 const SEARCH_TIMEZONE = "America/Chicago";
 const ESTNUMS_PAGE_CACHE_VERSION = "v4";
 const ESTNUMS_SEARCH_CACHE_COLLECTION_PREFIX = "estnums:form-search:";
@@ -1331,7 +1331,7 @@ export default function EstimateNumbersPage() {
   );
 
   const [billingDirectory, setBillingDirectory] = useState<AccountDirectoryItem[]>([]);
-  const [, setIsLoadingBillingDirectory] = useState(true);
+  const [isLoadingBillingDirectory, setIsLoadingBillingDirectory] = useState(true);
 
   const [draft, setDraft] = useScopedPersistentState<EstimateNumberSearchFormValues>(
     {
@@ -1381,7 +1381,9 @@ export default function EstimateNumbersPage() {
   const hasSelectionDirectoryRef = useRef(false);
   const {
     accountSelections,
+    isRefreshingSelections,
     selectionsError,
+    refreshSelections,
   } = useTradsphereAccountSelections({
     requestJson,
     requestHeaders,
@@ -1402,6 +1404,10 @@ export default function EstimateNumbersPage() {
       return map;
     }, {});
   }, [accountDirectory]);
+  const accountDirectoryByCodeRef = useRef(accountDirectoryByCode);
+  useEffect(() => {
+    accountDirectoryByCodeRef.current = accountDirectoryByCode;
+  }, [accountDirectoryByCode]);
 
   const displayPage = useMemo(
     () => withDirectoryAccountNames(page, accountDirectoryByCode),
@@ -1490,29 +1496,34 @@ export default function EstimateNumbersPage() {
     toast.error("Account load failed", selectionsError);
   }, [selectionsError, toast]);
 
+  const loadAccountDirectoryMetadata = useCallback(async (): Promise<AccountDirectoryItem[] | null> => {
+    try {
+      const accountPayload = await requestJson("/api/tradsphere/v1/accounts/directory?active=false", {
+        headers: requestHeaders,
+        errorToast: false,
+      });
+      return parseAccountDirectory(accountPayload);
+    } catch (loadError) {
+      if (!hasSelectionDirectoryRef.current) {
+        toast.error("Account load failed", getErrorMessage(loadError, "Unable to load TradSphere accounts."));
+      }
+      return null;
+    }
+  }, [requestHeaders, requestJson, toast]);
+
   useEffect(() => {
     let cancelled = false;
 
-    async function loadAccountDirectoryMetadata() {
+    async function loadAccountDirectoryMetadataIntoState() {
       if (!cancelled) {
         setIsLoadingBillingDirectory(true);
       }
       try {
-        const accountPayload = await requestJson("/api/tradsphere/v1/accounts/directory?active=false", {
-          headers: requestHeaders,
-          errorToast: false,
-        });
-        if (cancelled) {
+        const nextBillingDirectory = await loadAccountDirectoryMetadata();
+        if (cancelled || !nextBillingDirectory) {
           return;
         }
-        setBillingDirectory(parseAccountDirectory(accountPayload));
-      } catch (loadError) {
-        if (cancelled) {
-          return;
-        }
-        if (!hasSelectionDirectoryRef.current) {
-          toast.error("Account load failed", getErrorMessage(loadError, "Unable to load TradSphere accounts."));
-        }
+        setBillingDirectory(nextBillingDirectory);
       } finally {
         if (!cancelled) {
           setIsLoadingBillingDirectory(false);
@@ -1520,12 +1531,12 @@ export default function EstimateNumbersPage() {
       }
     }
 
-    void loadAccountDirectoryMetadata();
+    void loadAccountDirectoryMetadataIntoState();
 
     return () => {
       cancelled = true;
     };
-  }, [requestHeaders, requestJson, toast]);
+  }, [loadAccountDirectoryMetadata]);
 
   function buildSearchRequestQuery(plan: SearchPlan, options: { append: boolean; cursor: string | null; offset: number | null }): string {
     if (plan.type !== "search") {
@@ -1558,7 +1569,7 @@ export default function EstimateNumbersPage() {
         headers: requestHeaders,
         errorToast: false,
       });
-      return parseLegacyEstNumsResponse(payload, accountDirectoryByCode);
+      return parseLegacyEstNumsResponse(payload, accountDirectoryByCodeRef.current);
     }
 
     const query = buildSearchRequestQuery(search.plan, {
@@ -1570,7 +1581,7 @@ export default function EstimateNumbersPage() {
       headers: requestHeaders,
       errorToast: false,
     });
-    return parseSearchResponse(payload, accountDirectoryByCode);
+    return parseSearchResponse(payload, accountDirectoryByCodeRef.current);
   }
 
   async function fetchNextPageForSubmittedSearch(
@@ -1598,7 +1609,7 @@ export default function EstimateNumbersPage() {
       headers: requestHeaders,
       errorToast: false,
     });
-    return parseSearchResponse(payload, accountDirectoryByCode);
+    return parseSearchResponse(payload, accountDirectoryByCodeRef.current);
   }
 
   async function loadPageData(options: SearchLoadOptions): Promise<void> {
@@ -1849,6 +1860,16 @@ export default function EstimateNumbersPage() {
     }
     setIsChipRefreshOverlayVisible(true);
     try {
+      await refreshSelections();
+      setIsLoadingBillingDirectory(true);
+      try {
+        const nextBillingDirectory = await loadAccountDirectoryMetadata();
+        if (nextBillingDirectory) {
+          setBillingDirectory(nextBillingDirectory);
+        }
+      } finally {
+        setIsLoadingBillingDirectory(false);
+      }
       await loadPageData({
         policy: "network-only",
         append: false,
@@ -1963,8 +1984,15 @@ export default function EstimateNumbersPage() {
         <PageCacheFooter
           text={cacheStatusText}
           onRefresh={handleRefreshSearch}
-          disabled={isRefreshing || isLoadingMore || isChipRefreshOverlayVisible || !isOnline}
-          refreshing={isRefreshing || isChipRefreshOverlayVisible}
+          disabled={
+            isRefreshing ||
+            isRefreshingSelections ||
+            isLoadingBillingDirectory ||
+            isLoadingMore ||
+            isChipRefreshOverlayVisible ||
+            !isOnline
+          }
+          refreshing={isRefreshing || isRefreshingSelections || isLoadingBillingDirectory || isChipRefreshOverlayVisible}
           refreshLabel="Refresh estimate numbers"
           tooltipText={isOnline ? "Click to refresh last submitted search" : "Offline. Reconnect to refresh estimate numbers."}
           containerClassName="w-full"

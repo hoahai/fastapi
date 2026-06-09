@@ -25,6 +25,7 @@ import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { PageLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
+import { FRONTEND_CACHE_TTL_MS } from "@shared/cache";
 import { Tooltip } from "@shared/components/actions/Tooltip";
 import { roleLabel } from "@shared/auth/accessAssignments";
 import { useAuth } from "@shared/auth/useAuth";
@@ -89,7 +90,7 @@ const ROLE_OPTIONS: RoleOption[] = [
   { value: "editor", label: "Editor" },
   { value: "admin", label: "Admin" },
 ];
-const APP_SCOPED_ADMIN_CACHE_TTL_MS = 2 * 60 * 1000;
+const APP_SCOPED_ADMIN_CACHE_TTL_MS = FRONTEND_CACHE_TTL_MS.DEFAULT;
 const APP_SCOPED_ADMIN_PAGE_CODE = "admin";
 const APP_SCOPED_ADMIN_LOOKUP_QUERY_STATE_KEY = "lookupQuery";
 const APP_SCOPED_ADMIN_MEMBER_SEARCH_STATE_KEY = "memberSearch";

@@ -8,6 +8,7 @@ import { Input } from "@tradsphere/components/ui/input";
 import { canModalClose, shouldBlockOutsideClose } from "@tradsphere/components/ui/modal-close-guard";
 import { Textarea } from "@tradsphere/components/ui/textarea";
 import { UnsavedChangesDialog } from "@tradsphere/components/ui/unsaved-changes-dialog";
+import { ModalShell } from "@shared/components";
 import { FormRow } from "@shared/components/form/FormRow";
 import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
 import type {
@@ -212,141 +213,143 @@ export function ShiftzyScheduleEditModal({
     <>
       <Dialog open={open} onOpenChange={handleOpenChange}>
         <DialogContent
-          className="w-[calc(100%-1.5rem)] max-w-[720px] rounded-xl bg-white p-6"
+          className="flex max-h-[90vh] w-[calc(100%-1.5rem)] max-w-[720px] flex-col overflow-hidden rounded-xl bg-white p-6"
           onPointerDownOutside={(event) => {
             if (blockOutsideClose) {
               event.preventDefault();
             }
           }}
         >
-          <DialogClose
-            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/70"
-            aria-label="Close shift editor"
-          >
-            <X className="size-4" />
-          </DialogClose>
+          <ModalShell busy={saving} busyMessage="Saving shift..." className="min-h-0 flex-1">
+            <DialogClose
+              className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/70"
+              aria-label="Close shift editor"
+            >
+              <X className="size-4" />
+            </DialogClose>
 
-          <DialogHeader>
-            <DialogTitle>{mode === "create" ? "Add Shift" : "Edit Shift"}</DialogTitle>
-            <DialogDescription>
-              {canEdit
-                ? mode === "create"
-                  ? "Add a new shift card. Changes are staged locally until you click Save on the schedule board."
-                  : "Update this card. Changes are staged locally until you click Save on the schedule board."
-                : "You have view access only for this schedule card."}
-            </DialogDescription>
-          </DialogHeader>
+            <DialogHeader>
+              <DialogTitle>{mode === "create" ? "Add Shift" : "Edit Shift"}</DialogTitle>
+              <DialogDescription>
+                {canEdit
+                  ? mode === "create"
+                    ? "Add a new shift card. Changes are staged locally until you click Save on the schedule board."
+                    : "Update this card. Changes are staged locally until you click Save on the schedule board."
+                  : "You have view access only for this schedule card."}
+              </DialogDescription>
+            </DialogHeader>
 
-          {schedule ? (
-            <div className="mt-4 space-y-3">
-            <FormRow label="Employee">
-              <AppDropdown
-                value={form.employeeId}
-                options={employeeOptions}
-                placeholder=""
-                searchable={false}
-                onValueChange={(nextValue) => setForm((current) => {
-                  const employee = employees.find((item) => item.id === nextValue);
-                  const preferredPosition = employee?.refPositionCode
-                    && positions.some((item) => item.code === employee.refPositionCode)
-                    ? employee.refPositionCode
-                    : null;
-                  return {
-                    ...current,
-                    employeeId: nextValue,
-                    positionCode: preferredPosition || current.positionCode,
-                  };
-                })}
-                disabled={inputsDisabled}
-              />
-            </FormRow>
-
-            <FormRow label="Position">
-              <AppDropdown
-                value={form.positionCode}
-                options={positionOptions}
-                placeholder=""
-                searchable={positions.length > 8}
-                onValueChange={(nextValue) => setForm((current) => ({ ...current, positionCode: nextValue }))}
-                disabled={inputsDisabled}
-              />
-            </FormRow>
-
-            <FormRow label="Shift">
-              <AppDropdown
-                value={form.shiftId}
-                options={shiftOptions}
-                placeholder=""
-                searchable={shifts.length > 8}
-                onValueChange={(nextValue) => {
-                  const nextShift = shifts.find((item) => item.id === nextValue);
-                  setForm((current) => ({
-                    ...current,
-                    shiftId: nextValue,
-                    startTime: nextShift ? toTimeInputValue(nextShift.startTime) : current.startTime,
-                    endTime: nextShift ? toTimeInputValue(nextShift.endTime) : current.endTime,
-                  }));
-                }}
-                disabled={inputsDisabled}
-              />
-            </FormRow>
-
-            <FormRow label="Start / End">
-              <div className="grid gap-2 sm:grid-cols-2">
-                <div className="relative">
-                  <Input
-                    type="time"
-                    value={form.startTime}
-                    onChange={(event) => setForm((current) => ({ ...current, startTime: event.target.value }))}
+            {schedule ? (
+              <div className="mt-4 space-y-3">
+                <FormRow label="Employee">
+                  <AppDropdown
+                    value={form.employeeId}
+                    options={employeeOptions}
+                    placeholder=""
+                    searchable={false}
+                    onValueChange={(nextValue) => setForm((current) => {
+                      const employee = employees.find((item) => item.id === nextValue);
+                      const preferredPosition = employee?.refPositionCode
+                        && positions.some((item) => item.code === employee.refPositionCode)
+                        ? employee.refPositionCode
+                        : null;
+                      return {
+                        ...current,
+                        employeeId: nextValue,
+                        positionCode: preferredPosition || current.positionCode,
+                      };
+                    })}
                     disabled={inputsDisabled}
-                    className="pr-10"
                   />
-                  <Clock3 className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-slate-500" />
-                </div>
-                <div className="relative">
-                  <Input
-                    type="time"
-                    value={form.endTime}
-                    onChange={(event) => setForm((current) => ({ ...current, endTime: event.target.value }))}
+                </FormRow>
+
+                <FormRow label="Position">
+                  <AppDropdown
+                    value={form.positionCode}
+                    options={positionOptions}
+                    placeholder=""
+                    searchable={positions.length > 8}
+                    onValueChange={(nextValue) => setForm((current) => ({ ...current, positionCode: nextValue }))}
                     disabled={inputsDisabled}
-                    className="pr-10"
                   />
-                  <Clock3 className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-slate-500" />
-                </div>
+                </FormRow>
+
+                <FormRow label="Shift">
+                  <AppDropdown
+                    value={form.shiftId}
+                    options={shiftOptions}
+                    placeholder=""
+                    searchable={shifts.length > 8}
+                    onValueChange={(nextValue) => {
+                      const nextShift = shifts.find((item) => item.id === nextValue);
+                      setForm((current) => ({
+                        ...current,
+                        shiftId: nextValue,
+                        startTime: nextShift ? toTimeInputValue(nextShift.startTime) : current.startTime,
+                        endTime: nextShift ? toTimeInputValue(nextShift.endTime) : current.endTime,
+                      }));
+                    }}
+                    disabled={inputsDisabled}
+                  />
+                </FormRow>
+
+                <FormRow label="Start / End">
+                  <div className="grid gap-2 sm:grid-cols-2">
+                    <div className="relative">
+                      <Input
+                        type="time"
+                        value={form.startTime}
+                        onChange={(event) => setForm((current) => ({ ...current, startTime: event.target.value }))}
+                        disabled={inputsDisabled}
+                        className="pr-10"
+                      />
+                      <Clock3 className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-slate-500" />
+                    </div>
+                    <div className="relative">
+                      <Input
+                        type="time"
+                        value={form.endTime}
+                        onChange={(event) => setForm((current) => ({ ...current, endTime: event.target.value }))}
+                        disabled={inputsDisabled}
+                        className="pr-10"
+                      />
+                      <Clock3 className="pointer-events-none absolute right-3 top-1/2 size-4 -translate-y-1/2 text-slate-500" />
+                    </div>
+                  </div>
+                </FormRow>
+
+                <FormRow label="Note" alignStart>
+                  <Textarea
+                    rows={3}
+                    value={noteField.value}
+                    onChange={noteField.onChange}
+                    onBlur={noteField.onBlur}
+                    disabled={inputsDisabled}
+                  />
+                </FormRow>
               </div>
-            </FormRow>
-
-            <FormRow label="Note" alignStart>
-              <Textarea
-                rows={3}
-                value={noteField.value}
-                onChange={noteField.onChange}
-                onBlur={noteField.onBlur}
-                disabled={inputsDisabled}
-              />
-            </FormRow>
-            </div>
-          ) : null}
-
-          <DialogFooter className="gap-2">
-            {hasUnsavedChanges && canEdit ? (
-              <Button variant="outline" onClick={handleRevertChanges} disabled={saving}>
-                Revert
-              </Button>
             ) : null}
-            {canEdit && hasUnsavedChanges && canSave ? (
-              <Button onClick={() => void handleSubmit()} disabled={!canSave || saving}>
-                {saving ? (
-                  <>
-                    <Loader2 className="size-4 animate-spin" />
-                    Saving...
-                  </>
-                ) : (
-                  mode === "create" ? "Add" : "Edit"
-                )}
-              </Button>
-            ) : null}
-          </DialogFooter>
+
+            <DialogFooter className="gap-2">
+              {hasUnsavedChanges && canEdit ? (
+                <Button variant="outline" onClick={handleRevertChanges} disabled={saving}>
+                  Revert
+                </Button>
+              ) : null}
+              {canEdit && hasUnsavedChanges && canSave ? (
+                <Button onClick={() => void handleSubmit()} disabled={!canSave || saving}>
+                  {saving ? (
+                    <>
+                      <Loader2 className="size-4 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    mode === "create" ? "Add" : "Edit"
+                  )}
+                </Button>
+              ) : null}
+            </DialogFooter>
+          </ModalShell>
         </DialogContent>
       </Dialog>
 

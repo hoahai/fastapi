@@ -24,6 +24,7 @@ import { Textarea } from "@tradsphere/components/ui/textarea";
 import { SectionCard } from "@shared/components/layout/SectionCard";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { PageLoadingLayer } from "@shared/components/status/LoadingOverlay";
+import { ModalShell } from "@shared/components";
 import {
   loadLeaveSphereQuickApproval,
   submitLeaveSphereQuickApprovalDecision,
@@ -337,42 +338,44 @@ export default function LeaveSphereQuickApprovalPage({ token }: LeaveSphereQuick
       <PageLoadingLayer active={pageState === "loading"} message="Validating quick approval link..." />
 
       <Dialog open={rejectDialogOpen} onOpenChange={setRejectDialogOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Reject PTO request</DialogTitle>
-            <DialogDescription>
-              Optionally provide a note so the employee understands why this request was rejected.
-            </DialogDescription>
-          </DialogHeader>
-          <div className="mt-4">
-            <label htmlFor="quick-reject-note" className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-600">
-              Rejection note (optional)
-            </label>
-            <Textarea
-              id="quick-reject-note"
-              value={rejectReason}
-              onChange={(event) => setRejectReason(event.target.value)}
-              placeholder="Add context for the employee"
-              maxLength={500}
-            />
-          </div>
-          <DialogFooter>
-            <DialogClose asChild>
-              <Button variant="outline" disabled={isSubmitting}>Cancel</Button>
-            </DialogClose>
-            <Button
-              disabled={isSubmitting}
-              className="bg-rose-600 text-white hover:bg-rose-600/95"
-              onClick={() => {
-                void submitDecision("rejected", rejectReason.trim() || undefined);
-                setRejectDialogOpen(false);
-                setRejectReason("");
-              }}
-            >
-              {isSubmitting ? <Loader2 className="size-4 animate-spin" /> : <XCircle className="size-4" />}
-              Confirm rejection
-            </Button>
-          </DialogFooter>
+        <DialogContent className="flex max-h-[90vh] max-w-xl flex-col overflow-hidden rounded-xl bg-white p-6">
+          <ModalShell busy={isSubmitting} busyMessage="Submitting decision..." className="min-h-0 flex-1">
+            <DialogHeader>
+              <DialogTitle>Reject PTO request</DialogTitle>
+              <DialogDescription>
+                Optionally provide a note so the employee understands why this request was rejected.
+              </DialogDescription>
+            </DialogHeader>
+            <div className="mt-4">
+              <label htmlFor="quick-reject-note" className="mb-2 block text-xs font-semibold uppercase tracking-[0.12em] text-slate-600">
+                Rejection note (optional)
+              </label>
+              <Textarea
+                id="quick-reject-note"
+                value={rejectReason}
+                onChange={(event) => setRejectReason(event.target.value)}
+                placeholder="Add context for the employee"
+                maxLength={500}
+              />
+            </div>
+            <DialogFooter>
+              <DialogClose asChild>
+                <Button variant="outline">Cancel</Button>
+              </DialogClose>
+              <Button
+                disabled={isSubmitting}
+                className="bg-rose-600 text-white hover:bg-rose-600/95"
+                onClick={() => {
+                  void submitDecision("rejected", rejectReason.trim() || undefined);
+                  setRejectDialogOpen(false);
+                  setRejectReason("");
+                }}
+              >
+                {isSubmitting ? <Loader2 className="size-4 animate-spin" /> : <XCircle className="size-4" />}
+                Confirm rejection
+              </Button>
+            </DialogFooter>
+          </ModalShell>
         </DialogContent>
       </Dialog>
     </div>

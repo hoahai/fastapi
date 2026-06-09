@@ -35,9 +35,9 @@ import { PageMessageStack, type StackMessage } from "@shared/components/status/M
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
 import { shouldFetchSubmittedSearchNetwork } from "@shared/search";
 import { hasAtLeastOneSearchCriterion } from "@shared/search";
-import { type CachePolicy } from "@shared/cache";
+import { FRONTEND_CACHE_TTL_MS, type CachePolicy } from "@shared/cache";
 
-const STATIONS_SEARCH_CACHE_TTL_MS = 5 * 60 * 1000;
+const STATIONS_SEARCH_CACHE_TTL_MS = FRONTEND_CACHE_TTL_MS.DEFAULT;
 const STATIONS_SEARCH_COLLECTION_PREFIX = "stations:search:";
 const STATIONS_SEARCH_COLLECTION_LIMIT = 40;
 const STATIONS_SEARCH_DRAFT_STORAGE_KEY = "tradsphere.stations.searchDraft.v1";
