@@ -1,4 +1,4 @@
-import type { LeaveSpherePtoBalance, LeaveSpherePtoType } from "@leavesphere/lib/ptoMocks";
+import type { LeaveSpherePtoBalance } from "@leavesphere/lib/ptoMocks";
 
 export type LeaveSphereAdminPtoActionCode = "load_grant" | "adjustment";
 export type LeaveSphereAdminPtoTransactionStatus = "Pending" | "Approved" | "Rejected" | "Canceled";
@@ -7,7 +7,7 @@ export type LeaveSphereAdminAdjustmentDirection = "increase" | "decrease";
 export type LeaveSphereAdminPtoTransaction = {
   id: string;
   employeeId: string;
-  ptoTypeCode: LeaveSpherePtoType;
+  ptoTypeCode: string;
   ptoActionCode: LeaveSphereAdminPtoActionCode;
   hours: number;
   year: number;
@@ -26,7 +26,7 @@ export type LeaveSphereAdminEmployeeBalance = {
 };
 
 export type LeaveSphereAdminEmployeeBalanceUsageItem = {
-  type: LeaveSpherePtoType;
+  type: string;
   label: string;
   usedHours: number;
   scheduledHours: number;
@@ -38,16 +38,14 @@ export type LeaveSphereAdminEmployeeBalanceUsageRow = {
   balances: LeaveSphereAdminEmployeeBalanceUsageItem[];
 };
 
-const PTO_TYPES: LeaveSpherePtoType[] = ["vacation", "sick", "personal", "floating"];
-
-const PTO_TYPE_LABELS: Record<LeaveSpherePtoType, string> = {
+const PTO_TYPE_LABELS: Record<string, string> = {
   vacation: "Vacation",
   sick: "Sick",
   personal: "Personal",
   floating: "Floating Holiday",
 };
 
-function makeBalanceKey(employeeId: string, type: LeaveSpherePtoType): string {
+function makeBalanceKey(employeeId: string, type: string): string {
   return `${employeeId}::${type}`;
 }
 
@@ -61,15 +59,12 @@ export function buildLeaveSphereAdminBalanceUsageRows(
   return employeeBalances.map((row) => ({
     employeeId: row.employeeId,
     employeeName: row.employeeName,
-    balances: PTO_TYPES.map((type) => {
-      const balance = row.balances.find((item) => item.type === type);
-      return {
-        type,
-        label: balance?.label || PTO_TYPE_LABELS[type],
-        usedHours: asFiniteNumber(balance?.usedHours),
-        scheduledHours: asFiniteNumber(balance?.scheduledHours),
-      };
-    }),
+    balances: row.balances.map((balance) => ({
+      type: balance.type,
+      label: balance.label || PTO_TYPE_LABELS[balance.type] || balance.type,
+      usedHours: asFiniteNumber(balance.usedHours),
+      scheduledHours: asFiniteNumber(balance.scheduledHours),
+    })),
   }));
 }
 
@@ -91,7 +86,7 @@ export function seedLeaveSphereAdminBalanceTransactions(params: {
         transactions.push({
           id: `seed-load-${row.employeeId}-${balance.type}-${year}`,
           employeeId: row.employeeId,
-          ptoTypeCode: balance.type as LeaveSpherePtoType,
+          ptoTypeCode: balance.type,
           ptoActionCode: "load_grant",
           hours: totalHours,
           year,
@@ -122,20 +117,46 @@ export function deriveLeaveSphereAdminEmployeeBalances(params: {
     grantedHoursByKey.set(key, (grantedHoursByKey.get(key) || 0) + asFiniteNumber(transaction.hours));
   }
 
-  return params.usageRows.map((row) => ({
-    employeeId: row.employeeId,
-    employeeName: row.employeeName,
-    balances: PTO_TYPES.map((type) => {
+  return params.usageRows.map((row) => {
+    const typeOrder = new Map<string, number>();
+    row.balances.forEach((balance, index) => {
+      typeOrder.set(balance.type, index);
+    });
+    for (const transaction of params.transactions) {
+      if (transaction.employeeId !== row.employeeId || transaction.year !== params.year) {
+        continue;
+      }
+      if (!typeOrder.has(transaction.ptoTypeCode)) {
+        typeOrder.set(transaction.ptoTypeCode, typeOrder.size);
+      }
+    }
+
+    const balances = [...typeOrder.keys()].map((type) => {
       const usage = row.balances.find((item) => item.type === type);
       return {
         type,
-        label: usage?.label || PTO_TYPE_LABELS[type],
+        label: usage?.label || PTO_TYPE_LABELS[type] || type,
         totalHours: grantedHoursByKey.get(makeBalanceKey(row.employeeId, type)) || 0,
         usedHours: asFiniteNumber(usage?.usedHours),
         scheduledHours: asFiniteNumber(usage?.scheduledHours),
       };
-    }),
-  }));
+    });
+
+    balances.sort((left, right) => {
+      const leftIndex = typeOrder.get(left.type) ?? 0;
+      const rightIndex = typeOrder.get(right.type) ?? 0;
+      if (leftIndex !== rightIndex) {
+        return leftIndex - rightIndex;
+      }
+      return left.type.localeCompare(right.type);
+    });
+
+    return {
+      employeeId: row.employeeId,
+      employeeName: row.employeeName,
+      balances,
+    };
+  });
 }
 
 export function resolveLeaveSphereAdminTransactionHours(params: {
@@ -153,7 +174,7 @@ export function resolveLeaveSphereAdminTransactionHours(params: {
 export function getLeaveSphereAdminLoadRequests(params: {
   transactions: LeaveSphereAdminPtoTransaction[];
   employeeId: string;
-  ptoTypeCode: LeaveSpherePtoType;
+  ptoTypeCode: string;
   year: number;
 }): LeaveSphereAdminLoadRequest[] {
   return params.transactions

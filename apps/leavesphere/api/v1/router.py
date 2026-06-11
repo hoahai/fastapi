@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends
 
 from apps.leavesphere.api.v1.endpoints import (
+    adminPto,
     employeeManagers,
     employees,
     ptoActions,
@@ -19,4 +20,5 @@ router.include_router(employeeManagers.router, tags=["leavesphere"])
 router.include_router(ptoTypes.router, tags=["leavesphere"])
 router.include_router(ptoActions.router, tags=["leavesphere"])
 router.include_router(ptoTransactions.router, tags=["leavesphere"])
+router.include_router(adminPto.router, tags=["leavesphere"])
 router.include_router(my_pto_ui_router, tags=["leavesphere"])

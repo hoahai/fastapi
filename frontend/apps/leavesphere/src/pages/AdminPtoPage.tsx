@@ -61,6 +61,7 @@ import {
   createLeaveSphereAdminPtoRequest,
   loadLeaveSphereAdminPtoWorkspace,
   reviewLeaveSphereAdminPtoRequest,
+  updateLeaveSphereAdminPtoRequest,
   updateLeaveSphereAdminSetupData,
   type LeaveSphereAdminEmployee,
   type LeaveSphereAdminPtoTypeConfig,
@@ -864,6 +865,28 @@ export default function LeaveSphereAdminPtoPage() {
     () => (workspaceForYear?.employees ?? []).map((item) => ({ value: item.employeeId, label: item.employeeName })),
     [workspaceForYear?.employees],
   );
+
+  const balanceColumns = useMemo(() => {
+    const columns = new Map<string, { type: string; label: string }>();
+    for (const row of workspaceForYear?.employeeBalances ?? []) {
+      for (const balance of row.balances) {
+        const type = asString(balance.type);
+        if (!type || columns.has(type)) {
+          continue;
+        }
+        columns.set(type, {
+          type,
+          label: asString(balance.label) || requestTypeLabel(type),
+        });
+      }
+    }
+    if (columns.size === 0) {
+      for (const item of PTO_TYPE_OPTIONS) {
+        columns.set(item.value, { type: item.value, label: item.label });
+      }
+    }
+    return [...columns.values()];
+  }, [workspaceForYear?.employeeBalances]);
 
   const ptoTypeOptions = useMemo(
     () => (workspaceForYear?.ptoTypes ?? []).filter((item) => item.active).map((item) => ({ value: item.code, label: item.label })),
@@ -1863,34 +1886,29 @@ export default function LeaveSphereAdminPtoPage() {
     }
     setIsMutating(true);
     try {
-      setWorkspace((current) => {
-        if (!current) {
-          return current;
-        }
-        return {
-          ...current,
-          requests: current.requests.map((item) => {
-            if (item.id !== params.requestId) {
-              return item;
-            }
-            return {
-              ...item,
-              type: params.payload.type,
-              startDate: params.payload.startDate,
-              endDate: params.payload.endDate,
-              hours: params.payload.hours,
-              reason: params.payload.reason,
-            };
-          }),
-        };
+      const result = await updateLeaveSphereAdminPtoRequest({
+        requestJson,
+        workspaceKey,
+        currentUserId,
+        currentUserName,
+        payload: {
+          transactionId: params.requestId,
+          type: params.payload.type,
+          startDate: params.payload.startDate,
+          endDate: params.payload.endDate,
+          hours: params.payload.hours,
+          reason: params.payload.reason,
+          year: loadedYear,
+        },
       });
+      applyWorkspace(result.workspace, result.source);
       setSelectedRequestId(null);
       setReviewNote("");
       toast.success("Request updated", "PTO request details were updated.");
     } finally {
       setIsMutating(false);
     }
-  }, [toast]);
+  }, [applyWorkspace, currentUserId, currentUserName, loadedYear, requestJson, toast, workspaceKey]);
   const handleSaveRequestDetailWithNoteWarning = useCallback(async (params: {
     requestId: string | null;
     payload: {
@@ -2170,16 +2188,15 @@ export default function LeaveSphereAdminPtoPage() {
             <thead className="bg-blue-50/70 text-xs uppercase tracking-[0.08em] text-slate-600">
               <tr>
                 <th className="px-3 py-2.5">Employee</th>
-                <th className="px-3 py-2.5 text-center">Vacation</th>
-                <th className="px-3 py-2.5 text-center">Sick</th>
-                <th className="px-3 py-2.5 text-center">Personal</th>
-                <th className="px-3 py-2.5 text-center">Floating</th>
+                {balanceColumns.map((column) => (
+                  <th key={column.type} className="px-3 py-2.5 text-center">{column.label}</th>
+                ))}
               </tr>
             </thead>
             <tbody>
               {(workspaceForYear?.employeeBalances ?? []).map((row) => {
                 const balanceByType = new Map(row.balances.map((item) => [item.type, item]));
-                const renderCell = (type: LeaveSpherePtoType) => {
+                const renderCell = (type: string) => {
                   const balance = balanceByType.get(type);
                   if (!balance) {
                     return "-";
@@ -2188,14 +2205,14 @@ export default function LeaveSphereAdminPtoPage() {
                   const usedRatio = balance.totalHours > 0
                     ? Math.min(1, usedHours / balance.totalHours)
                     : 0;
-                  const loadRequests = resolveAdjustLoadRequests(row.employeeId, type);
+                  const loadRequests = resolveAdjustLoadRequests(row.employeeId, type as LeaveSpherePtoType);
                   return (
                     <TooltipTarget text="click to edit hours">
                       <button
                         type="button"
                         onClick={() => {
                           if (loadRequests.length > 1) {
-                            openAdjustRequestPicker(row.employeeId, type);
+                            openAdjustRequestPicker(row.employeeId, type as LeaveSpherePtoType);
                             return;
                           }
 
@@ -2208,7 +2225,7 @@ export default function LeaveSphereAdminPtoPage() {
                           openLoadHoursModal({
                             mode: "create",
                             employeeId: row.employeeId,
-                            ptoTypeCode: type,
+                            ptoTypeCode: type as LeaveSpherePtoType,
                           });
                         }}
                         className="group flex w-full flex-col items-center rounded-lg border border-transparent px-2 py-1.5 text-center transition hover:border-blue-200 hover:bg-blue-50/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
@@ -2232,10 +2249,9 @@ export default function LeaveSphereAdminPtoPage() {
                 return (
                   <tr key={row.employeeId} className="border-t border-blue-100/80 bg-white text-slate-700">
                     <td className="px-3 py-2.5 font-medium text-slate-900">{row.employeeName}</td>
-                    <td className="px-3 py-2.5 text-center">{renderCell("vacation")}</td>
-                    <td className="px-3 py-2.5 text-center">{renderCell("sick")}</td>
-                    <td className="px-3 py-2.5 text-center">{renderCell("personal")}</td>
-                    <td className="px-3 py-2.5 text-center">{renderCell("floating")}</td>
+                    {balanceColumns.map((column) => (
+                      <td key={column.type} className="px-3 py-2.5 text-center">{renderCell(column.type)}</td>
+                    ))}
                   </tr>
                 );
               })}

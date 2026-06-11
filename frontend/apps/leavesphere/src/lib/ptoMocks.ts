@@ -1,5 +1,5 @@
 export type LeaveSpherePtoStatus = "pending" | "approved" | "rejected" | "cancelled";
-export type LeaveSpherePtoType = "vacation" | "sick" | "personal" | "floating";
+export type LeaveSpherePtoType = string;
 export type LeaveSphereTeamRegion = "US" | "Mexico" | "Philippines";
 
 export const LEAVESPHERE_TEAM_REGION_OPTIONS: Array<{ value: LeaveSphereTeamRegion; label: string }> = [
@@ -186,10 +186,11 @@ export function normalizeLeaveSphereTeamRegion(value: unknown, fallback: LeaveSp
 }
 
 function normalizePtoType(value: unknown): LeaveSpherePtoType | null {
-  const normalized = asString(value).toLowerCase();
-  if (!normalized) {
+  const text = asString(value);
+  if (!text) {
     return null;
   }
+  const normalized = text.toLowerCase();
   if (normalized.includes("vac")) {
     return "vacation";
   }
@@ -202,7 +203,7 @@ function normalizePtoType(value: unknown): LeaveSpherePtoType | null {
   if (normalized.includes("float")) {
     return "floating";
   }
-  return null;
+  return text;
 }
 
 function normalizePtoStatus(value: unknown): LeaveSpherePtoStatus {
@@ -235,8 +236,8 @@ function normalizePtoTypeConfig(value: unknown): LeaveSpherePtoTypeConfig | null
   if (!type) {
     return null;
   }
-  const code = asString(value.code).toUpperCase() || type.toUpperCase();
-  const label = asString(value.label) || asString(value.name) || type[0].toUpperCase() + type.slice(1);
+  const code = asString(value.code) || type;
+  const label = asString(value.label) || asString(value.name) || code;
   return {
     code,
     type,

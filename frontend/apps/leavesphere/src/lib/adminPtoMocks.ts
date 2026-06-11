@@ -32,7 +32,7 @@ export type LeaveSphereAdminEmployee = {
 };
 
 export type LeaveSphereAdminPtoTypeConfig = {
-  code: LeaveSpherePtoType;
+  code: string;
   label: string;
   active: boolean;
 };
@@ -83,9 +83,21 @@ export type LeaveSphereAdminReviewRequestInput = {
   note: string;
 };
 
+export type LeaveSphereAdminUpdateRequestInput = {
+  transactionId: string;
+  type: string;
+  startDate: string;
+  endDate: string;
+  hours: number;
+  reason: string;
+  year?: number | null;
+  ptoTypeCode?: string | null;
+  calendarId?: string | null;
+};
+
 export type LeaveSphereAdminAdjustBalanceInput = {
   employeeId: string;
-  ptoTypeCode: LeaveSpherePtoType;
+  ptoTypeCode: string;
   ptoActionCode: LeaveSphereAdminPtoActionCode;
   transactionId?: string | null;
   hours: number;
@@ -97,7 +109,7 @@ export type LeaveSphereAdminAdjustBalanceInput = {
 export type LeaveSphereAdminSetupInput =
   | {
       kind: "pto_type";
-      code: LeaveSpherePtoType;
+      code: string;
       label: string;
       active: boolean;
     }
@@ -147,6 +159,10 @@ type ReviewRequestArgs = BaseArgs & {
   payload: LeaveSphereAdminReviewRequestInput;
 };
 
+type UpdateRequestArgs = BaseArgs & {
+  payload: LeaveSphereAdminUpdateRequestInput;
+};
+
 type AdjustBalanceArgs = BaseArgs & {
   payload: LeaveSphereAdminAdjustBalanceInput;
 };
@@ -158,14 +174,14 @@ type SetupArgs = BaseArgs & {
 const USE_API_FLAG = "VITE_LEAVESPHERE_USE_API";
 const MOCK_DELAY_MS = 180;
 
-const PTO_TYPE_LABELS: Record<LeaveSpherePtoType, string> = {
+const PTO_TYPE_LABELS: Record<string, string> = {
   vacation: "Vacation",
   sick: "Sick",
   personal: "Personal",
   floating: "Floating Holiday",
 };
 
-const PTO_TYPES: LeaveSpherePtoType[] = ["vacation", "sick", "personal", "floating"];
+const PTO_TYPES: string[] = ["vacation", "sick", "personal", "floating"];
 
 const STORE = new Map<string, LeaveSphereAdminWorkspaceData>();
 
@@ -218,7 +234,10 @@ function unwrapEnvelope(payload: unknown): unknown {
 
 function resolveUseApi(): boolean {
   const raw = asString(import.meta.env[USE_API_FLAG]);
-  return raw.toLowerCase() === "true" || raw === "1";
+  if (!raw) {
+    return true;
+  }
+  return raw.toLowerCase() !== "false" && raw !== "0";
 }
 
 function cloneWorkspace(workspace: LeaveSphereAdminWorkspaceData): LeaveSphereAdminWorkspaceData {
@@ -241,12 +260,7 @@ function cloneWorkspace(workspace: LeaveSphereAdminWorkspaceData): LeaveSphereAd
   };
 }
 
-function buildBaseEmployeeBalances(params: {
-  vacation: [number, number, number];
-  sick: [number, number, number];
-  personal: [number, number, number];
-  floating: [number, number, number];
-}): LeaveSphereAdminEmployeeBalance["balances"] {
+function buildBaseEmployeeBalances(params: Record<string, [number, number, number]>): LeaveSphereAdminEmployeeBalance["balances"] {
   return PTO_TYPES.map((type) => {
     const tuple = params[type];
     return {
@@ -592,6 +606,30 @@ function normalizeNetworkWorkspace(payload: unknown): LeaveSphereAdminWorkspaceD
       .filter((item) => item.id && item.date);
   }
 
+  const ptoTypesRaw = Array.isArray(raw.ptoTypes) ? raw.ptoTypes : [];
+  if (ptoTypesRaw.length > 0) {
+    workspace.ptoTypes = ptoTypesRaw
+      .filter(isRecord)
+      .map((item) => ({
+        code: asString(item.code || item.type || item.name),
+        label: asString(item.label) || asString(item.name) || asString(item.code) || "PTO",
+        active: Boolean(item.active ?? true),
+      }))
+      .filter((item) => Boolean(item.code) && Boolean(item.label));
+  }
+
+  const ptoActionsRaw = Array.isArray(raw.ptoActions) ? raw.ptoActions : [];
+  if (ptoActionsRaw.length > 0) {
+    workspace.ptoActions = ptoActionsRaw
+      .filter(isRecord)
+      .map((item) => ({
+        code: asString(item.code).toUpperCase(),
+        label: asString(item.label) || asString(item.name) || asString(item.code) || "PTO Action",
+        detail: asString(item.detail) || asString(item.color) || "",
+      }))
+      .filter((item) => Boolean(item.code) && Boolean(item.label));
+  }
+
   const requestsRaw = Array.isArray(raw.requests) ? raw.requests : [];
   workspace.requests = requestsRaw
     .filter(isRecord)
@@ -600,7 +638,7 @@ function normalizeNetworkWorkspace(payload: unknown): LeaveSphereAdminWorkspaceD
       employeeId: asString(item.employeeId),
       employeeName: asString(item.employeeName),
       managerId: asString(item.managerId),
-      type: (asString(item.type) as LeaveSpherePtoType) || "vacation",
+      type: asString(item.type) || "vacation",
       startDate: asString(item.startDate),
       endDate: asString(item.endDate),
       hours: asNumber(item.hours),
@@ -611,7 +649,7 @@ function normalizeNetworkWorkspace(payload: unknown): LeaveSphereAdminWorkspaceD
       reviewerName: asString(item.reviewerName) || null,
       managerNote: asString(item.managerNote) || null,
     }))
-    .filter((item) => item.id && PTO_TYPES.includes(item.type));
+    .filter((item) => item.id && item.type);
 
   const employeeBalancesRaw = Array.isArray(raw.employeeBalances) ? raw.employeeBalances : [];
   if (employeeBalancesRaw.length > 0) {
@@ -620,17 +658,17 @@ function normalizeNetworkWorkspace(payload: unknown): LeaveSphereAdminWorkspaceD
       .map((row) => ({
         employeeId: asString(row.employeeId),
         employeeName: asString(row.employeeName),
-        balances: PTO_TYPES.map((type) => {
-          const balancesRaw = Array.isArray(row.balances) ? row.balances : [];
-          const balance = balancesRaw.find((item) => isRecord(item) && asString(item.type) === type);
-          return {
-            type,
-            label: (isRecord(balance) ? asString(balance.label) : "") || PTO_TYPE_LABELS[type],
-            totalHours: isRecord(balance) ? asNumber(balance.totalHours) : 0,
-            usedHours: isRecord(balance) ? asNumber(balance.usedHours) : 0,
-            scheduledHours: isRecord(balance) ? asNumber(balance.scheduledHours) : 0,
-          };
-        }),
+        balances: (Array.isArray(row.balances) ? row.balances : [])
+          .filter(isRecord)
+          .map((item) => ({
+            type: asString(item.type) || asString(item.code) || "vacation",
+            code: asString(item.code) || undefined,
+            label: asString(item.label) || asString(item.code) || asString(item.type) || "PTO",
+            totalHours: asNumber(item.totalHours),
+            usedHours: asNumber(item.usedHours),
+            scheduledHours: asNumber(item.scheduledHours),
+            remainingHours: item.remainingHours === undefined ? undefined : asNumber(item.remainingHours),
+          })),
       }))
       .filter((row) => row.employeeId && row.employeeName);
 
@@ -656,7 +694,7 @@ function normalizeNetworkWorkspace(payload: unknown): LeaveSphereAdminWorkspaceD
       .map((item) => ({
         id: asString(item.id) || `txn-${Math.random().toString(36).slice(2, 8)}`,
         employeeId: asString(item.employeeId),
-        ptoTypeCode: (asString(item.ptoTypeCode) as LeaveSpherePtoType) || "vacation",
+        ptoTypeCode: asString(item.ptoTypeCode) || "vacation",
         ptoActionCode: (asString(item.ptoActionCode) as LeaveSphereAdminPtoActionCode) || "load_grant",
         hours: asNumber(item.hours),
         year: Math.trunc(asNumber(item.year)) || new Date().getFullYear(),
@@ -665,7 +703,7 @@ function normalizeNetworkWorkspace(payload: unknown): LeaveSphereAdminWorkspaceD
         createdAt: asString(item.createdAt) || toIsoDate(new Date()),
         createdByName: asString(item.createdByName) || null,
       }))
-      .filter((item) => item.employeeId && PTO_TYPES.includes(item.ptoTypeCode));
+      .filter((item) => item.employeeId && item.ptoTypeCode);
   }
 
   workspace.employeeBalances = deriveWorkspaceEmployeeBalances({
@@ -858,14 +896,59 @@ export async function createLeaveSphereAdminPtoRequest(params: CreateRequestArgs
   };
 }
 
+export async function updateLeaveSphereAdminPtoRequest(params: UpdateRequestArgs): Promise<LeaveSphereAdminMutationResult> {
+  const { requestJson, workspaceKey, currentUserId, currentUserName, payload } = params;
+
+  if (resolveUseApi()) {
+    try {
+      const response = await requestJson("/api/leavesphere/v1/admin/pto/requests", {
+        method: "PUT",
+        body: payload,
+        successToast: false,
+        errorToast: false,
+      });
+      const normalized = normalizeNetworkWorkspace(response);
+      if (normalized) {
+        return {
+          workspace: writeWorkspace(workspaceKey, normalized),
+          source: "network",
+        };
+      }
+    } catch {
+      // Fallback to local placeholder data.
+    }
+  }
+
+  await wait(MOCK_DELAY_MS);
+  const workspace = ensureWorkspace({ workspaceKey, currentUserId, currentUserName });
+  const target = workspace.requests.find((item) => item.id === payload.transactionId);
+  if (!target) {
+    return {
+      workspace: writeWorkspace(workspaceKey, workspace),
+      source: "mock",
+    };
+  }
+
+  target.type = payload.type;
+  target.startDate = asString(payload.startDate);
+  target.endDate = asString(payload.endDate);
+  target.hours = Math.max(1, asNumber(payload.hours));
+  target.reason = asString(payload.reason) || target.reason;
+  return {
+    workspace: writeWorkspace(workspaceKey, workspace),
+    source: "mock",
+  };
+}
+
 export async function reviewLeaveSphereAdminPtoRequest(params: ReviewRequestArgs): Promise<LeaveSphereAdminMutationResult> {
   const { requestJson, workspaceKey, currentUserId, currentUserName, payload } = params;
 
   if (resolveUseApi()) {
     try {
-      const response = await requestJson(`/api/leavesphere/v1/admin/pto/requests/${encodeURIComponent(payload.requestId)}/decision`, {
+      const response = await requestJson("/api/leavesphere/v1/admin/pto/review", {
         method: "POST",
         body: {
+          requestId: payload.requestId,
           action: payload.approve ? "approve" : "reject",
           note: payload.note,
         },

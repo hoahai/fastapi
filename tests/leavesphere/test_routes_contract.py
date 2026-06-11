@@ -44,6 +44,12 @@ class LeaveSphereRouteContractTests(unittest.TestCase):
             ("POST", "/v1/ptoTransactions/{transaction_id}/cancel"),
             ("POST", "/v1/ptoTransactions/{transaction_id}/approve"),
             ("POST", "/v1/ptoTransactions/{transaction_id}/reject"),
+            ("GET", "/v1/admin/pto/workspace"),
+            ("POST", "/v1/admin/pto/requests"),
+            ("PUT", "/v1/admin/pto/requests"),
+            ("POST", "/v1/admin/pto/review"),
+            ("POST", "/v1/admin/pto/balances/adjust"),
+            ("POST", "/v1/admin/pto/setup"),
             ("GET", "/v1/ui/my-pto/load"),
             ("POST", "/v1/ui/my-pto/requests"),
             ("PUT", "/v1/ui/my-pto/requests"),
@@ -83,6 +89,18 @@ class LeaveSphereRouteContractTests(unittest.TestCase):
         self.assertLess(cancel_idx, transaction_idx)
         self.assertLess(approve_idx, transaction_idx)
         self.assertLess(reject_idx, transaction_idx)
+
+    def test_admin_pto_route_ordering_is_safe(self):
+        route_paths = [
+            str(getattr(route, "path", "") or "")
+            for route in leavesphere_router.routes
+            if "/v1/admin/pto" in str(getattr(route, "path", "") or "")
+        ]
+        self.assertIn("/v1/admin/pto/workspace", route_paths)
+        self.assertIn("/v1/admin/pto/requests", route_paths)
+        self.assertIn("/v1/admin/pto/review", route_paths)
+        self.assertIn("/v1/admin/pto/balances/adjust", route_paths)
+        self.assertIn("/v1/admin/pto/setup", route_paths)
 
     def test_unknown_query_params_are_rejected(self):
         target_route = None

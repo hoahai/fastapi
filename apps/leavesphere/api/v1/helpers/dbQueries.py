@@ -239,6 +239,41 @@ def get_pto_actions(*, code: str | None = None) -> list[dict]:
     return fetch_all(query, params)
 
 
+def get_holidays(*, year: int | None = None) -> list[dict]:
+    tables = get_db_tables()
+    filters: list[tuple[str, object]] = []
+    if year is not None:
+        filters.append(("date >= %s", f"{year}-01-01"))
+        filters.append(("date <= %s", f"{year}-12-31"))
+    where, params = _build_where_clauses(filters)
+    query = (
+        "SELECT dateCreated, dateUpdated, id, name, date, teamRegion "
+        f"FROM {tables['HOLIDAYS']}{where} "
+        "ORDER BY date ASC, name ASC, id ASC"
+    )
+    return fetch_all(query, params)
+
+
+def upsert_holiday(item: dict) -> int:
+    tables = get_db_tables()
+    query = (
+        f"INSERT INTO {tables['HOLIDAYS']} (id, name, date, teamRegion) "
+        "VALUES (%s, %s, %s, %s) "
+        "ON DUPLICATE KEY UPDATE "
+        "name = VALUES(name), "
+        "date = VALUES(date), "
+        "teamRegion = VALUES(teamRegion), "
+        "dateUpdated = CURRENT_TIMESTAMP"
+    )
+    params = (
+        item["id"],
+        item["name"],
+        item["date"],
+        item["teamRegion"],
+    )
+    return execute_write(query, params)
+
+
 def insert_pto_action(item: dict) -> int:
     tables = get_db_tables()
     query = f"INSERT INTO {tables['PTOACTIONS']} (code, name, color) VALUES (%s, %s, %s)"
