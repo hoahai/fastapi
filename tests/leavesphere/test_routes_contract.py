@@ -44,6 +44,11 @@ class LeaveSphereRouteContractTests(unittest.TestCase):
             ("POST", "/v1/ptoTransactions/{transaction_id}/cancel"),
             ("POST", "/v1/ptoTransactions/{transaction_id}/approve"),
             ("POST", "/v1/ptoTransactions/{transaction_id}/reject"),
+            ("GET", "/v1/ui/my-pto/load"),
+            ("POST", "/v1/ui/my-pto/requests"),
+            ("PUT", "/v1/ui/my-pto/requests"),
+            ("DELETE", "/v1/ui/my-pto/requests"),
+            ("POST", "/v1/ui/my-pto/review"),
         }
         for route_key in expected_routes:
             self.assertIn(route_key, actual_routes)

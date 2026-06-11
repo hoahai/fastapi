@@ -104,6 +104,21 @@ TRADSPHERE_ROUTE_RULES: tuple[PermissionRouteRule, ...] = (
     ),
 )
 
+LEAVESPHERE_ROUTE_RULES: tuple[PermissionRouteRule, ...] = (
+    PermissionRouteRule(
+        app_code="leavesphere",
+        path_fragments=("/ui/my-pto/requests",),
+        read_permissions=("leavesphere.viewer",),
+        write_permissions=("leavesphere.viewer",),
+    ),
+    PermissionRouteRule(
+        app_code="leavesphere",
+        path_fragments=("/ui/my-pto/review",),
+        read_permissions=("leavesphere.viewer",),
+        write_permissions=("leavesphere.editor",),
+    ),
+)
+
 
 def resolve_required_permissions(*, app_code: str, method: str, path: str) -> tuple[str, ...]:
     normalized_app_code = str(app_code or "").strip().lower()
@@ -117,6 +132,11 @@ def resolve_required_permissions(*, app_code: str, method: str, path: str) -> tu
 
     if normalized_app_code == "tradsphere":
         for rule in TRADSPHERE_ROUTE_RULES:
+            if any(fragment in normalized_path for fragment in rule.path_fragments):
+                return rule.read_permissions if is_read_method(method) else rule.write_permissions
+
+    if normalized_app_code == "leavesphere":
+        for rule in LEAVESPHERE_ROUTE_RULES:
             if any(fragment in normalized_path for fragment in rule.path_fragments):
                 return rule.read_permissions if is_read_method(method) else rule.write_permissions
 

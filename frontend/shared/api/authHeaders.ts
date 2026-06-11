@@ -4,6 +4,7 @@ export function buildAuthHeaders(
   session: SupabaseSession | null,
   tenantSlug: string,
   includeJsonContentType: boolean,
+  legacyUserEmail?: string | null,
 ): HeadersInit {
   const headers: Record<string, string> = {};
   if (session?.accessToken) {
@@ -23,6 +24,10 @@ export function buildAuthHeaders(
     const legacyUserName = String(import.meta.env.VITE_LEGACY_USER_NAME || "").trim();
     if (authMode === "compat" && legacyEnabled !== "false" && legacyApiKey) {
       headers["X-API-Key"] = legacyApiKey;
+      const normalizedLegacyUserEmail = String(legacyUserEmail || "").trim();
+      if (normalizedLegacyUserEmail) {
+        headers["X-User-Email"] = normalizedLegacyUserEmail;
+      }
       if (legacyUserName) {
         headers["X-User-Name"] = legacyUserName;
       }

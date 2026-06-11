@@ -151,7 +151,9 @@ export function useApiRequest() {
       const callerHeaders = new Headers(options.headers ?? {});
       const requestHeaders = new Headers(callerHeaders);
       const ensuredSession = await authRef.current.ensureFreshSession();
-      const authHeaders = new Headers(buildAuthHeaders(ensuredSession, authRef.current.tenantSlug, false));
+      const authHeaders = new Headers(
+        buildAuthHeaders(ensuredSession, authRef.current.tenantSlug, false, authRef.current.user?.email ?? null),
+      );
       authHeaders.forEach((value, key) => requestHeaders.set(key, value));
 
       let body: BodyInit | undefined;

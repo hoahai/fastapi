@@ -16,9 +16,43 @@ def _build_where_clauses(filters: list[tuple[str, object]]) -> tuple[str, tuple[
     return where, params
 
 
+def _build_in_clause(column: str, values: list[object]) -> tuple[str, tuple[object, ...]]:
+    active = [value for value in values if value is not None and str(value).strip()]
+    if not active:
+        return "", tuple()
+    placeholders = ", ".join(["%s"] * len(active))
+    return f" WHERE {column} IN ({placeholders})", tuple(active)
+
+
 def get_employees(*, employee_id: str | None = None) -> list[dict]:
     tables = get_db_tables()
     where, params = _build_where_clauses([("id = %s", employee_id)])
+    query = (
+        "SELECT "
+        "dateCreated, dateUpdated, id, identityKey, firstName, lastName, email, "
+        "phone, dob, pictureUrl, region, startDate, title, isAE, active "
+        f"FROM {tables['EMPLOYEES']}{where} "
+        "ORDER BY lastName ASC, firstName ASC"
+    )
+    return fetch_all(query, params)
+
+
+def get_employees_by_email(*, email: str) -> list[dict]:
+    tables = get_db_tables()
+    query = (
+        "SELECT "
+        "dateCreated, dateUpdated, id, identityKey, firstName, lastName, email, "
+        "phone, dob, pictureUrl, region, startDate, title, isAE, active "
+        f"FROM {tables['EMPLOYEES']} "
+        "WHERE LOWER(TRIM(email)) = LOWER(TRIM(%s)) "
+        "ORDER BY active DESC, dateUpdated DESC, lastName ASC, firstName ASC, id ASC"
+    )
+    return fetch_all(query, (email,))
+
+
+def get_employees_by_ids(*, employee_ids: list[str]) -> list[dict]:
+    tables = get_db_tables()
+    where, params = _build_in_clause("id", employee_ids)
     query = (
         "SELECT "
         "dateCreated, dateUpdated, id, identityKey, firstName, lastName, email, "
@@ -233,20 +267,29 @@ def get_pto_transactions(
     *,
     transaction_id: str | None = None,
     employee_id: str | None = None,
+    employee_ids: list[str] | None = None,
     pto_type_code: str | None = None,
     year: int | None = None,
     status: str | None = None,
 ) -> list[dict]:
     tables = get_db_tables()
-    where, params = _build_where_clauses(
-        [
-            ("id = %s", transaction_id),
-            ("employeeId = %s", employee_id),
-            ("ptoTypeCode = %s", pto_type_code),
-            ("year = %s", year),
-            ("status = %s", status),
-        ]
-    )
+    clauses: list[tuple[str, object]] = [
+        ("id = %s", transaction_id),
+        ("employeeId = %s", employee_id),
+        ("ptoTypeCode = %s", pto_type_code),
+        ("year = %s", year),
+        ("status = %s", status),
+    ]
+    where, params = _build_where_clauses(clauses)
+    if employee_ids:
+        employee_where, employee_params = _build_in_clause("employeeId", employee_ids)
+        if employee_where:
+            if where:
+                where = where + " AND " + employee_where[len(" WHERE ") :]
+                params = params + employee_params
+            else:
+                where = employee_where
+                params = employee_params
     query = (
         "SELECT "
         "dateCreated, dateUpdated, id, employeeId, ptoTypeCode, ptoActionCode, "
@@ -283,6 +326,38 @@ def insert_pto_transaction(item: dict) -> int:
         item.get("calendarId"),
     )
     return execute_write(query, params)
+
+
+def update_pto_transaction(*, transaction_id: str, updates: dict) -> int:
+    tables = get_db_tables()
+    fields: list[str] = []
+    params: list[object] = []
+    for key in (
+        "employeeId",
+        "ptoTypeCode",
+        "ptoActionCode",
+        "hours",
+        "year",
+        "startDate",
+        "endDate",
+        "status",
+        "description",
+        "note",
+        "reason",
+        "approverId",
+        "calendarId",
+    ):
+        if key not in updates:
+            continue
+        fields.append(f"{key} = %s")
+        params.append(updates[key])
+    if not fields:
+        return 0
+    fields.append("dateUpdated = %s")
+    params.append(datetime.utcnow())
+    params.append(transaction_id)
+    query = f"UPDATE {tables['PTOTRANSACTIONS']} SET " + ", ".join(fields) + " WHERE id = %s"
+    return execute_write(query, tuple(params))
 
 
 def create_pto_request_transaction(*, item: dict, requested_hours: Decimal) -> int:
@@ -424,7 +499,7 @@ def approve_pending_pto_request(
         fields = ["status = %s", "approverId = %s", "dateUpdated = %s"]
         params: list[object] = ["Approved", approver_id, datetime.utcnow()]
         if reason is not None:
-            fields.append("reason = %s")
+            fields.append("note = %s")
             params.append(reason)
         params.append(transaction_id)
         cursor.execute(
@@ -468,7 +543,7 @@ def reject_pending_pto_request(
         fields = ["status = %s", "approverId = %s", "dateUpdated = %s"]
         params: list[object] = ["Rejected", approver_id, datetime.utcnow()]
         if reason is not None:
-            fields.append("reason = %s")
+            fields.append("note = %s")
             params.append(reason)
         params.append(transaction_id)
         cursor.execute(

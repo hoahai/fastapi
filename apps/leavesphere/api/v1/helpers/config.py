@@ -18,6 +18,7 @@ _DEFAULT_DB_TABLES = {
     "PTOTYPES": "PTOTypes",
     "PTOACTIONS": "PTOActions",
     "PTOTRANSACTIONS": "PTOTransactions",
+    "HOLIDAYS": "Holidays",
 }
 
 _DB_KEY_ALIASES = {
@@ -30,6 +31,7 @@ _DB_KEY_ALIASES = {
     "pto_actions": "PTOACTIONS",
     "ptotransactions": "PTOTRANSACTIONS",
     "pto_transactions": "PTOTRANSACTIONS",
+    "holidays": "HOLIDAYS",
 }
 
 _VALIDATED_TENANTS: set[str] = set()

@@ -229,6 +229,55 @@ class LeaveSpherePermissionDependencyTests(unittest.TestCase):
                 )
                 enforce_leavesphere_permission(request)
 
+    def test_my_pto_ui_routes_use_viewer_and_editor_permissions(self):
+        viewer = TenantAccessProfile(
+            tenant_id="tid",
+            tenant_slug="taaa",
+            app_id="aid",
+            app_code="leavesphere",
+            role="viewer",
+            permissions=frozenset({"leavesphere.viewer"}),
+        )
+        editor = TenantAccessProfile(
+            tenant_id="tid",
+            tenant_slug="taaa",
+            app_id="aid",
+            app_code="leavesphere",
+            role="editor",
+            permissions=frozenset({"leavesphere.viewer", "leavesphere.editor"}),
+        )
+
+        load_request = SimpleNamespace(
+            method="GET",
+            state=SimpleNamespace(auth_mode="supabase_jwt", tenant_access=viewer),
+            url=SimpleNamespace(path="/api/leavesphere/v1/ui/my-pto/load"),
+        )
+        enforce_leavesphere_permission(load_request)
+
+        for method in ("POST", "DELETE"):
+            for profile in (viewer, editor):
+                request = SimpleNamespace(
+                    method=method,
+                    state=SimpleNamespace(auth_mode="supabase_jwt", tenant_access=profile),
+                    url=SimpleNamespace(path="/api/leavesphere/v1/ui/my-pto/requests"),
+                )
+                enforce_leavesphere_permission(request)
+
+        review_request = SimpleNamespace(
+            method="POST",
+            state=SimpleNamespace(auth_mode="supabase_jwt", tenant_access=editor),
+            url=SimpleNamespace(path="/api/leavesphere/v1/ui/my-pto/review"),
+        )
+        enforce_leavesphere_permission(review_request)
+
+        blocked_review = SimpleNamespace(
+            method="POST",
+            state=SimpleNamespace(auth_mode="supabase_jwt", tenant_access=viewer),
+            url=SimpleNamespace(path="/api/leavesphere/v1/ui/my-pto/review"),
+        )
+        with self.assertRaises(HTTPException):
+            enforce_leavesphere_permission(blocked_review)
+
 
 if __name__ == "__main__":
     unittest.main()

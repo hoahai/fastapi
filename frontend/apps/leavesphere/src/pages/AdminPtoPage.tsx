@@ -809,6 +809,12 @@ export default function LeaveSphereAdminPtoPage() {
   }, [selectedRequest?.id]);
 
   const employeeById = useMemo(() => employeeNameById(workspaceForYear), [workspaceForYear]);
+  const selectedRequestManagerLabel = useMemo(() => {
+    if (!selectedRequest) {
+      return "Unassigned";
+    }
+    return employeeById.get(selectedRequest.managerId ?? "") || selectedRequest.managerId || "Unassigned";
+  }, [employeeById, selectedRequest]);
 
   const employeeOptions = useMemo(
     () => (workspaceForYear?.employees ?? []).map((item) => ({ value: item.employeeId, label: item.employeeName })),
@@ -2448,9 +2454,9 @@ export default function LeaveSphereAdminPtoPage() {
               <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Manager</span>
               <span
                 className="mt-0.5 block truncate font-semibold text-slate-900"
-                title={employeeById.get(selectedRequest.managerId) || selectedRequest.managerId}
+                title={selectedRequestManagerLabel}
               >
-                {employeeById.get(selectedRequest.managerId) || selectedRequest.managerId}
+                {selectedRequestManagerLabel}
               </span>
             </p>
             <p>

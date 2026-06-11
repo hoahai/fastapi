@@ -22,7 +22,6 @@ import { ConfirmDialog } from "@tradsphere/components/ui/confirm-dialog";
 import { useToast } from "@shell/components/ui/toast";
 import { useApiRequest } from "@shared/hooks/useApiRequest";
 import { useAuth } from "@shared/auth/useAuth";
-import { hasAppEditAccess } from "@shared/auth/permissions";
 import {
   buildScopedPageStateStorageKey,
   readScopedPageState,
@@ -50,9 +49,11 @@ import {
   type LeaveSpherePtoRequestFormState,
 } from "@leavesphere/components/PtoRequestDetailModal";
 import {
+  cancelLeaveSpherePtoRequest,
   loadLeaveSpherePtoWorkspace,
   reviewLeaveSpherePtoRequest,
   submitLeaveSpherePtoRequest,
+  updateLeaveSpherePtoRequest,
   type LeaveSpherePtoRequest,
   type LeaveSpherePtoStatus,
   type LeaveSpherePtoType,
@@ -68,7 +69,7 @@ import {
 } from "@leavesphere/lib/reviewActionConfirm";
 
 type CacheStatus = {
-  source: "mock" | "network";
+  source: "network";
   fetchedAt: number;
 };
 
@@ -95,12 +96,19 @@ type PersistedLeaveSphereMyPtoPageState = {
   scrollY: number;
 };
 
-const PTO_TYPE_OPTIONS = [
+const DEFAULT_PTO_TYPE_OPTIONS = [
   { value: "vacation", label: "Vacation" },
   { value: "sick", label: "Sick" },
   { value: "personal", label: "Personal" },
   { value: "floating", label: "Floating Holiday" },
 ] as const;
+
+const DEFAULT_PTO_TYPE_LABELS: Record<LeaveSpherePtoType, string> = {
+  vacation: "Vacation",
+  sick: "Sick",
+  personal: "Personal",
+  floating: "Floating Holiday",
+};
 
 const EMPTY_FORM: RequestFormState = {
   type: "vacation",
@@ -113,28 +121,52 @@ const EMPTY_FORM: RequestFormState = {
 const LEAVESPHERE_APP_CODE = "leavesphere";
 const LEAVESPHERE_MY_PTO_PAGE_CODE = "my-pto";
 
-const PTO_BALANCE_CARD_TONES: Record<LeaveSpherePtoType, { card: string; label: string; value: string }> = {
-  vacation: {
+const PTO_BALANCE_CARD_TONES = [
+  {
     card: "border-sky-200 bg-gradient-to-br from-white to-sky-50/80",
     label: "text-sky-700/80",
     value: "text-sky-900",
   },
-  sick: {
+  {
     card: "border-rose-200 bg-gradient-to-br from-white to-rose-50/75",
     label: "text-rose-700/80",
     value: "text-rose-900",
   },
-  personal: {
+  {
     card: "border-violet-200 bg-gradient-to-br from-white to-violet-50/75",
     label: "text-violet-700/80",
     value: "text-violet-900",
   },
-  floating: {
+  {
     card: "border-emerald-200 bg-gradient-to-br from-white to-emerald-50/75",
     label: "text-emerald-700/80",
     value: "text-emerald-900",
   },
-};
+] as const;
+
+function pickPtoBalanceTone(key: string): (typeof PTO_BALANCE_CARD_TONES)[number] {
+  const normalized = asString(key).toLowerCase();
+  if (!normalized) {
+    return PTO_BALANCE_CARD_TONES[0];
+  }
+  if (normalized.includes("vac")) {
+    return PTO_BALANCE_CARD_TONES[0];
+  }
+  if (normalized.includes("sick")) {
+    return PTO_BALANCE_CARD_TONES[1];
+  }
+  if (normalized.includes("person")) {
+    return PTO_BALANCE_CARD_TONES[2];
+  }
+  if (normalized.includes("float")) {
+    return PTO_BALANCE_CARD_TONES[3];
+  }
+  let hash = 0;
+  for (let index = 0; index < normalized.length; index += 1) {
+    hash = ((hash * 31) + normalized.charCodeAt(index)) >>> 0;
+  }
+  return PTO_BALANCE_CARD_TONES[hash % PTO_BALANCE_CARD_TONES.length];
+}
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -201,15 +233,25 @@ function normalizeOptionalNote(value: string | null | undefined): string {
   return asString(value);
 }
 
-function toLocalIsoDate(value: Date): string {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, "0");
-  const day = String(value.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
+function requestTypeLabel(type: LeaveSpherePtoType): string {
+  return DEFAULT_PTO_TYPE_LABELS[type] || "PTO";
 }
 
-function requestTypeLabel(type: LeaveSpherePtoType): string {
-  return PTO_TYPE_OPTIONS.find((item) => item.value === type)?.label || "PTO";
+function buildPtoTypeOptions(
+  ptoTypes: LeaveSpherePtoWorkspaceData["ptoTypes"] | undefined,
+): Array<{ value: LeaveSpherePtoType; label: string }> {
+  const labels = new Map<LeaveSpherePtoType, string>(
+    DEFAULT_PTO_TYPE_OPTIONS.map((item) => [item.value, item.label]),
+  );
+  for (const ptoType of ptoTypes ?? []) {
+    if (ptoType.active && isPtoTypeValue(ptoType.type)) {
+      labels.set(ptoType.type, ptoType.label || labels.get(ptoType.type) || requestTypeLabel(ptoType.type));
+    }
+  }
+  return DEFAULT_PTO_TYPE_OPTIONS.map((item) => ({
+    value: item.value,
+    label: labels.get(item.value) || item.label,
+  }));
 }
 
 function buildYearDateBounds(year: number): { minDate: string; maxDate: string } {
@@ -355,16 +397,6 @@ export default function LeaveSphereMyPtoPage() {
   const currentYear = useMemo(() => new Date().getFullYear(), []);
 
   const currentUserId = asString(auth.user?.id) || "local-user";
-  const currentUserName = asString(auth.user?.fullName) || asString(auth.user?.email) || "Workspace User";
-  const isManager = useMemo(() => {
-    const permissions = new Set(auth.accessProfile?.permissions ?? []);
-    return hasAppEditAccess(auth.accessProfile, "leavesphere") || permissions.has("leavesphere.manager");
-  }, [auth.accessProfile]);
-  const managerId = isManager ? currentUserId : "mgr-alex-morgan";
-  const workspaceKey = useMemo(() => {
-    const tenant = asString(auth.tenantSlug) || "default";
-    return `leavesphere:pto:${tenant}:${currentUserId}`;
-  }, [auth.tenantSlug, currentUserId]);
   const tenantSlug = asString(auth.tenantSlug);
   const canRestorePageState = auth.status === "authenticated" && Boolean(tenantSlug) && Boolean(currentUserId);
   const pageStateScope = useMemo<ScopedPageState | null>(() => {
@@ -543,6 +575,18 @@ export default function LeaveSphereMyPtoPage() {
     return filterWorkspaceByYear(workspace, loadedYear);
   }, [loadedYear, workspace]);
 
+  const isManager = Boolean(workspaceForYear?.isManager || workspace?.isManager);
+  const ptoTypeOptions = useMemo(
+    () => buildPtoTypeOptions(workspaceForYear?.ptoTypes),
+    [workspaceForYear?.ptoTypes],
+  );
+  const selectedYearNumber = useMemo(() => Number(selectedYear), [selectedYear]);
+  const loadedYearDateBounds = useMemo(
+    () => (loadedYear === null ? null : buildYearDateBounds(loadedYear)),
+    [loadedYear],
+  );
+  const loadedYearForRequests = loadedYear ?? (Number.isInteger(selectedYearNumber) ? selectedYearNumber : currentYear);
+
   const myRequests = useMemo(() => {
     if (!workspaceForYear) {
       return [];
@@ -553,7 +597,7 @@ export default function LeaveSphereMyPtoPage() {
   }, [workspaceForYear]);
 
   const directReportRequests = useMemo(() => {
-    if (!workspaceForYear || !workspaceForYear.isManager) {
+    if (!workspaceForYear || !isManager) {
       return [];
     }
     return workspaceForYear.requests
@@ -657,15 +701,10 @@ export default function LeaveSphereMyPtoPage() {
     () => (pendingReviewAction ? getLeaveSphereReviewActionConfirmCopy(pendingReviewAction, "manager") : null),
     [pendingReviewAction],
   );
-  const selectedYearNumber = useMemo(() => Number(selectedYear), [selectedYear]);
   const canRequestPto = Boolean(
     Number.isInteger(selectedYearNumber)
     && selectedYearNumber >= currentYear
     && loadedYear === selectedYearNumber,
-  );
-  const loadedYearDateBounds = useMemo(
-    () => (loadedYear === null ? null : buildYearDateBounds(loadedYear)),
-    [loadedYear],
   );
   const calendarEvents = useMemo(() => {
     const events: LeaveSphereMonthCalendarEvent[] = [];
@@ -703,6 +742,8 @@ export default function LeaveSphereMyPtoPage() {
         .map((item) => item.date),
     );
   }, [workspaceForYear?.currentUserTeamRegion, workspaceForYear?.holidays]);
+  const balanceRows = workspaceForYear?.balances ?? [];
+  const shouldCenterBalanceBlock = balanceRows.length > 0 && balanceRows.length <= 3;
 
   const cacheStatusText = useMemo(() => {
     if (isRefreshing) {
@@ -811,7 +852,7 @@ export default function LeaveSphereMyPtoPage() {
     },
   );
 
-  const loadWorkspace = useCallback(async (freshData = false): Promise<boolean> => {
+  const loadWorkspace = useCallback(async (year: number, freshData = false): Promise<boolean> => {
     if (freshData) {
       setIsRefreshing(true);
     } else {
@@ -822,13 +863,11 @@ export default function LeaveSphereMyPtoPage() {
     try {
       const result = await loadLeaveSpherePtoWorkspace({
         requestJson,
-        workspaceKey,
-        currentUserId,
-        currentUserName,
-        isManager,
-        freshData,
+        year,
       });
       setWorkspace(result.workspace);
+      setLoadedYear(year);
+      setSelectedYear(String(year));
       setCacheStatus({
         source: result.source,
         fetchedAt: Date.now(),
@@ -842,7 +881,7 @@ export default function LeaveSphereMyPtoPage() {
       setIsInitializing(false);
       setIsRefreshing(false);
     }
-  }, [currentUserId, currentUserName, isManager, requestJson, workspaceKey]);
+  }, [requestJson]);
 
   useEffect(() => {
     if (!hasHydratedPageState || !pageStateStorageKey || loadedYear === null) {
@@ -852,7 +891,7 @@ export default function LeaveSphereMyPtoPage() {
       return;
     }
     restoredWorkspaceScopeRef.current = pageStateStorageKey;
-    void loadWorkspace(false);
+    void loadWorkspace(loadedYear, false);
   }, [hasHydratedPageState, loadedYear, loadWorkspace, pageStateStorageKey]);
 
   const handleLoadByYear = useCallback(async () => {
@@ -861,12 +900,11 @@ export default function LeaveSphereMyPtoPage() {
       return;
     }
 
-    const didLoad = await loadWorkspace(false);
+    const didLoad = await loadWorkspace(parsedYear, false);
     if (!didLoad) {
       return;
     }
 
-    setLoadedYear(parsedYear);
     const today = new Date();
     const defaultMonth = parsedYear === today.getFullYear() ? today.getMonth() + 1 : 1;
     setCalendarMonth(`${parsedYear}-${String(defaultMonth).padStart(2, "0")}`);
@@ -927,12 +965,10 @@ export default function LeaveSphereMyPtoPage() {
     try {
       const result = await submitLeaveSpherePtoRequest({
         requestJson,
-        workspaceKey,
-        currentUserId,
-        currentUserName,
-        managerId,
-        isManager,
-        payload: params.payload,
+        payload: {
+          ...params.payload,
+          year: loadedYearForRequests,
+        },
       });
       setWorkspace(result.workspace);
       setCacheStatus({ source: result.source, fetchedAt: Date.now() });
@@ -944,63 +980,24 @@ export default function LeaveSphereMyPtoPage() {
       setIsSubmitting(false);
     }
   }, [
-    currentUserId,
-    currentUserName,
-    isManager,
-    managerId,
     requestJson,
     toast,
-    workspaceKey,
     canRequestPto,
     loadedYearDateBounds,
+    loadedYearForRequests,
   ]);
 
-  const handleReviewRequest = useCallback(async (approve: boolean) => {
+  const handleReviewRequest = useCallback(async (action: LeaveSphereReviewAction) => {
     if (!selectedReviewRequest) {
       return;
     }
     setIsReviewing(true);
     try {
-      if (selectedReviewRequest.status !== "pending") {
-        const reviewedAt = toLocalIsoDate(new Date());
-        const nextStatus: LeaveSpherePtoStatus = approve ? "approved" : "rejected";
-        setWorkspace((current) => {
-          if (!current) {
-            return current;
-          }
-          return {
-            ...current,
-            requests: current.requests.map((item) => (
-              item.id === selectedReviewRequest.id
-                ? {
-                    ...item,
-                    status: nextStatus,
-                    reviewedAt,
-                    reviewerName: currentUserName,
-                    managerNote: normalizeOptionalNote(reviewNote) || null,
-                  }
-                : item
-            )),
-          };
-        });
-        setReviewTargetId(null);
-        setReviewNote("");
-        toast.success(
-          approve ? "Request approved" : "Request rejected",
-          approve ? "Employee will see the approved status." : "Employee will see the rejected status.",
-        );
-        return;
-      }
-
       const result = await reviewLeaveSpherePtoRequest({
         requestJson,
-        workspaceKey,
-        currentUserId,
-        currentUserName,
-        isManager,
         payload: {
           requestId: selectedReviewRequest.id,
-          approve,
+          action,
           note: reviewNote,
         },
       });
@@ -1008,24 +1005,25 @@ export default function LeaveSphereMyPtoPage() {
       setCacheStatus({ source: result.source, fetchedAt: Date.now() });
       setReviewTargetId(null);
       setReviewNote("");
-      toast.success(
-        approve ? "Request approved" : "Request rejected",
-        approve ? "Employee will see the approved status." : "Employee will see the rejected status.",
-      );
+      if (action === "approve") {
+        toast.success("Request approved", "Employee will see the approved status.");
+      } else if (action === "reject") {
+        toast.success("Request rejected", "Employee will see the rejected status.");
+      } else if (action === "cancel") {
+        toast.success("Request cancelled", "Employee request status was updated to cancelled.");
+      } else {
+        toast.success("Decision reverted", "Request status was changed back to pending.");
+      }
     } catch {
       toast.error("Decision failed", "Unable to save this manager decision right now.");
     } finally {
       setIsReviewing(false);
     }
   }, [
-    currentUserId,
-    currentUserName,
-    isManager,
     requestJson,
     reviewNote,
     selectedReviewRequest,
     toast,
-    workspaceKey,
   ]);
 
   const handleCancelMyRequest = useCallback(async () => {
@@ -1034,92 +1032,20 @@ export default function LeaveSphereMyPtoPage() {
     }
     setIsSavingRequestDetail(true);
     try {
-      setWorkspace((current) => {
-        if (!current) {
-          return current;
-        }
-        return {
-          ...current,
-          requests: current.requests.map((item) => (
-            item.id === selectedMyRequest.id
-              ? {
-                  ...item,
-                  status: "cancelled",
-                }
-              : item
-          )),
-        };
+      const result = await cancelLeaveSpherePtoRequest({
+        requestJson,
+        transactionId: selectedMyRequest.id,
       });
+      setWorkspace(result.workspace);
+      setCacheStatus({ source: result.source, fetchedAt: Date.now() });
       setSelectedMyRequestId(null);
       toast.success("Request cancelled", "PTO request status was updated to cancelled.");
+    } catch {
+      toast.error("Cancel failed", "Unable to cancel this PTO request right now.");
     } finally {
       setIsSavingRequestDetail(false);
     }
-  }, [selectedMyRequest, toast]);
-
-  const handleCancelReviewRequest = useCallback(async () => {
-    if (!selectedReviewRequest) {
-      return;
-    }
-    setIsReviewing(true);
-    try {
-      const reviewedAt = toLocalIsoDate(new Date());
-      setWorkspace((current) => {
-        if (!current) {
-          return current;
-        }
-        return {
-          ...current,
-          requests: current.requests.map((item) => (
-            item.id === selectedReviewRequest.id
-              ? {
-                  ...item,
-                  status: "cancelled",
-                  reviewedAt,
-                  reviewerName: currentUserName,
-                  managerNote: normalizeOptionalNote(reviewNote) || null,
-                }
-              : item
-          )),
-        };
-      });
-      setReviewTargetId(null);
-      setReviewNote("");
-      toast.success("Request cancelled", "Employee request status was updated to cancelled.");
-    } finally {
-      setIsReviewing(false);
-    }
-  }, [currentUserName, reviewNote, selectedReviewRequest, toast]);
-
-  const handleRevertReviewRequest = useCallback(async () => {
-    if (!selectedReviewRequest) {
-      return;
-    }
-    setIsReviewing(true);
-    try {
-      setWorkspace((current) => {
-        if (!current) {
-          return current;
-        }
-        return {
-          ...current,
-          requests: current.requests.map((item) => (
-            item.id === selectedReviewRequest.id
-              ? {
-                  ...item,
-                  status: "pending",
-                  reviewedAt: null,
-                  reviewerName: null,
-                }
-              : item
-          )),
-        };
-      });
-      toast.success("Decision reverted", "Request status was changed back to pending.");
-    } finally {
-      setIsReviewing(false);
-    }
-  }, [selectedReviewRequest, toast]);
+  }, [requestJson, selectedMyRequest, toast]);
 
   const handleConfirmReviewAction = useCallback(async () => {
     if (!pendingReviewAction) {
@@ -1127,20 +1053,8 @@ export default function LeaveSphereMyPtoPage() {
     }
     const action = pendingReviewAction;
     setPendingReviewAction(null);
-    if (action === "approve") {
-      await handleReviewRequest(true);
-      return;
-    }
-    if (action === "reject") {
-      await handleReviewRequest(false);
-      return;
-    }
-    if (action === "cancel") {
-      await handleCancelReviewRequest();
-      return;
-    }
-    await handleRevertReviewRequest();
-  }, [handleCancelReviewRequest, handleReviewRequest, handleRevertReviewRequest, pendingReviewAction]);
+    await handleReviewRequest(action);
+  }, [handleReviewRequest, pendingReviewAction]);
 
   const handleSaveMyRequestDetail = useCallback(async (params: {
     requestId: string | null;
@@ -1157,28 +1071,26 @@ export default function LeaveSphereMyPtoPage() {
     }
     setIsSavingRequestDetail(true);
     try {
-      const nextRequests = workspace.requests.map((item) => {
-        if (item.id !== params.requestId) {
-          return item;
-        }
-        return {
-          ...item,
+      const selectedRequestYear = selectedMyRequest?.year ?? loadedYearForRequests;
+      const result = await updateLeaveSpherePtoRequest({
+        requestJson,
+        payload: {
+          transactionId: params.requestId,
           type: params.payload.type,
           startDate: params.payload.startDate,
           endDate: params.payload.endDate,
           hours: params.payload.hours,
           reason: params.payload.reason,
-        };
+          year: selectedRequestYear,
+        },
       });
-      setWorkspace({
-        ...workspace,
-        requests: nextRequests,
-      });
+      setWorkspace(result.workspace);
+      setCacheStatus({ source: result.source, fetchedAt: Date.now() });
       toast.success("Request updated", "PTO request details were updated.");
     } finally {
       setIsSavingRequestDetail(false);
     }
-  }, [toast, workspace]);
+  }, [loadedYearForRequests, requestJson, selectedMyRequest?.year, toast, workspace]);
   const handleSaveReviewRequestDetail = useCallback(async (params: {
     requestId: string | null;
     payload: {
@@ -1245,11 +1157,11 @@ export default function LeaveSphereMyPtoPage() {
         />
       )}
       footer={cacheStatus && loadedYear !== null ? (
-        <PageCacheFooter
+      <PageCacheFooter
           text={cacheStatusText}
           onRefresh={() => {
             setIsChipRefreshOverlayVisible(true);
-            void loadWorkspace(true).finally(() => {
+            void loadWorkspace(loadedYearForRequests, true).finally(() => {
               setIsChipRefreshOverlayVisible(false);
             });
           }}
@@ -1287,30 +1199,42 @@ export default function LeaveSphereMyPtoPage() {
         <>
       <SectionCard
         title="PTO balance overview"
-        description="Current totals by PTO type. Remaining = total - used - scheduled."
+        description="Current totals by PTO type from the selected year's transactions. Remaining = total - used - scheduled."
       >
-        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
-          {(workspaceForYear.balances ?? []).map((balance) => {
-            const remaining = Math.max(0, balance.totalHours - balance.usedHours - balance.scheduledHours);
-            const tone = PTO_BALANCE_CARD_TONES[balance.type];
-            return (
-              <article
-                key={balance.type}
-                className={`rounded-2xl border p-4 ${tone.card}`}
-              >
-                <p className={`text-xs font-semibold uppercase tracking-[0.14em] ${tone.label}`}>{balance.label}</p>
-                <p className={`mt-2 text-2xl font-semibold tracking-[-0.03em] ${tone.value}`}>{formatHoursLabel(remaining)}</p>
-                <p className="mt-3 text-xs text-slate-700">
-                  Total {formatHoursLabel(balance.totalHours)}
-                  <span className="mx-1.5 text-slate-400">•</span>
-                  Used {formatHoursLabel(balance.usedHours)}
-                  <span className="mx-1.5 text-slate-400">•</span>
-                  Scheduled {formatHoursLabel(balance.scheduledHours)}
-                </p>
-              </article>
-            );
-          })}
-        </div>
+        {balanceRows.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+            No PTO transactions were found for the selected year.
+          </div>
+        ) : (
+          <div
+            className={
+              shouldCenterBalanceBlock
+                ? "mx-auto grid w-full gap-3 sm:grid-cols-2 xl:grid-cols-3 xl:max-w-[72rem]"
+                : "grid gap-3 sm:grid-cols-2 xl:grid-cols-4"
+            }
+          >
+            {balanceRows.map((balance) => {
+              const tone = pickPtoBalanceTone(balance.code || balance.type || balance.label);
+              const remaining = balance.remainingHours ?? Math.max(0, (balance.totalHours || 0) - (balance.usedHours || 0) - (balance.scheduledHours || 0));
+              return (
+                <article
+                  key={balance.code || balance.type}
+                  className={`rounded-2xl border p-4 ${tone.card}`}
+                >
+                  <p className={`text-xs font-semibold uppercase tracking-[0.14em] ${tone.label}`}>{balance.label}</p>
+                  <p className={`mt-2 text-2xl font-semibold tracking-[-0.03em] ${tone.value}`}>{formatHoursLabel(remaining)}</p>
+                  <p className="mt-3 text-xs text-slate-700">
+                    Total {formatHoursLabel(balance.totalHours)}
+                    <span className="mx-1.5 text-slate-400">•</span>
+                    Used {formatHoursLabel(balance.usedHours)}
+                    <span className="mx-1.5 text-slate-400">•</span>
+                    Scheduled {formatHoursLabel(balance.scheduledHours)}
+                  </p>
+                </article>
+              );
+            })}
+          </div>
+        )}
       </SectionCard>
 
       <div className="relative grid gap-4 xl:grid-cols-[minmax(18rem,23rem)_minmax(0,1fr)]">
@@ -1391,7 +1315,7 @@ export default function LeaveSphereMyPtoPage() {
         />
       </div>
 
-      {workspaceForYear.isManager ? (
+      {isManager ? (
         <SectionCard
           title="Manager PTO"
           description="Direct employee requests and approval queue"
@@ -1508,7 +1432,7 @@ export default function LeaveSphereMyPtoPage() {
         initialForm={requestForm as LeaveSpherePtoRequestFormState}
         title="Submit PTO request"
         description="Enter request details. Your manager can approve or reject from the Manager PTO queue."
-        ptoTypeOptions={PTO_TYPE_OPTIONS.map((item) => ({ value: item.value, label: item.label }))}
+        ptoTypeOptions={ptoTypeOptions}
         statusLabel={statusLabel}
         saving={isSubmitting}
         calculateHours={(startDate, endDate) => calculateLeaveSpherePtoHours(startDate, endDate, holidayDates)}
@@ -1561,7 +1485,7 @@ export default function LeaveSphereMyPtoPage() {
         readOnly={!selectedMyRequestActionConfig?.canEditForm}
         title="My PTO request detail"
         description="Review or update your PTO submission details."
-        ptoTypeOptions={PTO_TYPE_OPTIONS.map((item) => ({ value: item.value, label: item.label }))}
+        ptoTypeOptions={ptoTypeOptions}
         statusLabel={statusLabel}
         saving={isSavingRequestDetail}
         calculateHours={(startDate, endDate) => calculateLeaveSpherePtoHours(startDate, endDate, holidayDates)}
@@ -1632,7 +1556,7 @@ export default function LeaveSphereMyPtoPage() {
         readOnly={!selectedReviewRequestActionConfig?.canEditForm}
         title="Manager request preview"
         description="Review this direct employee PTO request and approve or reject."
-        ptoTypeOptions={PTO_TYPE_OPTIONS.map((item) => ({ value: item.value, label: item.label }))}
+        ptoTypeOptions={ptoTypeOptions}
         statusLabel={statusLabel}
         saving={isReviewing}
         onOpenChange={(open) => {

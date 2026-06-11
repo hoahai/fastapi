@@ -91,7 +91,7 @@ export function seedLeaveSphereAdminBalanceTransactions(params: {
         transactions.push({
           id: `seed-load-${row.employeeId}-${balance.type}-${year}`,
           employeeId: row.employeeId,
-          ptoTypeCode: balance.type,
+          ptoTypeCode: balance.type as LeaveSpherePtoType,
           ptoActionCode: "load_grant",
           hours: totalHours,
           year,

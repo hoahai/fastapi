@@ -1,5 +1,3 @@
-import type { ApiRequestOptions } from "@shared/hooks/useApiRequest";
-
 export type LeaveSpherePtoStatus = "pending" | "approved" | "rejected" | "cancelled";
 export type LeaveSpherePtoType = "vacation" | "sick" | "personal" | "floating";
 export type LeaveSphereTeamRegion = "US" | "Mexico" | "Philippines";
@@ -11,19 +9,41 @@ export const LEAVESPHERE_TEAM_REGION_OPTIONS: Array<{ value: LeaveSphereTeamRegi
 ];
 
 export type LeaveSpherePtoBalance = {
-  type: LeaveSpherePtoType;
+  type: string;
+  code?: string;
   label: string;
   totalHours: number;
   usedHours: number;
   scheduledHours: number;
+  remainingHours?: number;
+};
+
+export type LeaveSpherePtoTypeConfig = {
+  code: string;
+  type: LeaveSpherePtoType;
+  label: string;
+  active: boolean;
+  listingOrder: number;
+  rolloverable?: boolean;
+  payoutable?: boolean;
+  usaDefaultHour?: number;
+  phlDefaultHour?: number;
+};
+
+export type LeaveSpherePtoActionConfig = {
+  code: string;
+  name: string;
+  color?: string | null;
 };
 
 export type LeaveSpherePtoRequest = {
   id: string;
   employeeId: string;
   employeeName: string;
-  managerId: string;
+  managerId: string | null;
+  year?: number;
   type: LeaveSpherePtoType;
+  ptoTypeCode?: string;
   startDate: string;
   endDate: string;
   hours: number;
@@ -51,9 +71,14 @@ export type LeaveSphereDirectReport = {
 export type LeaveSpherePtoWorkspaceData = {
   currentUserId: string;
   currentUserName: string;
-  managerId: string;
+  currentUserEmail: string;
+  managerId: string | null;
   currentUserTeamRegion: LeaveSphereTeamRegion;
   isManager: boolean;
+  ptoTypes: LeaveSpherePtoTypeConfig[];
+  ptoActions: LeaveSpherePtoActionConfig[];
+  defaultRequestActionCode?: string;
+  defaultCancelActionCode?: string;
   balances: LeaveSpherePtoBalance[];
   requests: LeaveSpherePtoRequest[];
   holidays: LeaveSphereHoliday[];
@@ -62,8 +87,8 @@ export type LeaveSpherePtoWorkspaceData = {
 
 export type LeaveSpherePtoLoadResult = {
   workspace: LeaveSpherePtoWorkspaceData;
-  source: "mock" | "network";
-  refreshMessage: string | null;
+  source: "network";
+  refreshMessage: null;
 };
 
 export type LeaveSpherePtoSubmitInput = {
@@ -72,119 +97,61 @@ export type LeaveSpherePtoSubmitInput = {
   endDate: string;
   hours: number;
   reason: string;
+  year: number;
 };
+
+export type LeaveSpherePtoUpdateInput = LeaveSpherePtoSubmitInput & {
+  transactionId: string;
+};
+
+export type LeaveSpherePtoReviewAction = "approve" | "reject" | "cancel" | "revert";
 
 export type LeaveSpherePtoReviewInput = {
   requestId: string;
-  approve: boolean;
+  action: LeaveSpherePtoReviewAction;
   note: string;
 };
 
 export type LeaveSpherePtoMutationResult = {
   workspace: LeaveSpherePtoWorkspaceData;
-  source: "mock" | "network";
+  source: "network";
+  createdRequestId?: string | null;
+  updated?: number;
+  status?: LeaveSpherePtoStatus | "Pending" | "Approved" | "Rejected" | "Canceled";
 };
 
-type RequestJson = (url: string, options?: ApiRequestOptions) => Promise<unknown>;
+type RequestJson = (url: string, options?: { method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; body?: unknown; successToast?: boolean | string | { title: string; message?: string }; errorToast?: boolean | string | { title: string; message?: string } }) => Promise<unknown>;
 
 type WorkspaceArgs = {
   requestJson: RequestJson;
-  workspaceKey: string;
-  currentUserId: string;
-  currentUserName: string;
-  isManager: boolean;
-  freshData?: boolean;
+  year?: number;
 };
 
 type SubmitArgs = {
   requestJson: RequestJson;
-  workspaceKey: string;
-  currentUserId: string;
-  currentUserName: string;
-  managerId: string;
-  isManager: boolean;
   payload: LeaveSpherePtoSubmitInput;
+};
+
+type UpdateArgs = {
+  requestJson: RequestJson;
+  payload: LeaveSpherePtoUpdateInput;
 };
 
 type ReviewArgs = {
   requestJson: RequestJson;
-  workspaceKey: string;
-  currentUserId: string;
-  currentUserName: string;
-  isManager: boolean;
   payload: LeaveSpherePtoReviewInput;
 };
-
-const USE_API_FLAG = "VITE_LEAVESPHERE_USE_API";
-const MOCK_DELAY_MS = 160;
-const PTO_TYPES: LeaveSpherePtoType[] = ["vacation", "sick", "personal", "floating"];
-const PTO_LABELS: Record<LeaveSpherePtoType, string> = {
-  vacation: "Vacation",
-  sick: "Sick",
-  personal: "Personal",
-  floating: "Floating Holiday",
-};
-
-const WORKSPACE_STORE = new Map<string, LeaveSpherePtoWorkspaceData>();
-
-function wait(ms: number): Promise<void> {
-  return new Promise((resolve) => {
-    window.setTimeout(resolve, ms);
-  });
-}
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
 }
 
-export function normalizeLeaveSphereTeamRegion(value: unknown, fallback: LeaveSphereTeamRegion = "US"): LeaveSphereTeamRegion {
-  const normalized = asString(value).toLowerCase();
-  if (normalized === "us" || normalized === "u.s." || normalized === "usa" || normalized === "united states") {
-    return "US";
+function asNumber(value: unknown): number {
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return value;
   }
-  if (normalized === "mexico" || normalized === "mx") {
-    return "Mexico";
-  }
-  if (
-    normalized === "philippines"
-    || normalized === "ph"
-    || normalized === "phl"
-    || normalized === "philippine"
-    || normalized === "philipine"
-  ) {
-    return "Philippines";
-  }
-  return fallback;
-}
-
-function toIsoDate(value: Date): string {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, "0");
-  const day = String(value.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
-function addDays(base: Date, days: number): Date {
-  const next = new Date(base);
-  next.setDate(next.getDate() + days);
-  return next;
-}
-
-function hoursForSpan(startIso: string, endIso: string): number {
-  const start = new Date(`${startIso}T00:00:00`);
-  const end = new Date(`${endIso}T00:00:00`);
-  const days = Math.max(1, Math.round((end.getTime() - start.getTime()) / (24 * 60 * 60 * 1000)) + 1);
-  return days * 8;
-}
-
-function cloneWorkspace(workspace: LeaveSpherePtoWorkspaceData): LeaveSpherePtoWorkspaceData {
-  return {
-    ...workspace,
-    balances: workspace.balances.map((item) => ({ ...item })),
-    requests: workspace.requests.map((item) => ({ ...item })),
-    holidays: workspace.holidays.map((item) => ({ ...item })),
-    directReports: workspace.directReports.map((item) => ({ ...item })),
-  };
+  const parsed = Number(value);
+  return Number.isFinite(parsed) ? parsed : 0;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -198,487 +165,350 @@ function unwrapEnvelope(payload: unknown): unknown {
   return payload;
 }
 
-function resolveUseApi(): boolean {
-  const raw = asString(import.meta.env[USE_API_FLAG]);
-  return raw.toLowerCase() === "true" || raw === "1";
-}
-
-function baseBalances(): LeaveSpherePtoBalance[] {
-  return [
-    { type: "vacation", label: PTO_LABELS.vacation, totalHours: 120, usedHours: 40, scheduledHours: 16 },
-    { type: "sick", label: PTO_LABELS.sick, totalHours: 64, usedHours: 8, scheduledHours: 0 },
-    { type: "personal", label: PTO_LABELS.personal, totalHours: 40, usedHours: 8, scheduledHours: 8 },
-    { type: "floating", label: PTO_LABELS.floating, totalHours: 16, usedHours: 8, scheduledHours: 0 },
-  ];
-}
-
-function baseHolidays(referenceDate: Date): LeaveSphereHoliday[] {
-  const year = referenceDate.getFullYear();
-  return [
-    { id: `${year}-us-new-year`, name: "New Year's Day", date: `${year}-01-01`, teamRegion: "US" },
-    { id: `${year}-us-memorial-day`, name: "Memorial Day", date: `${year}-05-25`, teamRegion: "US" },
-    { id: `${year}-us-independence-day`, name: "Independence Day", date: `${year}-07-04`, teamRegion: "US" },
-    { id: `${year}-us-labor-day`, name: "Labor Day", date: `${year}-09-07`, teamRegion: "US" },
-    { id: `${year}-mx-new-year`, name: "New Year's Day", date: `${year}-01-01`, teamRegion: "Mexico" },
-    { id: `${year}-mx-labor-day`, name: "Labor Day", date: `${year}-05-01`, teamRegion: "Mexico" },
-    { id: `${year}-mx-independence-day`, name: "Independence Day", date: `${year}-09-16`, teamRegion: "Mexico" },
-    { id: `${year}-mx-revolution-day`, name: "Revolution Day", date: `${year}-11-20`, teamRegion: "Mexico" },
-    { id: `${year}-ph-new-year`, name: "New Year's Day", date: `${year}-01-01`, teamRegion: "Philippines" },
-    { id: `${year}-ph-day-of-valour`, name: "Day of Valour", date: `${year}-04-09`, teamRegion: "Philippines" },
-    { id: `${year}-ph-independence-day`, name: "Independence Day", date: `${year}-06-12`, teamRegion: "Philippines" },
-    { id: `${year}-ph-bonifacio-day`, name: "Bonifacio Day", date: `${year}-11-30`, teamRegion: "Philippines" },
-  ];
-}
-
-function buildSeedRequests(params: {
-  now: Date;
-  currentUserId: string;
-  currentUserName: string;
-  managerId: string;
-  isManager: boolean;
-}): LeaveSpherePtoRequest[] {
-  const { now, currentUserId, currentUserName, managerId, isManager } = params;
-  const ownUpcomingStart = toIsoDate(addDays(now, 16));
-  const ownUpcomingEnd = toIsoDate(addDays(now, 17));
-  const ownPastStart = toIsoDate(addDays(now, -40));
-  const ownPastEnd = toIsoDate(addDays(now, -39));
-
-  const requests: LeaveSpherePtoRequest[] = [
-    {
-      id: "pto-self-approved",
-      employeeId: currentUserId,
-      employeeName: currentUserName,
-      managerId,
-      type: "vacation",
-      startDate: ownPastStart,
-      endDate: ownPastEnd,
-      hours: hoursForSpan(ownPastStart, ownPastEnd),
-      reason: "Family travel",
-      status: "approved",
-      submittedAt: toIsoDate(addDays(now, -55)),
-      reviewedAt: toIsoDate(addDays(now, -50)),
-      reviewerName: "Alex Morgan",
-      managerNote: "Approved. Coverage already scheduled.",
-    },
-    {
-      id: "pto-self-pending",
-      employeeId: currentUserId,
-      employeeName: currentUserName,
-      managerId,
-      type: "personal",
-      startDate: ownUpcomingStart,
-      endDate: ownUpcomingEnd,
-      hours: hoursForSpan(ownUpcomingStart, ownUpcomingEnd),
-      reason: "Personal appointments",
-      status: "pending",
-      submittedAt: toIsoDate(addDays(now, -2)),
-      reviewedAt: null,
-      reviewerName: null,
-      managerNote: null,
-    },
-  ];
-
-  if (!isManager) {
-    return requests;
+export function normalizeLeaveSphereTeamRegion(value: unknown, fallback: LeaveSphereTeamRegion = "US"): LeaveSphereTeamRegion {
+  const normalized = asString(value).toLowerCase();
+  if (normalized === "mexico" || normalized === "mx") {
+    return "Mexico";
   }
-
-  const reportAStart = toIsoDate(addDays(now, 8));
-  const reportAEnd = toIsoDate(addDays(now, 10));
-  const reportBStart = toIsoDate(addDays(now, 3));
-  const reportBEnd = toIsoDate(addDays(now, 3));
-
-  return [
-    ...requests,
-    {
-      id: "pto-report-pending-1",
-      employeeId: "emp-lee-chen",
-      employeeName: "Lee Chen",
-      managerId: currentUserId,
-      type: "vacation",
-      startDate: reportAStart,
-      endDate: reportAEnd,
-      hours: hoursForSpan(reportAStart, reportAEnd),
-      reason: "Family wedding out of state",
-      status: "pending",
-      submittedAt: toIsoDate(addDays(now, -1)),
-      reviewedAt: null,
-      reviewerName: null,
-      managerNote: null,
-    },
-    {
-      id: "pto-report-pending-2",
-      employeeId: "emp-sara-johnson",
-      employeeName: "Sara Johnson",
-      managerId: currentUserId,
-      type: "sick",
-      startDate: reportBStart,
-      endDate: reportBEnd,
-      hours: hoursForSpan(reportBStart, reportBEnd),
-      reason: "Medical procedure recovery",
-      status: "pending",
-      submittedAt: toIsoDate(addDays(now, -3)),
-      reviewedAt: null,
-      reviewerName: null,
-      managerNote: null,
-    },
-    {
-      id: "pto-report-approved",
-      employeeId: "emp-mateo-garcia",
-      employeeName: "Mateo Garcia",
-      managerId: currentUserId,
-      type: "floating",
-      startDate: toIsoDate(addDays(now, -12)),
-      endDate: toIsoDate(addDays(now, -12)),
-      hours: 8,
-      reason: "Floating holiday",
-      status: "approved",
-      submittedAt: toIsoDate(addDays(now, -16)),
-      reviewedAt: toIsoDate(addDays(now, -15)),
-      reviewerName: currentUserName,
-      managerNote: "Approved.",
-    },
-  ];
+  if (
+    normalized === "philippines"
+    || normalized === "ph"
+    || normalized === "phl"
+    || normalized === "philippine"
+    || normalized === "philipine"
+  ) {
+    return "Philippines";
+  }
+  if (normalized === "us" || normalized === "u.s." || normalized === "usa" || normalized === "united states") {
+    return "US";
+  }
+  return fallback;
 }
 
-function seedWorkspace(params: {
-  currentUserId: string;
-  currentUserName: string;
-  isManager: boolean;
-}): LeaveSpherePtoWorkspaceData {
-  const now = new Date();
-  const managerId = params.isManager ? params.currentUserId : "mgr-alex-morgan";
+function normalizePtoType(value: unknown): LeaveSpherePtoType | null {
+  const normalized = asString(value).toLowerCase();
+  if (!normalized) {
+    return null;
+  }
+  if (normalized.includes("vac")) {
+    return "vacation";
+  }
+  if (normalized.includes("sick")) {
+    return "sick";
+  }
+  if (normalized.includes("person")) {
+    return "personal";
+  }
+  if (normalized.includes("float")) {
+    return "floating";
+  }
+  return null;
+}
 
+function normalizePtoStatus(value: unknown): LeaveSpherePtoStatus {
+  const normalized = asString(value).toLowerCase();
+  if (normalized === "approved") {
+    return "approved";
+  }
+  if (normalized === "rejected") {
+    return "rejected";
+  }
+  if (normalized === "cancelled" || normalized === "canceled") {
+    return "cancelled";
+  }
+  return "pending";
+}
+
+function normalizeDate(value: unknown): string {
+  const text = asString(value);
+  if (!text) {
+    return "";
+  }
+  return text.slice(0, 10);
+}
+
+function normalizePtoTypeConfig(value: unknown): LeaveSpherePtoTypeConfig | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const type = normalizePtoType(value.type ?? value.code ?? value.name);
+  if (!type) {
+    return null;
+  }
+  const code = asString(value.code).toUpperCase() || type.toUpperCase();
+  const label = asString(value.label) || asString(value.name) || type[0].toUpperCase() + type.slice(1);
   return {
-    currentUserId: params.currentUserId,
-    currentUserName: params.currentUserName,
-    managerId,
-    currentUserTeamRegion: "US",
-    isManager: params.isManager,
-    balances: baseBalances(),
-    requests: buildSeedRequests({
-      now,
-      currentUserId: params.currentUserId,
-      currentUserName: params.currentUserName,
-      managerId,
-      isManager: params.isManager,
-    }),
-    holidays: baseHolidays(now),
-    directReports: params.isManager
-      ? [
-          { employeeId: "emp-lee-chen", employeeName: "Lee Chen", title: "Senior Designer" },
-          { employeeId: "emp-sara-johnson", employeeName: "Sara Johnson", title: "Performance Analyst" },
-          { employeeId: "emp-mateo-garcia", employeeName: "Mateo Garcia", title: "Paid Media Specialist" },
-        ]
-      : [],
+    code,
+    type,
+    label,
+    active: Boolean(value.active ?? true),
+    listingOrder: asNumber(value.listingOrder),
+    rolloverable: value.rolloverable === undefined ? undefined : Boolean(value.rolloverable),
+    payoutable: value.payoutable === undefined ? undefined : Boolean(value.payoutable),
+    usaDefaultHour: value.usaDefaultHour === undefined ? undefined : asNumber(value.usaDefaultHour),
+    phlDefaultHour: value.phlDefaultHour === undefined ? undefined : asNumber(value.phlDefaultHour),
   };
 }
 
-function ensureWorkspace(params: {
-  workspaceKey: string;
-  currentUserId: string;
-  currentUserName: string;
-  isManager: boolean;
-  reset?: boolean;
-}): LeaveSpherePtoWorkspaceData {
-  if (!params.reset && WORKSPACE_STORE.has(params.workspaceKey)) {
-    return cloneWorkspace(WORKSPACE_STORE.get(params.workspaceKey)!);
+function normalizePtoActionConfig(value: unknown): LeaveSpherePtoActionConfig | null {
+  if (!isRecord(value)) {
+    return null;
   }
-  const seeded = seedWorkspace({
-    currentUserId: params.currentUserId,
-    currentUserName: params.currentUserName,
-    isManager: params.isManager,
-  });
-  WORKSPACE_STORE.set(params.workspaceKey, seeded);
-  return cloneWorkspace(seeded);
+  const code = asString(value.code).toUpperCase();
+  const name = asString(value.name) || code;
+  if (!code && !name) {
+    return null;
+  }
+  return {
+    code: code || name.toUpperCase(),
+    name,
+    color: value.color === undefined ? null : asString(value.color) || null,
+  };
 }
 
-function writeWorkspace(workspaceKey: string, workspace: LeaveSpherePtoWorkspaceData): LeaveSpherePtoWorkspaceData {
-  WORKSPACE_STORE.set(workspaceKey, cloneWorkspace(workspace));
-  return cloneWorkspace(workspace);
+function normalizeBalanceRow(value: unknown): LeaveSpherePtoBalance | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const type = asString(value.type ?? value.code ?? value.label);
+  if (!type) {
+    return null;
+  }
+  const label = asString(value.label) || asString(value.code) || type;
+  return {
+    type,
+    code: asString(value.code) || undefined,
+    label,
+    totalHours: asNumber(value.totalHours),
+    usedHours: asNumber(value.usedHours),
+    scheduledHours: asNumber(value.scheduledHours),
+    remainingHours: value.remainingHours === undefined ? undefined : asNumber(value.remainingHours),
+  };
 }
 
-function normalizeNetworkWorkspace(payload: unknown): LeaveSpherePtoWorkspaceData | null {
+function normalizeDirectReport(value: unknown): LeaveSphereDirectReport | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const employeeId = asString(value.employeeId);
+  const employeeName = asString(value.employeeName) || asString(value.name);
+  if (!employeeId || !employeeName) {
+    return null;
+  }
+  return {
+    employeeId,
+    employeeName,
+    title: asString(value.title),
+  };
+}
+
+function normalizeHoliday(value: unknown): LeaveSphereHoliday | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const id = asString(value.id);
+  const name = asString(value.name);
+  const date = normalizeDate(value.date);
+  if (!id || !name || !date) {
+    return null;
+  }
+  return {
+    id,
+    name,
+    date,
+    teamRegion: normalizeLeaveSphereTeamRegion(value.teamRegion),
+  };
+}
+
+function normalizeRequest(value: unknown): LeaveSpherePtoRequest | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const id = asString(value.id);
+  const employeeId = asString(value.employeeId);
+  const employeeName = asString(value.employeeName);
+  const type = normalizePtoType(value.type ?? value.ptoTypeCode);
+  if (!id || !employeeId || !employeeName || !type) {
+    return null;
+  }
+  return {
+    id,
+    employeeId,
+    employeeName,
+    managerId: value.managerId === undefined ? null : asString(value.managerId) || null,
+    year: value.year === undefined ? undefined : asNumber(value.year),
+    type,
+    ptoTypeCode: asString(value.ptoTypeCode) || undefined,
+    startDate: normalizeDate(value.startDate),
+    endDate: normalizeDate(value.endDate),
+    hours: asNumber(value.hours),
+    reason: asString(value.reason),
+    status: normalizePtoStatus(value.status),
+    submittedAt: normalizeDate(value.submittedAt),
+    reviewedAt: value.reviewedAt === undefined ? null : normalizeDate(value.reviewedAt) || null,
+    reviewerName: value.reviewerName === undefined ? null : asString(value.reviewerName) || null,
+    managerNote: value.managerNote === undefined ? null : asString(value.managerNote) || null,
+  };
+}
+
+function normalizeWorkspace(payload: unknown): LeaveSpherePtoWorkspaceData | null {
   const raw = unwrapEnvelope(payload);
-  if (!isRecord(raw)) {
+  const workspace = isRecord(raw) && isRecord(raw.workspace) ? raw.workspace : raw;
+  if (!isRecord(workspace)) {
     return null;
   }
 
-  const currentUserId = asString(raw.currentUserId);
-  const currentUserName = asString(raw.currentUserName);
-  const managerId = asString(raw.managerId);
-  const currentUserTeamRegion = normalizeLeaveSphereTeamRegion(raw.currentUserTeamRegion);
-  const isManager = Boolean(raw.isManager);
-  const balancesRaw = Array.isArray(raw.balances) ? raw.balances : [];
-  const requestsRaw = Array.isArray(raw.requests) ? raw.requests : [];
-  const holidaysRaw = Array.isArray(raw.holidays) ? raw.holidays : [];
-  const directReportsRaw = Array.isArray(raw.directReports) ? raw.directReports : [];
-
-  const balances = balancesRaw
-    .filter(isRecord)
-    .map((item) => {
-      const type = asString(item.type) as LeaveSpherePtoType;
-      return {
-        type,
-        label: asString(item.label) || PTO_LABELS[type] || "PTO",
-        totalHours: Number(item.totalHours || 0),
-        usedHours: Number(item.usedHours || 0),
-        scheduledHours: Number(item.scheduledHours || 0),
-      } satisfies LeaveSpherePtoBalance;
-    })
-    .filter((item) => PTO_TYPES.includes(item.type));
-
-  const requests = requestsRaw
-    .filter(isRecord)
-    .map((item) => ({
-      id: asString(item.id),
-      employeeId: asString(item.employeeId),
-      employeeName: asString(item.employeeName),
-      managerId: asString(item.managerId),
-      type: asString(item.type) as LeaveSpherePtoType,
-      startDate: asString(item.startDate),
-      endDate: asString(item.endDate),
-      hours: Number(item.hours || 0),
-      reason: asString(item.reason),
-      status: asString(item.status) as LeaveSpherePtoStatus,
-      submittedAt: asString(item.submittedAt),
-      reviewedAt: asString(item.reviewedAt) || null,
-      reviewerName: asString(item.reviewerName) || null,
-      managerNote: asString(item.managerNote) || null,
-    }))
-    .filter((item) => item.id && PTO_TYPES.includes(item.type));
-
-  const holidays = holidaysRaw
-    .filter(isRecord)
-    .map((item) => ({
-      id: asString(item.id),
-      name: asString(item.name),
-      date: asString(item.date),
-      teamRegion: normalizeLeaveSphereTeamRegion(item.teamRegion, currentUserTeamRegion),
-    }))
-    .filter((item) => item.id && item.date);
-
-  const directReports = directReportsRaw
-    .filter(isRecord)
-    .map((item) => ({
-      employeeId: asString(item.employeeId),
-      employeeName: asString(item.employeeName),
-      title: asString(item.title),
-    }))
-    .filter((item) => item.employeeId && item.employeeName);
-
-  if (!currentUserId || !currentUserName || !managerId) {
+  const currentUserId = asString(workspace.currentUserId);
+  const currentUserName = asString(workspace.currentUserName);
+  const currentUserEmail = asString(workspace.currentUserEmail);
+  if (!currentUserId || !currentUserName) {
     return null;
   }
+
+  const ptoTypes = Array.isArray(workspace.ptoTypes)
+    ? workspace.ptoTypes.map(normalizePtoTypeConfig).filter((item): item is LeaveSpherePtoTypeConfig => Boolean(item))
+    : [];
+  const ptoActions = Array.isArray(workspace.ptoActions)
+    ? workspace.ptoActions.map(normalizePtoActionConfig).filter((item): item is LeaveSpherePtoActionConfig => Boolean(item))
+    : [];
+  const balances = Array.isArray(workspace.balances)
+    ? workspace.balances.map(normalizeBalanceRow).filter((item): item is LeaveSpherePtoBalance => Boolean(item))
+    : [];
+  const requests = Array.isArray(workspace.requests)
+    ? workspace.requests.map(normalizeRequest).filter((item): item is LeaveSpherePtoRequest => Boolean(item))
+    : [];
+  const holidays = Array.isArray(workspace.holidays)
+    ? workspace.holidays.map(normalizeHoliday).filter((item): item is LeaveSphereHoliday => Boolean(item))
+    : [];
+  const directReports = Array.isArray(workspace.directReports)
+    ? workspace.directReports.map(normalizeDirectReport).filter((item): item is LeaveSphereDirectReport => Boolean(item))
+    : [];
 
   return {
     currentUserId,
     currentUserName,
-    managerId,
-    currentUserTeamRegion,
-    isManager,
-    balances: balances.length > 0 ? balances : baseBalances(),
+    currentUserEmail,
+    managerId: workspace.managerId === undefined ? null : asString(workspace.managerId) || null,
+    currentUserTeamRegion: normalizeLeaveSphereTeamRegion(workspace.currentUserTeamRegion),
+    isManager: Boolean(workspace.isManager),
+    ptoTypes,
+    ptoActions,
+    defaultRequestActionCode: asString(workspace.defaultRequestActionCode) || undefined,
+    defaultCancelActionCode: asString(workspace.defaultCancelActionCode) || undefined,
+    balances,
     requests,
     holidays,
     directReports,
   };
 }
 
+function buildWorkspacePayload(response: unknown): LeaveSpherePtoWorkspaceData | null {
+  const normalized = normalizeWorkspace(response);
+  if (normalized) {
+    return normalized;
+  }
+  const raw = unwrapEnvelope(response);
+  if (isRecord(raw) && isRecord(raw.workspace)) {
+    return normalizeWorkspace(raw.workspace);
+  }
+  return null;
+}
+
 export async function loadLeaveSpherePtoWorkspace(params: WorkspaceArgs): Promise<LeaveSpherePtoLoadResult> {
-  const { requestJson, workspaceKey, currentUserId, currentUserName, isManager, freshData } = params;
-
-  if (resolveUseApi()) {
-    try {
-      const payload = await requestJson("/api/leavesphere/v1/pto/workspace", {
-        method: "GET",
-        successToast: false,
-        errorToast: false,
-      });
-      const networkWorkspace = normalizeNetworkWorkspace(payload);
-      if (networkWorkspace) {
-        return {
-          workspace: writeWorkspace(workspaceKey, networkWorkspace),
-          source: "network",
-          refreshMessage: null,
-        };
-      }
-    } catch {
-      // Fallback to local data when API is unavailable.
-    }
+  const response = await params.requestJson(
+    `/api/leavesphere/v1/ui/my-pto/load?year=${encodeURIComponent(String(params.year ?? new Date().getFullYear()))}`,
+    {
+      method: "GET",
+      successToast: false,
+      errorToast: false,
+    },
+  );
+  const workspace = buildWorkspacePayload(response);
+  if (!workspace) {
+    throw new Error("Unable to load My PTO workspace.");
   }
-
-  if (freshData) {
-    await wait(MOCK_DELAY_MS);
-  }
-
   return {
-    workspace: ensureWorkspace({
-      workspaceKey,
-      currentUserId,
-      currentUserName,
-      isManager,
-      reset: Boolean(freshData),
-    }),
-    source: "mock",
-    refreshMessage: resolveUseApi()
-      ? "Using local placeholder PTO data because LeaveSphere API is not available yet."
-      : "Using local placeholder PTO data. Set VITE_LEAVESPHERE_USE_API=true when backend endpoints are ready.",
+    workspace,
+    source: "network",
+    refreshMessage: null,
   };
 }
 
 export async function submitLeaveSpherePtoRequest(params: SubmitArgs): Promise<LeaveSpherePtoMutationResult> {
-  const { requestJson, workspaceKey, currentUserId, currentUserName, managerId, isManager, payload } = params;
-
-  if (resolveUseApi()) {
-    try {
-      const response = await requestJson("/api/leavesphere/v1/pto/requests", {
-        method: "POST",
-        body: payload,
-        successToast: false,
-        errorToast: false,
-      });
-      const networkWorkspace = normalizeNetworkWorkspace(response);
-      if (networkWorkspace) {
-        return {
-          workspace: writeWorkspace(workspaceKey, networkWorkspace),
-          source: "network",
-        };
-      }
-    } catch {
-      // Fallback to local store.
-    }
-  }
-
-  await wait(MOCK_DELAY_MS);
-  const current = ensureWorkspace({
-    workspaceKey,
-    currentUserId,
-    currentUserName,
-    isManager,
+  const response = await params.requestJson("/api/leavesphere/v1/ui/my-pto/requests", {
+    method: "POST",
+    body: params.payload,
+    successToast: false,
+    errorToast: false,
   });
-
-  const normalizedType = PTO_TYPES.includes(payload.type) ? payload.type : "vacation";
-  const normalizedReason = asString(payload.reason) || "PTO request";
-  const startDate = asString(payload.startDate);
-  const endDate = asString(payload.endDate);
-  const requestedHours = Number.isFinite(payload.hours) && payload.hours > 0
-    ? payload.hours
-    : hoursForSpan(startDate, endDate);
-
-  const nextRequest: LeaveSpherePtoRequest = {
-    id: `pto-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
-    employeeId: currentUserId,
-    employeeName: currentUserName,
-    managerId,
-    type: normalizedType,
-    startDate,
-    endDate,
-    hours: requestedHours,
-    reason: normalizedReason,
-    status: "pending",
-    submittedAt: toIsoDate(new Date()),
-    reviewedAt: null,
-    reviewerName: null,
-    managerNote: null,
-  };
-
-  const updated = {
-    ...current,
-    requests: [nextRequest, ...current.requests],
-    balances: current.balances.map((item) => {
-      if (item.type !== normalizedType) {
-        return item;
-      }
-      return {
-        ...item,
-        scheduledHours: item.scheduledHours + requestedHours,
-      };
-    }),
-  } satisfies LeaveSpherePtoWorkspaceData;
-
+  const workspace = buildWorkspacePayload(response);
+  if (!workspace) {
+    throw new Error("Unable to submit PTO request.");
+  }
+  const raw = unwrapEnvelope(response);
   return {
-    workspace: writeWorkspace(workspaceKey, updated),
-    source: "mock",
+    workspace,
+    source: "network",
+    createdRequestId: isRecord(raw) ? asString(raw.createdRequestId) || null : null,
+  };
+}
+
+export async function updateLeaveSpherePtoRequest(params: UpdateArgs): Promise<LeaveSpherePtoMutationResult> {
+  const response = await params.requestJson("/api/leavesphere/v1/ui/my-pto/requests", {
+    method: "PUT",
+    body: params.payload,
+    successToast: false,
+    errorToast: false,
+  });
+  const workspace = buildWorkspacePayload(response);
+  if (!workspace) {
+    throw new Error("Unable to update PTO request.");
+  }
+  const raw = unwrapEnvelope(response);
+  return {
+    workspace,
+    source: "network",
+    updated: isRecord(raw) ? asNumber(raw.updated) : undefined,
+  };
+}
+
+export async function cancelLeaveSpherePtoRequest(params: {
+  requestJson: RequestJson;
+  transactionId: string;
+}): Promise<LeaveSpherePtoMutationResult> {
+  const response = await params.requestJson("/api/leavesphere/v1/ui/my-pto/requests", {
+    method: "DELETE",
+    body: { transactionId: params.transactionId },
+    successToast: false,
+    errorToast: false,
+  });
+  const workspace = buildWorkspacePayload(response);
+  if (!workspace) {
+    throw new Error("Unable to cancel PTO request.");
+  }
+  const raw = unwrapEnvelope(response);
+  return {
+    workspace,
+    source: "network",
+    updated: isRecord(raw) ? asNumber(raw.updated) : undefined,
   };
 }
 
 export async function reviewLeaveSpherePtoRequest(params: ReviewArgs): Promise<LeaveSpherePtoMutationResult> {
-  const { requestJson, workspaceKey, currentUserId, currentUserName, isManager, payload } = params;
-
-  if (resolveUseApi()) {
-    try {
-      const response = await requestJson(`/api/leavesphere/v1/pto/requests/${encodeURIComponent(payload.requestId)}/decision`, {
-        method: "POST",
-        body: {
-          action: payload.approve ? "approve" : "reject",
-          note: payload.note,
-        },
-        successToast: false,
-        errorToast: false,
-      });
-      const networkWorkspace = normalizeNetworkWorkspace(response);
-      if (networkWorkspace) {
-        return {
-          workspace: writeWorkspace(workspaceKey, networkWorkspace),
-          source: "network",
-        };
-      }
-    } catch {
-      // Fallback to local store.
-    }
-  }
-
-  await wait(MOCK_DELAY_MS);
-  const current = ensureWorkspace({
-    workspaceKey,
-    currentUserId,
-    currentUserName,
-    isManager,
+  const response = await params.requestJson("/api/leavesphere/v1/ui/my-pto/review", {
+    method: "POST",
+    body: params.payload,
+    successToast: false,
+    errorToast: false,
   });
-
-  const reviewedAt = toIsoDate(new Date());
-  const nextStatus: LeaveSpherePtoStatus = payload.approve ? "approved" : "rejected";
-  const requestToReview = current.requests.find((item) => item.id === payload.requestId);
-  if (!requestToReview) {
-    return {
-      workspace: writeWorkspace(workspaceKey, current),
-      source: "mock",
-    };
+  const workspace = buildWorkspacePayload(response);
+  if (!workspace) {
+    throw new Error("Unable to review PTO request.");
   }
-
-  const updated = {
-    ...current,
-    requests: current.requests.map((item) => {
-      if (item.id !== payload.requestId) {
-        return item;
-      }
-      return {
-        ...item,
-        status: nextStatus,
-        reviewedAt,
-        reviewerName: currentUserName,
-        managerNote: asString(payload.note) || null,
-      };
-    }),
-    balances: current.balances.map((item) => {
-      if (item.type !== requestToReview.type || requestToReview.employeeId !== current.currentUserId) {
-        return item;
-      }
-      const nextScheduled = Math.max(0, item.scheduledHours - requestToReview.hours);
-      return payload.approve
-        ? {
-            ...item,
-            scheduledHours: nextScheduled,
-            usedHours: item.usedHours + requestToReview.hours,
-          }
-        : {
-            ...item,
-            scheduledHours: nextScheduled,
-          };
-    }),
-  } satisfies LeaveSpherePtoWorkspaceData;
-
+  const raw = unwrapEnvelope(response);
   return {
-    workspace: writeWorkspace(workspaceKey, updated),
-    source: "mock",
+    workspace,
+    source: "network",
+    updated: isRecord(raw) ? asNumber(raw.updated) : undefined,
   };
 }

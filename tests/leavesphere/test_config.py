@@ -24,6 +24,16 @@ class LeaveSphereConfigTests(unittest.TestCase):
         ), patch.object(config, "get_db_tables", return_value=dict(config._DEFAULT_DB_TABLES)):
             config.validate_tenant_config()
 
+    def test_validate_tenant_config_accepts_optional_holidays_table_mapping(self):
+        with patch.object(config, "get_tenant_id", return_value="taaa"), patch.object(
+            config, "_has_leavesphere_config", return_value=True
+        ), patch.object(
+            config,
+            "get_db_tables",
+            return_value={**dict(config._DEFAULT_DB_TABLES), "HOLIDAYS": "Holidays"},
+        ):
+            config.validate_tenant_config()
+
 
 if __name__ == "__main__":
     unittest.main()
