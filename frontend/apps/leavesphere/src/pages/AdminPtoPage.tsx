@@ -73,7 +73,11 @@ import {
   type LeaveSphereAdminPtoActionCode,
 } from "@leavesphere/lib/adminPtoBalanceLedger";
 import { calculateLeaveSpherePtoHours } from "@leavesphere/lib/ptoHours";
-import { buildLeaveSpherePtoCalendarChipLabel } from "@leavesphere/lib/ptoCalendar";
+import {
+  buildLeaveSpherePtoCalendarRequestChipLabel,
+  buildLeaveSpherePtoCalendarRequestTooltipLabel,
+  buildLeaveSpherePtoCalendarChipLabel,
+} from "@leavesphere/lib/ptoCalendar";
 import { getPtoRequestActionConfig } from "@leavesphere/lib/ptoRequestActionConfig";
 import {
   getLeaveSphereReviewActionConfirmCopy,
@@ -82,7 +86,7 @@ import {
 import { LEAVESPHERE_TEAM_REGION_OPTIONS } from "@leavesphere/lib/ptoMocks";
 import type { LeaveSpherePtoRequest, LeaveSpherePtoStatus, LeaveSpherePtoType, LeaveSphereTeamRegion } from "@leavesphere/lib/ptoMocks";
 import { ActionIconButton } from "@tradsphere/components/dashboard/ActionIconButton";
-import { formatPtoRequestDateRangeLabel } from "@leavesphere/lib/ptoDate";
+import { formatMonthDayYearLabel, formatPtoRequestDateRangeLabel } from "@leavesphere/lib/ptoDate";
 import {
   readLeaveSpherePtoWorkspaceCacheSnapshot,
   writeLeaveSpherePtoWorkspaceCache,
@@ -301,8 +305,13 @@ function adjustFormsEqual(left: AdjustBalanceForm, right: AdjustBalanceForm): bo
   );
 }
 
-function requestTypeLabel(type: LeaveSpherePtoType): string {
-  return PTO_TYPE_OPTIONS.find((item) => item.value === type)?.label || "PTO";
+function requestTypeLabel(type: string): string {
+  const normalized = asString(type).toLowerCase();
+  const matched = PTO_TYPE_OPTIONS.find((item) => item.value === normalized);
+  if (matched) {
+    return matched.label;
+  }
+  return asString(type).toUpperCase() || "PTO";
 }
 
 function monthKeyFromDate(date: Date): string {
@@ -1940,16 +1949,21 @@ export default function LeaveSphereAdminPtoPage() {
       const requestType = requestTypeLabel(request.type);
       calendarEvents.push({
         id: `request:${request.id}`,
-        label: buildLeaveSpherePtoCalendarChipLabel(request.employeeName, request.reason),
-        tone: mapLeaveSpherePtoStatusToChipTone(request.status),
-        startDate: request.startDate,
-        endDate: request.endDate,
-        title: [
+        label: buildLeaveSpherePtoCalendarRequestChipLabel(
           request.employeeName,
           requestType,
           request.reason,
-          `${formatDateLabel(request.startDate)} - ${formatDateLabel(request.endDate)}`,
-        ].filter(Boolean).join(" · "),
+          formatHoursLabel(request.hours),
+        ),
+        tone: mapLeaveSpherePtoStatusToChipTone(request.status),
+        startDate: request.startDate,
+        endDate: request.endDate,
+        title: buildLeaveSpherePtoCalendarRequestTooltipLabel(
+          request.employeeName,
+          requestType,
+          request.reason,
+          formatHoursLabel(request.hours),
+        ),
       });
     }
 
@@ -2010,7 +2024,7 @@ export default function LeaveSphereAdminPtoPage() {
                   dateLabel={formatPtoRequestDateRangeLabel(request.startDate, request.endDate)}
                   detailLabel={buildLeaveSpherePtoCalendarChipLabel(requestTypeLabel(request.type), request.reason)}
                   hoursLabel={formatHoursLabel(request.hours)}
-                  submittedLabel={`Submitted ${formatDateLabel(request.submittedAt)}`}
+                  submittedLabel={`Submitted ${formatMonthDayYearLabel(request.submittedAt)}`}
                 />
               ))
             )}
@@ -2078,10 +2092,10 @@ export default function LeaveSphereAdminPtoPage() {
               <thead className="bg-blue-50/70 text-xs uppercase tracking-[0.08em] text-slate-600">
                 <tr>
                   <th className="px-3 py-2.5">Employee</th>
-                  <th className="px-3 py-2.5">Type</th>
+                  <th className="px-3 py-2.5 text-center">Type</th>
                   <th className="px-3 py-2.5">Date range</th>
-                  <th className="px-3 py-2.5">Status</th>
-                  <th className="px-3 py-2.5">Hours</th>
+                  <th className="px-3 py-2.5 text-center">Status</th>
+                  <th className="px-3 py-2.5 text-center">Hours</th>
                 </tr>
               </thead>
               <tbody>
@@ -2116,12 +2130,12 @@ export default function LeaveSphereAdminPtoPage() {
                           </div>
                         </div>
                       </td>
-                      <td className="px-3 py-2.5">{requestTypeLabel(request.type)}</td>
+                      <td className="px-3 py-2.5 text-center">{requestTypeLabel(request.type)}</td>
                       <td className="px-3 py-2.5">{formatDateLabel(request.startDate)} - {formatDateLabel(request.endDate)}</td>
-                      <td className="px-3 py-2.5">
+                      <td className="px-3 py-2.5 text-center">
                         <LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} />
                       </td>
-                      <td className="px-3 py-2.5">{formatHoursLabel(request.hours)}</td>
+                      <td className="px-3 py-2.5 text-center">{formatHoursLabel(request.hours)}</td>
                     </tr>
                   ))
                 )}
@@ -2559,14 +2573,14 @@ export default function LeaveSphereAdminPtoPage() {
             </p>
             <p>
               <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Submitted</span>
-              <span className="mt-0.5 block font-semibold text-slate-900">{formatDateLabel(selectedRequest.submittedAt)}</span>
+              <span className="mt-0.5 block font-semibold text-slate-900">{formatMonthDayYearLabel(selectedRequest.submittedAt)}</span>
             </p>
             {selectedRequest.reviewerName ? (
               <p>
                 <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Reviewed by</span>
                 <span className="mt-0.5 block font-semibold text-slate-900">
                   {selectedRequest.reviewerName}
-                  {selectedRequest.reviewedAt ? ` · ${formatDateLabel(selectedRequest.reviewedAt)}` : ""}
+                  {selectedRequest.reviewedAt ? ` · ${formatMonthDayYearLabel(selectedRequest.reviewedAt)}` : ""}
                 </span>
               </p>
             ) : (

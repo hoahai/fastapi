@@ -290,8 +290,7 @@ def _resolve_direct_reports(manager_id: str) -> list[dict]:
     return direct_reports
 
 
-def _build_holidays(year: int, region: str) -> list[dict]:
-    region_name = _normalize_team_region(region)
+def _build_holidays(year: int, _region: str) -> list[dict]:
     seed = [
         ("new-year", "New Year's Day", f"{year}-01-01", "US"),
         ("memorial-day", "Memorial Day", f"{year}-05-25", "US"),
@@ -314,7 +313,6 @@ def _build_holidays(year: int, region: str) -> list[dict]:
             "teamRegion": team_region,
         }
         for slug, name, date_value, team_region in seed
-        if team_region == region_name
     ]
 
 

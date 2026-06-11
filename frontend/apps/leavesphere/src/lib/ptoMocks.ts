@@ -42,7 +42,7 @@ export type LeaveSpherePtoRequest = {
   employeeName: string;
   managerId: string | null;
   year?: number;
-  type: LeaveSpherePtoType;
+  type: string;
   ptoTypeCode?: string;
   startDate: string;
   endDate: string;
@@ -327,7 +327,7 @@ function normalizeRequest(value: unknown): LeaveSpherePtoRequest | null {
   const id = asString(value.id);
   const employeeId = asString(value.employeeId);
   const employeeName = asString(value.employeeName);
-  const type = normalizePtoType(value.type ?? value.ptoTypeCode);
+  const type = asString(value.type ?? value.ptoTypeCode);
   if (!id || !employeeId || !employeeName || !type) {
     return null;
   }

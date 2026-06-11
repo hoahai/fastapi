@@ -1334,4 +1334,8 @@ End with:
 5. Final `git status`.
 6. Confirm Render config unchanged and no secrets exposed.
 
+
+
+
+Before edits, create a real git safety commit on a WIP branch.
 -->

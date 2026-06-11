@@ -56,6 +56,10 @@ function toIsoDate(date: Date): string {
   return `${year}-${month}-${day}`;
 }
 
+function getTodayIsoDate(): string {
+  return toIsoDate(new Date());
+}
+
 function parseMonthKey(monthKey: string): Date {
   const match = /^(\d{4})-(\d{2})$/.exec(monthKey);
   if (!match) {
@@ -131,6 +135,7 @@ function CalendarDayCell({
   const anchorRef = useRef<HTMLButtonElement | null>(null);
   const [isTooltipOpen, setIsTooltipOpen] = useState(false);
   const tooltipText = `Request PTO for ${formatRequestTooltipDate(day.isoDate)}`;
+  const isToday = day.isoDate === getTodayIsoDate();
 
   return (
     <article
@@ -138,7 +143,11 @@ function CalendarDayCell({
       className={[
         `relative ${dayMinHeightClassName} rounded-xl border p-2`,
         onDateClick ? "cursor-pointer hover:border-blue-300" : "",
-        day.inCurrentMonth ? "border-blue-100 bg-white" : "border-slate-200 bg-slate-50/75 text-slate-400",
+        isToday
+          ? "border-sky-300 bg-gradient-to-br from-sky-50 via-white to-indigo-50 text-slate-900 shadow-sm"
+          : day.inCurrentMonth
+            ? "border-blue-100 bg-white"
+            : "border-slate-200 bg-slate-50/75 text-slate-400",
       ].join(" ")}
     >
       {onDateClick ? (

@@ -7,6 +7,7 @@ import {
 
 import { PageBanner } from "@shell/components/layout/PageBanner";
 import { Button } from "@tradsphere/components/ui/button";
+import { ActionIconButton } from "@tradsphere/components/dashboard/ActionIconButton";
 import {
   Dialog,
   DialogContent,
@@ -62,8 +63,12 @@ import {
   type LeaveSpherePtoWorkspaceData,
 } from "@leavesphere/lib/ptoMocks";
 import { calculateLeaveSpherePtoHours } from "@leavesphere/lib/ptoHours";
-import { buildLeaveSpherePtoCalendarChipLabel } from "@leavesphere/lib/ptoCalendar";
-import { formatPtoRequestDateRangeLabel } from "@leavesphere/lib/ptoDate";
+import {
+  buildLeaveSpherePtoCalendarRequestChipLabel,
+  buildLeaveSpherePtoCalendarRequestTooltipLabel,
+  buildLeaveSpherePtoCalendarChipLabel,
+} from "@leavesphere/lib/ptoCalendar";
+import { formatMonthDayYearLabel, formatPtoRequestDateRangeLabel } from "@leavesphere/lib/ptoDate";
 import { getPtoRequestActionConfig } from "@leavesphere/lib/ptoRequestActionConfig";
 import {
   getLeaveSphereReviewActionConfirmCopy,
@@ -239,8 +244,15 @@ function normalizeOptionalNote(value: string | null | undefined): string {
   return asString(value);
 }
 
-function requestTypeLabel(type: LeaveSpherePtoType): string {
-  return DEFAULT_PTO_TYPE_LABELS[type] || "PTO";
+function requestTypeLabel(type: string): string {
+  const normalized = asString(type).toLowerCase();
+  if (!normalized) {
+    return "PTO";
+  }
+  if (normalized in DEFAULT_PTO_TYPE_LABELS) {
+    return DEFAULT_PTO_TYPE_LABELS[normalized as LeaveSpherePtoType] || type;
+  }
+  return asString(type).toUpperCase() || "PTO";
 }
 
 function buildPtoTypeOptions(
@@ -728,21 +740,42 @@ export default function LeaveSphereMyPtoPage() {
     }
     for (const request of myRequests) {
       const requestType = requestTypeLabel(request.type);
+      const hoursLabel = formatHoursLabel(request.hours);
       events.push({
         id: `request:${request.id}`,
-        label: buildLeaveSpherePtoCalendarChipLabel(requestType, request.reason),
+        label: buildLeaveSpherePtoCalendarChipLabel(requestType, request.reason, hoursLabel),
         tone: mapLeaveSpherePtoStatusToChipTone(request.status),
         startDate: request.startDate,
         endDate: request.endDate,
-        title: [
-          requestType,
-          request.reason,
-          `${formatDateLabel(request.startDate)} - ${formatDateLabel(request.endDate)}`,
-        ].filter(Boolean).join(" · "),
+        title: buildLeaveSpherePtoCalendarChipLabel(requestType, request.reason, hoursLabel),
       });
     }
+    if (isManager) {
+      for (const request of directReportRequests) {
+        const requestType = requestTypeLabel(request.type);
+        const hoursLabel = formatHoursLabel(request.hours);
+        events.push({
+          id: `manager-request:${request.id}`,
+          label: buildLeaveSpherePtoCalendarRequestChipLabel(
+            request.employeeName,
+            requestType,
+            request.reason,
+            hoursLabel,
+          ),
+          tone: mapLeaveSpherePtoStatusToChipTone(request.status),
+          startDate: request.startDate,
+          endDate: request.endDate,
+          title: buildLeaveSpherePtoCalendarRequestTooltipLabel(
+            request.employeeName,
+            requestType,
+            request.reason,
+            hoursLabel,
+          ),
+        });
+      }
+    }
     return events;
-  }, [myRequests, workspaceForYear?.holidays]);
+  }, [directReportRequests, isManager, myRequests, workspaceForYear?.holidays]);
   const holidayDates = useMemo(() => {
     return new Set(
       (workspaceForYear?.holidays ?? [])
@@ -1238,12 +1271,12 @@ export default function LeaveSphereMyPtoPage() {
           description={isManager
             ? "Track your PTO, submit requests, and review direct employee requests in one workspace."
             : "Track your PTO balance, submit requests, and monitor approvals in one workspace."}
-          action={(
-            <Button onClick={openSubmitDialog} disabled={!canRequestPto || isSubmitting || isReviewing}>
+          action={canRequestPto ? (
+            <Button onClick={openSubmitDialog} disabled={isSubmitting || isReviewing}>
               <Plus className="size-4" />
               Submit PTO Request
             </Button>
-          )}
+          ) : null}
           gradientVariant="workspace"
         />
       )}
@@ -1332,6 +1365,15 @@ export default function LeaveSphereMyPtoPage() {
         <SectionCard
           title="My Requets"
           description={`${myRequests.length} request${myRequests.length === 1 ? "" : "s"} total`}
+          actions={canRequestPto ? (
+            <ActionIconButton
+              aria-label="Submit PTO request"
+              tooltip="Submit PTO request"
+              onClick={openSubmitDialog}
+              icon={<Plus className="size-4" />}
+              className="h-9 w-9"
+            />
+          ) : null}
           contentClassName="space-y-3"
         >
           <div className="grid grid-cols-3 gap-2">
@@ -1363,7 +1405,7 @@ export default function LeaveSphereMyPtoPage() {
                   dateLabel={formatPtoRequestDateRangeLabel(request.startDate, request.endDate)}
                   detailLabel={request.reason}
                   hoursLabel={formatHoursLabel(request.hours)}
-                  submittedLabel={`Submitted ${formatDateLabel(request.submittedAt)}`}
+                  submittedLabel={`Submitted ${formatMonthDayYearLabel(request.submittedAt)}`}
                   statusChip={<LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} />}
                 />
               ))
@@ -1381,6 +1423,12 @@ export default function LeaveSphereMyPtoPage() {
           onEventClick={(event) => {
             if (event.id.startsWith("request:")) {
               setSelectedMyRequestId(event.id.slice("request:".length));
+              setReviewTargetId(null);
+              return;
+            }
+            if (event.id.startsWith("manager-request:")) {
+              setReviewTargetId(event.id.slice("manager-request:".length));
+              setSelectedMyRequestId(null);
               return;
             }
             if (event.id.startsWith("holiday:")) {
@@ -1413,10 +1461,6 @@ export default function LeaveSphereMyPtoPage() {
           contentClassName="space-y-4"
         >
           <div className="grid gap-3 md:grid-cols-3">
-            <article className="rounded-2xl border border-blue-100 bg-white p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Direct reports</p>
-              <p className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-slate-900">{workspaceForYear.directReports.length}</p>
-            </article>
             <article className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-amber-800">Pending approvals</p>
               <p className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-amber-900">{pendingDirectReportRequests.length}</p>
@@ -1426,6 +1470,10 @@ export default function LeaveSphereMyPtoPage() {
               <p className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-emerald-900">
                 {Math.max(0, directReportRequests.length - pendingDirectReportRequests.length)}
               </p>
+            </article>
+            <article className="rounded-2xl border border-blue-100 bg-white p-4">
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Direct reports</p>
+              <p className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-slate-900">{workspaceForYear.directReports.length}</p>
             </article>
           </div>
 
@@ -1459,10 +1507,10 @@ export default function LeaveSphereMyPtoPage() {
               <thead className="bg-blue-50/70 text-xs uppercase tracking-[0.08em] text-slate-600">
                 <tr>
                   <th className="px-3 py-2.5">Employee</th>
-                  <th className="px-3 py-2.5">Type</th>
+                  <th className="px-3 py-2.5 text-center">Type</th>
                   <th className="px-3 py-2.5">Date range</th>
-                  <th className="px-3 py-2.5">Status</th>
-                  <th className="px-3 py-2.5">Hours</th>
+                  <th className="px-3 py-2.5 text-center">Status</th>
+                  <th className="px-3 py-2.5 text-center">Hours</th>
                 </tr>
               </thead>
               <tbody>
@@ -1499,12 +1547,12 @@ export default function LeaveSphereMyPtoPage() {
                           </div>
                         </div>
                       </td>
-                      <td className="px-3 py-2.5">{requestTypeLabel(request.type)}</td>
+                      <td className="px-3 py-2.5 text-center">{requestTypeLabel(request.type)}</td>
                       <td className="px-3 py-2.5">{formatDateLabel(request.startDate)} - {formatDateLabel(request.endDate)}</td>
-                      <td className="px-3 py-2.5">
+                      <td className="px-3 py-2.5 text-center">
                         <LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} />
                       </td>
-                      <td className="px-3 py-2.5">{formatHoursLabel(request.hours)}</td>
+                      <td className="px-3 py-2.5 text-center">{formatHoursLabel(request.hours)}</td>
                     </tr>
                   ))
                 )}
@@ -1591,16 +1639,16 @@ export default function LeaveSphereMyPtoPage() {
           <div className="grid gap-2 text-sm text-slate-700 sm:grid-cols-2">
             <p>
               <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Submitted</span>
-              <span className="mt-0.5 block font-semibold text-slate-900">{formatDateLabel(selectedMyRequest.submittedAt)}</span>
+              <span className="mt-0.5 block font-semibold text-slate-900">{formatMonthDayYearLabel(selectedMyRequest.submittedAt)}</span>
             </p>
             {selectedMyRequest.reviewerName ? (
               <p>
-                <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Reviewed by</span>
-                <span className="mt-0.5 block font-semibold text-slate-900">
-                  {selectedMyRequest.reviewerName}
-                  {selectedMyRequest.reviewedAt ? ` · ${formatDateLabel(selectedMyRequest.reviewedAt)}` : ""}
-                </span>
-              </p>
+              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Reviewed by</span>
+              <span className="mt-0.5 block font-semibold text-slate-900">
+                {selectedMyRequest.reviewerName}
+                  {selectedMyRequest.reviewedAt ? ` · ${formatMonthDayYearLabel(selectedMyRequest.reviewedAt)}` : ""}
+              </span>
+            </p>
             ) : (
               <p>
                 <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Reviewed by</span>
@@ -1680,12 +1728,12 @@ export default function LeaveSphereMyPtoPage() {
             </p>
             {selectedReviewRequest.reviewerName ? (
               <p>
-                <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Reviewed by</span>
-                <span className="mt-0.5 block font-semibold text-slate-900">
-                  {selectedReviewRequest.reviewerName}
-                  {selectedReviewRequest.reviewedAt ? ` · ${formatDateLabel(selectedReviewRequest.reviewedAt)}` : ""}
-                </span>
-              </p>
+              <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Reviewed by</span>
+              <span className="mt-0.5 block font-semibold text-slate-900">
+                {selectedReviewRequest.reviewerName}
+                  {selectedReviewRequest.reviewedAt ? ` · ${formatMonthDayYearLabel(selectedReviewRequest.reviewedAt)}` : ""}
+              </span>
+            </p>
             ) : (
               <p>
                 <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Reviewed by</span>
