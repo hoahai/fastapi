@@ -46,6 +46,7 @@ import { ModalShell } from "@shared/components";
 import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
+import { DEFAULT_TIME_ZONE, formatDateInTimeZone, getCurrentMonthKeyInTimeZone, getCurrentYearInTimeZone, getTodayIsoDateInTimeZone, shiftIsoDateByDays } from "@shared/utils/time";
 import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 import { LeaveSpherePtoRequestCard } from "@leavesphere/components/LeaveSpherePtoRequestCard";
 import { LeaveSphereMonthCalendar, type LeaveSphereMonthCalendarEvent } from "@leavesphere/components/MonthCalendar";
@@ -70,7 +71,7 @@ import {
 } from "@leavesphere/lib/adminPtoMocks";
 import {
   deriveLeaveSphereAdminEmployeeBalances,
-  getLeaveSphereAdminLoadRequests,
+  type LeaveSphereAdminLoadRequest,
   type LeaveSphereAdminPtoActionCode,
 } from "@leavesphere/lib/adminPtoBalanceLedger";
 import { calculateLeaveSpherePtoHours } from "@leavesphere/lib/ptoHours";
@@ -106,7 +107,7 @@ type CreateRequestForm = {
   startDate: string;
   endDate: string;
   hours: string;
-  reason: string;
+  description: string;
 };
 
 type PendingCreateRequest = {
@@ -116,7 +117,7 @@ type PendingCreateRequest = {
     startDate: string;
     endDate: string;
     hours: number;
-    reason: string;
+    description: string;
   };
 };
 
@@ -126,7 +127,7 @@ type AdjustBalanceForm = {
   ptoActionCode: LeaveSphereAdminPtoActionCode;
   transactionId: string;
   hours: string;
-  note: string;
+  approverNote: string;
 };
 
 type LegacyAdjustBalanceForm = {
@@ -134,7 +135,7 @@ type LegacyAdjustBalanceForm = {
   type: LeaveSpherePtoType;
   mode: "add" | "subtract" | "set";
   hours: string;
-  note: string;
+  approverNote: string;
 };
 
 type SetupForm = {
@@ -191,7 +192,7 @@ const EMPTY_CREATE_FORM: CreateRequestForm = {
   startDate: "",
   endDate: "",
   hours: "",
-  reason: "",
+  description: "",
 };
 
 const EMPTY_ADJUST_FORM: AdjustBalanceForm = {
@@ -200,7 +201,7 @@ const EMPTY_ADJUST_FORM: AdjustBalanceForm = {
   ptoActionCode: "load_grant",
   transactionId: "",
   hours: "",
-  note: "",
+  approverNote: "",
 };
 
 const EMPTY_SETUP_FORM: SetupForm = {
@@ -259,12 +260,11 @@ function formatRelativeTime(timestamp: number): string {
   return `${days}d ago`;
 }
 
-function formatDateLabel(isoDate: string): string {
+function formatDateLabel(isoDate: string, timeZone: string): string {
   if (!isoDate) {
     return "-";
   }
-  const date = new Date(`${isoDate}T00:00:00`);
-  return date.toLocaleDateString(undefined, {
+  return formatDateInTimeZone(isoDate, timeZone, {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -302,7 +302,7 @@ function adjustFormsEqual(left: AdjustBalanceForm, right: AdjustBalanceForm): bo
     && left.ptoActionCode === right.ptoActionCode
     && left.transactionId === right.transactionId
     && Number(left.hours) === Number(right.hours)
-    && normalizeOptionalNote(left.note) === normalizeOptionalNote(right.note)
+    && normalizeOptionalNote(left.approverNote) === normalizeOptionalNote(right.approverNote)
   );
 }
 
@@ -313,17 +313,6 @@ function requestTypeLabel(type: string): string {
     return matched.label;
   }
   return asString(type).toUpperCase() || "PTO";
-}
-
-function monthKeyFromDate(date: Date): string {
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
-}
-
-function toIsoDate(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
 }
 
 function buildYearDateBounds(year: number): { minDate: string; maxDate: string } {
@@ -365,17 +354,14 @@ function employeeNameById(workspace: LeaveSphereAdminWorkspaceData | null): Map<
   return map;
 }
 
-function countUpcomingOutRequests(requests: LeaveSpherePtoRequest[]): number {
-  const today = toIsoDate(new Date());
-  const inTwoWeeksDate = new Date();
-  inTwoWeeksDate.setDate(inTwoWeeksDate.getDate() + 14);
-  const horizon = toIsoDate(inTwoWeeksDate);
+function countUpcomingOutRequests(requests: LeaveSpherePtoRequest[], todayIsoDate: string): number {
+  const horizon = shiftIsoDateByDays(todayIsoDate, 14);
   let count = 0;
   for (const request of requests) {
     if (!requestIsOut(request)) {
       continue;
     }
-    if (request.endDate < today || request.startDate > horizon) {
+    if (request.endDate < todayIsoDate || request.startDate > horizon) {
       continue;
     }
     count += 1;
@@ -402,7 +388,7 @@ function isCreateRequestForm(value: unknown): value is CreateRequestForm {
     && typeof record.startDate === "string"
     && typeof record.endDate === "string"
     && typeof record.hours === "string"
-    && typeof record.reason === "string"
+    && typeof record.description === "string"
   );
 }
 
@@ -417,7 +403,7 @@ function isAdjustBalanceForm(value: unknown): value is AdjustBalanceForm {
     && (record.ptoActionCode === "load_grant" || record.ptoActionCode === "adjustment")
     && (typeof record.transactionId === "string" || record.transactionId === undefined)
     && typeof record.hours === "string"
-    && typeof record.note === "string"
+    && typeof record.approverNote === "string"
   );
 }
 
@@ -431,7 +417,7 @@ function isLegacyAdjustBalanceForm(value: unknown): value is LegacyAdjustBalance
     && isPtoTypeValue(record.type)
     && (record.mode === "add" || record.mode === "subtract" || record.mode === "set")
     && typeof record.hours === "string"
-    && typeof record.note === "string"
+    && typeof record.approverNote === "string"
   );
 }
 
@@ -446,7 +432,7 @@ function normalizePersistedAdjustBalanceForm(value: unknown): AdjustBalanceForm 
       ptoActionCode: value.mode === "set" ? "load_grant" : "adjustment",
       transactionId: "",
       hours: value.hours,
-      note: value.note,
+      approverNote: value.approverNote,
     };
   }
   return EMPTY_ADJUST_FORM;
@@ -545,12 +531,18 @@ export default function LeaveSphereAdminPtoPage() {
   const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null);
   const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
   const [pageErrorMessage, setPageErrorMessage] = useState<string | null>(null);
-  const currentYear = new Date().getFullYear();
+  const tenantTimeZone = asString(auth.accessProfile?.tenant?.timezone) || DEFAULT_TIME_ZONE;
+  const currentYear = useMemo(() => getCurrentYearInTimeZone(tenantTimeZone), [tenantTimeZone]);
+  const currentMonthKey = useMemo(() => getCurrentMonthKeyInTimeZone(tenantTimeZone), [tenantTimeZone]);
+  const todayIsoDate = useMemo(() => getTodayIsoDateInTimeZone(tenantTimeZone), [tenantTimeZone]);
+  const initialTimeZoneRef = useRef(tenantTimeZone);
+  const initialYearRef = useRef(currentYear);
+  const initialMonthKeyRef = useRef(currentMonthKey);
   const [selectedYear, setSelectedYear] = useState(() => String(currentYear));
   const [loadedYear, setLoadedYear] = useState<number | null>(null);
 
   const [tab, setTab] = useState<AdminTab>("calendar");
-  const [calendarMonth, setCalendarMonth] = useState(() => monthKeyFromDate(new Date()));
+  const [calendarMonth, setCalendarMonth] = useState(() => currentMonthKey);
 
   const [isInitializing, setIsInitializing] = useState(false);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -594,6 +586,22 @@ export default function LeaveSphereAdminPtoPage() {
   const noteSaveWarningResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
   const adjustWasOpenRef = useRef(false);
   const workspaceLoadRequestTokenRef = useRef(0);
+
+  useEffect(() => {
+    if (loadedYear !== null) {
+      return;
+    }
+    if (tenantTimeZone === initialTimeZoneRef.current) {
+      return;
+    }
+    const nextYear = getCurrentYearInTimeZone(tenantTimeZone);
+    const nextMonthKey = getCurrentMonthKeyInTimeZone(tenantTimeZone);
+    setSelectedYear((current) => (current === String(initialYearRef.current) ? String(nextYear) : current));
+    setCalendarMonth((current) => (current === initialMonthKeyRef.current ? nextMonthKey : current));
+    initialTimeZoneRef.current = tenantTimeZone;
+    initialYearRef.current = nextYear;
+    initialMonthKeyRef.current = nextMonthKey;
+  }, [loadedYear, tenantTimeZone]);
 
   useEffect(() => {
     if (!canRestorePageState || !pageStateScope || !pageStateStorageKey) {
@@ -799,10 +807,10 @@ export default function LeaveSphereAdminPtoPage() {
         request.employeeName,
         requestTypeLabel(request.type),
         statusLabel(request.status),
-        formatDateLabel(request.startDate),
-        formatDateLabel(request.endDate),
-        formatDateLabel(request.submittedAt),
-        request.reason,
+        formatDateLabel(request.startDate, tenantTimeZone),
+        formatDateLabel(request.endDate, tenantTimeZone),
+        formatDateLabel(request.submittedAt, tenantTimeZone),
+        request.description,
       ];
       return tokens.some((token) => normalizeSearchKeyword(token).includes(keyword));
     });
@@ -818,13 +826,14 @@ export default function LeaveSphereAdminPtoPage() {
         role: "admin",
         status: selectedRequest.status,
         startDate: selectedRequest.startDate,
+        todayIsoDate,
       })
       : null),
-    [selectedRequest],
+    [selectedRequest, todayIsoDate],
   );
   const isReviewNoteDirty = useMemo(
     () => selectedRequest
-      ? normalizeOptionalNote(reviewNote) !== normalizeOptionalNote(selectedRequest.managerNote)
+      ? normalizeOptionalNote(reviewNote) !== normalizeOptionalNote(selectedRequest.approverNote)
       : false,
     [reviewNote, selectedRequest],
   );
@@ -850,7 +859,7 @@ export default function LeaveSphereAdminPtoPage() {
     if (!selectedRequest) {
       return;
     }
-    setReviewNote(selectedRequest.managerNote || "");
+    setReviewNote(selectedRequest.approverNote || "");
   }, [selectedRequest?.id]);
 
   const employeeById = useMemo(() => employeeNameById(workspaceForYear), [workspaceForYear]);
@@ -887,26 +896,46 @@ export default function LeaveSphereAdminPtoPage() {
     }
     return [...columns.values()];
   }, [workspaceForYear?.employeeBalances]);
+  const loadRequestsByBalanceKey = useMemo(() => {
+    const requestsByKey = new Map<string, LeaveSphereAdminLoadRequest[]>();
+    if (typeof loadedYear !== "number") {
+      return requestsByKey;
+    }
+
+    for (const transaction of workspaceForYear?.balanceTransactions ?? []) {
+      if (
+        transaction.year !== loadedYear
+        || transaction.status !== "Approved"
+        || transaction.ptoActionCode !== "load_grant"
+      ) {
+        continue;
+      }
+      const key = `${transaction.employeeId}::${transaction.ptoTypeCode}`;
+      const currentRequests = requestsByKey.get(key);
+      if (currentRequests) {
+        currentRequests.push(transaction);
+        continue;
+      }
+      requestsByKey.set(key, [transaction]);
+    }
+
+    for (const requests of requestsByKey.values()) {
+      requests.sort((left, right) => right.createdAt.localeCompare(left.createdAt));
+    }
+
+    return requestsByKey;
+  }, [loadedYear, workspaceForYear?.balanceTransactions]);
 
   const ptoTypeOptions = useMemo(
     () => (workspaceForYear?.ptoTypes ?? []).filter((item) => item.active).map((item) => ({ value: item.code, label: item.label })),
     [workspaceForYear?.ptoTypes],
   );
   const resolveAdjustLoadRequests = useCallback((employeeId: string, ptoTypeCode: LeaveSpherePtoType) => {
-    const year = loadedYear;
-    if (typeof year !== "number" || !workspaceForYear?.balanceTransactions) {
-      return [];
-    }
     if (!employeeId || !ptoTypeCode) {
       return [];
     }
-    return getLeaveSphereAdminLoadRequests({
-      transactions: workspaceForYear.balanceTransactions,
-      employeeId,
-      ptoTypeCode,
-      year,
-    });
-  }, [loadedYear, workspaceForYear?.balanceTransactions]);
+    return loadRequestsByBalanceKey.get(`${employeeId}::${ptoTypeCode}`) || [];
+  }, [loadRequestsByBalanceKey]);
   const openAdjustRequestEditor = useCallback((request: { id: string; employeeId: string; ptoTypeCode: LeaveSpherePtoType; hours: number }) => {
     setAdjustRequestPickerTarget(null);
     setIsAdjustRequestPickerOpen(false);
@@ -994,7 +1023,7 @@ export default function LeaveSphereAdminPtoPage() {
   const overview = useMemo(() => {
     return {
       pendingCount: pendingRequests.length,
-      upcomingOutCount: countUpcomingOutRequests(requests),
+      upcomingOutCount: countUpcomingOutRequests(requests, todayIsoDate),
       employeeCount: workspaceForYear?.employees.filter((item) => item.active).length ?? 0,
       holidayCount: workspaceForYear?.holidays.length ?? 0,
     };
@@ -1175,6 +1204,7 @@ export default function LeaveSphereAdminPtoPage() {
         workspaceKey,
         currentUserId,
         currentUserName,
+        timeZone: tenantTimeZone,
         freshData: policy !== "network-only",
       });
       if (requestToken !== workspaceLoadRequestTokenRef.current) {
@@ -1208,6 +1238,7 @@ export default function LeaveSphereAdminPtoPage() {
     loadedYear,
     requestJson,
     tenantSlug,
+    tenantTimeZone,
     workspaceForYear,
     workspaceKey,
   ]);
@@ -1230,12 +1261,11 @@ export default function LeaveSphereAdminPtoPage() {
     }
     const didLoad = await loadWorkspace(parsedYear, loadedYear === parsedYear ? "network-only" : "cache-first");
     if (didLoad) {
-      const today = new Date();
-      const defaultMonth = parsedYear === today.getFullYear() ? today.getMonth() + 1 : 1;
+      const defaultMonth = parsedYear === currentYear ? Number(currentMonthKey.slice(5, 7)) : 1;
       setCalendarMonth(`${parsedYear}-${String(defaultMonth).padStart(2, "0")}`);
       applyRecentHistorySearchKeyword("");
     }
-  }, [applyRecentHistorySearchKeyword, loadWorkspace, loadedYear, selectedYear]);
+  }, [applyRecentHistorySearchKeyword, currentMonthKey, currentYear, loadWorkspace, loadedYear, selectedYear]);
 
   const openCreateRequestModal = useCallback(() => {
     if (!loadedYearDateBounds) {
@@ -1243,7 +1273,6 @@ export default function LeaveSphereAdminPtoPage() {
     }
     setPendingCreateRequest(null);
     setIsCreateDecisionDialogOpen(false);
-    const todayIsoDate = toIsoDate(new Date());
     const defaultIsoDate = todayIsoDate >= loadedYearDateBounds.minDate && todayIsoDate <= loadedYearDateBounds.maxDate
       ? todayIsoDate
       : loadedYearDateBounds.minDate;
@@ -1256,7 +1285,7 @@ export default function LeaveSphereAdminPtoPage() {
       hours: calculateLeaveSpherePtoHours(defaultIsoDate, defaultIsoDate, holidayDates),
     });
     setIsCreateModalOpen(true);
-  }, [employeeOptions, holidayDates, loadedYearDateBounds, ptoTypeOptions]);
+  }, [employeeOptions, holidayDates, loadedYearDateBounds, ptoTypeOptions, todayIsoDate]);
 
   useEffect(() => {
     if (!isCreateModalOpen) {
@@ -1363,7 +1392,7 @@ export default function LeaveSphereAdminPtoPage() {
       startDate: string;
       endDate: string;
       hours: number;
-      reason: string;
+      description: string;
     };
   }) => {
     const employeeId = asString(createForm.employeeId);
@@ -1410,13 +1439,13 @@ export default function LeaveSphereAdminPtoPage() {
             requestJson,
             workspaceKey,
             currentUserId,
-            currentUserName,
-            payload: {
-              requestId: createdRequestId,
-              approve: true,
-              note: "",
-            },
-          });
+          currentUserName,
+          payload: {
+            requestId: createdRequestId,
+            approve: true,
+            approverNote: "",
+          },
+        });
           applyWorkspace(approvedResult.workspace, approvedResult.source);
           toast.success("Request approved", "PTO request was created and approved.");
         } else {
@@ -1457,7 +1486,7 @@ export default function LeaveSphereAdminPtoPage() {
     setIsMutating(true);
     try {
       if (selectedRequest.status !== "pending") {
-        const reviewedAt = toIsoDate(new Date());
+        const reviewedAt = todayIsoDate;
         const nextStatus: LeaveSpherePtoStatus = approve ? "approved" : "rejected";
         setWorkspace((current) => {
           if (!current) {
@@ -1472,7 +1501,7 @@ export default function LeaveSphereAdminPtoPage() {
                     status: nextStatus,
                     reviewedAt,
                     reviewerName: currentUserName,
-                    managerNote: normalizeOptionalNote(reviewNote) || null,
+                    approverNote: normalizeOptionalNote(reviewNote) || null,
                   }
                 : item
             )),
@@ -1495,7 +1524,7 @@ export default function LeaveSphereAdminPtoPage() {
         payload: {
           requestId: selectedRequest.id,
           approve,
-          note: reviewNote,
+          approverNote: reviewNote,
         },
       });
       applyWorkspace(result.workspace, result.source);
@@ -1517,6 +1546,7 @@ export default function LeaveSphereAdminPtoPage() {
     requestJson,
     reviewNote,
     selectedRequest,
+    todayIsoDate,
     toast,
     workspaceKey,
   ]);
@@ -1527,7 +1557,7 @@ export default function LeaveSphereAdminPtoPage() {
     }
     setIsMutating(true);
     try {
-      const reviewedAt = toIsoDate(new Date());
+      const reviewedAt = todayIsoDate;
       setWorkspace((current) => {
         if (!current) {
           return current;
@@ -1541,7 +1571,7 @@ export default function LeaveSphereAdminPtoPage() {
                   status: "cancelled",
                   reviewedAt,
                   reviewerName: currentUserName,
-                  managerNote: normalizeOptionalNote(reviewNote) || null,
+                  approverNote: normalizeOptionalNote(reviewNote) || null,
                 }
               : item
           )),
@@ -1553,7 +1583,7 @@ export default function LeaveSphereAdminPtoPage() {
     } finally {
       setIsMutating(false);
     }
-  }, [currentUserName, reviewNote, selectedRequest, toast]);
+  }, [currentUserName, reviewNote, selectedRequest, todayIsoDate, toast]);
 
   const handleRevertReviewDecision = useCallback(async () => {
     if (!selectedRequest) {
@@ -1681,7 +1711,7 @@ export default function LeaveSphereAdminPtoPage() {
           hours: asNumber(adjustForm.hours),
           year: transactionYear,
           status: "Approved",
-          note: asString(adjustForm.note),
+          approverNote: asString(adjustForm.approverNote),
         },
       });
       applyWorkspace(result.workspace, result.source);
@@ -1696,7 +1726,7 @@ export default function LeaveSphereAdminPtoPage() {
   }, [
     adjustForm.employeeId,
     adjustForm.hours,
-    adjustForm.note,
+    adjustForm.approverNote,
     adjustForm.ptoActionCode,
     adjustForm.ptoTypeCode,
     applyWorkspace,
@@ -1729,7 +1759,7 @@ export default function LeaveSphereAdminPtoPage() {
           hours: selectedAdjustRequest.hours,
           year: Number(loadedYear),
           status: "Canceled",
-          note: asString(adjustForm.note),
+          approverNote: asString(adjustForm.approverNote),
         },
       });
       applyWorkspace(result.workspace, result.source);
@@ -1743,7 +1773,7 @@ export default function LeaveSphereAdminPtoPage() {
       setIsMutating(false);
     }
   }, [
-    adjustForm.note,
+    adjustForm.approverNote,
     applyWorkspace,
     closeAdjustModal,
     currentUserId,
@@ -1873,13 +1903,13 @@ export default function LeaveSphereAdminPtoPage() {
 
   const handleSaveRequestDetail = useCallback(async (params: {
     requestId: string | null;
-    payload: {
-      type: LeaveSpherePtoType;
-      startDate: string;
-      endDate: string;
-      hours: number;
-      reason: string;
-    };
+      payload: {
+        type: LeaveSpherePtoType;
+        startDate: string;
+        endDate: string;
+        hours: number;
+        description: string;
+      };
   }) => {
     if (!params.requestId) {
       return;
@@ -1897,7 +1927,7 @@ export default function LeaveSphereAdminPtoPage() {
           startDate: params.payload.startDate,
           endDate: params.payload.endDate,
           hours: params.payload.hours,
-          reason: params.payload.reason,
+          description: params.payload.description,
           year: loadedYear,
         },
       });
@@ -1911,13 +1941,13 @@ export default function LeaveSphereAdminPtoPage() {
   }, [applyWorkspace, currentUserId, currentUserName, loadedYear, requestJson, toast, workspaceKey]);
   const handleSaveRequestDetailWithNoteWarning = useCallback(async (params: {
     requestId: string | null;
-    payload: {
-      type: LeaveSpherePtoType;
-      startDate: string;
-      endDate: string;
-      hours: number;
-      reason: string;
-    };
+      payload: {
+        type: LeaveSpherePtoType;
+        startDate: string;
+        endDate: string;
+        hours: number;
+        description: string;
+      };
   }) => {
     async function requestNoteSaveWarningConfirmation(): Promise<boolean> {
       setIsNoteSaveWarningDialogOpen(true);
@@ -1970,7 +2000,7 @@ export default function LeaveSphereAdminPtoPage() {
         request.employeeName,
         requestType,
         hoursLabel,
-        request.reason,
+        request.description,
       );
       calendarEvents.push({
         id: `request:${request.id}`,
@@ -1982,7 +2012,7 @@ export default function LeaveSphereAdminPtoPage() {
           request.employeeName,
           requestType,
           hoursLabel,
-          request.reason,
+          request.description,
         ),
       });
     }
@@ -1993,6 +2023,7 @@ export default function LeaveSphereAdminPtoPage() {
         description="Who is out and company holidays"
         monthKey={calendarMonth}
         onMonthChange={setCalendarMonth}
+        todayIsoDate={todayIsoDate}
         dayMinHeightClassName="min-h-[8.2rem]"
         events={calendarEvents}
         onEventClick={(event) => {
@@ -2038,13 +2069,13 @@ export default function LeaveSphereAdminPtoPage() {
                   key={request.id}
                   onClick={() => {
                     setSelectedRequestId(request.id);
-                    setReviewNote(request.managerNote || "");
+                    setReviewNote(request.approverNote || "");
                   }}
                   title={request.employeeName}
-                  dateLabel={formatPtoRequestDateRangeLabel(request.startDate, request.endDate)}
-                  detailLabel={buildLeaveSpherePtoCalendarChipLabel(requestTypeLabel(request.type), request.reason)}
+                  dateLabel={formatPtoRequestDateRangeLabel(request.startDate, request.endDate, tenantTimeZone)}
+                  detailLabel={buildLeaveSpherePtoCalendarChipLabel(requestTypeLabel(request.type), request.description)}
                   hoursLabel={formatHoursLabel(request.hours)}
-                  submittedLabel={`Submitted ${formatMonthDayYearLabel(request.submittedAt)}`}
+                  submittedLabel={`Submitted ${formatMonthDayYearLabel(request.submittedAt, tenantTimeZone)}`}
                 />
               ))
             )}
@@ -2136,7 +2167,7 @@ export default function LeaveSphereAdminPtoPage() {
                       className="cursor-pointer border-t border-blue-100/80 bg-white text-slate-700 transition-colors hover:bg-blue-50/40"
                       onClick={() => {
                         setSelectedRequestId(request.id);
-                        setReviewNote(request.managerNote || "");
+                        setReviewNote(request.approverNote || "");
                       }}
                     >
                       <td className="px-3 py-2.5">
@@ -2146,12 +2177,12 @@ export default function LeaveSphereAdminPtoPage() {
                           </span>
                           <div>
                             <p className="text-sm font-medium text-slate-900">{request.employeeName}</p>
-                            <p className="text-xs text-slate-500">Submitted {formatDateLabel(request.submittedAt)}</p>
+                            <p className="text-xs text-slate-500">Submitted {formatDateLabel(request.submittedAt, tenantTimeZone)}</p>
                           </div>
                         </div>
                       </td>
                       <td className="px-3 py-2.5 text-center">{requestTypeLabel(request.type)}</td>
-                      <td className="px-3 py-2.5">{formatDateLabel(request.startDate)} - {formatDateLabel(request.endDate)}</td>
+                      <td className="px-3 py-2.5">{formatDateLabel(request.startDate, tenantTimeZone)} - {formatDateLabel(request.endDate, tenantTimeZone)}</td>
                       <td className="px-3 py-2.5 text-center">
                         <LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} />
                       </td>
@@ -2333,7 +2364,7 @@ export default function LeaveSphereAdminPtoPage() {
               {(workspaceForYear?.holidays ?? []).map((item) => (
                 <li key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2">
                   <p className="font-medium text-slate-800">{item.name} ({item.teamRegion})</p>
-                  <p className="text-xs text-slate-600">{formatDateLabel(item.date)}</p>
+                  <p className="text-xs text-slate-600">{formatDateLabel(item.date, tenantTimeZone)}</p>
                 </li>
               ))}
             </ul>
@@ -2591,14 +2622,14 @@ export default function LeaveSphereAdminPtoPage() {
             </p>
             <p>
               <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Submitted</span>
-              <span className="mt-0.5 block font-semibold text-slate-900">{formatMonthDayYearLabel(selectedRequest.submittedAt)}</span>
+              <span className="mt-0.5 block font-semibold text-slate-900">{formatMonthDayYearLabel(selectedRequest.submittedAt, tenantTimeZone)}</span>
             </p>
             {selectedRequest.reviewerName ? (
               <p>
                 <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Reviewed by</span>
                 <span className="mt-0.5 block font-semibold text-slate-900">
                   {selectedRequest.reviewerName}
-                  {selectedRequest.reviewedAt ? ` · ${formatMonthDayYearLabel(selectedRequest.reviewedAt)}` : ""}
+                  {selectedRequest.reviewedAt ? ` · ${formatMonthDayYearLabel(selectedRequest.reviewedAt, tenantTimeZone)}` : ""}
                 </span>
               </p>
             ) : (
@@ -2705,7 +2736,7 @@ export default function LeaveSphereAdminPtoPage() {
             <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-3 text-sm text-slate-700">
               <p><span className="font-semibold text-slate-900">Holiday:</span> {selectedHoliday.name}</p>
               <p><span className="font-semibold text-slate-900">Team region:</span> {selectedHoliday.teamRegion}</p>
-              <p><span className="font-semibold text-slate-900">Date:</span> {formatDateLabel(selectedHoliday.date)}</p>
+              <p><span className="font-semibold text-slate-900">Date:</span> {formatDateLabel(selectedHoliday.date, tenantTimeZone)}</p>
             </div>
           ) : null}
         </DialogContent>
@@ -2744,8 +2775,8 @@ export default function LeaveSphereAdminPtoPage() {
               >
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <p className="text-sm font-semibold text-slate-900">{formatDateLabel(request.createdAt)}</p>
-                    <p className="text-xs text-slate-500">{request.note || "No note"}</p>
+                    <p className="text-sm font-semibold text-slate-900">{formatDateLabel(request.createdAt, tenantTimeZone)}</p>
+                    <p className="text-xs text-slate-500">{request.approverNote || "No note"}</p>
                   </div>
                   <p className="text-sm font-semibold text-slate-900">{formatHoursLabel(request.hours)}</p>
                 </div>
@@ -2846,8 +2877,8 @@ export default function LeaveSphereAdminPtoPage() {
                 />
               </label>
               <label className="space-y-1 text-sm">
-                <span className="text-slate-600">Note</span>
-                <Textarea value={adjustForm.note} onChange={(event) => setAdjustForm((current) => ({ ...current, note: event.target.value }))} className="min-h-[96px]" disabled={isMutating} />
+                <span className="text-slate-600">Approver note</span>
+                <Textarea value={adjustForm.approverNote} onChange={(event) => setAdjustForm((current) => ({ ...current, approverNote: event.target.value }))} className="min-h-[96px]" disabled={isMutating} />
               </label>
             </div>
 
