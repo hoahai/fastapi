@@ -28,7 +28,7 @@ export type LeaveSpherePtoRequestFormState = {
   startDate: string;
   endDate: string;
   hours: string;
-  reason: string;
+  description: string;
 };
 
 type LeaveSpherePtoRequestDetailModalProps = {
@@ -45,23 +45,23 @@ type LeaveSpherePtoRequestDetailModalProps = {
   onClose: () => void;
   onSubmit?: (params: {
     requestId: string | null;
-    payload: {
-      type: LeaveSpherePtoType;
-      startDate: string;
-      endDate: string;
-      hours: number;
-      reason: string;
-    };
+      payload: {
+        type: LeaveSpherePtoType;
+        startDate: string;
+        endDate: string;
+        hours: number;
+        description: string;
+      };
   }) => Promise<void | boolean> | void | boolean;
   onSave?: (params: {
     requestId: string | null;
-    payload: {
-      type: LeaveSpherePtoType;
-      startDate: string;
-      endDate: string;
-      hours: number;
-      reason: string;
-    };
+      payload: {
+        type: LeaveSpherePtoType;
+        startDate: string;
+        endDate: string;
+        hours: number;
+        description: string;
+      };
   }) => Promise<void | boolean> | void | boolean;
   onFormChange?: (form: LeaveSpherePtoRequestFormState) => void;
   calculateHours?: (startDate: string, endDate: string) => string;
@@ -85,7 +85,7 @@ const EMPTY_FORM: LeaveSpherePtoRequestFormState = {
   startDate: "",
   endDate: "",
   hours: "",
-  reason: "",
+  description: "",
 };
 
 function createFormState(request: LeaveSpherePtoRequest | null): LeaveSpherePtoRequestFormState {
@@ -97,7 +97,7 @@ function createFormState(request: LeaveSpherePtoRequest | null): LeaveSpherePtoR
     startDate: request?.startDate ?? "",
     endDate: request?.endDate ?? "",
     hours: request ? String(request.hours) : "",
-    reason: request?.reason ?? "",
+    description: request?.description ?? "",
   };
 }
 
@@ -123,7 +123,7 @@ function isNonNegativeNumber(value: string): boolean {
   return Number.isFinite(parsed) && parsed >= 0;
 }
 
-function normalizeReason(value: string): string {
+function normalizeDescription(value: string): string {
   return value.trim();
 }
 
@@ -133,7 +133,7 @@ function formsEqual(left: LeaveSpherePtoRequestFormState, right: LeaveSpherePtoR
     && left.startDate === right.startDate
     && left.endDate === right.endDate
     && Number(left.hours) === Number(right.hours)
-    && normalizeReason(left.reason) === normalizeReason(right.reason)
+    && normalizeDescription(left.description) === normalizeDescription(right.description)
   );
 }
 
@@ -185,9 +185,10 @@ export function LeaveSpherePtoRequestDetailModal({
   const shouldAutoCalculateOnOpenRef = useRef(true);
   const hasHandledInitialAutoCalculateRef = useRef(false);
   const previousDateRangeRef = useRef<{ startDate: string; endDate: string } | null>(null);
-  const reasonField = useCommittedTextField<HTMLTextAreaElement>(
-    form.reason,
-    (value) => setForm((current) => ({ ...current, reason: value })),
+  const lastEmittedFormRef = useRef<LeaveSpherePtoRequestFormState | null>(null);
+  const descriptionField = useCommittedTextField<HTMLTextAreaElement>(
+    form.description,
+    (value) => setForm((current) => ({ ...current, description: value })),
   );
 
   useEffect(() => {
@@ -206,6 +207,7 @@ export function LeaveSpherePtoRequestDetailModal({
       startDate: sourceForm.startDate,
       endDate: sourceForm.endDate,
     };
+    lastEmittedFormRef.current = { ...sourceForm };
   }, [mode, open, sourceForm]);
 
   useEffect(() => {
@@ -218,7 +220,7 @@ export function LeaveSpherePtoRequestDetailModal({
         && form.startDate === sourceForm.startDate
         && form.endDate === sourceForm.endDate
         && form.hours === sourceForm.hours
-        && form.reason === sourceForm.reason
+        && form.description === sourceForm.description
       );
       if (!hasHydratedFormValues) {
         return;
@@ -254,8 +256,15 @@ export function LeaveSpherePtoRequestDetailModal({
   }, [calculateHours, form, open, sourceForm]);
 
   useEffect(() => {
+    if (!open) {
+      return;
+    }
+    if (lastEmittedFormRef.current && formsEqual(lastEmittedFormRef.current, form)) {
+      return;
+    }
+    lastEmittedFormRef.current = { ...form };
     onFormChange?.(form);
-  }, [form, onFormChange]);
+  }, [form, onFormChange, open]);
 
   const hasFormChanges = useMemo(
     () => !formsEqual(form, baselineForm),
@@ -273,7 +282,7 @@ export function LeaveSpherePtoRequestDetailModal({
     && isWithinRange(form.startDate, allowedDateRange?.minDate, allowedDateRange?.maxDate)
     && isWithinRange(form.endDate, allowedDateRange?.minDate, allowedDateRange?.maxDate)
     && isNonNegativeNumber(form.hours)
-    && normalizeReason(form.reason),
+    && normalizeDescription(form.description),
   );
   const canSave = Boolean(
     submitHandler
@@ -286,7 +295,7 @@ export function LeaveSpherePtoRequestDetailModal({
   const endDateMin = form.startDate && allowedDateRange?.minDate
     ? (form.startDate > allowedDateRange.minDate ? form.startDate : allowedDateRange.minDate)
     : (form.startDate || allowedDateRange?.minDate);
-  const reasonMinHeightClassName = isMyPtoDetailLayout ? "min-h-[110px]" : "min-h-[100px]";
+  const descriptionMinHeightClassName = isMyPtoDetailLayout ? "min-h-[110px]" : "min-h-[100px]";
   const formFields = (
     <>
       <div className="grid gap-3 sm:grid-cols-2">
@@ -352,12 +361,12 @@ export function LeaveSpherePtoRequestDetailModal({
       </div>
 
       <label className={isMyPtoDetailLayout ? "block space-y-1 text-sm" : "space-y-1 text-sm"}>
-        <span className="text-slate-600">Reason</span>
+        <span className="text-slate-600">Description</span>
         <Textarea
-          value={reasonField.value}
-          onChange={reasonField.onChange}
-          onBlur={reasonField.onBlur}
-          className={reasonMinHeightClassName}
+          value={descriptionField.value}
+          onChange={descriptionField.onChange}
+          onBlur={descriptionField.onBlur}
+          className={descriptionMinHeightClassName}
           disabled={saving || readOnly}
         />
       </label>
@@ -407,8 +416,8 @@ export function LeaveSpherePtoRequestDetailModal({
       setFormError("Hours must be 0 or greater.");
       return;
     }
-    if (!normalizeReason(form.reason)) {
-      setFormError("Reason is required.");
+    if (!normalizeDescription(form.description)) {
+      setFormError("Description is required.");
       return;
     }
 
@@ -417,7 +426,7 @@ export function LeaveSpherePtoRequestDetailModal({
       startDate: form.startDate,
       endDate: form.endDate,
       hours: String(Number(form.hours)),
-      reason: normalizeReason(form.reason),
+      description: normalizeDescription(form.description),
     };
 
     setFormError(null);
@@ -428,7 +437,7 @@ export function LeaveSpherePtoRequestDetailModal({
         startDate: submittedForm.startDate,
         endDate: submittedForm.endDate,
         hours: Number(submittedForm.hours),
-        reason: submittedForm.reason,
+        description: submittedForm.description,
       },
     });
     if (didSave === false) {
