@@ -21,6 +21,8 @@ import { Textarea } from "@tradsphere/components/ui/textarea";
 import { ConfirmDialog } from "@tradsphere/components/ui/confirm-dialog";
 import { useToast } from "@shell/components/ui/toast";
 import { useApiRequest } from "@shared/hooks/useApiRequest";
+import { useOnlineStatus } from "@shared/hooks/useOnlineStatus";
+import { shouldFetchNetwork, type CachePolicy } from "@shared/cache";
 import { useAuth } from "@shared/auth/useAuth";
 import {
   buildScopedPageStateStorageKey,
@@ -67,9 +69,13 @@ import {
   getLeaveSphereReviewActionConfirmCopy,
   type LeaveSphereReviewAction,
 } from "@leavesphere/lib/reviewActionConfirm";
+import {
+  readLeaveSpherePtoWorkspaceCacheSnapshot,
+  writeLeaveSpherePtoWorkspaceCache,
+} from "@leavesphere/lib/ptoWorkspaceCache";
 
 type CacheStatus = {
-  source: "network";
+  source: "cache" | "network";
   fetchedAt: number;
 };
 
@@ -394,6 +400,7 @@ export default function LeaveSphereMyPtoPage() {
   const { requestJson } = useApiRequest();
   const auth = useAuth();
   const toast = useToast();
+  const { isOnline } = useOnlineStatus();
   const currentYear = useMemo(() => new Date().getFullYear(), []);
 
   const currentUserId = asString(auth.user?.id) || "local-user";
@@ -448,6 +455,7 @@ export default function LeaveSphereMyPtoPage() {
   const [pendingReviewAction, setPendingReviewAction] = useState<LeaveSphereReviewAction | null>(null);
   const [draftManagerSearch, setDraftManagerSearch] = useState("");
   const [appliedManagerSearch, setAppliedManagerSearch] = useState("");
+  const workspaceLoadRequestTokenRef = useRef(0);
 
   useEffect(() => {
     if (!canRestorePageState || !pageStateScope || !pageStateStorageKey) {
@@ -745,6 +753,34 @@ export default function LeaveSphereMyPtoPage() {
   const balanceRows = workspaceForYear?.balances ?? [];
   const shouldCenterBalanceBlock = balanceRows.length > 0 && balanceRows.length <= 3;
 
+  const commitWorkspace = useCallback((
+    nextWorkspace: LeaveSpherePtoWorkspaceData,
+    source: "cache" | "network",
+    year: number,
+    fetchedAt = Date.now(),
+  ) => {
+    setWorkspace(nextWorkspace);
+    setLoadedYear(year);
+    setSelectedYear(String(year));
+    setCacheStatus({
+      source,
+      fetchedAt,
+    });
+    writeLeaveSpherePtoWorkspaceCache(
+      {
+        pageCode: "my-pto",
+        tenantSlug,
+        userId: currentUserId,
+        year,
+      },
+      nextWorkspace,
+      {
+        source,
+        fetchedAt,
+      },
+    );
+  }, [currentUserId, tenantSlug]);
+
   const cacheStatusText = useMemo(() => {
     if (isRefreshing) {
       return "Refreshing LeaveSphere PTO workspace...";
@@ -755,8 +791,11 @@ export default function LeaveSphereMyPtoPage() {
     if (!cacheStatus) {
       return "Loading LeaveSphere PTO workspace...";
     }
+    if (!isOnline) {
+      return `Offline. Showing cached data from ${formatRelativeTime(cacheStatus.fetchedAt)}.`;
+    }
     return `Year ${loadedYear}. Data source: ${cacheStatus.source}. Last updated ${formatRelativeTime(cacheStatus.fetchedAt)}.`;
-  }, [cacheStatus, isRefreshing, loadedYear]);
+  }, [cacheStatus, isOnline, isRefreshing, loadedYear]);
 
   const applyManagerSearchKeyword = useCallback((rawValue: string) => {
     const normalized = asString(rawValue);
@@ -852,36 +891,90 @@ export default function LeaveSphereMyPtoPage() {
     },
   );
 
-  const loadWorkspace = useCallback(async (year: number, freshData = false): Promise<boolean> => {
-    if (freshData) {
-      setIsRefreshing(true);
-    } else {
-      setIsInitializing(true);
+  const loadWorkspace = useCallback(async (year: number, policy: CachePolicy = "stale-while-revalidate"): Promise<boolean> => {
+    const requestToken = ++workspaceLoadRequestTokenRef.current;
+    const cacheSnapshot = readLeaveSpherePtoWorkspaceCacheSnapshot<LeaveSpherePtoWorkspaceData>({
+      pageCode: "my-pto",
+      tenantSlug,
+      userId: currentUserId,
+      year,
+    });
+    const cachedWorkspace = cacheSnapshot?.data ?? null;
+    const hasCachedWorkspace = Boolean(cachedWorkspace);
+    const shouldUseCache = policy !== "network-only" && hasCachedWorkspace;
+    const shouldFetchFromNetwork = shouldFetchNetwork(policy, cacheSnapshot);
+    const shouldShowRefreshing = hasCachedWorkspace || (loadedYear === year && workspaceForYear !== null);
+
+    if (shouldUseCache && cachedWorkspace) {
+      commitWorkspace(cachedWorkspace, "cache", year, cacheSnapshot?.fetchedAt ?? Date.now());
+      setRefreshMessage(null);
     }
+
+    if (!shouldFetchFromNetwork) {
+      setIsInitializing(false);
+      setIsRefreshing(false);
+      setPageErrorMessage(null);
+      return true;
+    }
+
+    if (!isOnline) {
+      setIsInitializing(false);
+      setIsRefreshing(false);
+      if (hasCachedWorkspace && cachedWorkspace) {
+        commitWorkspace(cachedWorkspace, "cache", year, cacheSnapshot?.fetchedAt ?? Date.now());
+        setRefreshMessage("You're offline. Showing cached PTO workspace.");
+        return true;
+      }
+      setPageErrorMessage("You're offline. Connect to the internet to load PTO workspace.");
+      return false;
+    }
+
+    setIsInitializing(!shouldShowRefreshing);
+    setIsRefreshing(shouldShowRefreshing);
     setPageErrorMessage(null);
+    if (shouldShowRefreshing && hasCachedWorkspace) {
+      setRefreshMessage("Cached PTO workspace shown while refreshing.");
+    } else {
+      setRefreshMessage(null);
+    }
 
     try {
       const result = await loadLeaveSpherePtoWorkspace({
         requestJson,
         year,
       });
-      setWorkspace(result.workspace);
-      setLoadedYear(year);
-      setSelectedYear(String(year));
-      setCacheStatus({
-        source: result.source,
-        fetchedAt: Date.now(),
-      });
+      if (requestToken !== workspaceLoadRequestTokenRef.current) {
+        return false;
+      }
+      commitWorkspace(result.workspace, "network", year, Date.now());
       setRefreshMessage(result.refreshMessage);
       return true;
     } catch {
+      if (requestToken !== workspaceLoadRequestTokenRef.current) {
+        return false;
+      }
+      if (hasCachedWorkspace && cachedWorkspace) {
+        commitWorkspace(cachedWorkspace, "cache", year, cacheSnapshot?.fetchedAt ?? Date.now());
+        setRefreshMessage("Showing cached PTO workspace. Could not refresh.");
+        return true;
+      }
       setPageErrorMessage("Unable to load PTO workspace right now. Please try again.");
       return false;
     } finally {
-      setIsInitializing(false);
-      setIsRefreshing(false);
+      if (requestToken === workspaceLoadRequestTokenRef.current) {
+        setIsInitializing(false);
+        setIsRefreshing(false);
+      }
     }
-  }, [requestJson]);
+  }, [
+    commitWorkspace,
+    currentUserId,
+    isOnline,
+    loadedYear,
+    requestJson,
+    tenantSlug,
+    workspaceForYear,
+  ]);
 
   useEffect(() => {
     if (!hasHydratedPageState || !pageStateStorageKey || loadedYear === null) {
@@ -891,7 +984,7 @@ export default function LeaveSphereMyPtoPage() {
       return;
     }
     restoredWorkspaceScopeRef.current = pageStateStorageKey;
-    void loadWorkspace(loadedYear, false);
+    void loadWorkspace(loadedYear, "stale-while-revalidate");
   }, [hasHydratedPageState, loadedYear, loadWorkspace, pageStateStorageKey]);
 
   const handleLoadByYear = useCallback(async () => {
@@ -900,7 +993,7 @@ export default function LeaveSphereMyPtoPage() {
       return;
     }
 
-    const didLoad = await loadWorkspace(parsedYear, false);
+    const didLoad = await loadWorkspace(parsedYear, loadedYear === parsedYear ? "network-only" : "cache-first");
     if (!didLoad) {
       return;
     }
@@ -908,7 +1001,7 @@ export default function LeaveSphereMyPtoPage() {
     const today = new Date();
     const defaultMonth = parsedYear === today.getFullYear() ? today.getMonth() + 1 : 1;
     setCalendarMonth(`${parsedYear}-${String(defaultMonth).padStart(2, "0")}`);
-  }, [loadWorkspace, selectedYear]);
+  }, [loadWorkspace, loadedYear, selectedYear]);
 
   const openSubmitDialog = useCallback(() => {
     if (!canRequestPto || !loadedYearDateBounds) {
@@ -970,8 +1063,7 @@ export default function LeaveSphereMyPtoPage() {
           year: loadedYearForRequests,
         },
       });
-      setWorkspace(result.workspace);
-      setCacheStatus({ source: result.source, fetchedAt: Date.now() });
+      commitWorkspace(result.workspace, result.source, loadedYearForRequests);
       setIsRequestDialogOpen(false);
       toast.success("PTO request submitted", "Your request is now pending manager review.");
     } catch {
@@ -980,6 +1072,7 @@ export default function LeaveSphereMyPtoPage() {
       setIsSubmitting(false);
     }
   }, [
+    commitWorkspace,
     requestJson,
     toast,
     canRequestPto,
@@ -1001,8 +1094,7 @@ export default function LeaveSphereMyPtoPage() {
           note: reviewNote,
         },
       });
-      setWorkspace(result.workspace);
-      setCacheStatus({ source: result.source, fetchedAt: Date.now() });
+      commitWorkspace(result.workspace, result.source, loadedYearForRequests);
       setReviewTargetId(null);
       setReviewNote("");
       if (action === "approve") {
@@ -1020,6 +1112,8 @@ export default function LeaveSphereMyPtoPage() {
       setIsReviewing(false);
     }
   }, [
+    commitWorkspace,
+    loadedYearForRequests,
     requestJson,
     reviewNote,
     selectedReviewRequest,
@@ -1036,8 +1130,7 @@ export default function LeaveSphereMyPtoPage() {
         requestJson,
         transactionId: selectedMyRequest.id,
       });
-      setWorkspace(result.workspace);
-      setCacheStatus({ source: result.source, fetchedAt: Date.now() });
+      commitWorkspace(result.workspace, result.source, loadedYearForRequests);
       setSelectedMyRequestId(null);
       toast.success("Request cancelled", "PTO request status was updated to cancelled.");
     } catch {
@@ -1045,7 +1138,7 @@ export default function LeaveSphereMyPtoPage() {
     } finally {
       setIsSavingRequestDetail(false);
     }
-  }, [requestJson, selectedMyRequest, toast]);
+  }, [commitWorkspace, loadedYearForRequests, requestJson, selectedMyRequest, toast]);
 
   const handleConfirmReviewAction = useCallback(async () => {
     if (!pendingReviewAction) {
@@ -1084,13 +1177,12 @@ export default function LeaveSphereMyPtoPage() {
           year: selectedRequestYear,
         },
       });
-      setWorkspace(result.workspace);
-      setCacheStatus({ source: result.source, fetchedAt: Date.now() });
+      commitWorkspace(result.workspace, result.source, selectedRequestYear);
       toast.success("Request updated", "PTO request details were updated.");
     } finally {
       setIsSavingRequestDetail(false);
     }
-  }, [loadedYearForRequests, requestJson, selectedMyRequest?.year, toast, workspace]);
+  }, [commitWorkspace, loadedYearForRequests, requestJson, selectedMyRequest?.year, toast, workspace]);
   const handleSaveReviewRequestDetail = useCallback(async (params: {
     requestId: string | null;
     payload: {
@@ -1106,35 +1198,34 @@ export default function LeaveSphereMyPtoPage() {
     }
     setIsReviewing(true);
     try {
-      setWorkspace((current) => {
-        if (!current) {
-          return current;
-        }
-        return {
-          ...current,
-          requests: current.requests.map((item) => {
-            if (item.id !== params.requestId) {
-              return item;
-            }
-            return {
-              ...item,
-              type: params.payload.type,
-              startDate: params.payload.startDate,
-              endDate: params.payload.endDate,
-              hours: params.payload.hours,
-              reason: params.payload.reason,
-              managerNote: normalizeOptionalNote(reviewNote) || null,
-            };
-          }),
-        };
-      });
+      const nextWorkspace = workspace ? {
+        ...workspace,
+        requests: workspace.requests.map((item) => {
+          if (item.id !== params.requestId) {
+            return item;
+          }
+          return {
+            ...item,
+            type: params.payload.type,
+            startDate: params.payload.startDate,
+            endDate: params.payload.endDate,
+            hours: params.payload.hours,
+            reason: params.payload.reason,
+            managerNote: normalizeOptionalNote(reviewNote) || null,
+          };
+        }),
+      } : null;
+      if (!nextWorkspace) {
+        return;
+      }
+      commitWorkspace(nextWorkspace, "cache", loadedYearForRequests);
       setReviewTargetId(null);
       setReviewNote("");
       toast.success("Request updated", "PTO request details were updated.");
     } finally {
       setIsReviewing(false);
     }
-  }, [reviewNote, toast]);
+  }, [commitWorkspace, loadedYearForRequests, reviewNote, toast, workspace]);
 
   return (
     <AppPageLayout
@@ -1157,18 +1248,18 @@ export default function LeaveSphereMyPtoPage() {
         />
       )}
       footer={cacheStatus && loadedYear !== null ? (
-      <PageCacheFooter
+        <PageCacheFooter
           text={cacheStatusText}
           onRefresh={() => {
             setIsChipRefreshOverlayVisible(true);
-            void loadWorkspace(loadedYearForRequests, true).finally(() => {
+            void loadWorkspace(loadedYearForRequests, "network-only").finally(() => {
               setIsChipRefreshOverlayVisible(false);
             });
           }}
-          disabled={isInitializing || isRefreshing || isSubmitting || isReviewing}
+          disabled={isInitializing || isRefreshing || isSubmitting || isReviewing || !isOnline}
           refreshing={isRefreshing || isChipRefreshOverlayVisible}
           refreshLabel="Refresh PTO workspace"
-          tooltipText="Click to refresh PTO balances, requests, and calendar data"
+          tooltipText={isOnline ? "Click to refresh PTO balances, requests, and calendar data" : "Offline. Reconnect to refresh PTO workspace."}
           containerClassName="w-full"
         />
       ) : null}

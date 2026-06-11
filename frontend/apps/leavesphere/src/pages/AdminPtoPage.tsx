@@ -30,6 +30,8 @@ import { useToast } from "@shell/components/ui/toast";
 import { hasAppAdminAccess } from "@shared/auth/permissions";
 import { useAuth } from "@shared/auth/useAuth";
 import { useApiRequest } from "@shared/hooks/useApiRequest";
+import { useOnlineStatus } from "@shared/hooks/useOnlineStatus";
+import { shouldFetchNetwork, type CachePolicy } from "@shared/cache";
 import {
   buildScopedPageStateStorageKey,
   readScopedPageState,
@@ -81,9 +83,13 @@ import { LEAVESPHERE_TEAM_REGION_OPTIONS } from "@leavesphere/lib/ptoMocks";
 import type { LeaveSpherePtoRequest, LeaveSpherePtoStatus, LeaveSpherePtoType, LeaveSphereTeamRegion } from "@leavesphere/lib/ptoMocks";
 import { ActionIconButton } from "@tradsphere/components/dashboard/ActionIconButton";
 import { formatPtoRequestDateRangeLabel } from "@leavesphere/lib/ptoDate";
+import {
+  readLeaveSpherePtoWorkspaceCacheSnapshot,
+  writeLeaveSpherePtoWorkspaceCache,
+} from "@leavesphere/lib/ptoWorkspaceCache";
 
 type CacheStatus = {
-  source: "mock" | "network";
+  source: "cache" | "network";
   fetchedAt: number;
 };
 
@@ -495,6 +501,7 @@ export default function LeaveSphereAdminPtoPage() {
   const { requestJson } = useApiRequest();
   const auth = useAuth();
   const toast = useToast();
+  const { isOnline } = useOnlineStatus();
 
   const currentUserId = asString(auth.user?.id) || "local-admin";
   const currentUserName = asString(auth.user?.fullName) || asString(auth.user?.email) || "LeaveSphere Admin";
@@ -576,6 +583,7 @@ export default function LeaveSphereAdminPtoPage() {
   const restoredWorkspaceScopeRef = useRef<string | null>(null);
   const noteSaveWarningResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
   const adjustWasOpenRef = useRef(false);
+  const workspaceLoadRequestTokenRef = useRef(0);
 
   useEffect(() => {
     if (!canRestorePageState || !pageStateScope || !pageStateStorageKey) {
@@ -727,6 +735,33 @@ export default function LeaveSphereAdminPtoPage() {
     }
     return filterWorkspaceByYear(workspace, selectedYearNumber);
   }, [isSelectedYearLoaded, selectedYearNumber, workspace]);
+  const commitWorkspace = useCallback((
+    nextWorkspace: LeaveSphereAdminWorkspaceData,
+    source: "cache" | "network",
+    year: number,
+    fetchedAt = Date.now(),
+  ) => {
+    setWorkspace(nextWorkspace);
+    setLoadedYear(year);
+    setSelectedYear(String(year));
+    setCacheStatus({
+      source,
+      fetchedAt,
+    });
+    writeLeaveSpherePtoWorkspaceCache(
+      {
+        pageCode: "admin-pto",
+        tenantSlug,
+        userId: currentUserId,
+        year,
+      },
+      nextWorkspace,
+      {
+        source,
+        fetchedAt,
+      },
+    );
+  }, [currentUserId, tenantSlug]);
 
   const requests = useMemo(
     () => [...(workspaceForYear?.requests ?? [])].sort((left, right) => right.submittedAt.localeCompare(left.submittedAt)),
@@ -955,8 +990,11 @@ export default function LeaveSphereAdminPtoPage() {
     if (!cacheStatus) {
       return "Loading LeaveSphere Admin PTO workspace...";
     }
+    if (!isOnline) {
+      return `Offline. Showing cached data from ${formatRelativeTime(cacheStatus.fetchedAt)}.`;
+    }
     return `Data source: ${cacheStatus.source}. Last updated ${formatRelativeTime(cacheStatus.fetchedAt)}.`;
-  }, [cacheStatus, isRefreshing, loadedYear]);
+  }, [cacheStatus, isOnline, isRefreshing, loadedYear]);
 
   const applyRecentHistorySearchKeyword = useCallback((rawValue: string) => {
     const normalized = asString(rawValue);
@@ -1052,13 +1090,52 @@ export default function LeaveSphereAdminPtoPage() {
     },
   );
 
-  const loadWorkspace = useCallback(async (freshData = false): Promise<boolean> => {
-    if (freshData) {
-      setIsRefreshing(true);
-    } else {
-      setIsInitializing(true);
+  const loadWorkspace = useCallback(async (year: number, policy: CachePolicy = "stale-while-revalidate"): Promise<boolean> => {
+    const requestToken = ++workspaceLoadRequestTokenRef.current;
+    const cacheSnapshot = readLeaveSpherePtoWorkspaceCacheSnapshot<LeaveSphereAdminWorkspaceData>({
+      pageCode: "admin-pto",
+      tenantSlug,
+      userId: currentUserId,
+      year,
+    });
+    const cachedWorkspace = cacheSnapshot?.data ?? null;
+    const hasCachedWorkspace = Boolean(cachedWorkspace);
+    const shouldUseCache = policy !== "network-only" && hasCachedWorkspace;
+    const shouldFetchFromNetwork = shouldFetchNetwork(policy, cacheSnapshot);
+    const shouldShowRefreshing = hasCachedWorkspace || (loadedYear === year && workspaceForYear !== null);
+
+    if (shouldUseCache && cachedWorkspace) {
+      commitWorkspace(cachedWorkspace, "cache", year, cacheSnapshot?.fetchedAt ?? Date.now());
+      setRefreshMessage(null);
     }
+
+    if (!shouldFetchFromNetwork) {
+      setIsInitializing(false);
+      setIsRefreshing(false);
+      setPageErrorMessage(null);
+      return true;
+    }
+
+    if (!isOnline) {
+      setIsInitializing(false);
+      setIsRefreshing(false);
+      if (hasCachedWorkspace && cachedWorkspace) {
+        commitWorkspace(cachedWorkspace, "cache", year, cacheSnapshot?.fetchedAt ?? Date.now());
+        setRefreshMessage("You're offline. Showing cached admin PTO workspace.");
+        return true;
+      }
+      setPageErrorMessage("You're offline. Connect to the internet to load admin PTO workspace.");
+      return false;
+    }
+
+    setIsInitializing(!shouldShowRefreshing);
+    setIsRefreshing(shouldShowRefreshing);
     setPageErrorMessage(null);
+    if (shouldShowRefreshing && hasCachedWorkspace) {
+      setRefreshMessage("Cached admin PTO workspace shown while refreshing.");
+    } else {
+      setRefreshMessage(null);
+    }
 
     try {
       const result = await loadLeaveSphereAdminPtoWorkspace({
@@ -1066,20 +1143,42 @@ export default function LeaveSphereAdminPtoPage() {
         workspaceKey,
         currentUserId,
         currentUserName,
-        freshData,
+        freshData: policy !== "network-only",
       });
-      setWorkspace(result.workspace);
-      setCacheStatus({ source: result.source, fetchedAt: Date.now() });
+      if (requestToken !== workspaceLoadRequestTokenRef.current) {
+        return false;
+      }
+      commitWorkspace(result.workspace, result.source === "mock" ? "cache" : "network", year, Date.now());
       setRefreshMessage(result.refreshMessage);
       return true;
     } catch {
+      if (requestToken !== workspaceLoadRequestTokenRef.current) {
+        return false;
+      }
+      if (hasCachedWorkspace && cachedWorkspace) {
+        commitWorkspace(cachedWorkspace, "cache", year, cacheSnapshot?.fetchedAt ?? Date.now());
+        setRefreshMessage("Showing cached admin PTO workspace. Could not refresh.");
+        return true;
+      }
       setPageErrorMessage("Unable to load Admin PTO workspace right now. Please try again.");
       return false;
     } finally {
-      setIsInitializing(false);
-      setIsRefreshing(false);
+      if (requestToken === workspaceLoadRequestTokenRef.current) {
+        setIsInitializing(false);
+        setIsRefreshing(false);
+      }
     }
-  }, [currentUserId, currentUserName, requestJson, workspaceKey]);
+  }, [
+    commitWorkspace,
+    currentUserId,
+    currentUserName,
+    isOnline,
+    loadedYear,
+    requestJson,
+    tenantSlug,
+    workspaceForYear,
+    workspaceKey,
+  ]);
 
   useEffect(() => {
     if (!hasHydratedPageState || !pageStateStorageKey || loadedYear === null) {
@@ -1089,7 +1188,7 @@ export default function LeaveSphereAdminPtoPage() {
       return;
     }
     restoredWorkspaceScopeRef.current = pageStateStorageKey;
-    void loadWorkspace(false);
+    void loadWorkspace(loadedYear, "stale-while-revalidate");
   }, [hasHydratedPageState, loadedYear, loadWorkspace, pageStateStorageKey]);
 
   const handleLoadByYear = useCallback(async () => {
@@ -1097,15 +1196,14 @@ export default function LeaveSphereAdminPtoPage() {
     if (!Number.isInteger(parsedYear)) {
       return;
     }
-    const didLoad = await loadWorkspace(false);
+    const didLoad = await loadWorkspace(parsedYear, loadedYear === parsedYear ? "network-only" : "cache-first");
     if (didLoad) {
-      setLoadedYear(parsedYear);
       const today = new Date();
       const defaultMonth = parsedYear === today.getFullYear() ? today.getMonth() + 1 : 1;
       setCalendarMonth(`${parsedYear}-${String(defaultMonth).padStart(2, "0")}`);
       applyRecentHistorySearchKeyword("");
     }
-  }, [applyRecentHistorySearchKeyword, loadWorkspace, selectedYear]);
+  }, [applyRecentHistorySearchKeyword, loadWorkspace, loadedYear, selectedYear]);
 
   const openCreateRequestModal = useCallback(() => {
     if (!loadedYearDateBounds) {
@@ -1190,9 +1288,9 @@ export default function LeaveSphereAdminPtoPage() {
   }, [adjustForm.transactionId, isAdjustEditMode, isAdjustModalOpen, selectedAdjustRequestList]);
 
   const applyWorkspace = useCallback((next: LeaveSphereAdminWorkspaceData, source: "mock" | "network") => {
-    setWorkspace(next);
-    setCacheStatus({ source, fetchedAt: Date.now() });
-  }, []);
+    const effectiveYear = loadedYear ?? (Number.isInteger(selectedYearNumber) ? selectedYearNumber : currentYear);
+    commitWorkspace(next, source === "mock" ? "cache" : "network", effectiveYear);
+  }, [commitWorkspace, currentYear, loadedYear, selectedYearNumber]);
 
   const openLoadHoursModal = useCallback((params?: {
     employeeId?: string;
@@ -2251,14 +2349,14 @@ export default function LeaveSphereAdminPtoPage() {
           text={cacheStatusText}
           onRefresh={() => {
             setIsChipRefreshOverlayVisible(true);
-            void loadWorkspace(true).finally(() => {
+            void loadWorkspace(loadedYear ?? currentYear, "network-only").finally(() => {
               setIsChipRefreshOverlayVisible(false);
             });
           }}
-          disabled={isInitializing || isRefreshing || isMutating}
+          disabled={isInitializing || isRefreshing || isMutating || !isOnline}
           refreshing={isRefreshing || isChipRefreshOverlayVisible}
           refreshLabel="Refresh admin PTO workspace"
-          tooltipText="Click to refresh requests, balances, and setup data"
+          tooltipText={isOnline ? "Click to refresh requests, balances, and setup data" : "Offline. Reconnect to refresh admin PTO workspace."}
           containerClassName="w-full"
         />
       ) : null}
