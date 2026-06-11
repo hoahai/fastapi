@@ -25,6 +25,7 @@ from apps.leavesphere.api.v1.helpers.myPto import (
     _build_pto_type_catalog,
     _build_request_rows,
     _employee_full_name,
+    _extract_email_from_auth_payload,
     _normalize_email,
     _normalize_team_region,
     _normalize_text,
@@ -39,6 +40,7 @@ from apps.leavesphere.api.v1.helpers.myPto import (
 from apps.leavesphere.api.v1.helpers.ptoActions import create_pto_action, modify_pto_action
 from apps.leavesphere.api.v1.helpers.ptoTypes import create_pto_type, modify_pto_type
 from apps.leavesphere.api.v1.helpers.ptoTransactions import create_adjustment, create_request
+from shared.auth.dependencies import get_auth_principal
 from shared.db import execute_write
 
 _REQUEST_ACTION_TOKENS = ("request", "req")
@@ -343,11 +345,81 @@ def _make_synthetic_identity(employee_name: str) -> tuple[str, str]:
     return identity_key, email
 
 
+def _build_synthetic_current_employee(request) -> dict:
+    principal = get_auth_principal(request)
+    principal_email = ""
+    principal_id = ""
+    if principal is not None:
+        principal_email = _normalize_email(principal.email) or _extract_email_from_auth_payload(principal.raw_user)
+        principal_id = _normalize_text(getattr(principal, "user_id", ""))
+
+    header_email = _normalize_email(getattr(request, "headers", {}).get("x-user-email"))
+    current_email = principal_email or header_email
+    current_name = current_email.split("@", 1)[0].replace(".", " ").replace("_", " ").strip() if current_email else ""
+    current_name = " ".join(part.capitalize() for part in current_name.split() if part) or "LeaveSphere Admin"
+    identity_key, synthetic_email = _make_synthetic_identity(current_name)
+    synthetic_id = principal_id or identity_key
+    return {
+        "id": synthetic_id,
+        "identityKey": identity_key,
+        "firstName": current_name.split(" ", 1)[0],
+        "lastName": current_name.split(" ", 1)[1] if " " in current_name else "Admin",
+        "email": current_email or synthetic_email,
+        "region": "US",
+        "title": "Leave Management Admin",
+        "active": 1,
+    }
+
+
 def _get_holiday_rows() -> list[dict]:
     try:
         return get_holidays()
     except Exception:
         return []
+
+
+def _resolve_current_employee_from_rows(request, employees: list[dict]) -> dict:
+    principal = get_auth_principal(request)
+
+    candidate_emails: list[str] = []
+    principal_values = (
+        getattr(principal, "email", None),
+        _extract_email_from_auth_payload(getattr(principal, "raw_user", None)) if principal is not None else "",
+    )
+    for value in (
+        *principal_values,
+        _normalize_text(getattr(request, "headers", {}).get("x-user-email")),
+        _normalize_text(getattr(request, "headers", {}).get("x-user-name"))
+        if "@" in _normalize_text(getattr(request, "headers", {}).get("x-user-name"))
+        else "",
+    ):
+        normalized = _normalize_email(value)
+        if normalized and normalized not in candidate_emails:
+            candidate_emails.append(normalized)
+
+    identity_key = _normalize_text(getattr(principal, "user_id", "")).lower() if principal is not None else ""
+    candidate_identity_keys = [identity_key] if identity_key else []
+
+    matched_rows: list[dict] = []
+    for row in employees:
+        if not isinstance(row, dict):
+            continue
+        row_email = _normalize_email(row.get("email"))
+        row_identity_key = _normalize_text(row.get("identityKey")).lower()
+        if row_email and row_email in candidate_emails:
+            matched_rows.append(row)
+            continue
+        if row_identity_key and row_identity_key in candidate_emails:
+            matched_rows.append(row)
+            continue
+        if row_identity_key and row_identity_key in candidate_identity_keys:
+            matched_rows.append(row)
+
+    if not matched_rows:
+        raise ValueError("Authenticated user is not mapped to a LeaveSphere employee")
+
+    active_rows = [row for row in matched_rows if int(row.get("active") or 0) == 1]
+    return active_rows[0] if active_rows else matched_rows[0]
 
 
 def _resolve_workspace_year_from_transaction(transaction: dict | None, fallback_year: int | None = None) -> int:
@@ -364,7 +436,11 @@ def _resolve_workspace_year_from_transaction(transaction: dict | None, fallback_
 
 
 def _resolve_current_employee_record(request) -> dict:
-    employee = _resolve_current_employee(request, require_active=False)
+    employees = get_employees()
+    try:
+        employee = _resolve_current_employee_from_rows(request, employees)
+    except ValueError:
+        employee = _build_synthetic_current_employee(request)
     if not isinstance(employee, dict):
         raise ValueError("Authenticated user is not mapped to a LeaveSphere employee")
     return employee
@@ -372,13 +448,16 @@ def _resolve_current_employee_record(request) -> dict:
 
 def _build_workspace(*, request, year: int) -> dict:
     selected_year = _normalize_year(year)
-    current_employee = _resolve_current_employee_record(request)
+    employees = get_employees()
+    try:
+        current_employee = _resolve_current_employee_from_rows(request, employees)
+    except ValueError:
+        current_employee = _build_synthetic_current_employee(request)
     current_employee_id = _normalize_text(current_employee.get("id"))
     current_employee_name = _employee_full_name(current_employee)
     current_employee_email = _normalize_email(current_employee.get("email"))
     current_employee_region = _normalize_team_region(current_employee.get("region"))
 
-    employees = get_employees()
     employee_map = _build_employee_map(employees)
     employee_map.setdefault(current_employee_id, current_employee)
 

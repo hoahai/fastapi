@@ -65,6 +65,36 @@ class LeaveSphereMyPtoIdentityTests(unittest.TestCase):
 
         self.assertEqual(employee["id"], "emp-current")
 
+    def test_resolve_current_employee_falls_back_to_header_email(self):
+        request = SimpleNamespace(
+            headers={"x-user-email": "lookup@theautoadagency.com"},
+            state=SimpleNamespace(
+                auth_principal=AuthPrincipal(user_id="user-1", email="wrong@example.com", raw_user={})
+            ),
+        )
+        rows = [
+            {"id": "emp-match", "active": 1, "email": "lookup@theautoadagency.com"},
+        ]
+
+        with patch.object(myPto, "get_employees_by_email", side_effect=[[], rows]):
+            employee = myPto._resolve_current_employee(request)
+
+        self.assertEqual(employee["id"], "emp-match")
+
+    def test_resolve_current_employee_falls_back_to_identity_key(self):
+        request = SimpleNamespace(
+            headers={},
+            state=SimpleNamespace(
+                auth_principal=AuthPrincipal(user_id="identity-123", email="wrong@example.com", raw_user={})
+            ),
+        )
+        with patch.object(myPto, "get_employees_by_email", return_value=[]), patch.object(
+            myPto, "get_employees_by_identity_key", return_value=[{"id": "emp-identity", "active": 1, "email": "lookup@theautoadagency.com"}]
+        ):
+            employee = myPto._resolve_current_employee(request)
+
+        self.assertEqual(employee["id"], "emp-identity")
+
     def test_resolve_current_employee_allows_loads_for_inactive_rows(self):
         request = SimpleNamespace(
             headers={},

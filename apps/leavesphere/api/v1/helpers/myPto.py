@@ -10,6 +10,7 @@ from apps.leavesphere.api.v1.helpers.dbQueries import (
     get_db_tables,
     get_employee_managers,
     get_employees_by_email,
+    get_employees_by_identity_key,
     get_employees_by_ids,
     get_pto_actions,
     get_pto_transactions,
@@ -235,9 +236,38 @@ def _resolve_current_principal_email(request) -> str:
     raise ValueError("Authenticated user email is required")
 
 
+def _resolve_current_employee_candidates(request) -> list[str]:
+    candidates: list[str] = []
+    principal = get_auth_principal(request)
+    if principal is None:
+        return candidates
+
+    legacy_user_name = _normalize_text(getattr(request, "headers", {}).get("x-user-name"))
+    for value in (
+        principal.email,
+        _extract_email_from_auth_payload(principal.raw_user),
+        _normalize_text(getattr(request, "headers", {}).get("x-user-email")),
+        legacy_user_name if "@" in legacy_user_name else "",
+    ):
+        normalized = _normalize_email(value)
+        if normalized and normalized not in candidates:
+            candidates.append(normalized)
+    return candidates
+
+
 def _resolve_current_employee(request, *, require_active: bool = False) -> dict:
-    email = _resolve_current_principal_email(request)
-    rows = get_employees_by_email(email=email)
+    rows: list[dict] = []
+    for email in _resolve_current_employee_candidates(request):
+        rows = get_employees_by_email(email=email)
+        if rows:
+            break
+
+    if not rows:
+        principal = get_auth_principal(request)
+        identity_key = _normalize_text(getattr(principal, "user_id", None))
+        if identity_key:
+            rows = get_employees_by_identity_key(identity_key=identity_key)
+
     if not rows:
         raise ValueError("Authenticated user is not mapped to a LeaveSphere employee")
     active_rows = [row for row in rows if int(row.get("active") or 0) == 1]
