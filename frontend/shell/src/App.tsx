@@ -101,19 +101,27 @@ function formatAppLabel(appCode: string): string {
 
 const BROWSER_TITLE_SUFFIX = "TheSphereWorks";
 
-function formatBrowserTitle(pageTitle: string): string {
+function formatBrowserTitle(pageTitle: string, appTitle?: string | null): string {
   const normalized = String(pageTitle || "").trim();
   if (!normalized) {
     return BROWSER_TITLE_SUFFIX;
   }
+  const normalizedAppTitle = String(appTitle || "").trim();
+  if (normalizedAppTitle) {
+    return `${normalized} | ${normalizedAppTitle} | ${BROWSER_TITLE_SUFFIX}`;
+  }
   return `${normalized} | ${BROWSER_TITLE_SUFFIX}`;
 }
 
-function resolveAppRouteTitle(route: string): string | null {
+function resolveAppRouteTitle(route: string): { pageTitle: string; appTitle: string } | null {
   const normalizedRoute = stripTrailingSlash(route);
   const scopedAdminMatch = normalizedRoute.match(/^\/([a-z0-9-_]+)\/admin$/);
   if (scopedAdminMatch) {
-    return `${formatAppLabel(scopedAdminMatch[1] || "")} Admin`;
+    const appTitle = formatAppLabel(scopedAdminMatch[1] || "");
+    return {
+      pageTitle: "Admin",
+      appTitle,
+    };
   }
 
   for (const app of APP_NAV_ITEMS) {
@@ -121,7 +129,10 @@ function resolveAppRouteTitle(route: string): string | null {
     if (!child) {
       continue;
     }
-    return `${app.label} ${child.label}`;
+    return {
+      pageTitle: child.label,
+      appTitle: app.label,
+    };
   }
 
   return null;
@@ -166,12 +177,12 @@ function resolveBrowserTitle(params: {
     return formatBrowserTitle("Admin Users");
   }
   if (scopedAdminAppCode) {
-    return formatBrowserTitle(`${formatAppLabel(scopedAdminAppCode)} Admin`);
+    return formatBrowserTitle("Admin", formatAppLabel(scopedAdminAppCode));
   }
 
   const appRouteTitle = resolveAppRouteTitle(frontendPath);
   if (appRouteTitle) {
-    return formatBrowserTitle(appRouteTitle);
+    return formatBrowserTitle(appRouteTitle.pageTitle, appRouteTitle.appTitle);
   }
 
   return formatBrowserTitle("Page Not Found");

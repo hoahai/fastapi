@@ -15,6 +15,10 @@ export function buildAuthHeaders(
   if (normalizedTenant) {
     headers["X-Tenant-Id"] = normalizedTenant;
   }
+  const normalizedUserEmail = String(legacyUserEmail || "").trim();
+  if (normalizedUserEmail) {
+    headers["X-User-Email"] = normalizedUserEmail;
+  }
   if (!session?.accessToken) {
     const authMode = String(import.meta.env.VITE_AUTH_MODE || "compat").trim().toLowerCase();
     const legacyEnabled = String(import.meta.env.VITE_AUTH_ENABLE_LEGACY_API_KEY_FALLBACK || "true")
@@ -24,10 +28,6 @@ export function buildAuthHeaders(
     const legacyUserName = String(import.meta.env.VITE_LEGACY_USER_NAME || "").trim();
     if (authMode === "compat" && legacyEnabled !== "false" && legacyApiKey) {
       headers["X-API-Key"] = legacyApiKey;
-      const normalizedLegacyUserEmail = String(legacyUserEmail || "").trim();
-      if (normalizedLegacyUserEmail) {
-        headers["X-User-Email"] = normalizedLegacyUserEmail;
-      }
       if (legacyUserName) {
         headers["X-User-Name"] = legacyUserName;
       }

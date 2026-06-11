@@ -778,8 +778,8 @@ export async function loadLeaveSphereAdminPtoWorkspace(params: LoadArgs): Promis
     }),
     source: "mock",
     refreshMessage: resolveUseApi()
-      ? "Using local placeholder admin PTO data because LeaveSphere admin endpoints are not available yet."
-      : "Using local placeholder admin PTO data. Set VITE_LEAVESPHERE_USE_API=true when backend endpoints are ready.",
+      ? "Using local placeholder Leave Management data because LeaveSphere admin endpoints are not available yet."
+      : "Using local placeholder Leave Management data. Set VITE_LEAVESPHERE_USE_API=true when backend endpoints are ready.",
   };
 }
 

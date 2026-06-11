@@ -2,6 +2,10 @@ function normalizeCalendarLabel(value: string): string {
   return value.trim();
 }
 
+function joinCalendarLabels(parts: Array<string | null | undefined>): string {
+  return parts.map((part) => normalizeCalendarLabel(part ?? "")).filter(Boolean).join(" · ");
+}
+
 export function buildLeaveSpherePtoCalendarChipLabel(
   baseLabel: string,
   reason?: string | null,
@@ -29,20 +33,17 @@ export function buildLeaveSpherePtoCalendarChipLabel(
 export function buildLeaveSpherePtoCalendarRequestChipLabel(
   employeeName: string,
   ptoType: string,
-  requestNote?: string | null,
   hoursLabel?: string | null,
+  requestNote?: string | null,
 ): string {
-  return buildLeaveSpherePtoCalendarChipLabel(
-    employeeName,
-    buildLeaveSpherePtoCalendarChipLabel(ptoType, requestNote, hoursLabel),
-  );
+  return joinCalendarLabels([employeeName, ptoType, hoursLabel, requestNote]);
 }
 
 export function buildLeaveSpherePtoCalendarRequestTooltipLabel(
   employeeName: string,
   ptoType: string,
-  requestNote?: string | null,
   hoursLabel?: string | null,
+  requestNote?: string | null,
 ): string {
-  return buildLeaveSpherePtoCalendarRequestChipLabel(employeeName, ptoType, requestNote, hoursLabel);
+  return buildLeaveSpherePtoCalendarRequestChipLabel(employeeName, ptoType, hoursLabel, requestNote);
 }

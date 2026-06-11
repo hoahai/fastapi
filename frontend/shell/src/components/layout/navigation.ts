@@ -102,7 +102,7 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
       },
       {
         id: "leavesphere-admin-pto",
-        label: "Admin PTO",
+        label: "Leave Management",
         route: "/leavesphere/admin-pto",
         available: true,
       },

@@ -66,7 +66,6 @@ import { calculateLeaveSpherePtoHours } from "@leavesphere/lib/ptoHours";
 import {
   buildLeaveSpherePtoCalendarRequestChipLabel,
   buildLeaveSpherePtoCalendarRequestTooltipLabel,
-  buildLeaveSpherePtoCalendarChipLabel,
 } from "@leavesphere/lib/ptoCalendar";
 import { formatMonthDayYearLabel, formatPtoRequestDateRangeLabel } from "@leavesphere/lib/ptoDate";
 import { getPtoRequestActionConfig } from "@leavesphere/lib/ptoRequestActionConfig";
@@ -611,9 +610,14 @@ export default function LeaveSphereMyPtoPage() {
     if (!workspaceForYear) {
       return [];
     }
+    const currentUserName = workspaceForYear.currentUserName;
     return workspaceForYear.requests
       .filter((item) => item.employeeId === workspaceForYear.currentUserId)
-      .sort((left, right) => right.submittedAt.localeCompare(left.submittedAt));
+      .sort((left, right) => right.submittedAt.localeCompare(left.submittedAt))
+      .map((request) => ({
+        ...request,
+        employeeName: currentUserName,
+      }));
   }, [workspaceForYear]);
 
   const directReportRequests = useMemo(() => {
@@ -741,35 +745,42 @@ export default function LeaveSphereMyPtoPage() {
     for (const request of myRequests) {
       const requestType = requestTypeLabel(request.type);
       const hoursLabel = formatHoursLabel(request.hours);
+      const chipLabel = buildLeaveSpherePtoCalendarRequestChipLabel(
+        request.employeeName,
+        requestType,
+        hoursLabel,
+        request.reason,
+      );
       events.push({
         id: `request:${request.id}`,
-        label: buildLeaveSpherePtoCalendarChipLabel(requestType, request.reason, hoursLabel),
+        label: chipLabel,
         tone: mapLeaveSpherePtoStatusToChipTone(request.status),
         startDate: request.startDate,
         endDate: request.endDate,
-        title: buildLeaveSpherePtoCalendarChipLabel(requestType, request.reason, hoursLabel),
+        title: chipLabel,
       });
     }
     if (isManager) {
       for (const request of directReportRequests) {
         const requestType = requestTypeLabel(request.type);
         const hoursLabel = formatHoursLabel(request.hours);
+        const chipLabel = buildLeaveSpherePtoCalendarRequestChipLabel(
+          request.employeeName,
+          requestType,
+          hoursLabel,
+          request.reason,
+        );
         events.push({
           id: `manager-request:${request.id}`,
-          label: buildLeaveSpherePtoCalendarRequestChipLabel(
-            request.employeeName,
-            requestType,
-            request.reason,
-            hoursLabel,
-          ),
+          label: chipLabel,
           tone: mapLeaveSpherePtoStatusToChipTone(request.status),
           startDate: request.startDate,
           endDate: request.endDate,
           title: buildLeaveSpherePtoCalendarRequestTooltipLabel(
             request.employeeName,
             requestType,
-            request.reason,
             hoursLabel,
+            request.reason,
           ),
         });
       }
@@ -1322,7 +1333,7 @@ export default function LeaveSphereMyPtoPage() {
       {workspaceForYear && (
         <>
       <SectionCard
-        title="PTO balance overview"
+        title="PTO Balance Overview"
         description="Current totals by PTO type from the selected year's transactions. Remaining = total - used - scheduled."
       >
         {balanceRows.length === 0 ? (
@@ -1363,7 +1374,7 @@ export default function LeaveSphereMyPtoPage() {
 
       <div className="relative grid gap-4 xl:grid-cols-[minmax(18rem,23rem)_minmax(0,1fr)]">
         <SectionCard
-          title="My Requets"
+          title="My Requests"
           description={`${myRequests.length} request${myRequests.length === 1 ? "" : "s"} total`}
           actions={canRequestPto ? (
             <ActionIconButton
@@ -1414,7 +1425,7 @@ export default function LeaveSphereMyPtoPage() {
         </SectionCard>
 
         <LeaveSphereMonthCalendar
-          title="PTO calendar"
+          title="PTO Calendar"
           description="Your PTO requests and holidays"
           monthKey={calendarMonth}
           onMonthChange={setCalendarMonth}
@@ -1462,7 +1473,7 @@ export default function LeaveSphereMyPtoPage() {
         >
           <div className="grid gap-3 md:grid-cols-3">
             <article className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-amber-800">Pending approvals</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-amber-800">Pending Approvals</p>
               <p className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-amber-900">{pendingDirectReportRequests.length}</p>
             </article>
             <article className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
@@ -1472,7 +1483,7 @@ export default function LeaveSphereMyPtoPage() {
               </p>
             </article>
             <article className="rounded-2xl border border-blue-100 bg-white p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Direct reports</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-slate-500">Direct Reports</p>
               <p className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-slate-900">{workspaceForYear.directReports.length}</p>
             </article>
           </div>
@@ -1569,7 +1580,7 @@ export default function LeaveSphereMyPtoPage() {
         open={isRequestDialogOpen}
         request={null}
         initialForm={requestForm as LeaveSpherePtoRequestFormState}
-        title="Submit PTO request"
+        title="Submit PTO Request"
         description="Enter request details. Your manager can approve or reject from the Manager PTO queue."
         ptoTypeOptions={ptoTypeOptions}
         statusLabel={statusLabel}
@@ -1592,7 +1603,7 @@ export default function LeaveSphereMyPtoPage() {
       }}>
         <DialogContent className="max-w-xl">
           <DialogHeader>
-            <DialogTitle>Holiday detail</DialogTitle>
+            <DialogTitle>Holiday Detail</DialogTitle>
             <DialogDescription>
               LeaveSphere holiday information for the selected date.
             </DialogDescription>
@@ -1622,7 +1633,7 @@ export default function LeaveSphereMyPtoPage() {
         request={selectedMyRequest}
         layoutVariant="my-pto-detail"
         readOnly={!selectedMyRequestActionConfig?.canEditForm}
-        title="My PTO request detail"
+        title="My PTO Request Detail"
         description="Review or update your PTO submission details."
         ptoTypeOptions={ptoTypeOptions}
         statusLabel={statusLabel}
@@ -1677,7 +1688,7 @@ export default function LeaveSphereMyPtoPage() {
 
       <ConfirmDialog
         open={isCancelMyRequestDialogOpen}
-        title="Cancel PTO request?"
+        title="Cancel PTO Request?"
         description="This will change the request status to cancelled. This action cannot be undone."
         confirmLabel="Cancel request"
         cancelLabel="Go back"
@@ -1693,7 +1704,7 @@ export default function LeaveSphereMyPtoPage() {
         request={selectedReviewRequest}
         layoutVariant="my-pto-detail"
         readOnly={!selectedReviewRequestActionConfig?.canEditForm}
-        title="Manager request preview"
+        title="Manager Request Preview"
         description="Review this direct employee PTO request and approve or reject."
         ptoTypeOptions={ptoTypeOptions}
         statusLabel={statusLabel}

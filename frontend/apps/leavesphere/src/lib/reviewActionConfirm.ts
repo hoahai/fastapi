@@ -15,7 +15,7 @@ export function getLeaveSphereReviewActionConfirmCopy(
 
   if (action === "approve") {
     return {
-      title: "Approve request?",
+      title: "Approve Request?",
       description: `This will approve the PTO request and apply the current ${reviewerLabel} note.`,
       confirmLabel: "Approve",
     };
@@ -23,7 +23,7 @@ export function getLeaveSphereReviewActionConfirmCopy(
 
   if (action === "reject") {
     return {
-      title: "Reject request?",
+      title: "Reject Request?",
       description: `This will reject the PTO request and apply the current ${reviewerLabel} note.`,
       confirmLabel: "Reject",
     };
@@ -31,14 +31,14 @@ export function getLeaveSphereReviewActionConfirmCopy(
 
   if (action === "cancel") {
     return {
-      title: "Cancel request?",
+      title: "Cancel Request?",
       description: `This will cancel the PTO request and apply the current ${reviewerLabel} note.`,
       confirmLabel: "Cancel request",
     };
   }
 
   return {
-    title: "Revert decision?",
+    title: "Revert Decision?",
     description: "This will revert the PTO request back to pending.",
     confirmLabel: "Revert",
   };

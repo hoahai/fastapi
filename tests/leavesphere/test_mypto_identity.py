@@ -28,21 +28,15 @@ class LeaveSphereMyPtoIdentityTests(unittest.TestCase):
 
         self.assertEqual(resolved, "metadata@example.com")
 
-    def test_resolve_principal_email_falls_back_to_auth_user_lookup(self):
+    def test_resolve_principal_email_uses_header_before_backend_lookup(self):
         principal = AuthPrincipal(user_id="user-1", email=None, raw_user={})
-        request = SimpleNamespace(headers={}, state=SimpleNamespace(auth_principal=principal))
-        seen_user_ids: list[str] = []
-
-        class FakeProvider:
-            def get_auth_user_by_id(self, *, user_id: str):
-                seen_user_ids.append(user_id)
-                return {"email": "Lookup@Example.com"}
-
-        with patch.object(myPto, "get_auth_provider", return_value=FakeProvider()):
-            resolved = myPto._resolve_current_principal_email(request)
+        request = SimpleNamespace(
+            headers={"x-user-email": "Lookup@Example.com"},
+            state=SimpleNamespace(auth_principal=principal),
+        )
+        resolved = myPto._resolve_current_principal_email(request)
 
         self.assertEqual(resolved, "lookup@example.com")
-        self.assertEqual(seen_user_ids, ["user-1"])
 
     def test_resolve_principal_email_uses_legacy_header_email(self):
         request = SimpleNamespace(

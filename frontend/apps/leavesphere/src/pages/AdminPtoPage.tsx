@@ -962,7 +962,7 @@ export default function LeaveSphereAdminPtoPage() {
       return null;
     }
     return {
-      title: "Cancel load request?",
+      title: "Cancel Load Request?",
       description: "This will cancel the selected approved PTO load request and remove it from the balance.",
       confirmLabel: "Cancel request",
     };
@@ -991,13 +991,13 @@ export default function LeaveSphereAdminPtoPage() {
 
   const cacheStatusText = useMemo(() => {
     if (isRefreshing) {
-      return "Refreshing LeaveSphere Admin PTO workspace...";
+      return "Refreshing LeaveSphere Leave Management workspace...";
     }
     if (loadedYear === null) {
       return "Select a year and click Load.";
     }
     if (!cacheStatus) {
-      return "Loading LeaveSphere Admin PTO workspace...";
+      return "Loading LeaveSphere Leave Management workspace...";
     }
     if (!isOnline) {
       return `Offline. Showing cached data from ${formatRelativeTime(cacheStatus.fetchedAt)}.`;
@@ -1092,9 +1092,9 @@ export default function LeaveSphereAdminPtoPage() {
       sectionLoading: isMutating,
     },
     {
-      pageInitializing: "Preparing LeaveSphere admin PTO workspace...",
-      pageRefreshing: "Refreshing admin PTO workspace...",
-      cacheChipRefreshing: "Refreshing admin PTO workspace...",
+      pageInitializing: "Preparing LeaveSphere Leave Management workspace...",
+      pageRefreshing: "Refreshing Leave Management workspace...",
+      cacheChipRefreshing: "Refreshing Leave Management workspace...",
       sectionLoading: "Applying admin changes...",
     },
   );
@@ -1130,10 +1130,10 @@ export default function LeaveSphereAdminPtoPage() {
       setIsRefreshing(false);
       if (hasCachedWorkspace && cachedWorkspace) {
         commitWorkspace(cachedWorkspace, "cache", year, cacheSnapshot?.fetchedAt ?? Date.now());
-        setRefreshMessage("You're offline. Showing cached admin PTO workspace.");
+        setRefreshMessage("You're offline. Showing cached Leave Management workspace.");
         return true;
       }
-      setPageErrorMessage("You're offline. Connect to the internet to load admin PTO workspace.");
+      setPageErrorMessage("You're offline. Connect to the internet to load Leave Management workspace.");
       return false;
     }
 
@@ -1141,7 +1141,7 @@ export default function LeaveSphereAdminPtoPage() {
     setIsRefreshing(shouldShowRefreshing);
     setPageErrorMessage(null);
     if (shouldShowRefreshing && hasCachedWorkspace) {
-      setRefreshMessage("Cached admin PTO workspace shown while refreshing.");
+      setRefreshMessage("Cached Leave Management workspace shown while refreshing.");
     } else {
       setRefreshMessage(null);
     }
@@ -1166,10 +1166,10 @@ export default function LeaveSphereAdminPtoPage() {
       }
       if (hasCachedWorkspace && cachedWorkspace) {
         commitWorkspace(cachedWorkspace, "cache", year, cacheSnapshot?.fetchedAt ?? Date.now());
-        setRefreshMessage("Showing cached admin PTO workspace. Could not refresh.");
+        setRefreshMessage("Showing cached Leave Management workspace. Could not refresh.");
         return true;
       }
-      setPageErrorMessage("Unable to load Admin PTO workspace right now. Please try again.");
+      setPageErrorMessage("Unable to load Leave Management workspace right now. Please try again.");
       return false;
     } finally {
       if (requestToken === workspaceLoadRequestTokenRef.current) {
@@ -1947,29 +1947,31 @@ export default function LeaveSphereAdminPtoPage() {
     }
     for (const request of requests) {
       const requestType = requestTypeLabel(request.type);
+      const hoursLabel = formatHoursLabel(request.hours);
+      const chipLabel = buildLeaveSpherePtoCalendarRequestChipLabel(
+        request.employeeName,
+        requestType,
+        hoursLabel,
+        request.reason,
+      );
       calendarEvents.push({
         id: `request:${request.id}`,
-        label: buildLeaveSpherePtoCalendarRequestChipLabel(
-          request.employeeName,
-          requestType,
-          request.reason,
-          formatHoursLabel(request.hours),
-        ),
+        label: chipLabel,
         tone: mapLeaveSpherePtoStatusToChipTone(request.status),
         startDate: request.startDate,
         endDate: request.endDate,
         title: buildLeaveSpherePtoCalendarRequestTooltipLabel(
           request.employeeName,
           requestType,
+          hoursLabel,
           request.reason,
-          formatHoursLabel(request.hours),
         ),
       });
     }
 
     return (
       <LeaveSphereMonthCalendar
-        title="Month calendar"
+        title="Month Calendar"
         description="Who is out and company holidays"
         monthKey={calendarMonth}
         onMonthChange={setCalendarMonth}
@@ -2003,7 +2005,7 @@ export default function LeaveSphereAdminPtoPage() {
     return (
       <div className="grid gap-4 xl:grid-cols-[minmax(18rem,22rem)_minmax(0,1fr)]">
         <SectionCard
-          title="Pending requests"
+          title="Pending Requests"
           description={`${pendingRequests.length} waiting for decision`}
           contentClassName="space-y-3"
         >
@@ -2032,7 +2034,7 @@ export default function LeaveSphereAdminPtoPage() {
         </SectionCard>
 
       <SectionCard
-        title="Recent request history"
+        title="Recent Request History"
         description="All employee PTO request statuses"
         actions={(
           <ActionIconButton
@@ -2150,7 +2152,7 @@ export default function LeaveSphereAdminPtoPage() {
   const renderBalancesTab = () => {
     return (
       <SectionCard
-        title="Employee PTO balances"
+        title="Employee PTO Balances"
         description="Click a balance to edit loaded PTO hours by employee"
         actions={(
           <ActionIconButton
@@ -2248,7 +2250,7 @@ export default function LeaveSphereAdminPtoPage() {
     return (
       <div className="grid gap-4 xl:grid-cols-2">
         <SectionCard
-          title="Setup data"
+          title="Setup Data"
           description="PTO types, actions, employees, managers, and holidays"
           actions={(
             <Button
@@ -2293,7 +2295,7 @@ export default function LeaveSphereAdminPtoPage() {
         </SectionCard>
 
         <SectionCard
-          title="Employees / managers / holidays"
+          title="Employees / Managers / Holidays"
           description="Current manager mapping and holiday list"
           contentClassName="space-y-3"
         >
@@ -2333,13 +2335,13 @@ export default function LeaveSphereAdminPtoPage() {
         banner={(
           <PageBanner
             eyebrow="LeaveSphere"
-            title="Admin PTO"
+            title="Leave Management"
             description="This page requires LeaveSphere admin access."
             gradientVariant="workspace"
           />
         )}
       >
-        <SectionCard title="Access required" description="Only LeaveSphere admins can access this workspace.">
+        <SectionCard title="Access Required" description="Only LeaveSphere admins can access this workspace.">
           <p className="text-sm text-slate-600">Contact your workspace administrator if you need admin access.</p>
         </SectionCard>
       </AppPageLayout>
@@ -2353,7 +2355,7 @@ export default function LeaveSphereAdminPtoPage() {
       banner={(
         <PageBanner
         eyebrow="LeaveSphere"
-        title="Admin PTO"
+        title="Leave Management"
         description="Admin overview of PTO activity, requests, balances, and setup data."
         gradientVariant="workspace"
       />
@@ -2369,8 +2371,8 @@ export default function LeaveSphereAdminPtoPage() {
           }}
           disabled={isInitializing || isRefreshing || isMutating || !isOnline}
           refreshing={isRefreshing || isChipRefreshOverlayVisible}
-          refreshLabel="Refresh admin PTO workspace"
-          tooltipText={isOnline ? "Click to refresh requests, balances, and setup data" : "Offline. Reconnect to refresh admin PTO workspace."}
+          refreshLabel="Refresh Leave Management workspace"
+          tooltipText={isOnline ? "Click to refresh requests, balances, and setup data" : "Offline. Reconnect to refresh Leave Management workspace."}
           containerClassName="w-full"
         />
       ) : null}
@@ -2398,7 +2400,7 @@ export default function LeaveSphereAdminPtoPage() {
         <>
           <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
             <article className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-amber-800">Pending requests</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-amber-800">Pending Requests</p>
               <p className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-amber-900">{overview.pendingCount}</p>
             </article>
             <article className="rounded-2xl border border-blue-200 bg-blue-50 p-4">
@@ -2406,11 +2408,11 @@ export default function LeaveSphereAdminPtoPage() {
               <p className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-blue-900">{overview.upcomingOutCount}</p>
             </article>
             <article className="rounded-2xl border border-violet-200 bg-violet-50 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-violet-800">Total employees</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-violet-800">Total Employees</p>
               <p className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-violet-900">{overview.employeeCount}</p>
             </article>
             <article className="rounded-2xl border border-indigo-200 bg-indigo-50 p-4">
-              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-indigo-800">Holiday marks</p>
+              <p className="text-xs font-semibold uppercase tracking-[0.12em] text-indigo-800">Holiday Marks</p>
               <p className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-indigo-900">{overview.holidayCount}</p>
             </article>
           </div>
@@ -2459,7 +2461,7 @@ export default function LeaveSphereAdminPtoPage() {
         open={isCreateModalOpen}
         request={null}
         initialForm={createForm as LeaveSpherePtoRequestFormState}
-        title="Submit PTO request"
+        title="Submit PTO Request"
         description="Enter request details. Your manager can approve or reject from the Manager PTO queue."
         ptoTypeOptions={ptoTypeOptions}
         statusLabel={statusLabel}
@@ -2501,7 +2503,7 @@ export default function LeaveSphereAdminPtoPage() {
             <X className="size-4" />
           </DialogClose>
           <DialogHeader>
-            <DialogTitle>Submit PTO request?</DialogTitle>
+            <DialogTitle>Submit PTO Request?</DialogTitle>
             <DialogDescription>
               Choose whether this admin-created request should be submitted as pending or submitted and approved immediately.
             </DialogDescription>
@@ -2530,7 +2532,7 @@ export default function LeaveSphereAdminPtoPage() {
         request={selectedRequest}
         layoutVariant="my-pto-detail"
         readOnly={!selectedRequestActionConfig?.canEditForm}
-        title="Request detail"
+        title="Request Detail"
         description="Review and update employee PTO request details."
         ptoTypeOptions={PTO_TYPE_OPTIONS.map((item) => ({ value: item.value, label: item.label }))}
         statusLabel={statusLabel}
@@ -2662,7 +2664,7 @@ export default function LeaveSphereAdminPtoPage() {
 
       <ConfirmDialog
         open={isNoteSaveWarningDialogOpen}
-        title="Admin note won't be saved"
+        title="Admin Note Won't Be Saved"
         description="Save changes only updates request details. Use Approve, Reject, or Cancel to save the admin note."
         cancelLabel="Go back"
         confirmLabel="Save details only"
@@ -2677,7 +2679,7 @@ export default function LeaveSphereAdminPtoPage() {
       }}>
         <DialogContent className="max-w-xl">
           <DialogHeader>
-            <DialogTitle>Holiday detail</DialogTitle>
+            <DialogTitle>Holiday Detail</DialogTitle>
             <DialogDescription>
               Team holiday information for the selected date.
             </DialogDescription>
@@ -2710,7 +2712,7 @@ export default function LeaveSphereAdminPtoPage() {
             <X className="size-4" />
           </DialogClose>
           <DialogHeader>
-            <DialogTitle>Choose load request</DialogTitle>
+            <DialogTitle>Choose Load Request</DialogTitle>
             <DialogDescription>
               Select the approved load request you want to adjust.
             </DialogDescription>
@@ -2890,7 +2892,7 @@ export default function LeaveSphereAdminPtoPage() {
         <DialogContent className="flex max-h-[90vh] max-w-2xl flex-col overflow-hidden rounded-xl bg-white p-6">
           <ModalShell busy={isMutating} busyMessage="Saving setup..." className="min-h-0 flex-1">
             <DialogHeader>
-              <DialogTitle>Setup / admin data</DialogTitle>
+              <DialogTitle>Setup / Admin Data</DialogTitle>
               <DialogDescription>Manage PTO types, actions, employees, employee managers, and holidays.</DialogDescription>
             </DialogHeader>
 

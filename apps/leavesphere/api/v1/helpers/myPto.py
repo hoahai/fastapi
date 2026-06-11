@@ -17,9 +17,7 @@ from apps.leavesphere.api.v1.helpers.dbQueries import (
     reject_pending_pto_request,
     update_pto_transaction,
 )
-from shared.auth.providers import get_auth_provider
 from shared.auth.dependencies import get_auth_principal, get_tenant_access
-from shared.auth.supabase_client import SupabaseClientError
 from shared.db import run_transaction
 
 _UI_PTO_TYPE_ORDER = ("vacation", "sick", "personal", "floating")
@@ -226,16 +224,6 @@ def _resolve_current_principal_email(request) -> str:
         raw_user_email = _extract_email_from_auth_payload(principal.raw_user)
         if raw_user_email:
             return raw_user_email
-
-        user_id = _normalize_text(getattr(principal, "user_id", None))
-        if user_id:
-            try:
-                auth_user = get_auth_provider().get_auth_user_by_id(user_id=user_id)
-            except SupabaseClientError:
-                auth_user = None
-            resolved_auth_user_email = _extract_email_from_auth_payload(auth_user)
-            if resolved_auth_user_email:
-                return resolved_auth_user_email
 
     legacy_user_name = _normalize_text(getattr(request, "headers", {}).get("x-user-name"))
     legacy_user_email = _normalize_text(getattr(request, "headers", {}).get("x-user-email"))
