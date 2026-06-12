@@ -1,3 +1,5 @@
+import type { ReactNode } from "react";
+
 import { Button } from "@/components/ui/button";
 import {
   Dialog,
@@ -16,6 +18,7 @@ type ConfirmDialogProps = {
   cancelLabel?: string;
   onConfirm: () => void;
   onCancel: () => void;
+  children?: ReactNode;
 };
 
 export function ConfirmDialog({
@@ -26,6 +29,7 @@ export function ConfirmDialog({
   cancelLabel = "Cancel",
   onConfirm,
   onCancel,
+  children,
 }: ConfirmDialogProps) {
   return (
     <Dialog
@@ -36,11 +40,12 @@ export function ConfirmDialog({
         }
       }}
     >
-      <DialogContent className="max-w-md">
+      <DialogContent className={children ? "max-w-lg" : "max-w-md"}>
         <DialogHeader>
           <DialogTitle>{title}</DialogTitle>
           <DialogDescription>{description}</DialogDescription>
         </DialogHeader>
+        {children ? <div className="mt-4">{children}</div> : null}
         <DialogFooter>
           <Button variant="outline" onClick={onCancel}>
             {cancelLabel}

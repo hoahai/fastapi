@@ -558,7 +558,6 @@ export default function LeaveSphereAdminPtoPage() {
   const [selectedHolidayId, setSelectedHolidayId] = useState<string | null>(null);
   const [reviewNote, setReviewNote] = useState("");
   const [pendingReviewAction, setPendingReviewAction] = useState<LeaveSphereReviewAction | null>(null);
-  const [isNoteSaveWarningDialogOpen, setIsNoteSaveWarningDialogOpen] = useState(false);
 
   const [isAdjustModalOpen, setIsAdjustModalOpen] = useState(false);
   const [adjustForm, setAdjustForm] = useState<AdjustBalanceForm>(EMPTY_ADJUST_FORM);
@@ -583,7 +582,6 @@ export default function LeaveSphereAdminPtoPage() {
   const hydratedPageStateScopeRef = useRef<string | null>(null);
   const restoredScrollScopeRef = useRef<string | null>(null);
   const restoredWorkspaceScopeRef = useRef<string | null>(null);
-  const noteSaveWarningResolverRef = useRef<((confirmed: boolean) => void) | null>(null);
   const adjustWasOpenRef = useRef(false);
   const workspaceLoadRequestTokenRef = useRef(0);
 
@@ -830,21 +828,6 @@ export default function LeaveSphereAdminPtoPage() {
       })
       : null),
     [selectedRequest, todayIsoDate],
-  );
-  const isReviewNoteDirty = useMemo(
-    () => selectedRequest
-      ? normalizeOptionalNote(reviewNote) !== normalizeOptionalNote(selectedRequest.approverNote)
-      : false,
-    [reviewNote, selectedRequest],
-  );
-  const canEditAdminNote = Boolean(
-    selectedRequest?.status === "pending"
-    && (
-      selectedRequestActionConfig?.canEditForm
-      || selectedRequestActionConfig?.canApprove
-      || selectedRequestActionConfig?.canReject
-      || selectedRequestActionConfig?.canCancel
-    ),
   );
   const pendingReviewActionCopy = useMemo(
     () => (pendingReviewAction ? getLeaveSphereReviewActionConfirmCopy(pendingReviewAction, "admin") : null),
@@ -1609,6 +1592,7 @@ export default function LeaveSphereAdminPtoPage() {
           )),
         };
       });
+      setReviewNote(selectedRequest.approverNote || "");
       toast.success("Decision reverted", "Request status was changed back to pending.");
     } finally {
       setIsMutating(false);
@@ -1939,48 +1923,6 @@ export default function LeaveSphereAdminPtoPage() {
       setIsMutating(false);
     }
   }, [applyWorkspace, currentUserId, currentUserName, loadedYear, requestJson, toast, workspaceKey]);
-  const handleSaveRequestDetailWithNoteWarning = useCallback(async (params: {
-    requestId: string | null;
-      payload: {
-        type: LeaveSpherePtoType;
-        startDate: string;
-        endDate: string;
-        hours: number;
-        description: string;
-      };
-  }) => {
-    async function requestNoteSaveWarningConfirmation(): Promise<boolean> {
-      setIsNoteSaveWarningDialogOpen(true);
-      return new Promise<boolean>((resolve) => {
-        noteSaveWarningResolverRef.current = resolve;
-      });
-    }
-
-    if (canEditAdminNote && isReviewNoteDirty) {
-      const shouldContinue = await requestNoteSaveWarningConfirmation();
-      if (!shouldContinue) {
-        return false;
-      }
-    }
-    await handleSaveRequestDetail(params);
-  }, [canEditAdminNote, handleSaveRequestDetail, isReviewNoteDirty]);
-
-  const resolveNoteSaveWarningDialog = useCallback((confirmed: boolean) => {
-    const resolver = noteSaveWarningResolverRef.current;
-    noteSaveWarningResolverRef.current = null;
-    setIsNoteSaveWarningDialogOpen(false);
-    resolver?.(confirmed);
-  }, []);
-
-  useEffect(() => {
-    return () => {
-      if (noteSaveWarningResolverRef.current) {
-        noteSaveWarningResolverRef.current(false);
-        noteSaveWarningResolverRef.current = null;
-      }
-    };
-  }, []);
-
   const renderCalendarTab = () => {
     const calendarEvents: LeaveSphereMonthCalendarEvent[] = [];
     for (const holiday of workspaceForYear?.holidays ?? []) {
@@ -2597,12 +2539,7 @@ export default function LeaveSphereAdminPtoPage() {
           setReviewNote("");
           setPendingReviewAction(null);
         }}
-        onSave={selectedRequestActionConfig?.canSubmit ? handleSaveRequestDetailWithNoteWarning : undefined}
-        externalDirty={Boolean(
-          selectedRequest
-          && canEditAdminNote
-          && isReviewNoteDirty
-        )}
+        onSave={selectedRequestActionConfig?.canSubmit ? handleSaveRequestDetail : undefined}
         details={selectedRequest ? (
           <div className="grid gap-2 text-sm text-slate-700 sm:grid-cols-2">
             <p className="min-w-0">
@@ -2641,11 +2578,17 @@ export default function LeaveSphereAdminPtoPage() {
           </div>
         ) : null}
         extraContent={selectedRequest ? (
-          <div className="border-t border-slate-200 pt-3 text-sm text-slate-700">
+          <div className="text-sm text-slate-700">
             <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Admin note</p>
-            <p className="mt-1 whitespace-pre-wrap text-slate-800">
-              {selectedRequest.approverNote || "No admin note."}
-            </p>
+            {selectedRequest.approverNote ? (
+              <p className="mt-1 whitespace-pre-wrap text-slate-800">
+                {selectedRequest.approverNote}
+              </p>
+            ) : (
+              <p className="mt-1 whitespace-pre-wrap italic text-slate-400">
+                No admin note.
+              </p>
+            )}
           </div>
         ) : null}
         footerActions={selectedRequest ? (
@@ -2703,18 +2646,21 @@ export default function LeaveSphereAdminPtoPage() {
           onConfirm={() => {
             void handleConfirmReviewAction();
           }}
-        />
+        >
+          {pendingReviewAction === "revert" ? null : (
+            <label className="block space-y-1 text-sm">
+              <span className="text-slate-600">Admin note / reason</span>
+              <Textarea
+                value={reviewNote}
+                onChange={(event) => setReviewNote(event.target.value)}
+                className="min-h-[120px]"
+                placeholder="Add a note or reason for this decision"
+                disabled={isMutating}
+              />
+            </label>
+          )}
+        </ConfirmDialog>
       ) : null}
-
-      <ConfirmDialog
-        open={isNoteSaveWarningDialogOpen}
-        title="Admin Note Won't Be Saved"
-        description="Save changes only updates request details. Use Approve, Reject, or Cancel to save the admin note."
-        cancelLabel="Go back"
-        confirmLabel="Save details only"
-        onCancel={() => resolveNoteSaveWarningDialog(false)}
-        onConfirm={() => resolveNoteSaveWarningDialog(true)}
-      />
 
       <Dialog open={Boolean(selectedHoliday)} onOpenChange={(open) => {
         if (!open) {
