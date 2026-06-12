@@ -1,24 +1,25 @@
-export function formatMonthDayYearLabel(isoDate: string): string {
+import { formatDateInTimeZone } from "@shared/utils/time";
+
+export function formatMonthDayYearLabel(isoDate: string, timeZone?: string | null): string {
   if (!isoDate) {
     return "-";
   }
-  const date = new Date(`${isoDate}T00:00:00`);
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  const year = date.getFullYear();
-  return `${month}/${day}/${year}`;
+  return formatDateInTimeZone(isoDate, timeZone, {
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+  });
 }
 
-export function formatPtoRequestDateRangeLabel(startDate: string, endDate: string): string {
+export function formatPtoRequestDateRangeLabel(startDate: string, endDate: string, timeZone?: string | null): string {
   if (!startDate || !endDate) {
     return "-";
   }
   if (startDate === endDate) {
-    const date = new Date(`${startDate}T00:00:00`);
-    const weekday = date.toLocaleDateString(undefined, { weekday: "long" });
-    return `${weekday}, ${formatMonthDayYearLabel(startDate)}`;
+    const weekday = formatDateInTimeZone(startDate, timeZone, { weekday: "long" });
+    return `${weekday}, ${formatMonthDayYearLabel(startDate, timeZone)}`;
   }
-  const startDateLabel = new Date(`${startDate}T00:00:00`).toLocaleDateString(undefined, { weekday: "long" });
-  const endDateLabel = new Date(`${endDate}T00:00:00`).toLocaleDateString(undefined, { weekday: "long" });
-  return `${startDateLabel}, ${formatMonthDayYearLabel(startDate)} - ${endDateLabel}, ${formatMonthDayYearLabel(endDate)}`;
+  const startDateLabel = formatDateInTimeZone(startDate, timeZone, { weekday: "long" });
+  const endDateLabel = formatDateInTimeZone(endDate, timeZone, { weekday: "long" });
+  return `${startDateLabel}, ${formatMonthDayYearLabel(startDate, timeZone)} - ${endDateLabel}, ${formatMonthDayYearLabel(endDate, timeZone)}`;
 }

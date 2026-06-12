@@ -55,7 +55,7 @@ class LeaveManagementBackendTests(unittest.TestCase):
                 "dateCreated": "2026-01-01T00:00:00",
                 "dateUpdated": "2026-01-01T00:00:00",
                 "approverId": "emp-1",
-                "note": "Opening load",
+                "description": "Opening load",
             },
             {
                 "id": "txn-req-approved",
@@ -68,7 +68,8 @@ class LeaveManagementBackendTests(unittest.TestCase):
                 "dateCreated": "2026-06-01T00:00:00",
                 "dateUpdated": "2026-06-02T00:00:00",
                 "approverId": "emp-1",
-                "reason": "Trip",
+                "description": "Trip",
+                "approverNote": "Approved for travel",
             },
             {
                 "id": "txn-req-pending",
@@ -80,7 +81,7 @@ class LeaveManagementBackendTests(unittest.TestCase):
                 "status": "Pending",
                 "dateCreated": "2026-06-05T00:00:00",
                 "dateUpdated": "2026-06-05T00:00:00",
-                "reason": "Doctor",
+                "description": "Doctor",
             },
         ]
 
@@ -101,6 +102,9 @@ class LeaveManagementBackendTests(unittest.TestCase):
         self.assertEqual(workspace["currentUserName"], "Hai Truong")
         self.assertEqual(len(workspace["requests"]), 2)
         self.assertEqual(len(workspace["holidays"]), 1)
+        approved_request = next(item for item in workspace["requests"] if item["id"] == "txn-req-approved")
+        self.assertEqual(approved_request["description"], "Trip")
+        self.assertEqual(approved_request["approverNote"], "Approved for travel")
         employee_balance = next(row for row in workspace["employeeBalances"] if row["employeeId"] == "emp-2")
         vacation_balance = next(row["balances"] for row in [employee_balance] if row["employeeId"] == "emp-2")
         balance = next(item for item in vacation_balance if item["code"] == "VAC")

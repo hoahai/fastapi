@@ -20,6 +20,7 @@ import {
   type LeaveSphereAdminPtoTransaction,
   type LeaveSphereAdminPtoTransactionStatus,
 } from "@leavesphere/lib/adminPtoBalanceLedger";
+import { DEFAULT_TIME_ZONE, getCurrentYearInTimeZone, getTodayIsoDateInTimeZone } from "@shared/utils/time";
 
 export type LeaveSphereAdminEmployee = {
   employeeId: string;
@@ -74,13 +75,13 @@ export type LeaveSphereAdminCreateRequestInput = {
   startDate: string;
   endDate: string;
   hours: number;
-  reason: string;
+  description: string;
 };
 
 export type LeaveSphereAdminReviewRequestInput = {
   requestId: string;
   approve: boolean;
-  note: string;
+  approverNote: string;
 };
 
 export type LeaveSphereAdminUpdateRequestInput = {
@@ -89,7 +90,7 @@ export type LeaveSphereAdminUpdateRequestInput = {
   startDate: string;
   endDate: string;
   hours: number;
-  reason: string;
+  description: string;
   year?: number | null;
   ptoTypeCode?: string | null;
   calendarId?: string | null;
@@ -103,7 +104,7 @@ export type LeaveSphereAdminAdjustBalanceInput = {
   hours: number;
   year: number;
   status: LeaveSphereAdminPtoTransactionStatus;
-  note: string;
+  approverNote: string;
 };
 
 export type LeaveSphereAdminSetupInput =
@@ -145,6 +146,7 @@ type BaseArgs = {
   workspaceKey: string;
   currentUserId: string;
   currentUserName: string;
+  timeZone?: string | null;
 };
 
 type LoadArgs = BaseArgs & {
@@ -209,15 +211,15 @@ function asNumber(value: unknown): number {
 }
 
 function toIsoDate(value: Date): string {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, "0");
-  const day = String(value.getDate()).padStart(2, "0");
+  const year = value.getUTCFullYear();
+  const month = String(value.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(value.getUTCDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
 
 function addDays(value: Date, days: number): Date {
   const next = new Date(value);
-  next.setDate(next.getDate() + days);
+  next.setUTCDate(next.getUTCDate() + days);
   return next;
 }
 
@@ -288,9 +290,12 @@ function deriveWorkspaceEmployeeBalances(params: {
 function seedWorkspace(params: {
   currentUserId: string;
   currentUserName: string;
+  timeZone?: string | null;
 }): LeaveSphereAdminWorkspaceData {
   const { currentUserId, currentUserName } = params;
-  const now = new Date();
+  const todayIsoDate = getTodayIsoDateInTimeZone(params.timeZone || DEFAULT_TIME_ZONE);
+  const now = new Date(`${todayIsoDate}T12:00:00Z`);
+  const currentYear = getCurrentYearInTimeZone(params.timeZone || DEFAULT_TIME_ZONE);
 
   const employees: LeaveSphereAdminEmployee[] = [
     {
@@ -403,12 +408,12 @@ function seedWorkspace(params: {
       startDate: toIsoDate(addDays(now, 7)),
       endDate: toIsoDate(addDays(now, 9)),
       hours: 24,
-      reason: "Family wedding trip",
+      description: "Family wedding trip",
+      approverNote: null,
       status: "pending",
       submittedAt: toIsoDate(addDays(now, -2)),
       reviewedAt: null,
       reviewerName: null,
-      managerNote: null,
     },
     {
       id: "admin-pto-rq-2",
@@ -419,12 +424,12 @@ function seedWorkspace(params: {
       startDate: toIsoDate(addDays(now, 1)),
       endDate: toIsoDate(addDays(now, 1)),
       hours: 8,
-      reason: "Scheduled procedure",
+      description: "Scheduled procedure",
+      approverNote: null,
       status: "pending",
       submittedAt: toIsoDate(addDays(now, -1)),
       reviewedAt: null,
       reviewerName: null,
-      managerNote: null,
     },
     {
       id: "admin-pto-rq-3",
@@ -435,12 +440,12 @@ function seedWorkspace(params: {
       startDate: toIsoDate(addDays(now, -8)),
       endDate: toIsoDate(addDays(now, -8)),
       hours: 8,
-      reason: "Floating holiday",
+      description: "Floating holiday",
+      approverNote: "Approved.",
       status: "approved",
       submittedAt: toIsoDate(addDays(now, -12)),
       reviewedAt: toIsoDate(addDays(now, -11)),
       reviewerName: currentUserName,
-      managerNote: "Approved.",
     },
     {
       id: "admin-pto-rq-4",
@@ -451,12 +456,12 @@ function seedWorkspace(params: {
       startDate: toIsoDate(addDays(now, 14)),
       endDate: toIsoDate(addDays(now, 14)),
       hours: 8,
-      reason: "Family appointment",
+      description: "Family appointment",
+      approverNote: "Coverage confirmed.",
       status: "approved",
       submittedAt: toIsoDate(addDays(now, -3)),
       reviewedAt: toIsoDate(addDays(now, -2)),
       reviewerName: "Mateo Garcia",
-      managerNote: "Coverage confirmed.",
     },
     {
       id: "admin-pto-rq-5",
@@ -467,16 +472,16 @@ function seedWorkspace(params: {
       startDate: toIsoDate(addDays(now, 18)),
       endDate: toIsoDate(addDays(now, 19)),
       hours: 16,
-      reason: "Weekend extension",
+      description: "Weekend extension",
+      approverNote: null,
       status: "pending",
       submittedAt: toIsoDate(addDays(now, -1)),
       reviewedAt: null,
       reviewerName: null,
-      managerNote: null,
     },
   ];
 
-  const year = now.getFullYear();
+  const year = currentYear;
   const holidays: LeaveSphereHoliday[] = [
     { id: `${year}-us-new-year`, name: "New Year's Day", date: `${year}-01-01`, teamRegion: "US" },
     { id: `${year}-us-memorial`, name: "Memorial Day", date: `${year}-05-25`, teamRegion: "US" },
@@ -532,6 +537,7 @@ function ensureWorkspace(params: {
   workspaceKey: string;
   currentUserId: string;
   currentUserName: string;
+  timeZone?: string | null;
   reset?: boolean;
 }): LeaveSphereAdminWorkspaceData {
   if (!params.reset && STORE.has(params.workspaceKey)) {
@@ -540,6 +546,7 @@ function ensureWorkspace(params: {
   const seeded = seedWorkspace({
     currentUserId: params.currentUserId,
     currentUserName: params.currentUserName,
+    timeZone: params.timeZone,
   });
   STORE.set(params.workspaceKey, seeded);
   return cloneWorkspace(seeded);
@@ -551,7 +558,7 @@ function writeWorkspace(workspaceKey: string, workspace: LeaveSphereAdminWorkspa
 }
 
 function resolveWorkspaceBalanceYear(workspace: LeaveSphereAdminWorkspaceData): number {
-  const currentYear = new Date().getFullYear();
+  const currentYear = getCurrentYearInTimeZone(DEFAULT_TIME_ZONE);
   if (workspace.balanceTransactions.some((item) => item.year === currentYear)) {
     return currentYear;
   }
@@ -559,7 +566,7 @@ function resolveWorkspaceBalanceYear(workspace: LeaveSphereAdminWorkspaceData): 
   return Number.isInteger(firstTransactionYear) ? firstTransactionYear : currentYear;
 }
 
-function normalizeNetworkWorkspace(payload: unknown): LeaveSphereAdminWorkspaceData | null {
+function normalizeNetworkWorkspace(payload: unknown, timeZone?: string | null): LeaveSphereAdminWorkspaceData | null {
   const raw = unwrapEnvelope(payload);
   if (!isRecord(raw)) {
     return null;
@@ -569,11 +576,16 @@ function normalizeNetworkWorkspace(payload: unknown): LeaveSphereAdminWorkspaceD
   if (!currentUserId || !currentUserName) {
     return null;
   }
+  const timezone = timeZone || DEFAULT_TIME_ZONE;
+  const todayIsoDate = getTodayIsoDateInTimeZone(timezone);
+  const now = new Date(`${todayIsoDate}T12:00:00Z`);
+  const currentYear = getCurrentYearInTimeZone(timezone);
 
   const workspace = ensureWorkspace({
     workspaceKey: `${currentUserId}:network`,
     currentUserId,
     currentUserName,
+    timeZone,
     reset: true,
   });
 
@@ -642,12 +654,12 @@ function normalizeNetworkWorkspace(payload: unknown): LeaveSphereAdminWorkspaceD
       startDate: asString(item.startDate),
       endDate: asString(item.endDate),
       hours: asNumber(item.hours),
-      reason: asString(item.reason),
+      description: asString(item.description),
+      approverNote: asString(item.approverNote) || null,
       status: (asString(item.status) as LeaveSpherePtoStatus) || "pending",
       submittedAt: asString(item.submittedAt),
       reviewedAt: asString(item.reviewedAt) || null,
       reviewerName: asString(item.reviewerName) || null,
-      managerNote: asString(item.managerNote) || null,
     }))
     .filter((item) => item.id && item.type);
 
@@ -676,8 +688,8 @@ function normalizeNetworkWorkspace(payload: unknown): LeaveSphereAdminWorkspaceD
       workspace.employeeBalanceUsage = buildLeaveSphereAdminBalanceUsageRows(networkEmployeeBalances);
       workspace.balanceTransactions = seedLeaveSphereAdminBalanceTransactions({
         employeeBalances: networkEmployeeBalances,
-        years: [new Date().getFullYear()],
-        createdAt: toIsoDate(new Date()),
+        years: [currentYear],
+        createdAt: toIsoDate(now),
         createdByName: currentUserName,
       });
     }
@@ -697,10 +709,10 @@ function normalizeNetworkWorkspace(payload: unknown): LeaveSphereAdminWorkspaceD
         ptoTypeCode: asString(item.ptoTypeCode) || "vacation",
         ptoActionCode: (asString(item.ptoActionCode) as LeaveSphereAdminPtoActionCode) || "load_grant",
         hours: asNumber(item.hours),
-        year: Math.trunc(asNumber(item.year)) || new Date().getFullYear(),
+        year: Math.trunc(asNumber(item.year)) || currentYear,
         status: (asString(item.status) as LeaveSphereAdminPtoTransactionStatus) || "Approved",
-        note: asString(item.note) || null,
-        createdAt: asString(item.createdAt) || toIsoDate(new Date()),
+        approverNote: asString(item.approverNote) || null,
+        createdAt: asString(item.createdAt) || toIsoDate(now),
         createdByName: asString(item.createdByName) || null,
       }))
       .filter((item) => item.employeeId && item.ptoTypeCode);
@@ -738,8 +750,8 @@ function applyLeaveSphereAdminBalanceTransaction(
     hours: nextHours,
     year: payload.year,
     status: payload.status,
-    note: asString(payload.note) || null,
-    createdAt: toIsoDate(new Date()),
+    approverNote: asString(payload.approverNote) || null,
+    createdAt: getTodayIsoDateInTimeZone(DEFAULT_TIME_ZONE),
     createdByName: currentUserName,
   };
 
@@ -759,7 +771,7 @@ function applyLeaveSphereAdminBalanceTransaction(
         return {
           ...item,
           hours: nextHours,
-          note: asString(payload.note) || null,
+          approverNote: asString(payload.approverNote) || null,
           status: payload.status,
           createdByName: currentUserName,
         };
@@ -781,7 +793,7 @@ function applyLeaveSphereAdminBalanceTransaction(
 }
 
 export async function loadLeaveSphereAdminPtoWorkspace(params: LoadArgs): Promise<LeaveSphereAdminLoadResult> {
-  const { requestJson, workspaceKey, currentUserId, currentUserName, freshData } = params;
+  const { requestJson, workspaceKey, currentUserId, currentUserName, freshData, timeZone } = params;
 
   if (resolveUseApi()) {
     try {
@@ -790,7 +802,7 @@ export async function loadLeaveSphereAdminPtoWorkspace(params: LoadArgs): Promis
         successToast: false,
         errorToast: false,
       });
-      const normalized = normalizeNetworkWorkspace(payload);
+      const normalized = normalizeNetworkWorkspace(payload, timeZone);
       if (normalized) {
         return {
           workspace: writeWorkspace(workspaceKey, normalized),
@@ -812,6 +824,7 @@ export async function loadLeaveSphereAdminPtoWorkspace(params: LoadArgs): Promis
       workspaceKey,
       currentUserId,
       currentUserName,
+      timeZone,
       reset: Boolean(freshData),
     }),
     source: "mock",
@@ -832,7 +845,7 @@ export async function createLeaveSphereAdminPtoRequest(params: CreateRequestArgs
         successToast: false,
         errorToast: false,
       });
-      const normalized = normalizeNetworkWorkspace(response);
+      const normalized = normalizeNetworkWorkspace(response, params.timeZone);
       if (normalized) {
         return {
           workspace: writeWorkspace(workspaceKey, normalized),
@@ -869,12 +882,12 @@ export async function createLeaveSphereAdminPtoRequest(params: CreateRequestArgs
     startDate,
     endDate,
     hours,
-    reason: asString(payload.reason) || "Admin-created PTO request",
+    description: asString(payload.description) || "Admin-created PTO request",
+    approverNote: null,
     status: "pending",
-    submittedAt: toIsoDate(new Date()),
+    submittedAt: getTodayIsoDateInTimeZone(params.timeZone || DEFAULT_TIME_ZONE),
     reviewedAt: null,
     reviewerName: null,
-    managerNote: `Created by ${currentUserName}`,
   };
 
   workspace.requests = [request, ...workspace.requests];
@@ -907,7 +920,7 @@ export async function updateLeaveSphereAdminPtoRequest(params: UpdateRequestArgs
         successToast: false,
         errorToast: false,
       });
-      const normalized = normalizeNetworkWorkspace(response);
+      const normalized = normalizeNetworkWorkspace(response, params.timeZone);
       if (normalized) {
         return {
           workspace: writeWorkspace(workspaceKey, normalized),
@@ -933,7 +946,7 @@ export async function updateLeaveSphereAdminPtoRequest(params: UpdateRequestArgs
   target.startDate = asString(payload.startDate);
   target.endDate = asString(payload.endDate);
   target.hours = Math.max(1, asNumber(payload.hours));
-  target.reason = asString(payload.reason) || target.reason;
+  target.description = asString(payload.description) || target.description;
   return {
     workspace: writeWorkspace(workspaceKey, workspace),
     source: "mock",
@@ -950,12 +963,12 @@ export async function reviewLeaveSphereAdminPtoRequest(params: ReviewRequestArgs
         body: {
           requestId: payload.requestId,
           action: payload.approve ? "approve" : "reject",
-          note: payload.note,
+          approverNote: payload.approverNote,
         },
         successToast: false,
         errorToast: false,
       });
-      const normalized = normalizeNetworkWorkspace(response);
+      const normalized = normalizeNetworkWorkspace(response, params.timeZone);
       if (normalized) {
         return {
           workspace: writeWorkspace(workspaceKey, normalized),
@@ -979,9 +992,9 @@ export async function reviewLeaveSphereAdminPtoRequest(params: ReviewRequestArgs
 
   const nextStatus: LeaveSpherePtoStatus = payload.approve ? "approved" : "rejected";
   target.status = nextStatus;
-  target.reviewedAt = toIsoDate(new Date());
+  target.reviewedAt = getTodayIsoDateInTimeZone(params.timeZone || DEFAULT_TIME_ZONE);
   target.reviewerName = currentUserName;
-  target.managerNote = asString(payload.note) || null;
+  target.approverNote = asString(payload.approverNote) || null;
 
   const balance = findEmployeeBalanceUsage(workspace, target.employeeId);
   const typeBalance = balance?.balances.find((item) => item.type === target.type);
@@ -1020,7 +1033,7 @@ export async function adjustLeaveSphereAdminPtoBalance(params: AdjustBalanceArgs
         Array.isArray(responseRaw.balanceTransactions)
         || Array.isArray(responseRaw.ptoTransactions)
       );
-      const normalized = normalizeNetworkWorkspace(response);
+      const normalized = normalizeNetworkWorkspace(response, params.timeZone);
       if (normalized) {
         if (!hasExplicitBalanceTransactions) {
           const mergedWorkspace = cloneWorkspace(workspace);
@@ -1068,7 +1081,7 @@ export async function updateLeaveSphereAdminSetupData(params: SetupArgs): Promis
         successToast: false,
         errorToast: false,
       });
-      const normalized = normalizeNetworkWorkspace(response);
+      const normalized = normalizeNetworkWorkspace(response, params.timeZone);
       if (normalized) {
         return {
           workspace: writeWorkspace(workspaceKey, normalized),
@@ -1136,8 +1149,8 @@ export async function updateLeaveSphereAdminSetupData(params: SetupArgs): Promis
     workspace.balanceTransactions = [
       ...seedLeaveSphereAdminBalanceTransactions({
         employeeBalances: [defaultEmployeeBalance],
-        years: [new Date().getFullYear()],
-        createdAt: toIsoDate(new Date()),
+        years: [getCurrentYearInTimeZone(params.timeZone || DEFAULT_TIME_ZONE)],
+        createdAt: getTodayIsoDateInTimeZone(params.timeZone || DEFAULT_TIME_ZONE),
         createdByName: currentUserName,
       }),
       ...workspace.balanceTransactions,

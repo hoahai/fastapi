@@ -25,6 +25,7 @@ import { SectionCard } from "@shared/components/layout/SectionCard";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { PageLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { ModalShell } from "@shared/components";
+import { DEFAULT_TIME_ZONE, formatDateInTimeZone } from "@shared/utils/time";
 import {
   loadLeaveSphereQuickApproval,
   submitLeaveSphereQuickApprovalDecision,
@@ -44,11 +45,11 @@ function formatDateLabel(value: string): string {
   if (Number.isNaN(parsed)) {
     return value;
   }
-  return new Intl.DateTimeFormat(undefined, {
+  return formatDateInTimeZone(value, DEFAULT_TIME_ZONE, {
     month: "short",
     day: "numeric",
     year: "numeric",
-  }).format(new Date(parsed));
+  });
 }
 
 function statusChipClass(status: LeaveSphereQuickApprovalRequestStatus): string {

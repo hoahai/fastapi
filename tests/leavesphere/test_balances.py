@@ -236,12 +236,12 @@ class LeaveSphereBalancesTests(unittest.TestCase):
             "approve_pending_pto_request",
             return_value=1,
         ) as mock_approve:
-            result = ptoTransactions.approve_request(request=request, transaction_id="tx-1", reason="ok")
+            result = ptoTransactions.approve_request(request=request, transaction_id="tx-1", approverNote="ok")
 
         self.assertEqual(result, {"id": "tx-1", "status": "Approved", "updated": 1})
         call = mock_approve.call_args.kwargs
         self.assertEqual(call["approver_id"], "mgr-1")
-        self.assertEqual(call["reason"], "ok")
+        self.assertEqual(call["approverNote"], "ok")
 
     def test_reject_request_sets_rejected_status(self):
         request = self._build_request(
@@ -266,12 +266,12 @@ class LeaveSphereBalancesTests(unittest.TestCase):
             "reject_pending_pto_request",
             return_value=1,
         ) as mock_reject:
-            result = ptoTransactions.reject_request(request=request, transaction_id="tx-1", reason="insufficient coverage")
+            result = ptoTransactions.reject_request(request=request, transaction_id="tx-1", approverNote="insufficient coverage")
 
         self.assertEqual(result, {"id": "tx-1", "status": "Rejected", "updated": 1})
         call = mock_reject.call_args.kwargs
         self.assertEqual(call["approver_id"], "mgr-1")
-        self.assertEqual(call["reason"], "insufficient coverage")
+        self.assertEqual(call["approverNote"], "insufficient coverage")
 
     def test_non_manager_editor_cannot_approve_or_reject(self):
         request = self._build_request(

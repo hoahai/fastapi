@@ -13,6 +13,7 @@ import {
 } from "@tradsphere/components/ui/dialog";
 import { Tooltip } from "@shared/components/actions/Tooltip";
 import { SectionCard } from "@shared/components/layout/SectionCard";
+import { formatDateInTimeZone } from "@shared/utils/time";
 import {
   getLeaveSpherePtoChipMeta,
   LeaveSpherePtoChipLabel,
@@ -47,69 +48,78 @@ type LeaveSphereMonthCalendarProps = {
   dayMinHeightClassName?: string;
   maxVisibleEventRows?: number;
   legend?: ReactNode;
+  todayIsoDate?: string;
 };
 
 function toIsoDate(date: Date): string {
-  const year = date.getFullYear();
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
+  const year = date.getUTCFullYear();
+  const month = String(date.getUTCMonth() + 1).padStart(2, "0");
+  const day = String(date.getUTCDate()).padStart(2, "0");
   return `${year}-${month}-${day}`;
 }
 
-function getTodayIsoDate(): string {
-  return toIsoDate(new Date());
+function getUtcTodayIsoDate(): string {
+  return new Date().toISOString().slice(0, 10);
 }
 
-function parseMonthKey(monthKey: string): Date {
+function parseMonthKey(monthKey: string, todayIsoDate?: string): Date {
   const match = /^(\d{4})-(\d{2})$/.exec(monthKey);
   if (!match) {
+    const fallbackIsoDate = todayIsoDate || getUtcTodayIsoDate();
+    const fallbackMatch = /^(\d{4})-(\d{2})-(\d{2})$/.exec(fallbackIsoDate);
+    if (fallbackMatch) {
+      return new Date(Date.UTC(Number(fallbackMatch[1]), Number(fallbackMatch[2]) - 1, 1));
+    }
     const now = new Date();
-    return new Date(now.getFullYear(), now.getMonth(), 1);
+    return new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
   }
-  return new Date(Number(match[1]), Number(match[2]) - 1, 1);
+  return new Date(Date.UTC(Number(match[1]), Number(match[2]) - 1, 1));
 }
 
-function formatMonthHeading(monthKey: string): string {
-  return parseMonthKey(monthKey).toLocaleDateString(undefined, { month: "long", year: "numeric" });
+function formatMonthHeading(monthKey: string, todayIsoDate?: string): string {
+  return new Intl.DateTimeFormat("en-US", {
+    month: "long",
+    year: "numeric",
+    timeZone: "UTC",
+  }).format(parseMonthKey(monthKey, todayIsoDate));
 }
 
 function addMonths(monthKey: string, offset: number): string {
   const date = parseMonthKey(monthKey);
-  date.setMonth(date.getMonth() + offset);
-  return `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, "0")}`;
+  date.setUTCMonth(date.getUTCMonth() + offset);
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
 }
 
-function buildCalendarDays(monthKey: string): CalendarDay[] {
-  const monthStart = parseMonthKey(monthKey);
-  const monthEnd = new Date(monthStart.getFullYear(), monthStart.getMonth() + 1, 0);
-  const startWeekday = (monthStart.getDay() + 6) % 7;
+function buildCalendarDays(monthKey: string, todayIsoDate?: string): CalendarDay[] {
+  const monthStart = parseMonthKey(monthKey, todayIsoDate);
+  const monthEnd = new Date(Date.UTC(monthStart.getUTCFullYear(), monthStart.getUTCMonth() + 1, 0));
+  const startWeekday = (monthStart.getUTCDay() + 6) % 7;
   const gridStart = new Date(monthStart);
-  gridStart.setDate(monthStart.getDate() - startWeekday);
+  gridStart.setUTCDate(monthStart.getUTCDate() - startWeekday);
 
   const days: CalendarDay[] = [];
   for (let index = 0; index < 42; index += 1) {
     const date = new Date(gridStart);
-    date.setDate(gridStart.getDate() + index);
+    date.setUTCDate(gridStart.getUTCDate() + index);
     days.push({
       isoDate: toIsoDate(date),
-      dayNumber: date.getDate(),
-      inCurrentMonth: date >= monthStart && date <= monthEnd,
+      dayNumber: date.getUTCDate(),
+      inCurrentMonth: date.getTime() >= monthStart.getTime() && date.getTime() <= monthEnd.getTime(),
     });
   }
   return days;
 }
 
 function formatRequestTooltipDate(isoDate: string): string {
-  const date = new Date(`${isoDate}T00:00:00`);
-  const month = String(date.getMonth() + 1).padStart(2, "0");
-  const day = String(date.getDate()).padStart(2, "0");
-  const year = date.getFullYear();
-  return `${month}/${day}/${year}`;
+  return formatDateInTimeZone(isoDate, "UTC", {
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+  });
 }
 
 function formatLongDateLabel(isoDate: string): string {
-  const date = new Date(`${isoDate}T00:00:00`);
-  return date.toLocaleDateString(undefined, {
+  return formatDateInTimeZone(isoDate, "UTC", {
     weekday: "long",
     month: "long",
     day: "numeric",
@@ -123,6 +133,7 @@ type CalendarDayCellProps = {
   onDateClick?: (isoDate: string) => void;
   hiddenEventCount?: number;
   onMoreEventsClick?: () => void;
+  isToday?: boolean;
 };
 
 function CalendarDayCell({
@@ -131,11 +142,11 @@ function CalendarDayCell({
   onDateClick,
   hiddenEventCount = 0,
   onMoreEventsClick,
+  isToday = false,
 }: CalendarDayCellProps) {
   const anchorRef = useRef<HTMLButtonElement | null>(null);
   const [isTooltipOpen, setIsTooltipOpen] = useState(false);
   const tooltipText = `Request PTO for ${formatRequestTooltipDate(day.isoDate)}`;
-  const isToday = day.isoDate === getTodayIsoDate();
 
   return (
     <article
@@ -316,8 +327,9 @@ export function LeaveSphereMonthCalendar({
   dayMinHeightClassName = "min-h-[7.6rem]",
   maxVisibleEventRows = 3,
   legend,
+  todayIsoDate,
 }: LeaveSphereMonthCalendarProps) {
-  const calendarDays = buildCalendarDays(monthKey);
+  const calendarDays = buildCalendarDays(monthKey, todayIsoDate);
   const weeks = Array.from({ length: 6 }, (_, weekIndex) => (
     calendarDays.slice(weekIndex * 7, weekIndex * 7 + 7)
   ));
@@ -351,7 +363,7 @@ export function LeaveSphereMonthCalendar({
               icon={<ChevronLeft className="size-5" />}
               className="h-9 w-9"
             />
-            <p className="min-w-[9rem] text-center text-sm font-semibold text-slate-800">{formatMonthHeading(monthKey)}</p>
+            <p className="min-w-[9rem] text-center text-sm font-semibold text-slate-800">{formatMonthHeading(monthKey, todayIsoDate)}</p>
             <ActionIconButton
               aria-label="Load next month"
               tooltip="Load next month"
@@ -393,6 +405,7 @@ export function LeaveSphereMonthCalendar({
                       dayMinHeightClassName={dayMinHeightClassName}
                       onDateClick={onDateClick}
                       hiddenEventCount={hiddenCountByDate.get(day.isoDate) ?? 0}
+                      isToday={day.isoDate === todayIsoDate}
                       onMoreEventsClick={() => {
                         const dayEvents = dayEventsByIso.get(day.isoDate) ?? [];
                         setSelectedOverflowDay({

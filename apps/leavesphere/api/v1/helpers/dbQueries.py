@@ -328,7 +328,7 @@ def get_pto_transactions(
     query = (
         "SELECT "
         "dateCreated, dateUpdated, id, employeeId, ptoTypeCode, ptoActionCode, "
-        "hours, year, startDate, endDate, status, description, note, reason, "
+        "hours, year, startDate, endDate, status, description, approverNote, "
         "approverId, calendarId "
         f"FROM {tables['PTOTRANSACTIONS']}{where} "
         "ORDER BY year DESC, startDate DESC, dateCreated DESC"
@@ -341,8 +341,8 @@ def insert_pto_transaction(item: dict) -> int:
     query = (
         f"INSERT INTO {tables['PTOTRANSACTIONS']} ("
         "id, employeeId, ptoTypeCode, ptoActionCode, hours, year, startDate, endDate, "
-        "status, description, note, reason, approverId, calendarId"
-        ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+        "status, description, approverNote, approverId, calendarId"
+        ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
     )
     params = (
         item["id"],
@@ -355,8 +355,7 @@ def insert_pto_transaction(item: dict) -> int:
         item.get("endDate"),
         item["status"],
         item.get("description"),
-        item.get("note"),
-        item.get("reason"),
+        item.get("approverNote"),
         item.get("approverId"),
         item.get("calendarId"),
     )
@@ -377,8 +376,7 @@ def update_pto_transaction(*, transaction_id: str, updates: dict) -> int:
         "endDate",
         "status",
         "description",
-        "note",
-        "reason",
+        "approverNote",
         "approverId",
         "calendarId",
     ):
@@ -431,8 +429,8 @@ def create_pto_request_transaction(*, item: dict, requested_hours: Decimal) -> i
         cursor.execute(
             f"INSERT INTO {tables['PTOTRANSACTIONS']} ("
             "id, employeeId, ptoTypeCode, ptoActionCode, hours, year, startDate, endDate, "
-            "status, description, note, reason, approverId, calendarId"
-            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            "status, description, approverNote, approverId, calendarId"
+            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 item["id"],
                 item["employeeId"],
@@ -444,8 +442,7 @@ def create_pto_request_transaction(*, item: dict, requested_hours: Decimal) -> i
                 item.get("endDate"),
                 item["status"],
                 item.get("description"),
-                item.get("note"),
-                item.get("reason"),
+                item.get("approverNote"),
                 item.get("approverId"),
                 item.get("calendarId"),
             ),
@@ -486,7 +483,7 @@ def approve_pending_pto_request(
     *,
     transaction_id: str,
     approver_id: str | None,
-    reason: str | None,
+    approverNote: str | None,
 ) -> int:
     tables = get_db_tables()
 
@@ -533,9 +530,9 @@ def approve_pending_pto_request(
 
         fields = ["status = %s", "approverId = %s", "dateUpdated = %s"]
         params: list[object] = ["Approved", approver_id, datetime.utcnow()]
-        if reason is not None:
-            fields.append("note = %s")
-            params.append(reason)
+        if approverNote is not None:
+            fields.append("approverNote = %s")
+            params.append(approverNote)
         params.append(transaction_id)
         cursor.execute(
             f"UPDATE {tables['PTOTRANSACTIONS']} "
@@ -552,7 +549,7 @@ def reject_pending_pto_request(
     *,
     transaction_id: str,
     approver_id: str | None,
-    reason: str | None,
+    approverNote: str | None,
 ) -> int:
     tables = get_db_tables()
 
@@ -577,9 +574,9 @@ def reject_pending_pto_request(
 
         fields = ["status = %s", "approverId = %s", "dateUpdated = %s"]
         params: list[object] = ["Rejected", approver_id, datetime.utcnow()]
-        if reason is not None:
-            fields.append("note = %s")
-            params.append(reason)
+        if approverNote is not None:
+            fields.append("approverNote = %s")
+            params.append(approverNote)
         params.append(transaction_id)
         cursor.execute(
             f"UPDATE {tables['PTOTRANSACTIONS']} "

@@ -1,3 +1,5 @@
+import { DEFAULT_TIME_ZONE, getCurrentYearInTimeZone } from "@shared/utils/time";
+
 export type LeaveSpherePtoStatus = "pending" | "approved" | "rejected" | "cancelled";
 export type LeaveSpherePtoType = string;
 export type LeaveSphereTeamRegion = "US" | "Mexico" | "Philippines";
@@ -47,12 +49,12 @@ export type LeaveSpherePtoRequest = {
   startDate: string;
   endDate: string;
   hours: number;
-  reason: string;
+  description: string;
+  approverNote: string | null;
   status: LeaveSpherePtoStatus;
   submittedAt: string;
   reviewedAt: string | null;
   reviewerName: string | null;
-  managerNote: string | null;
 };
 
 export type LeaveSphereHoliday = {
@@ -96,7 +98,7 @@ export type LeaveSpherePtoSubmitInput = {
   startDate: string;
   endDate: string;
   hours: number;
-  reason: string;
+  description: string;
   year: number;
 };
 
@@ -109,7 +111,7 @@ export type LeaveSpherePtoReviewAction = "approve" | "reject" | "cancel" | "reve
 export type LeaveSpherePtoReviewInput = {
   requestId: string;
   action: LeaveSpherePtoReviewAction;
-  note: string;
+  approverNote: string;
 };
 
 export type LeaveSpherePtoMutationResult = {
@@ -125,6 +127,7 @@ type RequestJson = (url: string, options?: { method?: "GET" | "POST" | "PUT" | "
 type WorkspaceArgs = {
   requestJson: RequestJson;
   year?: number;
+  timeZone?: string | null;
 };
 
 type SubmitArgs = {
@@ -343,12 +346,12 @@ function normalizeRequest(value: unknown): LeaveSpherePtoRequest | null {
     startDate: normalizeDate(value.startDate),
     endDate: normalizeDate(value.endDate),
     hours: asNumber(value.hours),
-    reason: asString(value.reason),
+    description: asString(value.description),
+    approverNote: value.approverNote === undefined ? null : asString(value.approverNote) || null,
     status: normalizePtoStatus(value.status),
     submittedAt: normalizeDate(value.submittedAt),
     reviewedAt: value.reviewedAt === undefined ? null : normalizeDate(value.reviewedAt) || null,
     reviewerName: value.reviewerName === undefined ? null : asString(value.reviewerName) || null,
-    managerNote: value.managerNote === undefined ? null : asString(value.managerNote) || null,
   };
 }
 
@@ -416,8 +419,9 @@ function buildWorkspacePayload(response: unknown): LeaveSpherePtoWorkspaceData |
 }
 
 export async function loadLeaveSpherePtoWorkspace(params: WorkspaceArgs): Promise<LeaveSpherePtoLoadResult> {
+  const timeZone = params.timeZone || DEFAULT_TIME_ZONE;
   const response = await params.requestJson(
-    `/api/leavesphere/v1/ui/my-pto/load?year=${encodeURIComponent(String(params.year ?? new Date().getFullYear()))}`,
+    `/api/leavesphere/v1/ui/my-pto/load?year=${encodeURIComponent(String(params.year ?? getCurrentYearInTimeZone(timeZone)))}`,
     {
       method: "GET",
       successToast: false,

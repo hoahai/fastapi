@@ -26,6 +26,19 @@ def _auth_result() -> AuthorizationResult:
 
 
 class SessionEndpointTests(unittest.TestCase):
+    def setUp(self):
+        self._timezone_patcher = patch("apps.auth.api.v1.endpoints.session.get_timezone", return_value="America/Chicago")
+        self._timezone_patcher.start()
+        self._page_permissions_patcher = patch(
+            "apps.auth.api.v1.endpoints.session.list_page_permissions_for_user",
+            return_value=[],
+        )
+        self._page_permissions_patcher.start()
+
+    def tearDown(self):
+        self._timezone_patcher.stop()
+        self._page_permissions_patcher.stop()
+
     def _request(self):
         return SimpleNamespace(
             headers={
@@ -49,6 +62,7 @@ class SessionEndpointTests(unittest.TestCase):
         self.assertEqual(response["user"]["fullName"], "Alex Johnson")
         self.assertEqual(response["user"]["firstName"], "Alex")
         self.assertEqual(response["user"]["lastName"], "Johnson")
+        self.assertEqual(response["tenant"]["timezone"], "America/Chicago")
 
     def test_patch_session_profile_accepts_first_and_last_name(self):
         request = self._request()

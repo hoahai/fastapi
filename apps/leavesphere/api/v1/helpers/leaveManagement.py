@@ -318,7 +318,7 @@ def _build_balance_transaction_rows(
                 "hours": float(abs(hours_value)) if action_code == "load_grant" else float(hours_value),
                 "year": int(row.get("year") or date.today().year),
                 "status": "Approved",
-                "note": _normalize_text(row.get("note")) or None,
+                "approverNote": _normalize_text(row.get("approverNote")) or None,
                 "createdAt": _to_date_string(row.get("dateCreated")) or _to_date_string(row.get("dateUpdated")) or date.today().isoformat(),
                 "createdByName": _employee_full_name(approver) if approver else None,
             }
@@ -620,9 +620,8 @@ def create_leave_management_request(*, request, payload: dict) -> dict:
         "startDate": start_date or None,
         "endDate": end_date or None,
         "status": "Pending",
-        "description": None,
-        "note": None,
-        "reason": _normalize_text(payload.get("reason")) or None,
+        "description": _normalize_text(payload.get("description")) or None,
+        "approverNote": None,
         "approverId": None,
         "calendarId": _normalize_text(payload.get("calendarId")) or None,
     }
@@ -638,7 +637,8 @@ def create_leave_management_request(*, request, payload: dict) -> dict:
             "year": year,
             "startDate": start_date or None,
             "endDate": end_date or None,
-            "reason": item["reason"],
+            "description": item["description"],
+            "approverNote": item["approverNote"],
             "calendarId": item["calendarId"],
         }
     ).get("inserted")
@@ -682,7 +682,7 @@ def update_leave_management_request(*, request, payload: dict) -> dict:
         "year": _resolve_request_year(payload, transaction),
         "startDate": _normalize_optional_iso_date(payload.get("startDate")) or transaction.get("startDate"),
         "endDate": _normalize_optional_iso_date(payload.get("endDate")) or transaction.get("endDate"),
-        "reason": _normalize_text(payload.get("reason")) or transaction.get("reason"),
+        "description": _normalize_text(payload.get("description")) or transaction.get("description"),
     }
     updated = update_pto_transaction(transaction_id=transaction_id, updates=updates)
     return {
@@ -700,16 +700,16 @@ def review_leave_management_request(*, request, payload: dict) -> dict:
         raise ValueError("requestId is required")
 
     action = _normalize_text(payload.get("action")).lower()
-    note = _normalize_optional_text(payload.get("note"))
+    approver_note = _normalize_optional_text(payload.get("approverNote"))
     transaction_rows = get_pto_transactions(transaction_id=transaction_id)
     if not transaction_rows:
         raise ValueError("PTO transaction not found")
     transaction = transaction_rows[0]
 
     if action == "approve":
-        result = approve_request(request=request, transaction_id=transaction_id, reason=note)
+        result = approve_request(request=request, transaction_id=transaction_id, approverNote=approver_note)
     elif action == "reject":
-        result = reject_request(request=request, transaction_id=transaction_id, reason=note)
+        result = reject_request(request=request, transaction_id=transaction_id, approverNote=approver_note)
     else:
         raise ValueError("action must be approve or reject")
 
@@ -752,7 +752,7 @@ def adjust_leave_management_balance(*, request, payload: dict) -> dict:
     if status != "Approved":
         raise ValueError("status must be Approved")
 
-    note = _normalize_optional_text(payload.get("note"))
+    approver_note = _normalize_optional_text(payload.get("approverNote"))
     transaction_id = _normalize_text(payload.get("transactionId"))
     if transaction_id:
         existing = get_pto_transactions(transaction_id=transaction_id)
@@ -767,7 +767,7 @@ def adjust_leave_management_balance(*, request, payload: dict) -> dict:
                 "hours": hours,
                 "year": year,
                 "status": "Approved",
-                "note": note,
+                "approverNote": approver_note,
             },
         )
     else:
@@ -778,7 +778,7 @@ def adjust_leave_management_balance(*, request, payload: dict) -> dict:
                 "ptoActionCode": resolved_action_code,
                 "hours": hours,
                 "year": year,
-                "note": note,
+                "approverNote": approver_note,
                 "status": "Approved",
             }
         ).get("inserted")
@@ -834,8 +834,7 @@ def _seed_employee_opening_balances(*, employee_id: str, region: str, year: int,
             "endDate": None,
             "status": "Approved",
             "description": "Opening PTO balance load",
-            "note": None,
-            "reason": None,
+            "approverNote": None,
             "approverId": None,
             "calendarId": None,
         }

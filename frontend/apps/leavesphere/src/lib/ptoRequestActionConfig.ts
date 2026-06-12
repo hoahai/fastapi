@@ -1,4 +1,5 @@
 import type { LeaveSpherePtoStatus } from "@leavesphere/lib/ptoMocks";
+import { DEFAULT_TIME_ZONE, getTodayIsoDateInTimeZone } from "@shared/utils/time";
 
 export type LeaveSpherePtoActionRole = "user" | "approver" | "admin";
 export type LeaveSpherePtoActionStatus = "create" | LeaveSpherePtoStatus;
@@ -73,13 +74,6 @@ function normalizeStatus(status: LeaveSpherePtoActionStatus): "create" | "pendin
   return status;
 }
 
-function toLocalIsoDate(value: Date): string {
-  const year = value.getFullYear();
-  const month = String(value.getMonth() + 1).padStart(2, "0");
-  const day = String(value.getDate()).padStart(2, "0");
-  return `${year}-${month}-${day}`;
-}
-
 function isBeforeStartDate(startDate: string | null | undefined, todayIso: string): boolean {
   if (!startDate) {
     return true;
@@ -95,7 +89,7 @@ export function getPtoRequestActionConfig(params: {
 }): LeaveSpherePtoActionConfig {
   const normalizedStatus = normalizeStatus(params.status);
   const key = `${params.role}:${normalizedStatus}` as RuleKey;
-  const todayIsoDate = params.todayIsoDate ?? toLocalIsoDate(new Date());
+  const todayIsoDate = params.todayIsoDate ?? getTodayIsoDateInTimeZone(DEFAULT_TIME_ZONE);
   const isBeforeStart = isBeforeStartDate(params.startDate, todayIsoDate);
   const table = isBeforeStart ? BEFORE_START_RULES : ON_OR_AFTER_START_RULES;
   return table[key] ?? NO_ACTIONS;

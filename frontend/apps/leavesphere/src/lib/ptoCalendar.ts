@@ -8,18 +8,18 @@ function joinCalendarLabels(parts: Array<string | null | undefined>): string {
 
 export function buildLeaveSpherePtoCalendarChipLabel(
   baseLabel: string,
-  reason?: string | null,
+  description?: string | null,
   hoursLabel?: string | null,
 ): string {
   const normalizedBaseLabel = normalizeCalendarLabel(baseLabel);
-  const normalizedReason = normalizeCalendarLabel(reason ?? "");
+  const normalizedDescription = normalizeCalendarLabel(description ?? "");
   const normalizedHoursLabel = normalizeCalendarLabel(hoursLabel ?? "");
 
   if (!normalizedBaseLabel) {
-    return normalizedReason || normalizedHoursLabel;
+    return normalizedDescription || normalizedHoursLabel;
   }
 
-  if (!normalizedReason) {
+  if (!normalizedDescription) {
     return normalizedHoursLabel ? `${normalizedBaseLabel} · ${normalizedHoursLabel}` : normalizedBaseLabel;
   }
 
@@ -27,23 +27,23 @@ export function buildLeaveSpherePtoCalendarChipLabel(
     return normalizedBaseLabel;
   }
 
-  return `${normalizedBaseLabel} · ${normalizedReason} · ${normalizedHoursLabel}`;
+  return `${normalizedBaseLabel} · ${normalizedDescription} · ${normalizedHoursLabel}`;
 }
 
 export function buildLeaveSpherePtoCalendarRequestChipLabel(
   employeeName: string,
   ptoType: string,
   hoursLabel?: string | null,
-  requestNote?: string | null,
+  description?: string | null,
 ): string {
-  return joinCalendarLabels([employeeName, ptoType, hoursLabel, requestNote]);
+  return joinCalendarLabels([employeeName, ptoType, hoursLabel, description]);
 }
 
 export function buildLeaveSpherePtoCalendarRequestTooltipLabel(
   employeeName: string,
   ptoType: string,
   hoursLabel?: string | null,
-  requestNote?: string | null,
+  description?: string | null,
 ): string {
-  return buildLeaveSpherePtoCalendarRequestChipLabel(employeeName, ptoType, hoursLabel, requestNote);
+  return buildLeaveSpherePtoCalendarRequestChipLabel(employeeName, ptoType, hoursLabel, description);
 }

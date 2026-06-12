@@ -38,7 +38,7 @@ class LeaveManagementRequestCreateRequest(_LeaveSphereModel):
     startDate: str
     endDate: str
     hours: float | int | str
-    reason: str | None = None
+    description: str | None = None
     year: int | str | None = None
     ptoTypeCode: str | None = None
     calendarId: str | None = None
@@ -50,7 +50,7 @@ class LeaveManagementRequestUpdateRequest(_LeaveSphereModel):
     startDate: str
     endDate: str
     hours: float | int | str
-    reason: str | None = None
+    description: str | None = None
     year: int | str | None = None
     ptoTypeCode: str | None = None
     calendarId: str | None = None
@@ -59,7 +59,7 @@ class LeaveManagementRequestUpdateRequest(_LeaveSphereModel):
 class LeaveManagementReviewRequest(_LeaveSphereModel):
     requestId: str
     action: str
-    note: str | None = None
+    approverNote: str | None = None
 
 
 class LeaveManagementAdjustRequest(_LeaveSphereModel):
@@ -70,7 +70,7 @@ class LeaveManagementAdjustRequest(_LeaveSphereModel):
     hours: float | int | str
     year: int | str
     status: str
-    note: str | None = None
+    approverNote: str | None = None
 
 
 class LeaveManagementSetupRequest(_LeaveSphereModel):
@@ -145,7 +145,7 @@ def create_leave_management_request_route(
           "startDate": "2026-06-10",
           "endDate": "2026-06-10",
           "hours": 8,
-          "reason": "Family trip"
+          "description": "Family trip"
         }
 
     Example response:
@@ -188,7 +188,7 @@ def update_leave_management_request_route(
           "startDate": "2026-06-11",
           "endDate": "2026-06-11",
           "hours": 8,
-          "reason": "Updated family trip"
+          "description": "Updated family trip"
         }
 
     Example response:
@@ -225,7 +225,7 @@ def review_leave_management_request_route(
 
     Example request:
         POST /api/leavesphere/v1/admin/pto/review
-        {"requestId": "pto-1", "action": "approve", "note": "Approved"}
+        {"requestId": "pto-1", "action": "approve", "approverNote": "Approved"}
 
     Example response:
         {
@@ -271,7 +271,7 @@ def adjust_leave_management_balance_route(
           "hours": 8,
           "year": 2026,
           "status": "Approved",
-          "note": "Opening balance"
+          "approverNote": "Opening balance"
         }
 
     Example response:

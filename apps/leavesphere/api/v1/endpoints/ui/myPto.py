@@ -32,7 +32,7 @@ class MyPtoRequestCreateRequest(_LeaveSphereModel):
     startDate: str
     endDate: str
     hours: float | int | str
-    reason: str | None = None
+    description: str | None = None
     year: int | str
     calendarId: str | None = None
     ptoTypeCode: str | None = None
@@ -45,7 +45,7 @@ class MyPtoRequestUpdateRequest(_LeaveSphereModel):
     startDate: str
     endDate: str
     hours: float | int | str
-    reason: str | None = None
+    description: str | None = None
     year: int | str
     calendarId: str | None = None
     ptoTypeCode: str | None = None
@@ -58,7 +58,7 @@ class MyPtoRequestActionRequest(_LeaveSphereModel):
 class MyPtoReviewRequest(_LeaveSphereModel):
     transactionId: str
     action: str
-    note: str | None = None
+    approverNote: str | None = None
 
 
 @router.get("/load")
@@ -142,7 +142,7 @@ def create_my_pto_request_route(
           "startDate": "2026-06-10",
           "endDate": "2026-06-10",
           "hours": 8,
-          "reason": "Family trip",
+          "description": "Family trip",
           "year": 2026
         }
 
@@ -187,7 +187,7 @@ def update_my_pto_request_route(
           "startDate": "2026-06-11",
           "endDate": "2026-06-11",
           "hours": 8,
-          "reason": "Family trip",
+          "description": "Family trip",
           "year": 2026
         }
 
@@ -261,7 +261,7 @@ def review_my_pto_request_route(
 
     Example request:
         POST /api/leavesphere/v1/ui/my-pto/review
-        {"transactionId": "pto-1", "action": "approve", "note": "Approved for travel"}
+        {"transactionId": "pto-1", "action": "approve", "approverNote": "Approved for travel"}
 
     Example response:
         {

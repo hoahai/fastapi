@@ -12,7 +12,7 @@ export type LeaveSphereAdminPtoTransaction = {
   hours: number;
   year: number;
   status: LeaveSphereAdminPtoTransactionStatus;
-  note: string | null;
+  approverNote: string | null;
   createdAt: string;
   createdByName: string | null;
 };
@@ -91,7 +91,7 @@ export function seedLeaveSphereAdminBalanceTransactions(params: {
           hours: totalHours,
           year,
           status: "Approved",
-          note: "Opening PTO balance load",
+          approverNote: "Opening PTO balance load",
           createdAt: params.createdAt,
           createdByName: params.createdByName,
         });

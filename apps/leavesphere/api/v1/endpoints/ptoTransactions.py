@@ -38,8 +38,7 @@ class PTOAdjustmentCreateRequest(_LeaveSphereModel):
     hours: float | int | str
     year: int | str
     description: str | None = None
-    note: str | None = None
-    reason: str | None = None
+    approverNote: str | None = None
     startDate: str | None = None
     endDate: str | None = None
     calendarId: str | None = None
@@ -54,13 +53,12 @@ class PTORequestCreateRequest(_LeaveSphereModel):
     startDate: str | None = None
     endDate: str | None = None
     description: str | None = None
-    note: str | None = None
-    reason: str | None = None
+    approverNote: str | None = None
     calendarId: str | None = None
 
 
 class PTORequestDecisionRequest(_LeaveSphereModel):
-    reason: str | None = None
+    approverNote: str | None = None
 
 
 @router.get("/balances")
@@ -233,7 +231,7 @@ def approve_request_route(
 
     Example request:
         POST /api/leavesphere/v1/ptoTransactions/0d5da2e2-0769-44c3-ac8c-bebf6b7f2f2f/approve
-        {"reason": "Approved for upcoming schedule"}
+        {"approverNote": "Approved for upcoming schedule"}
 
     Example response:
         {
@@ -250,7 +248,7 @@ def approve_request_route(
     try:
         payload_obj = payload or PTORequestDecisionRequest()
         body = payload_obj.model_dump() if hasattr(payload_obj, "model_dump") else payload_obj.dict()
-        return approve_request(request=request, transaction_id=transaction_id, reason=body.get("reason"))
+        return approve_request(request=request, transaction_id=transaction_id, approverNote=body.get("approverNote"))
     except ValueError as exc:
         detail = str(exc)
         status_code = 404 if detail == "PTO transaction not found" else 400
@@ -271,7 +269,7 @@ def reject_request_route(
 
     Example request:
         POST /api/leavesphere/v1/ptoTransactions/0d5da2e2-0769-44c3-ac8c-bebf6b7f2f2f/reject
-        {"reason": "Insufficient staffing coverage"}
+        {"approverNote": "Insufficient staffing coverage"}
 
     Example response:
         {
@@ -288,7 +286,7 @@ def reject_request_route(
     try:
         payload_obj = payload or PTORequestDecisionRequest()
         body = payload_obj.model_dump() if hasattr(payload_obj, "model_dump") else payload_obj.dict()
-        return reject_request(request=request, transaction_id=transaction_id, reason=body.get("reason"))
+        return reject_request(request=request, transaction_id=transaction_id, approverNote=body.get("approverNote"))
     except ValueError as exc:
         detail = str(exc)
         status_code = 404 if detail == "PTO transaction not found" else 400

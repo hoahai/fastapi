@@ -11,7 +11,7 @@ from shared.auth.profile_repo import compose_full_name, select_profile_for_user,
 from shared.auth.providers import get_auth_provider
 from shared.auth.roles import normalize_role_key
 from shared.auth.supabase_client import SupabaseClientError
-from shared.tenant import TenantConfigError, reset_tenant_context, set_tenant_context
+from shared.tenant import TenantConfigError, get_timezone, reset_tenant_context, set_tenant_context
 from apps.tradsphere.api.v1.helpers.config import validate_tenant_config as validate_tradsphere_tenant_config
 
 router = APIRouter(prefix="/session")
@@ -323,6 +323,7 @@ def _build_validate_payload(
         "tenant": {
             "id": response_tenant_id,
             "slug": response_tenant_slug,
+            "timezone": get_timezone(),
         },
         "app": app_payload,
         "role": selected_role if include_selected_assignment else None,
@@ -362,7 +363,8 @@ def get_session_me(request: Request):
           },
           "tenant": {
             "id": "a4f4fd7d-2c0d-4bb2-bf73-26e5f7f918bf",
-            "slug": "taaa"
+            "slug": "taaa",
+            "timezone": "America/Chicago"
           },
           "app": {
             "id": "f57fc74c-b429-4ce2-8bd0-c6f154a2cb18",
@@ -445,6 +447,7 @@ def get_session_me(request: Request):
         "tenant": {
             "id": result.access.tenant_id,
             "slug": result.access.tenant_slug,
+            "timezone": get_timezone(),
         },
         "app": {
             "id": result.access.app_id,

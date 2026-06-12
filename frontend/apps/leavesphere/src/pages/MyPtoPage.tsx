@@ -38,6 +38,7 @@ import { SectionCard } from "@shared/components/layout/SectionCard";
 import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
+import { DEFAULT_TIME_ZONE, formatDateInTimeZone, getCurrentMonthKeyInTimeZone, getCurrentYearInTimeZone, getTodayIsoDateInTimeZone } from "@shared/utils/time";
 import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 import { LeaveSpherePtoRequestCard } from "@leavesphere/components/LeaveSpherePtoRequestCard";
 import { LeaveSphereMonthCalendar, type LeaveSphereMonthCalendarEvent } from "@leavesphere/components/MonthCalendar";
@@ -88,7 +89,7 @@ type RequestFormState = {
   startDate: string;
   endDate: string;
   hours: string;
-  reason: string;
+  description: string;
 };
 
 type PersistedLeaveSphereMyPtoPageState = {
@@ -125,7 +126,7 @@ const EMPTY_FORM: RequestFormState = {
   startDate: "",
   endDate: "",
   hours: "",
-  reason: "",
+  description: "",
 };
 
 const LEAVESPHERE_APP_CODE = "leavesphere";
@@ -186,10 +187,6 @@ function normalizeSearchKeyword(value: string): string {
   return asString(value).toLowerCase();
 }
 
-function monthKeyFromDate(value: Date): string {
-  return `${value.getFullYear()}-${String(value.getMonth() + 1).padStart(2, "0")}`;
-}
-
 function formatRelativeTime(timestamp: number): string {
   const deltaMs = Math.max(0, Date.now() - timestamp);
   if (deltaMs < 60_000) {
@@ -207,9 +204,8 @@ function formatRelativeTime(timestamp: number): string {
   return `${days}d ago`;
 }
 
-function formatDateLabel(isoDate: string): string {
-  const value = new Date(`${isoDate}T00:00:00`);
-  return value.toLocaleDateString(undefined, {
+function formatDateLabel(isoDate: string, timeZone: string): string {
+  return formatDateInTimeZone(isoDate, timeZone, {
     month: "short",
     day: "numeric",
     year: "numeric",
@@ -328,7 +324,7 @@ function buildDateSearchTokens(isoDate: string): string[] {
     `${month}/${day}/${year}`,
     `${monthPadded}-${dayPadded}-${year}`,
     `${month}-${day}-${year}`,
-    formatDateLabel(isoDate),
+    formatDateLabel(isoDate, DEFAULT_TIME_ZONE),
   ];
 }
 
@@ -340,8 +336,8 @@ function managerRequestMatchesSearch(request: LeaveSpherePtoRequest, keyword: st
     request.employeeName,
     requestTypeLabel(request.type),
     statusLabel(request.status),
-    request.reason,
-    request.managerNote ?? "",
+    request.description,
+    request.approverNote ?? "",
     ...buildDateSearchTokens(request.startDate),
     ...buildDateSearchTokens(request.endDate),
     ...buildDateSearchTokens(request.submittedAt),
@@ -379,7 +375,7 @@ function isRequestFormState(value: unknown): value is RequestFormState {
     && typeof record.startDate === "string"
     && typeof record.endDate === "string"
     && typeof record.hours === "string"
-    && typeof record.reason === "string"
+    && typeof record.description === "string"
   );
 }
 
@@ -412,7 +408,13 @@ export default function LeaveSphereMyPtoPage() {
   const auth = useAuth();
   const toast = useToast();
   const { isOnline } = useOnlineStatus();
-  const currentYear = useMemo(() => new Date().getFullYear(), []);
+  const tenantTimeZone = asString(auth.accessProfile?.tenant?.timezone) || DEFAULT_TIME_ZONE;
+  const currentYear = useMemo(() => getCurrentYearInTimeZone(tenantTimeZone), [tenantTimeZone]);
+  const currentMonthKey = useMemo(() => getCurrentMonthKeyInTimeZone(tenantTimeZone), [tenantTimeZone]);
+  const todayIsoDate = useMemo(() => getTodayIsoDateInTimeZone(tenantTimeZone), [tenantTimeZone]);
+  const initialTimeZoneRef = useRef(tenantTimeZone);
+  const initialYearRef = useRef(currentYear);
+  const initialMonthKeyRef = useRef(currentMonthKey);
 
   const currentUserId = asString(auth.user?.id) || "local-user";
   const tenantSlug = asString(auth.tenantSlug);
@@ -454,7 +456,7 @@ export default function LeaveSphereMyPtoPage() {
   const [isReviewing, setIsReviewing] = useState(false);
   const [isSavingRequestDetail, setIsSavingRequestDetail] = useState(false);
 
-  const [calendarMonth, setCalendarMonth] = useState(() => monthKeyFromDate(new Date()));
+  const [calendarMonth, setCalendarMonth] = useState(() => currentMonthKey);
   const [isRequestDialogOpen, setIsRequestDialogOpen] = useState(false);
   const [requestForm, setRequestForm] = useState<RequestFormState>(EMPTY_FORM);
   const [selectedMyRequestId, setSelectedMyRequestId] = useState<string | null>(null);
@@ -467,6 +469,22 @@ export default function LeaveSphereMyPtoPage() {
   const [draftManagerSearch, setDraftManagerSearch] = useState("");
   const [appliedManagerSearch, setAppliedManagerSearch] = useState("");
   const workspaceLoadRequestTokenRef = useRef(0);
+
+  useEffect(() => {
+    if (loadedYear !== null) {
+      return;
+    }
+    if (tenantTimeZone === initialTimeZoneRef.current) {
+      return;
+    }
+    const nextYear = getCurrentYearInTimeZone(tenantTimeZone);
+    const nextMonthKey = getCurrentMonthKeyInTimeZone(tenantTimeZone);
+    setSelectedYear((current) => (current === String(initialYearRef.current) ? String(nextYear) : current));
+    setCalendarMonth((current) => (current === initialMonthKeyRef.current ? nextMonthKey : current));
+    initialTimeZoneRef.current = tenantTimeZone;
+    initialYearRef.current = nextYear;
+    initialMonthKeyRef.current = nextMonthKey;
+  }, [loadedYear, tenantTimeZone]);
 
   useEffect(() => {
     if (!canRestorePageState || !pageStateScope || !pageStateStorageKey) {
@@ -678,7 +696,7 @@ export default function LeaveSphereMyPtoPage() {
     if (!selectedReviewRequest) {
       return;
     }
-    setReviewNote(selectedReviewRequest.managerNote || "");
+    setReviewNote(selectedReviewRequest.approverNote || "");
   }, [selectedReviewRequest?.id]);
   useEffect(() => {
     if (!selectedMyRequest) {
@@ -691,9 +709,10 @@ export default function LeaveSphereMyPtoPage() {
         role: "user",
         status: selectedMyRequest.status,
         startDate: selectedMyRequest.startDate,
+        todayIsoDate,
       })
       : null),
-    [selectedMyRequest],
+    [selectedMyRequest, todayIsoDate],
   );
   const selectedReviewRequestActionConfig = useMemo(
     () => (selectedReviewRequest
@@ -701,9 +720,10 @@ export default function LeaveSphereMyPtoPage() {
         role: "approver",
         status: selectedReviewRequest.status,
         startDate: selectedReviewRequest.startDate,
+        todayIsoDate,
       })
       : null),
-    [selectedReviewRequest],
+    [selectedReviewRequest, todayIsoDate],
   );
   const canEditReviewNote = Boolean(
     selectedReviewRequest?.status === "pending"
@@ -716,7 +736,7 @@ export default function LeaveSphereMyPtoPage() {
   );
   const isReviewNoteDirty = useMemo(
     () => selectedReviewRequest
-      ? normalizeOptionalNote(reviewNote) !== normalizeOptionalNote(selectedReviewRequest.managerNote)
+      ? normalizeOptionalNote(reviewNote) !== normalizeOptionalNote(selectedReviewRequest.approverNote)
       : false,
     [reviewNote, selectedReviewRequest],
   );
@@ -749,7 +769,7 @@ export default function LeaveSphereMyPtoPage() {
         request.employeeName,
         requestType,
         hoursLabel,
-        request.reason,
+        request.description,
       );
       events.push({
         id: `request:${request.id}`,
@@ -768,7 +788,7 @@ export default function LeaveSphereMyPtoPage() {
           request.employeeName,
           requestType,
           hoursLabel,
-          request.reason,
+          request.description,
         );
         events.push({
           id: `manager-request:${request.id}`,
@@ -780,7 +800,7 @@ export default function LeaveSphereMyPtoPage() {
             request.employeeName,
             requestType,
             hoursLabel,
-            request.reason,
+            request.description,
           ),
         });
       }
@@ -986,6 +1006,7 @@ export default function LeaveSphereMyPtoPage() {
       const result = await loadLeaveSpherePtoWorkspace({
         requestJson,
         year,
+        timeZone: tenantTimeZone,
       });
       if (requestToken !== workspaceLoadRequestTokenRef.current) {
         return false;
@@ -1017,6 +1038,7 @@ export default function LeaveSphereMyPtoPage() {
     loadedYear,
     requestJson,
     tenantSlug,
+    tenantTimeZone,
     workspaceForYear,
   ]);
 
@@ -1042,17 +1064,14 @@ export default function LeaveSphereMyPtoPage() {
       return;
     }
 
-    const today = new Date();
-    const defaultMonth = parsedYear === today.getFullYear() ? today.getMonth() + 1 : 1;
+    const defaultMonth = parsedYear === currentYear ? Number(currentMonthKey.slice(5, 7)) : 1;
     setCalendarMonth(`${parsedYear}-${String(defaultMonth).padStart(2, "0")}`);
-  }, [loadWorkspace, loadedYear, selectedYear]);
+  }, [currentMonthKey, currentYear, loadWorkspace, loadedYear, selectedYear]);
 
   const openSubmitDialog = useCallback(() => {
     if (!canRequestPto || !loadedYearDateBounds) {
       return;
     }
-    const today = new Date();
-    const todayIsoDate = `${today.getFullYear()}-${String(today.getMonth() + 1).padStart(2, "0")}-${String(today.getDate()).padStart(2, "0")}`;
     const defaultIsoDate = isDateWithinBounds(todayIsoDate, loadedYearDateBounds)
       ? todayIsoDate
       : loadedYearDateBounds.minDate;
@@ -1061,10 +1080,10 @@ export default function LeaveSphereMyPtoPage() {
       startDate: defaultIsoDate,
       endDate: defaultIsoDate,
       hours: calculateLeaveSpherePtoHours(defaultIsoDate, defaultIsoDate, holidayDates),
-      reason: "",
+      description: "",
     });
     setIsRequestDialogOpen(true);
-  }, [canRequestPto, holidayDates, loadedYearDateBounds]);
+  }, [canRequestPto, holidayDates, loadedYearDateBounds, todayIsoDate]);
 
   const openSubmitDialogForDate = useCallback((isoDate: string) => {
     if (!canRequestPto || !loadedYearDateBounds || !isDateWithinBounds(isoDate, loadedYearDateBounds)) {
@@ -1075,19 +1094,19 @@ export default function LeaveSphereMyPtoPage() {
       startDate: isoDate,
       endDate: isoDate,
       hours: calculateLeaveSpherePtoHours(isoDate, isoDate, holidayDates),
-      reason: "",
+      description: "",
     });
     setIsRequestDialogOpen(true);
   }, [canRequestPto, holidayDates, loadedYearDateBounds]);
 
   const handleSubmitRequest = useCallback(async (params: {
-    payload: {
-      type: LeaveSpherePtoType;
-      startDate: string;
-      endDate: string;
-      hours: number;
-      reason: string;
-    };
+      payload: {
+        type: LeaveSpherePtoType;
+        startDate: string;
+        endDate: string;
+        hours: number;
+        description: string;
+      };
   }) => {
     if (!canRequestPto) {
       toast.error("Submit unavailable", "PTO requests are allowed only for a loaded current or future selected year.");
@@ -1135,7 +1154,7 @@ export default function LeaveSphereMyPtoPage() {
         payload: {
           requestId: selectedReviewRequest.id,
           action,
-          note: reviewNote,
+          approverNote: reviewNote,
         },
       });
       commitWorkspace(result.workspace, result.source, loadedYearForRequests);
@@ -1195,13 +1214,13 @@ export default function LeaveSphereMyPtoPage() {
 
   const handleSaveMyRequestDetail = useCallback(async (params: {
     requestId: string | null;
-    payload: {
-      type: LeaveSpherePtoType;
-      startDate: string;
-      endDate: string;
-      hours: number;
-      reason: string;
-    };
+      payload: {
+        type: LeaveSpherePtoType;
+        startDate: string;
+        endDate: string;
+        hours: number;
+        description: string;
+      };
   }) => {
     if (!workspace || !params.requestId) {
       return;
@@ -1217,7 +1236,7 @@ export default function LeaveSphereMyPtoPage() {
           startDate: params.payload.startDate,
           endDate: params.payload.endDate,
           hours: params.payload.hours,
-          reason: params.payload.reason,
+          description: params.payload.description,
           year: selectedRequestYear,
         },
       });
@@ -1229,13 +1248,13 @@ export default function LeaveSphereMyPtoPage() {
   }, [commitWorkspace, loadedYearForRequests, requestJson, selectedMyRequest?.year, toast, workspace]);
   const handleSaveReviewRequestDetail = useCallback(async (params: {
     requestId: string | null;
-    payload: {
-      type: LeaveSpherePtoType;
-      startDate: string;
-      endDate: string;
-      hours: number;
-      reason: string;
-    };
+      payload: {
+        type: LeaveSpherePtoType;
+        startDate: string;
+        endDate: string;
+        hours: number;
+        description: string;
+      };
   }) => {
     if (!params.requestId) {
       return;
@@ -1254,8 +1273,8 @@ export default function LeaveSphereMyPtoPage() {
             startDate: params.payload.startDate,
             endDate: params.payload.endDate,
             hours: params.payload.hours,
-            reason: params.payload.reason,
-            managerNote: normalizeOptionalNote(reviewNote) || null,
+            description: params.payload.description,
+            approverNote: normalizeOptionalNote(reviewNote) || null,
           };
         }),
       } : null;
@@ -1413,10 +1432,10 @@ export default function LeaveSphereMyPtoPage() {
                   key={request.id}
                   onClick={() => setSelectedMyRequestId(request.id)}
                   title={requestTypeLabel(request.type)}
-                  dateLabel={formatPtoRequestDateRangeLabel(request.startDate, request.endDate)}
-                  detailLabel={request.reason}
+                  dateLabel={formatPtoRequestDateRangeLabel(request.startDate, request.endDate, tenantTimeZone)}
+                  detailLabel={request.description}
                   hoursLabel={formatHoursLabel(request.hours)}
-                  submittedLabel={`Submitted ${formatMonthDayYearLabel(request.submittedAt)}`}
+                  submittedLabel={`Submitted ${formatMonthDayYearLabel(request.submittedAt, tenantTimeZone)}`}
                   statusChip={<LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} />}
                 />
               ))
@@ -1429,6 +1448,7 @@ export default function LeaveSphereMyPtoPage() {
           description="Your PTO requests and holidays"
           monthKey={calendarMonth}
           onMonthChange={setCalendarMonth}
+          todayIsoDate={todayIsoDate}
           events={calendarEvents}
           onDateClick={openSubmitDialogForDate}
           onEventClick={(event) => {
@@ -1539,14 +1559,14 @@ export default function LeaveSphereMyPtoPage() {
                   </tr>
                 ) : (
                   filteredDirectReportRequests.map((request) => (
-                    <tr
-                      key={request.id}
-                      className="cursor-pointer border-t border-blue-100/80 bg-white text-slate-700 transition-colors hover:bg-blue-50/40"
-                      onClick={() => {
-                        setReviewTargetId(request.id);
-                        setReviewNote(request.managerNote || "");
-                      }}
-                    >
+                      <tr
+                        key={request.id}
+                        className="cursor-pointer border-t border-blue-100/80 bg-white text-slate-700 transition-colors hover:bg-blue-50/40"
+                        onClick={() => {
+                          setReviewTargetId(request.id);
+                          setReviewNote(request.approverNote || "");
+                        }}
+                      >
                       <td className="px-3 py-2.5">
                         <div className="flex items-center gap-2">
                           <span className="inline-flex size-7 items-center justify-center rounded-full border border-blue-100 bg-blue-50 text-blue-700">
@@ -1554,12 +1574,12 @@ export default function LeaveSphereMyPtoPage() {
                           </span>
                           <div>
                             <p className="text-sm font-medium text-slate-900">{request.employeeName}</p>
-                            <p className="text-xs text-slate-500">Submitted {formatDateLabel(request.submittedAt)}</p>
+                            <p className="text-xs text-slate-500">Submitted {formatDateLabel(request.submittedAt, tenantTimeZone)}</p>
                           </div>
                         </div>
                       </td>
                       <td className="px-3 py-2.5 text-center">{requestTypeLabel(request.type)}</td>
-                      <td className="px-3 py-2.5">{formatDateLabel(request.startDate)} - {formatDateLabel(request.endDate)}</td>
+                      <td className="px-3 py-2.5">{formatDateLabel(request.startDate, tenantTimeZone)} - {formatDateLabel(request.endDate, tenantTimeZone)}</td>
                       <td className="px-3 py-2.5 text-center">
                         <LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} />
                       </td>
@@ -1613,7 +1633,7 @@ export default function LeaveSphereMyPtoPage() {
             <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-3 text-sm text-slate-700">
               <p><span className="font-semibold text-slate-900">Holiday:</span> {selectedHoliday.name}</p>
               <p><span className="font-semibold text-slate-900">Team region:</span> {selectedHoliday.teamRegion}</p>
-              <p><span className="font-semibold text-slate-900">Date:</span> {formatDateLabel(selectedHoliday.date)}</p>
+              <p><span className="font-semibold text-slate-900">Date:</span> {formatDateLabel(selectedHoliday.date, tenantTimeZone)}</p>
             </div>
           ) : null}
 
@@ -1650,14 +1670,14 @@ export default function LeaveSphereMyPtoPage() {
           <div className="grid gap-2 text-sm text-slate-700 sm:grid-cols-2">
             <p>
               <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Submitted</span>
-              <span className="mt-0.5 block font-semibold text-slate-900">{formatMonthDayYearLabel(selectedMyRequest.submittedAt)}</span>
+              <span className="mt-0.5 block font-semibold text-slate-900">{formatMonthDayYearLabel(selectedMyRequest.submittedAt, tenantTimeZone)}</span>
             </p>
             {selectedMyRequest.reviewerName ? (
               <p>
               <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Reviewed by</span>
               <span className="mt-0.5 block font-semibold text-slate-900">
                 {selectedMyRequest.reviewerName}
-                  {selectedMyRequest.reviewedAt ? ` · ${formatMonthDayYearLabel(selectedMyRequest.reviewedAt)}` : ""}
+                  {selectedMyRequest.reviewedAt ? ` · ${formatMonthDayYearLabel(selectedMyRequest.reviewedAt, tenantTimeZone)}` : ""}
               </span>
             </p>
             ) : (
@@ -1668,10 +1688,10 @@ export default function LeaveSphereMyPtoPage() {
             )}
           </div>
         ) : null}
-        extraContent={selectedMyRequest?.managerNote ? (
+        extraContent={selectedMyRequest?.approverNote ? (
           <div className="text-sm">
             <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Manager note</span>
-            <p className="mt-1 text-slate-800">{selectedMyRequest.managerNote}</p>
+            <p className="mt-1 text-slate-800">{selectedMyRequest.approverNote}</p>
           </div>
         ) : null}
         footerActions={selectedMyRequestActionConfig?.canCancel ? (
@@ -1735,14 +1755,14 @@ export default function LeaveSphereMyPtoPage() {
             </p>
             <p>
               <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Submitted</span>
-              <span className="mt-0.5 block font-semibold text-slate-900">{formatDateLabel(selectedReviewRequest.submittedAt)}</span>
+              <span className="mt-0.5 block font-semibold text-slate-900">{formatDateLabel(selectedReviewRequest.submittedAt, tenantTimeZone)}</span>
             </p>
             {selectedReviewRequest.reviewerName ? (
               <p>
               <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Reviewed by</span>
               <span className="mt-0.5 block font-semibold text-slate-900">
                 {selectedReviewRequest.reviewerName}
-                  {selectedReviewRequest.reviewedAt ? ` · ${formatMonthDayYearLabel(selectedReviewRequest.reviewedAt)}` : ""}
+                  {selectedReviewRequest.reviewedAt ? ` · ${formatMonthDayYearLabel(selectedReviewRequest.reviewedAt, tenantTimeZone)}` : ""}
               </span>
             </p>
             ) : (

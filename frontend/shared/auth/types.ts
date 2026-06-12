@@ -17,6 +17,7 @@ export type AccessProfile = {
   tenant: {
     id: string;
     slug: string;
+    timezone?: string | null;
   };
   app?: {
     id: string;

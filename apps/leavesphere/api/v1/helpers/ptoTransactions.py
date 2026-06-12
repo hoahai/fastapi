@@ -163,8 +163,7 @@ def create_adjustment(payload: dict) -> dict:
         "endDate": _normalize_datetime(payload.get("endDate"), field="endDate"),
         "status": "Approved",
         "description": (str(payload.get("description") or "").strip() or None),
-        "note": (str(payload.get("note") or "").strip() or None),
-        "reason": (str(payload.get("reason") or "").strip() or None),
+        "approverNote": (str(payload.get("approverNote") or "").strip() or None),
         "approverId": None,
         "calendarId": (str(payload.get("calendarId") or "").strip() or None),
     }
@@ -172,10 +171,8 @@ def create_adjustment(payload: dict) -> dict:
         raise ValueError("year is required")
     if item["description"] and len(item["description"]) > 255:
         raise ValueError("description must be <= 255 characters")
-    if item["note"] and len(item["note"]) > 2048:
-        raise ValueError("note must be <= 2048 characters")
-    if item["reason"] and len(item["reason"]) > 2048:
-        raise ValueError("reason must be <= 2048 characters")
+    if item["approverNote"] and len(item["approverNote"]) > 2048:
+        raise ValueError("approverNote must be <= 2048 characters")
     if item["calendarId"] and len(item["calendarId"]) > 30:
         raise ValueError("calendarId must be <= 30 characters")
 
@@ -218,8 +215,7 @@ def create_request(payload: dict) -> dict:
         "endDate": end_date,
         "status": "Pending",
         "description": (str(payload.get("description") or "").strip() or None),
-        "note": (str(payload.get("note") or "").strip() or None),
-        "reason": (str(payload.get("reason") or "").strip() or None),
+        "approverNote": (str(payload.get("approverNote") or "").strip() or None),
         "approverId": None,
         "calendarId": (str(payload.get("calendarId") or "").strip() or None),
     }
@@ -227,10 +223,8 @@ def create_request(payload: dict) -> dict:
         raise ValueError("year is required")
     if item["description"] and len(item["description"]) > 255:
         raise ValueError("description must be <= 255 characters")
-    if item["note"] and len(item["note"]) > 2048:
-        raise ValueError("note must be <= 2048 characters")
-    if item["reason"] and len(item["reason"]) > 2048:
-        raise ValueError("reason must be <= 2048 characters")
+    if item["approverNote"] and len(item["approverNote"]) > 2048:
+        raise ValueError("approverNote must be <= 2048 characters")
     if item["calendarId"] and len(item["calendarId"]) > 30:
         raise ValueError("calendarId must be <= 30 characters")
 
@@ -246,15 +240,15 @@ def cancel_request(*, transaction_id: str) -> dict:
     return {"id": normalized_id, "status": "Canceled", "updated": canceled}
 
 
-def _normalize_optional_reason(value: object | None) -> str | None:
+def _normalize_optional_approver_note(value: object | None) -> str | None:
     if value is None:
         return None
-    reason = str(value).strip()
-    if not reason:
+    note = str(value).strip()
+    if not note:
         return None
-    if len(reason) > 2048:
-        raise ValueError("reason must be <= 2048 characters")
-    return reason
+    if len(note) > 2048:
+        raise ValueError("approverNote must be <= 2048 characters")
+    return note
 
 
 def _has_admin_override(request) -> bool:
@@ -314,7 +308,7 @@ def _require_direct_manager(*, employee_id: str, manager_id: str) -> None:
         raise ValueError("Only a direct manager can approve or reject this PTO request")
 
 
-def approve_request(*, request, transaction_id: str, reason: object | None = None) -> dict:
+def approve_request(*, request, transaction_id: str, approverNote: object | None = None) -> dict:
     normalized_id = str(transaction_id or "").strip()
     if not normalized_id:
         raise ValueError("transaction_id is required")
@@ -332,12 +326,12 @@ def approve_request(*, request, transaction_id: str, reason: object | None = Non
     updated = approve_pending_pto_request(
         transaction_id=normalized_id,
         approver_id=actor_employee_id,
-        reason=_normalize_optional_reason(reason),
+        approverNote=_normalize_optional_approver_note(approverNote),
     )
     return {"id": normalized_id, "status": "Approved", "updated": updated}
 
 
-def reject_request(*, request, transaction_id: str, reason: object | None = None) -> dict:
+def reject_request(*, request, transaction_id: str, approverNote: object | None = None) -> dict:
     normalized_id = str(transaction_id or "").strip()
     if not normalized_id:
         raise ValueError("transaction_id is required")
@@ -355,6 +349,6 @@ def reject_request(*, request, transaction_id: str, reason: object | None = None
     updated = reject_pending_pto_request(
         transaction_id=normalized_id,
         approver_id=actor_employee_id,
-        reason=_normalize_optional_reason(reason),
+        approverNote=_normalize_optional_approver_note(approverNote),
     )
     return {"id": normalized_id, "status": "Rejected", "updated": updated}

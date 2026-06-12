@@ -361,6 +361,7 @@ def _build_request_rows(
         approver = employee_map.get(approver_id) if approver_id else None
         submitted_at = _to_date_string(row.get("dateCreated"))
         reviewed_at = _to_date_string(row.get("dateUpdated")) if status != "pending" else ""
+        description = _normalize_text(row.get("description"))
         request = {
             "id": _normalize_text(row.get("id")),
             "employeeId": employee_id,
@@ -371,12 +372,12 @@ def _build_request_rows(
             "startDate": _to_date_string(row.get("startDate")),
             "endDate": _to_date_string(row.get("endDate")),
             "hours": float(hours.quantize(Decimal("0.01"))),
-            "reason": _normalize_text(row.get("reason")),
+            "description": description,
             "status": status,
             "submittedAt": submitted_at,
             "reviewedAt": reviewed_at or None,
             "reviewerName": _employee_full_name(approver) if approver else None,
-            "managerNote": _normalize_text(row.get("note")) or None,
+            "approverNote": _normalize_text(row.get("approverNote")) or None,
         }
         requests.append(request)
 
@@ -585,9 +586,8 @@ def create_my_pto_request(*, request, payload: dict) -> dict:
         "startDate": start_date or None,
         "endDate": end_date or None,
         "status": "Pending",
-        "description": None,
-        "note": None,
-        "reason": _normalize_text(payload.get("reason")) or None,
+        "description": _normalize_text(payload.get("description")) or None,
+        "approverNote": None,
         "approverId": None,
         "calendarId": _normalize_text(payload.get("calendarId")) or None,
     }
@@ -689,7 +689,7 @@ def update_my_pto_request(*, request, payload: dict) -> dict:
         cursor.execute(
             f"UPDATE {tables['PTOTRANSACTIONS']} "
             "SET ptoTypeCode = %s, ptoActionCode = %s, hours = %s, year = %s, startDate = %s, endDate = %s, "
-            "reason = %s, dateUpdated = %s "
+            "description = %s, dateUpdated = %s "
             "WHERE id = %s",
             (
                 pto_type["code"],
@@ -698,7 +698,7 @@ def update_my_pto_request(*, request, payload: dict) -> dict:
                 requested_year,
                 start_date or None,
                 end_date or None,
-                _normalize_text(payload.get("reason")) or None,
+                _normalize_text(payload.get("description")) or None,
                 datetime.utcnow(),
                 transaction_id,
             ),
@@ -796,7 +796,7 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
             updated = approve_pending_pto_request(
                 transaction_id=transaction_id,
                 approver_id=current_employee_id if current_employee_id else None,
-                reason=_normalize_text(payload.get("note")) or None,
+                approverNote=_normalize_text(payload.get("approverNote")) or None,
             )
             return {
                 "workspace": load_my_pto_workspace(request=request, year=int(transaction.get("year") or date.today().year)),
@@ -808,7 +808,7 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
         updated = reject_pending_pto_request(
             transaction_id=transaction_id,
             approver_id=current_employee_id if current_employee_id else None,
-            reason=_normalize_text(payload.get("note")) or None,
+            approverNote=_normalize_text(payload.get("approverNote")) or None,
         )
         return {
             "workspace": load_my_pto_workspace(request=request, year=int(transaction.get("year") or date.today().year)),
