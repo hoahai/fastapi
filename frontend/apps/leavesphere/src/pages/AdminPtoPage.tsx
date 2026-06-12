@@ -2640,11 +2640,11 @@ export default function LeaveSphereAdminPtoPage() {
             )}
           </div>
         ) : null}
-        extraContent={selectedRequest?.approverNote ? (
+        extraContent={selectedRequest ? (
           <div className="border-t border-slate-200 pt-3 text-sm text-slate-700">
             <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Admin note</p>
             <p className="mt-1 whitespace-pre-wrap text-slate-800">
-              {selectedRequest.approverNote}
+              {selectedRequest.approverNote || "No admin note."}
             </p>
           </div>
         ) : null}
