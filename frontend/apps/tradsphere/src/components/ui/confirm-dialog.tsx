@@ -56,7 +56,7 @@ export function ConfirmDialog({
         }
       }}
       >
-      <DialogContent className={cn("relative", note || children ? "max-w-lg" : "max-w-md")}>
+      <DialogContent className={cn("!z-[60]", note || children ? "max-w-lg" : "max-w-md")}>
         <DialogClose asChild aria-label="Close confirm dialog">
           <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
         </DialogClose>
