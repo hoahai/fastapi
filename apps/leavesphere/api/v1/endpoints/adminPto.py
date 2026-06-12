@@ -300,7 +300,7 @@ def adjust_leave_management_balance_route(
 
     Requirements:
         - Requires leavesphere.admin permission or workspace.super_admin
-        - `hours` must be non-zero
+        - `hours` must be zero or greater
         - `status` must be `Approved`
     """
     try:

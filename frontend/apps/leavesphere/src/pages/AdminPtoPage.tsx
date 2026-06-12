@@ -1254,12 +1254,18 @@ export default function LeaveSphereAdminPtoPage() {
     [adjustBaselineForm, adjustForm],
   );
   const isAdjustFormValid = useMemo(
-    () => Boolean(
-      Number.isInteger(loadedYear)
-      && asString(adjustForm.employeeId)
-      && asNumber(adjustForm.hours) > 0
-      && (!isAdjustEditMode || Boolean(adjustForm.transactionId))
-    ),
+    () => {
+      const hoursText = asString(adjustForm.hours);
+      const hoursValue = hoursText === "" ? null : Number(hoursText);
+      return Boolean(
+        Number.isInteger(loadedYear)
+        && asString(adjustForm.employeeId)
+        && hoursValue !== null
+        && Number.isFinite(hoursValue)
+        && hoursValue >= 0
+        && (!isAdjustEditMode || Boolean(adjustForm.transactionId))
+      );
+    },
     [adjustForm.employeeId, adjustForm.hours, adjustForm.transactionId, isAdjustEditMode, loadedYear],
   );
   const canSubmitAdjustForm = useMemo(
@@ -1987,8 +1993,14 @@ export default function LeaveSphereAdminPtoPage() {
       setAdjustError("Employee is required.");
       return;
     }
-    if (adjustForm.hours === "") {
+    const hoursText = asString(adjustForm.hours);
+    if (hoursText === "") {
       setAdjustError("Hours are required.");
+      return;
+    }
+    const hoursValue = Number(hoursText);
+    if (!Number.isFinite(hoursValue) || hoursValue < 0) {
+      setAdjustError("Hours must be zero or greater.");
       return;
     }
     if (isAdjustEditMode && !selectedAdjustRequest) {
@@ -2014,7 +2026,7 @@ export default function LeaveSphereAdminPtoPage() {
           ptoTypeCode: adjustForm.ptoTypeCode,
           ptoActionCode: adjustForm.ptoActionCode,
           transactionId: selectedAdjustRequest?.id || null,
-          hours: asNumber(adjustForm.hours),
+          hours: hoursValue,
           year: transactionYear,
           status: "Approved",
           approverNote: asString(adjustSaveNote),
@@ -3179,14 +3191,15 @@ export default function LeaveSphereAdminPtoPage() {
                 </div>
               ) : (
                 <label className="block space-y-1 text-sm">
-                  <span className="text-slate-600">Admin note</span>
+                  <span className="text-slate-600">Admin note <span className="text-slate-400">(optional)</span></span>
                   <Textarea
                     value={adjustForm.approverNote}
                     onChange={(event) => setAdjustForm((current) => ({ ...current, approverNote: event.target.value }))}
                     className="min-h-[96px]"
                     disabled={isMutating}
-                    placeholder="Add a note or reason for this PTO hour change"
+                    placeholder="Optional. Add a note or reason for this PTO hour change"
                   />
+                  <p className="text-xs text-slate-500">Leave this blank if no admin note is needed.</p>
                 </label>
               )}
             </div>

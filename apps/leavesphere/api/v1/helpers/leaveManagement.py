@@ -97,8 +97,8 @@ def _normalize_decimal_hours(value: object) -> Decimal:
         hours = Decimal(str(value).strip())
     except (InvalidOperation, ValueError) as exc:
         raise ValueError("hours must be a decimal number") from exc
-    if hours == 0:
-        raise ValueError("hours must not be zero")
+    if hours < 0:
+        raise ValueError("hours must not be negative")
     return hours.quantize(Decimal("0.01"))
 
 
