@@ -756,15 +756,6 @@ export default function LeaveSphereMyPtoPage() {
       : null),
     [selectedReviewRequest, todayIsoDate],
   );
-  const canEditReviewNote = Boolean(
-    selectedReviewRequest?.status === "pending"
-    && (
-      selectedReviewRequestActionConfig?.canEditForm
-      || selectedReviewRequestActionConfig?.canApprove
-      || selectedReviewRequestActionConfig?.canReject
-      || selectedReviewRequestActionConfig?.canCancel
-    ),
-  );
   const isReviewNoteDirty = useMemo(
     () => selectedReviewRequest
       ? normalizeOptionalNote(reviewNote) !== normalizeOptionalNote(selectedReviewRequest.approverNote)
@@ -1747,11 +1738,7 @@ export default function LeaveSphereMyPtoPage() {
           setPendingReviewAction(null);
         }}
         onSave={canSaveReviewNote ? handleSaveReviewRequestDetail : undefined}
-        externalDirty={Boolean(
-          selectedReviewRequest
-          && canEditReviewNote
-          && isReviewNoteDirty
-        )}
+        externalDirty={Boolean(selectedReviewRequest && isReviewNoteDirty)}
         details={selectedReviewRequest ? (
           <div className="grid gap-2 text-sm text-slate-700 sm:grid-cols-2">
             <p className="sm:col-span-2">
@@ -1781,16 +1768,18 @@ export default function LeaveSphereMyPtoPage() {
           </div>
         ) : null}
         extraContent={selectedReviewRequest ? (
-          <label className="block space-y-1 text-sm">
-            <span className="text-slate-600">Manager note</span>
-            <Textarea
-              value={reviewNote}
-              onChange={(event) => setReviewNote(event.target.value)}
-              className="min-h-[100px]"
-              placeholder="Optional note for the employee"
-              disabled={isReviewing || !canEditReviewNote}
-            />
-          </label>
+          <div className="text-sm text-slate-700">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Manager note</p>
+            {selectedReviewRequest.approverNote ? (
+              <p className="mt-1 whitespace-pre-wrap italic text-slate-400">
+                {selectedReviewRequest.approverNote}
+              </p>
+            ) : (
+              <p className="mt-1 whitespace-pre-wrap italic text-slate-400">
+                No manager note.
+              </p>
+            )}
+          </div>
         ) : null}
         footerActions={selectedReviewRequest ? (
           <>
@@ -1847,7 +1836,20 @@ export default function LeaveSphereMyPtoPage() {
           onConfirm={() => {
             void handleConfirmReviewAction();
           }}
-        />
+        >
+          {pendingReviewAction === "revert" ? null : (
+            <label className="block space-y-1 text-sm">
+              <span className="text-slate-600">Manager note / reason</span>
+              <Textarea
+                value={reviewNote}
+                onChange={(event) => setReviewNote(event.target.value)}
+                className="min-h-[120px]"
+                placeholder="Add a note or reason for this decision"
+                disabled={isReviewing}
+              />
+            </label>
+          )}
+        </ConfirmDialog>
       ) : null}
 
       <PageLoadingLayer
