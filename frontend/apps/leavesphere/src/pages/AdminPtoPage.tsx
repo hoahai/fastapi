@@ -26,7 +26,6 @@ import { Textarea } from "@tradsphere/components/ui/textarea";
 import { ConfirmDialog } from "@tradsphere/components/ui/confirm-dialog";
 import { canModalClose, shouldBlockOutsideClose } from "@tradsphere/components/ui/modal-close-guard";
 import { UnsavedChangesDialog } from "@tradsphere/components/ui/unsaved-changes-dialog";
-import { isAppDropdownInteractionEvent } from "@shared/components/ui/app-dropdown-interaction";
 import { useToast } from "@shell/components/ui/toast";
 import { hasAppAdminAccess } from "@shared/auth/permissions";
 import { useAuth } from "@shared/auth/useAuth";
@@ -503,24 +502,25 @@ export default function LeaveSphereAdminPtoPage() {
   const currentUserId = asString(auth.user?.id) || "local-admin";
   const currentUserName = asString(auth.user?.fullName) || asString(auth.user?.email) || "LeaveSphere Admin";
   const canAdmin = hasAppAdminAccess(auth.accessProfile, "leavesphere");
+  const pageStateUserKey = asString(auth.user?.id || auth.user?.email);
 
   const workspaceKey = useMemo(() => {
     const tenant = asString(auth.tenantSlug) || "default";
     return `leavesphere:admin:${tenant}:${currentUserId}`;
   }, [auth.tenantSlug, currentUserId]);
   const tenantSlug = asString(auth.tenantSlug);
-  const canRestorePageState = auth.status === "authenticated" && Boolean(tenantSlug) && Boolean(currentUserId);
+  const canRestorePageState = auth.status === "authenticated" && Boolean(tenantSlug) && Boolean(pageStateUserKey);
   const pageStateScope = useMemo<ScopedPageState | null>(() => {
     if (!canRestorePageState) {
       return null;
     }
     return {
-      userKey: currentUserId,
+      userKey: pageStateUserKey,
       tenantSlug,
       appCode: LEAVESPHERE_APP_CODE,
       pageCode: LEAVESPHERE_ADMIN_PTO_PAGE_CODE,
     };
-  }, [canRestorePageState, currentUserId, tenantSlug]);
+  }, [canRestorePageState, pageStateUserKey, tenantSlug]);
   const pageStateStorageKey = useMemo(() => {
     if (!pageStateScope) {
       return null;
@@ -2732,10 +2732,6 @@ export default function LeaveSphereAdminPtoPage() {
         <DialogContent
           className="flex max-h-[90vh] max-w-xl flex-col overflow-hidden rounded-xl bg-white p-6"
           onInteractOutside={(event) => {
-            if (isAppDropdownInteractionEvent(event)) {
-              event.preventDefault();
-              return;
-            }
             if (shouldBlockOutsideClose({ isBusy: isMutating, hasUnsavedChanges: hasAdjustFormChanges })) {
               event.preventDefault();
             }
@@ -2874,14 +2870,7 @@ export default function LeaveSphereAdminPtoPage() {
       />
 
       <Dialog open={isSetupModalOpen} onOpenChange={setIsSetupModalOpen}>
-        <DialogContent
-          className="flex max-h-[90vh] max-w-2xl flex-col overflow-hidden rounded-xl bg-white p-6"
-          onInteractOutside={(event) => {
-            if (isAppDropdownInteractionEvent(event)) {
-              event.preventDefault();
-            }
-          }}
-        >
+        <DialogContent className="flex max-h-[90vh] max-w-2xl flex-col overflow-hidden rounded-xl bg-white p-6">
           <ModalShell busy={isMutating} busyMessage="Saving setup..." className="min-h-0 flex-1">
             <DialogHeader>
               <DialogTitle>Setup / Admin Data</DialogTitle>
