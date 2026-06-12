@@ -466,15 +466,20 @@ export function LeaveSpherePtoRequestDetailModal({
           }
         }}
       >
-        <ModalShell busy={saving} busyMessage="Saving PTO request..." className="min-h-0 flex-1">
-          <DialogClose
-            className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
-            aria-label="Close PTO request modal"
-          >
-            <X className="size-4" />
-          </DialogClose>
-
-          <DialogHeader>
+        <ModalShell
+          busy={saving}
+          busyMessage="Saving PTO request..."
+          className="min-h-0 flex-1"
+          closeButton={(
+            <DialogClose
+              className="rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
+              aria-label="Close PTO request modal"
+            >
+              <X className="size-4" />
+            </DialogClose>
+          )}
+        >
+          <DialogHeader className="pr-8">
             <DialogTitle>{title}</DialogTitle>
             <DialogDescription>{description}</DialogDescription>
           </DialogHeader>

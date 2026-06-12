@@ -7,6 +7,7 @@ export interface ModalShellProps extends HTMLAttributes<HTMLDivElement> {
   busy?: boolean;
   busyMessage?: string;
   children?: ReactNode;
+  closeButton?: ReactNode;
 }
 
 export function ModalShell({
@@ -14,10 +15,16 @@ export function ModalShell({
   busy = false,
   busyMessage = "Saving...",
   children,
+  closeButton,
   ...props
 }: ModalShellProps) {
   return (
     <div className={cn("relative flex min-h-0 flex-1 flex-col", className)} {...props}>
+      {closeButton ? (
+        <div className="absolute right-0 top-0 z-20">
+          {closeButton}
+        </div>
+      ) : null}
       <div className={cn("flex min-h-0 flex-1 flex-col transition-opacity duration-150", busy && "opacity-60")}>
         {children}
       </div>
