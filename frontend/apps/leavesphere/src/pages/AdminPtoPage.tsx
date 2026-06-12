@@ -2640,16 +2640,13 @@ export default function LeaveSphereAdminPtoPage() {
             )}
           </div>
         ) : null}
-        extraContent={selectedRequest ? (
-          <label className="space-y-1 text-sm">
-            <span className="text-slate-600">Admin note</span>
-            <Textarea
-              value={reviewNote}
-              onChange={(event) => setReviewNote(event.target.value)}
-              className="min-h-[100px]"
-              disabled={isMutating || !canEditAdminNote}
-            />
-          </label>
+        extraContent={selectedRequest?.approverNote ? (
+          <div className="border-t border-slate-200 pt-3 text-sm text-slate-700">
+            <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Admin note</p>
+            <p className="mt-1 whitespace-pre-wrap text-slate-800">
+              {selectedRequest.approverNote}
+            </p>
+          </div>
         ) : null}
         footerActions={selectedRequest ? (
           <>
