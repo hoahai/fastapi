@@ -1,7 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Plus,
-  UserRound,
   X,
 } from "lucide-react";
 
@@ -42,6 +41,16 @@ import { DEFAULT_TIME_ZONE, formatDateInTimeZone, getCurrentMonthKeyInTimeZone, 
 import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 import { LeaveSpherePtoRequestCard } from "@leavesphere/components/LeaveSpherePtoRequestCard";
 import { LeaveSphereMonthCalendar, type LeaveSphereMonthCalendarEvent } from "@leavesphere/components/MonthCalendar";
+import { LeaveSpherePtoRequestTable } from "@leavesphere/components/LeaveSpherePtoRequestTable";
+import {
+  buildLeaveSpherePtoEmployeeLookup,
+  resolveLeaveSpherePtoEmployeeDisplay,
+} from "@leavesphere/lib/ptoEmployeeLookup";
+import {
+  mergeLeaveSpherePtoEmployeeCacheItems,
+  readLeaveSpherePtoEmployeeCacheSnapshot,
+  writeLeaveSpherePtoEmployeeCache,
+} from "@leavesphere/lib/ptoEmployeeCache";
 import {
   mapLeaveSphereHolidayRegionToChipTone,
   mapLeaveSpherePtoStatusToChipTone,
@@ -328,12 +337,12 @@ function buildDateSearchTokens(isoDate: string): string[] {
   ];
 }
 
-function managerRequestMatchesSearch(request: LeaveSpherePtoRequest, keyword: string): boolean {
+function managerRequestMatchesSearch(request: LeaveSpherePtoRequest, keyword: string, employeeName: string): boolean {
   if (!keyword) {
     return true;
   }
   const tokens = [
-    request.employeeName,
+    employeeName,
     requestTypeLabel(request.type),
     statusLabel(request.status),
     request.description,
@@ -623,19 +632,41 @@ export default function LeaveSphereMyPtoPage() {
     [loadedYear],
   );
   const loadedYearForRequests = loadedYear ?? (Number.isInteger(selectedYearNumber) ? selectedYearNumber : currentYear);
+  const cachedEmployeeItems = useMemo(
+    () => readLeaveSpherePtoEmployeeCacheSnapshot({ tenantSlug })?.data ?? [],
+    [tenantSlug],
+  );
+  const mergedEmployeeItems = useMemo(
+    () => mergeLeaveSpherePtoEmployeeCacheItems(workspaceForYear?.employees, cachedEmployeeItems),
+    [cachedEmployeeItems, workspaceForYear?.employees],
+  );
+  const employeeLookupById = useMemo(
+    () => buildLeaveSpherePtoEmployeeLookup(mergedEmployeeItems),
+    [mergedEmployeeItems],
+  );
+  const resolveRequestEmployee = useCallback(
+    (request: LeaveSpherePtoRequest) => resolveLeaveSpherePtoEmployeeDisplay(employeeLookupById, request.employeeId),
+    [employeeLookupById],
+  );
+
+  useEffect(() => {
+    if (!tenantSlug || !workspaceForYear) {
+      return;
+    }
+    writeLeaveSpherePtoEmployeeCache(
+      { tenantSlug },
+      mergedEmployeeItems,
+      { fetchedAt: Date.now() },
+    );
+  }, [mergedEmployeeItems, tenantSlug, workspaceForYear]);
 
   const myRequests = useMemo(() => {
     if (!workspaceForYear) {
       return [];
     }
-    const currentUserName = workspaceForYear.currentUserName;
     return workspaceForYear.requests
       .filter((item) => item.employeeId === workspaceForYear.currentUserId)
-      .sort((left, right) => right.submittedAt.localeCompare(left.submittedAt))
-      .map((request) => ({
-        ...request,
-        employeeName: currentUserName,
-      }));
+      .sort((left, right) => right.submittedAt.localeCompare(left.submittedAt));
   }, [workspaceForYear]);
 
   const directReportRequests = useMemo(() => {
@@ -652,8 +683,8 @@ export default function LeaveSphereMyPtoPage() {
     [appliedManagerSearch],
   );
   const filteredDirectReportRequests = useMemo(
-    () => directReportRequests.filter((item) => managerRequestMatchesSearch(item, normalizedAppliedManagerSearch)),
-    [directReportRequests, normalizedAppliedManagerSearch],
+    () => directReportRequests.filter((item) => managerRequestMatchesSearch(item, normalizedAppliedManagerSearch, resolveRequestEmployee(item).employeeName)),
+    [directReportRequests, normalizedAppliedManagerSearch, resolveRequestEmployee],
   );
 
   const pendingDirectReportRequests = useMemo(
@@ -763,10 +794,11 @@ export default function LeaveSphereMyPtoPage() {
       });
     }
     for (const request of myRequests) {
+      const employee = resolveRequestEmployee(request);
       const requestType = requestTypeLabel(request.type);
       const hoursLabel = formatHoursLabel(request.hours);
       const chipLabel = buildLeaveSpherePtoCalendarRequestChipLabel(
-        request.employeeName,
+        employee.employeeName,
         requestType,
         hoursLabel,
         request.description,
@@ -782,10 +814,11 @@ export default function LeaveSphereMyPtoPage() {
     }
     if (isManager) {
       for (const request of directReportRequests) {
+        const employee = resolveRequestEmployee(request);
         const requestType = requestTypeLabel(request.type);
         const hoursLabel = formatHoursLabel(request.hours);
         const chipLabel = buildLeaveSpherePtoCalendarRequestChipLabel(
-          request.employeeName,
+          employee.employeeName,
           requestType,
           hoursLabel,
           request.description,
@@ -797,7 +830,7 @@ export default function LeaveSphereMyPtoPage() {
           startDate: request.startDate,
           endDate: request.endDate,
           title: buildLeaveSpherePtoCalendarRequestTooltipLabel(
-            request.employeeName,
+            employee.employeeName,
             requestType,
             hoursLabel,
             request.description,
@@ -1064,9 +1097,10 @@ export default function LeaveSphereMyPtoPage() {
       return;
     }
 
-    const defaultMonth = parsedYear === currentYear ? Number(currentMonthKey.slice(5, 7)) : 1;
+    const currentMonthMatch = /^(\d{4})-(\d{2})$/.exec(calendarMonth);
+    const defaultMonth = currentMonthMatch ? Number(currentMonthMatch[2]) : (parsedYear === currentYear ? Number(currentMonthKey.slice(5, 7)) : 1);
     setCalendarMonth(`${parsedYear}-${String(defaultMonth).padStart(2, "0")}`);
-  }, [currentMonthKey, currentYear, loadWorkspace, loadedYear, selectedYear]);
+  }, [calendarMonth, currentMonthKey, currentYear, loadWorkspace, loadedYear, selectedYear]);
 
   const openSubmitDialog = useCallback(() => {
     if (!canRequestPto || !loadedYearDateBounds) {
@@ -1431,7 +1465,9 @@ export default function LeaveSphereMyPtoPage() {
                 <LeaveSpherePtoRequestCard
                   key={request.id}
                   onClick={() => setSelectedMyRequestId(request.id)}
-                  title={requestTypeLabel(request.type)}
+                  employeeName={resolveRequestEmployee(request).employeeName}
+                  title={resolveRequestEmployee(request).employeeName}
+                  pictureUrl={resolveRequestEmployee(request).pictureUrl}
                   dateLabel={formatPtoRequestDateRangeLabel(request.startDate, request.endDate, tenantTimeZone)}
                   detailLabel={request.description}
                   hoursLabel={formatHoursLabel(request.hours)}
@@ -1448,6 +1484,8 @@ export default function LeaveSphereMyPtoPage() {
           description="Your PTO requests and holidays"
           monthKey={calendarMonth}
           onMonthChange={setCalendarMonth}
+          minMonthKey={loadedYear === null ? undefined : `${loadedYear}-01`}
+          maxMonthKey={loadedYear === null ? undefined : `${loadedYear}-12`}
           todayIsoDate={todayIsoDate}
           events={calendarEvents}
           onDateClick={openSubmitDialogForDate}
@@ -1533,63 +1571,30 @@ export default function LeaveSphereMyPtoPage() {
             </div>
           </div>
 
-          <div className="overflow-x-auto rounded-xl border border-blue-100">
-            <table className="min-w-full text-left text-sm">
-              <thead className="bg-blue-50/70 text-xs uppercase tracking-[0.08em] text-slate-600">
-                <tr>
-                  <th className="px-3 py-2.5">Employee</th>
-                  <th className="px-3 py-2.5 text-center">Type</th>
-                  <th className="px-3 py-2.5">Date range</th>
-                  <th className="px-3 py-2.5 text-center">Status</th>
-                  <th className="px-3 py-2.5 text-center">Hours</th>
-                </tr>
-              </thead>
-              <tbody>
-                {directReportRequests.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="px-3 py-6 text-center text-sm text-slate-600">
-                      No direct employee requests yet.
-                    </td>
-                  </tr>
-                ) : filteredDirectReportRequests.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="px-3 py-6 text-center text-sm text-slate-600">
-                      No manager requests match your keyword filter.
-                    </td>
-                  </tr>
-                ) : (
-                  filteredDirectReportRequests.map((request) => (
-                      <tr
-                        key={request.id}
-                        className="cursor-pointer border-t border-blue-100/80 bg-white text-slate-700 transition-colors hover:bg-blue-50/40"
-                        onClick={() => {
-                          setReviewTargetId(request.id);
-                          setReviewNote(request.approverNote || "");
-                        }}
-                      >
-                      <td className="px-3 py-2.5">
-                        <div className="flex items-center gap-2">
-                          <span className="inline-flex size-7 items-center justify-center rounded-full border border-blue-100 bg-blue-50 text-blue-700">
-                            <UserRound className="size-4" />
-                          </span>
-                          <div>
-                            <p className="text-sm font-medium text-slate-900">{request.employeeName}</p>
-                            <p className="text-xs text-slate-500">Submitted {formatDateLabel(request.submittedAt, tenantTimeZone)}</p>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-3 py-2.5 text-center">{requestTypeLabel(request.type)}</td>
-                      <td className="px-3 py-2.5">{formatDateLabel(request.startDate, tenantTimeZone)} - {formatDateLabel(request.endDate, tenantTimeZone)}</td>
-                      <td className="px-3 py-2.5 text-center">
-                        <LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} />
-                      </td>
-                      <td className="px-3 py-2.5 text-center">{formatHoursLabel(request.hours)}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+          <LeaveSpherePtoRequestTable
+            requests={filteredDirectReportRequests}
+            emptyMessage={directReportRequests.length === 0
+              ? "No direct employee requests yet."
+              : "No manager requests match your keyword filter."}
+            resolveEmployee={resolveRequestEmployee}
+            requestTypeLabel={requestTypeLabel}
+            statusLabel={statusLabel}
+            formatSubmittedLabel={(request) => `Submitted ${formatDateInTimeZone(request.submittedAt, tenantTimeZone, {
+              month: "numeric",
+              day: "numeric",
+              year: "numeric",
+            })}`}
+            formatDateRangeLabel={(request) => `${formatDateLabel(request.startDate, tenantTimeZone)} - ${formatDateLabel(request.endDate, tenantTimeZone)}`}
+            formatHoursLabel={formatHoursLabel}
+            onRequestClick={(request) => {
+              setReviewTargetId(request.id);
+              setReviewNote(request.approverNote || "");
+            }}
+            showDescription
+            employeeColumnClassName="w-[19rem] px-3 py-2.5"
+            dateRangeColumnClassName="w-[18rem] whitespace-nowrap px-3 py-2.5"
+            descriptionColumnClassName="px-3 py-2.5 text-slate-600"
+          />
         </SectionCard>
       ) : null}
         </>
@@ -1751,7 +1756,9 @@ export default function LeaveSphereMyPtoPage() {
           <div className="grid gap-2 text-sm text-slate-700 sm:grid-cols-2">
             <p className="sm:col-span-2">
               <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Employee</span>
-              <span className="mt-0.5 block font-semibold text-slate-900">{selectedReviewRequest.employeeName}</span>
+              <span className="mt-0.5 block font-semibold text-slate-900">
+                {resolveRequestEmployee(selectedReviewRequest).employeeName}
+              </span>
             </p>
             <p>
               <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Submitted</span>

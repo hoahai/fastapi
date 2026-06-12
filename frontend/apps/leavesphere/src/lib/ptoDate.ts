@@ -23,3 +23,23 @@ export function formatPtoRequestDateRangeLabel(startDate: string, endDate: strin
   const endDateLabel = formatDateInTimeZone(endDate, timeZone, { weekday: "long" });
   return `${startDateLabel}, ${formatMonthDayYearLabel(startDate, timeZone)} - ${endDateLabel}, ${formatMonthDayYearLabel(endDate, timeZone)}`;
 }
+
+export function formatMonthDayYearRangeLabel(startDate: string, endDate: string, timeZone?: string | null): string {
+  if (!startDate || !endDate) {
+    return "-";
+  }
+  const startLabel = formatDateInTimeZone(startDate, timeZone, {
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+  });
+  const endLabel = formatDateInTimeZone(endDate, timeZone, {
+    month: "2-digit",
+    day: "2-digit",
+    year: "numeric",
+  });
+  if (startLabel === endLabel) {
+    return startLabel;
+  }
+  return `${startLabel} - ${endLabel}`;
+}

@@ -42,6 +42,8 @@ type LeaveSphereMonthCalendarProps = {
   description?: ReactNode;
   monthKey: string;
   onMonthChange: (nextMonthKey: string) => void;
+  minMonthKey?: string;
+  maxMonthKey?: string;
   events: LeaveSphereMonthCalendarEvent[];
   onEventClick?: (event: LeaveSphereMonthCalendarEvent) => void;
   onDateClick?: (isoDate: string) => void;
@@ -88,6 +90,14 @@ function addMonths(monthKey: string, offset: number): string {
   const date = parseMonthKey(monthKey);
   date.setUTCMonth(date.getUTCMonth() + offset);
   return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function isBeforeMonthKey(left: string, right: string): boolean {
+  return left < right;
+}
+
+function isAfterMonthKey(left: string, right: string): boolean {
+  return left > right;
 }
 
 function buildCalendarDays(monthKey: string, todayIsoDate?: string): CalendarDay[] {
@@ -321,6 +331,8 @@ export function LeaveSphereMonthCalendar({
   description,
   monthKey,
   onMonthChange,
+  minMonthKey,
+  maxMonthKey,
   events,
   onEventClick,
   onDateClick,
@@ -334,6 +346,8 @@ export function LeaveSphereMonthCalendar({
     calendarDays.slice(weekIndex * 7, weekIndex * 7 + 7)
   ));
   const effectiveVisibleEventRows = resolveEffectiveVisibleEventRows(maxVisibleEventRows, dayMinHeightClassName);
+  const isPreviousMonthDisabled = Boolean(minMonthKey && isBeforeMonthKey(addMonths(monthKey, -1), minMonthKey));
+  const isNextMonthDisabled = Boolean(maxMonthKey && isAfterMonthKey(addMonths(monthKey, 1), maxMonthKey));
   const [selectedOverflowDay, setSelectedOverflowDay] = useState<{
     isoDate: string;
     events: LeaveSphereMonthCalendarEvent[];
@@ -359,17 +373,27 @@ export function LeaveSphereMonthCalendar({
             <ActionIconButton
               aria-label="Load previous month"
               tooltip="Load previous month"
-              onClick={() => onMonthChange(addMonths(monthKey, -1))}
+              onClick={() => {
+                if (!isPreviousMonthDisabled) {
+                  onMonthChange(addMonths(monthKey, -1));
+                }
+              }}
               icon={<ChevronLeft className="size-5" />}
               className="h-9 w-9"
+              disabled={isPreviousMonthDisabled}
             />
             <p className="min-w-[9rem] text-center text-sm font-semibold text-slate-800">{formatMonthHeading(monthKey, todayIsoDate)}</p>
             <ActionIconButton
               aria-label="Load next month"
               tooltip="Load next month"
-              onClick={() => onMonthChange(addMonths(monthKey, 1))}
+              onClick={() => {
+                if (!isNextMonthDisabled) {
+                  onMonthChange(addMonths(monthKey, 1));
+                }
+              }}
               icon={<ChevronRight className="size-5" />}
               className="h-9 w-9"
+              disabled={isNextMonthDisabled}
             />
           </div>
         )}

@@ -3,6 +3,7 @@ import { CACHE_TIME, type CacheSource } from "@shared/cache";
 import { readBrowserCacheSnapshot, writeBrowserCache } from "@leavesphere/lib/browserCache";
 
 export const LEAVESPHERE_PTO_WORKSPACE_CACHE_TTL_MS = CACHE_TIME.WEEK;
+const LEAVESPHERE_PTO_WORKSPACE_CACHE_VERSION = "v2";
 
 export type LeaveSpherePtoWorkspaceCacheContext = {
   pageCode: "my-pto" | "admin-pto";
@@ -18,6 +19,7 @@ function encodeCachePart(value: string): string {
 export function buildLeaveSpherePtoWorkspaceCacheKey(context: LeaveSpherePtoWorkspaceCacheContext): string {
   return [
     "pto-workspace",
+    LEAVESPHERE_PTO_WORKSPACE_CACHE_VERSION,
     encodeCachePart(context.pageCode),
     encodeCachePart(context.tenantSlug),
     encodeCachePart(context.userId),
@@ -46,6 +48,7 @@ export function writeLeaveSpherePtoWorkspaceCache<T>(
     {
       source: options?.source ?? "network",
       fetchedAt: options?.fetchedAt,
+      version: LEAVESPHERE_PTO_WORKSPACE_CACHE_VERSION,
     },
   );
 }

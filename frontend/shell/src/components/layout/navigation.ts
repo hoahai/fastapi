@@ -101,9 +101,9 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
         available: true,
       },
       {
-        id: "leavesphere-admin-pto",
+        id: "leavesphere-leave-management",
         label: "Leave Management",
-        route: "/leavesphere/admin-pto",
+        route: "/leavesphere/leave-management",
         available: true,
       },
     ],
@@ -174,4 +174,4 @@ export const TRADSPHERE_USERS_ACCESS_CHILD_ICON = UserCheck;
 export const SHIFTZY_SCHEDULES_CHILD_ICON = CalendarClock;
 export const SHIFTZY_ACCOUNTS_CHILD_ICON = Users;
 export const LEAVESPHERE_MY_PTO_CHILD_ICON = Plane;
-export const LEAVESPHERE_ADMIN_PTO_CHILD_ICON = Users;
+export const LEAVESPHERE_LEAVE_MANAGEMENT_CHILD_ICON = Users;

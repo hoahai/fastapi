@@ -21,8 +21,16 @@ const APP_PAGE_CATALOG: Record<string, AppPageDefinition[]> = {
   ],
   leavesphere: [
     { key: "leavesphere_home", label: "My PTO / Manager PTO", route: "/leavesphere/home" },
-    { key: "leavesphere_admin_pto", label: "Leave Management", route: "/leavesphere/admin-pto" },
+    { key: "leavesphere_leave_management", label: "Leave Management", route: "/leavesphere/leave-management" },
   ],
+};
+
+const LEGACY_PAGE_KEY_ALIASES: Record<string, string> = {
+  leavesphere_admin_pto: "leavesphere_leave_management",
+};
+
+const LEGACY_ROUTE_ALIASES: Record<string, string> = {
+  "/leavesphere/admin-pto": "/leavesphere/leave-management",
 };
 
 function normalize(value: string): string {
@@ -34,7 +42,13 @@ function normalizeRoute(route: string): string {
   if (!normalized) {
     return "";
   }
-  return normalized.length > 1 && normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
+  const stripped = normalized.length > 1 && normalized.endsWith("/") ? normalized.slice(0, -1) : normalized;
+  return LEGACY_ROUTE_ALIASES[stripped] ?? stripped;
+}
+
+function normalizePageKey(pageKey: string): string {
+  const normalized = normalize(pageKey);
+  return LEGACY_PAGE_KEY_ALIASES[normalized] ?? normalized;
 }
 
 export function getAppPageCatalog(appCode: string): AppPageDefinition[] {
@@ -57,7 +71,7 @@ function scopedPermissionKeys(
   for (const entry of entries) {
     const entryAppCode = normalize(entry?.appCode || "");
     const entryTenantSlug = normalize(entry?.tenantSlug || "");
-    const pageKey = normalize(entry?.pageKey || "");
+    const pageKey = normalizePageKey(entry?.pageKey || "");
     if (!entryAppCode || !entryTenantSlug || !pageKey) {
       continue;
     }

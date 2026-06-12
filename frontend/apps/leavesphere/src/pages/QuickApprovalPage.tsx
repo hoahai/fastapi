@@ -26,6 +26,7 @@ import { PageMessageStack, type StackMessage } from "@shared/components/status/M
 import { PageLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { ModalShell } from "@shared/components";
 import { DEFAULT_TIME_ZONE, formatDateInTimeZone } from "@shared/utils/time";
+import { LeaveSpherePtoTypeChip } from "@leavesphere/components/PtoTypeChip";
 import {
   loadLeaveSphereQuickApproval,
   submitLeaveSphereQuickApprovalDecision,
@@ -251,7 +252,9 @@ export default function LeaveSphereQuickApprovalPage({ token }: LeaveSphereQuick
               </div>
               <div className="rounded-xl border border-blue-100/90 bg-blue-50/55 p-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-blue-700/85">PTO type</p>
-                <p className="mt-2 text-sm font-semibold text-slate-900">{preview.ptoTypeLabel}</p>
+                <div className="mt-2">
+                  <LeaveSpherePtoTypeChip type={preview.ptoTypeLabel} label={preview.ptoTypeLabel} />
+                </div>
               </div>
               <div className="rounded-xl border border-blue-100/90 bg-blue-50/55 p-4 sm:col-span-2">
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-blue-700/85">Date range</p>

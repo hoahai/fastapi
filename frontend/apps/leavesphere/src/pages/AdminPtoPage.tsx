@@ -4,7 +4,6 @@ import {
   Clock3,
   Plus,
   Settings2,
-  UserRound,
   Users,
   X,
 } from "lucide-react";
@@ -46,11 +45,22 @@ import { ModalCloseButton, ModalShell } from "@shared/components";
 import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
-import { DEFAULT_TIME_ZONE, formatDateInTimeZone, getCurrentMonthKeyInTimeZone, getCurrentYearInTimeZone, getTodayIsoDateInTimeZone, shiftIsoDateByDays } from "@shared/utils/time";
+import { DEFAULT_TIME_ZONE, formatDateInTimeZone, getCurrentMonthKeyInTimeZone, getCurrentYearInTimeZone, getTodayIsoDateInTimeZone, isIsoDateWithinInclusiveRange, shiftIsoDateByDays } from "@shared/utils/time";
 import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 import { LeaveSpherePtoRequestCard } from "@leavesphere/components/LeaveSpherePtoRequestCard";
 import { LeaveSphereMonthCalendar, type LeaveSphereMonthCalendarEvent } from "@leavesphere/components/MonthCalendar";
 import { LeaveSpherePtoRequestDetailModal, type LeaveSpherePtoRequestFormState } from "@leavesphere/components/PtoRequestDetailModal";
+import { LeaveSpherePtoTypeChip } from "@leavesphere/components/PtoTypeChip";
+import { LeaveSpherePtoRequestTable } from "@leavesphere/components/LeaveSpherePtoRequestTable";
+import {
+  buildLeaveSpherePtoEmployeeLookup,
+  resolveLeaveSpherePtoEmployeeDisplay,
+} from "@leavesphere/lib/ptoEmployeeLookup";
+import {
+  mergeLeaveSpherePtoEmployeeCacheItems,
+  readLeaveSpherePtoEmployeeCacheSnapshot,
+  writeLeaveSpherePtoEmployeeCache,
+} from "@leavesphere/lib/ptoEmployeeCache";
 import {
   mapLeaveSphereHolidayRegionToChipTone,
   mapLeaveSpherePtoStatusToChipTone,
@@ -78,7 +88,6 @@ import { calculateLeaveSpherePtoHours } from "@leavesphere/lib/ptoHours";
 import {
   buildLeaveSpherePtoCalendarRequestChipLabel,
   buildLeaveSpherePtoCalendarRequestTooltipLabel,
-  buildLeaveSpherePtoCalendarChipLabel,
 } from "@leavesphere/lib/ptoCalendar";
 import { getPtoRequestActionConfig } from "@leavesphere/lib/ptoRequestActionConfig";
 import {
@@ -88,7 +97,7 @@ import {
 import { LEAVESPHERE_TEAM_REGION_OPTIONS } from "@leavesphere/lib/ptoMocks";
 import type { LeaveSpherePtoRequest, LeaveSpherePtoStatus, LeaveSpherePtoType, LeaveSphereTeamRegion } from "@leavesphere/lib/ptoMocks";
 import { ActionIconButton } from "@tradsphere/components/dashboard/ActionIconButton";
-import { formatMonthDayYearLabel, formatPtoRequestDateRangeLabel } from "@leavesphere/lib/ptoDate";
+import { formatMonthDayYearLabel, formatMonthDayYearRangeLabel, formatPtoRequestDateRangeLabel } from "@leavesphere/lib/ptoDate";
 import {
   readLeaveSpherePtoWorkspaceCacheSnapshot,
   writeLeaveSpherePtoWorkspaceCache,
@@ -344,14 +353,6 @@ function filterWorkspaceByYear(workspace: LeaveSphereAdminWorkspaceData, year: n
     requests: workspace.requests.filter((item) => requestOverlapsYear(item, year)),
     holidays: workspace.holidays.filter((item) => item.date.startsWith(yearPrefix)),
   };
-}
-
-function employeeNameById(workspace: LeaveSphereAdminWorkspaceData | null): Map<string, string> {
-  const map = new Map<string, string>();
-  for (const employee of workspace?.employees ?? []) {
-    map.set(employee.employeeId, employee.employeeName);
-  }
-  return map;
 }
 
 function countUpcomingOutRequests(requests: LeaveSpherePtoRequest[], todayIsoDate: string): number {
@@ -780,16 +781,62 @@ export default function LeaveSphereAdminPtoPage() {
     );
   }, [currentUserId, tenantSlug]);
 
+  const cachedEmployeeItems = useMemo(
+    () => readLeaveSpherePtoEmployeeCacheSnapshot({ tenantSlug })?.data ?? [],
+    [tenantSlug],
+  );
+  const employeeLookupById = useMemo(
+    () => buildLeaveSpherePtoEmployeeLookup(
+      mergeLeaveSpherePtoEmployeeCacheItems(workspaceForYear?.employees, cachedEmployeeItems),
+    ),
+    [cachedEmployeeItems, workspaceForYear?.employees],
+  );
+  const resolveRequestEmployee = useCallback(
+    (request: LeaveSpherePtoRequest) => resolveLeaveSpherePtoEmployeeDisplay(employeeLookupById, request.employeeId),
+    [employeeLookupById],
+  );
+
+  useEffect(() => {
+    if (!tenantSlug || !workspaceForYear) {
+      return;
+    }
+    writeLeaveSpherePtoEmployeeCache(
+      { tenantSlug },
+      mergeLeaveSpherePtoEmployeeCacheItems(workspaceForYear?.employees, cachedEmployeeItems),
+      { fetchedAt: Date.now() },
+    );
+  }, [cachedEmployeeItems, tenantSlug, workspaceForYear]);
+
   const requests = useMemo(
-    () => [...(workspaceForYear?.requests ?? [])].sort((left, right) => right.submittedAt.localeCompare(left.submittedAt)),
-    [workspaceForYear?.requests],
+    () => [...(workspaceForYear?.requests ?? [])].sort((left, right) => {
+      const leftEmployeeName = resolveRequestEmployee(left).employeeName;
+      const rightEmployeeName = resolveRequestEmployee(right).employeeName;
+
+      const startDateCompare = right.startDate.localeCompare(left.startDate);
+      if (startDateCompare !== 0) {
+        return startDateCompare;
+      }
+
+      const employeeCompare = leftEmployeeName.localeCompare(rightEmployeeName);
+      if (employeeCompare !== 0) {
+        return employeeCompare;
+      }
+
+      const typeCompare = left.type.localeCompare(right.type);
+      if (typeCompare !== 0) {
+        return typeCompare;
+      }
+
+      return right.submittedAt.localeCompare(left.submittedAt);
+    }),
+    [resolveRequestEmployee, workspaceForYear?.requests],
   );
   const pendingRequests = useMemo(
     () => requests.filter((item) => item.status === "pending"),
     [requests],
   );
   const recentRequests = useMemo(
-    () => requests.slice(0, 10),
+    () => requests,
     [requests],
   );
   const normalizedRecentHistorySearch = useMemo(
@@ -802,8 +849,9 @@ export default function LeaveSphereAdminPtoPage() {
       return recentRequests;
     }
     return recentRequests.filter((request) => {
+      const employee = resolveRequestEmployee(request);
       const tokens = [
-        request.employeeName,
+        employee.employeeName,
         requestTypeLabel(request.type),
         statusLabel(request.status),
         formatDateLabel(request.startDate, tenantTimeZone),
@@ -813,7 +861,7 @@ export default function LeaveSphereAdminPtoPage() {
       ];
       return tokens.some((token) => normalizeSearchKeyword(token).includes(keyword));
     });
-  }, [normalizedRecentHistorySearch, recentRequests]);
+  }, [normalizedRecentHistorySearch, recentRequests, resolveRequestEmployee]);
 
   const selectedRequest = useMemo(
     () => requests.find((item) => item.id === selectedRequestId) || null,
@@ -846,13 +894,12 @@ export default function LeaveSphereAdminPtoPage() {
     setReviewNote(selectedRequest.approverNote || "");
   }, [selectedRequest?.id]);
 
-  const employeeById = useMemo(() => employeeNameById(workspaceForYear), [workspaceForYear]);
   const selectedRequestManagerLabel = useMemo(() => {
     if (!selectedRequest) {
       return "Unassigned";
     }
-    return employeeById.get(selectedRequest.managerId ?? "") || selectedRequest.managerId || "Unassigned";
-  }, [employeeById, selectedRequest]);
+    return employeeLookupById.get(selectedRequest.managerId ?? "")?.employeeName || selectedRequest.managerId || "Unassigned";
+  }, [employeeLookupById, selectedRequest]);
 
   const employeeOptions = useMemo(
     () => (workspaceForYear?.employees ?? []).map((item) => ({ value: item.employeeId, label: item.employeeName })),
@@ -1937,10 +1984,11 @@ export default function LeaveSphereAdminPtoPage() {
       });
     }
     for (const request of requests) {
+      const employee = resolveRequestEmployee(request);
       const requestType = requestTypeLabel(request.type);
       const hoursLabel = formatHoursLabel(request.hours);
       const chipLabel = buildLeaveSpherePtoCalendarRequestChipLabel(
-        request.employeeName,
+        employee.employeeName,
         requestType,
         hoursLabel,
         request.description,
@@ -1952,7 +2000,7 @@ export default function LeaveSphereAdminPtoPage() {
         startDate: request.startDate,
         endDate: request.endDate,
         title: buildLeaveSpherePtoCalendarRequestTooltipLabel(
-          request.employeeName,
+          employee.employeeName,
           requestType,
           hoursLabel,
           request.description,
@@ -2014,9 +2062,13 @@ export default function LeaveSphereAdminPtoPage() {
                     setSelectedRequestId(request.id);
                     setReviewNote(request.approverNote || "");
                   }}
-                  title={request.employeeName}
+                  employeeName={resolveRequestEmployee(request).employeeName}
+                  title={resolveRequestEmployee(request).employeeName}
+                  pictureUrl={resolveRequestEmployee(request).pictureUrl}
+                  typeChip={<LeaveSpherePtoTypeChip type={request.type} label={requestTypeLabel(request.type)} />}
+                  statusChip={<LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} />}
                   dateLabel={formatPtoRequestDateRangeLabel(request.startDate, request.endDate, tenantTimeZone)}
-                  detailLabel={buildLeaveSpherePtoCalendarChipLabel(requestTypeLabel(request.type), request.description)}
+                  detailLabel={request.description}
                   hoursLabel={formatHoursLabel(request.hours)}
                   submittedLabel={`Submitted ${formatMonthDayYearLabel(request.submittedAt, tenantTimeZone)}`}
                 />
@@ -2026,8 +2078,8 @@ export default function LeaveSphereAdminPtoPage() {
         </SectionCard>
 
       <SectionCard
-        title="Recent Request History"
-        description="All employee PTO request statuses"
+        title="Request History"
+        description="All PTO requests loaded for the selected year"
         actions={(
           <ActionIconButton
             tooltip="Create Request"
@@ -2081,61 +2133,35 @@ export default function LeaveSphereAdminPtoPage() {
             </div>
           </div>
 
-          <div className="overflow-x-auto rounded-xl border border-blue-100">
-            <table className="min-w-full text-left text-sm">
-              <thead className="bg-blue-50/70 text-xs uppercase tracking-[0.08em] text-slate-600">
-                <tr>
-                  <th className="px-3 py-2.5">Employee</th>
-                  <th className="px-3 py-2.5 text-center">Type</th>
-                  <th className="px-3 py-2.5">Date range</th>
-                  <th className="px-3 py-2.5 text-center">Status</th>
-                  <th className="px-3 py-2.5 text-center">Hours</th>
-                </tr>
-              </thead>
-              <tbody>
-                {recentRequests.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="px-3 py-6 text-center text-sm text-slate-600">No requests found.</td>
-                  </tr>
-                ) : filteredRecentRequests.length === 0 ? (
-                  <tr>
-                    <td colSpan={5} className="px-3 py-6 text-center text-sm text-slate-600">
-                      No recent requests match your keyword filter.
-                    </td>
-                  </tr>
-                ) : (
-                  filteredRecentRequests.map((request) => (
-                    <tr
-                      key={request.id}
-                      className="cursor-pointer border-t border-blue-100/80 bg-white text-slate-700 transition-colors hover:bg-blue-50/40"
-                      onClick={() => {
-                        setSelectedRequestId(request.id);
-                        setReviewNote(request.approverNote || "");
-                      }}
-                    >
-                      <td className="px-3 py-2.5">
-                        <div className="flex items-center gap-2">
-                          <span className="inline-flex size-7 items-center justify-center rounded-full border border-blue-100 bg-blue-50 text-blue-700">
-                            <UserRound className="size-4" />
-                          </span>
-                          <div>
-                            <p className="text-sm font-medium text-slate-900">{request.employeeName}</p>
-                            <p className="text-xs text-slate-500">Submitted {formatDateLabel(request.submittedAt, tenantTimeZone)}</p>
-                          </div>
-                        </div>
-                      </td>
-                      <td className="px-3 py-2.5 text-center">{requestTypeLabel(request.type)}</td>
-                      <td className="px-3 py-2.5">{formatDateLabel(request.startDate, tenantTimeZone)} - {formatDateLabel(request.endDate, tenantTimeZone)}</td>
-                      <td className="px-3 py-2.5 text-center">
-                        <LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} />
-                      </td>
-                      <td className="px-3 py-2.5 text-center">{formatHoursLabel(request.hours)}</td>
-                    </tr>
-                  ))
-                )}
-              </tbody>
-            </table>
-          </div>
+          <LeaveSpherePtoRequestTable
+            requests={filteredRecentRequests}
+            emptyMessage={recentRequests.length === 0
+              ? "No requests found."
+              : "No recent requests match your keyword filter."}
+            resolveEmployee={resolveRequestEmployee}
+            requestTypeLabel={requestTypeLabel}
+            statusLabel={statusLabel}
+            formatSubmittedLabel={(request) => `Submitted ${formatDateInTimeZone(request.submittedAt, tenantTimeZone, {
+              month: "numeric",
+              day: "numeric",
+              year: "numeric",
+            })}`}
+            formatDateRangeLabel={(request) => formatMonthDayYearRangeLabel(request.startDate, request.endDate, tenantTimeZone)}
+            formatHoursLabel={formatHoursLabel}
+            onRequestClick={(request) => {
+              setSelectedRequestId(request.id);
+              setReviewNote(request.approverNote || "");
+            }}
+            showDescription
+            isRowHighlighted={(request) => isIsoDateWithinInclusiveRange(
+              request.startDate,
+              todayIsoDate,
+              shiftIsoDateByDays(todayIsoDate, 7),
+            )}
+            employeeColumnClassName="w-[19rem] px-3 py-2.5"
+            dateRangeColumnClassName="w-[18rem] whitespace-nowrap px-3 py-2.5"
+            descriptionColumnClassName="px-3 py-2.5 text-slate-600"
+          />
         </SectionCard>
       </div>
     );
@@ -2541,8 +2567,11 @@ export default function LeaveSphereAdminPtoPage() {
           <div className="grid gap-2 text-sm text-slate-700 sm:grid-cols-2">
             <p className="min-w-0">
               <span className="text-xs font-medium uppercase tracking-wide text-slate-500">Employee</span>
-              <span className="mt-0.5 block truncate font-semibold text-slate-900" title={selectedRequest.employeeName}>
-                {selectedRequest.employeeName}
+              <span
+                className="mt-0.5 block truncate font-semibold text-slate-900"
+                title={resolveRequestEmployee(selectedRequest).employeeName}
+              >
+                {resolveRequestEmployee(selectedRequest).employeeName}
               </span>
             </p>
             <p className="min-w-0">

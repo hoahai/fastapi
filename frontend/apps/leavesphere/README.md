@@ -5,15 +5,15 @@ This document describes the current LeaveSphere frontend behavior and rules as i
 - `frontend/apps/leavesphere/src/lib/ptoRequestActionConfig.ts`
 - `frontend/apps/leavesphere/src/components/PtoRequestDetailModal.tsx`
 - `frontend/apps/leavesphere/src/pages/MyPtoPage.tsx`
-- `frontend/apps/leavesphere/src/pages/AdminPtoPage.tsx`
+- `frontend/apps/leavesphere/src/pages/LeaveManagementPage.tsx`
 
 ## Main Pages
 
 - `MyPtoPage`:
   - normal user PTO requests
   - manager review area for direct reports
-- `AdminPtoPage`:
-  - admin PTO calendar, requests, balances, setup
+- `LeaveManagementPage`:
+  - Leave Management calendar, requests, balances, setup
 
 ## Role + Status Permission Rules
 
@@ -112,7 +112,7 @@ Source: `PtoRequestDetailModal`.
 - note-only edits do not show `Save changes` (manager review uses decision buttons for note persistence)
 - note is saved through `Approve/Reject/Cancel` actions
 
-### Admin note in `AdminPtoPage` detail modal
+### Admin note in `LeaveManagementPage` detail modal
 
 - editable only when selected request status is `pending` and action config allows review actions
 - `Save changes` updates request body fields (`type/startDate/endDate/hours/reason`) only
@@ -131,7 +131,7 @@ Shared confirmation component:
 Applied in both:
 
 - `MyPtoPage` manager review actions
-- `AdminPtoPage` admin review actions
+- `LeaveManagementPage` admin review actions
 
 Confirmed actions:
 
@@ -146,7 +146,7 @@ Confirmed actions:
 
 - shows user requests and team-region holidays
 
-### Admin calendar (`AdminPtoPage`)
+### Leave Management calendar (`LeaveManagementPage`)
 
 - now shows all request statuses (pending, approved, rejected, cancelled) plus holidays
 - status chip tone is mapped via `mapLeaveSpherePtoStatusToChipTone`
@@ -154,7 +154,7 @@ Confirmed actions:
 ## Current Style Conventions
 
 - request-detail summary card uses neutral slate background with status chip at top-right
-- long summary values (employee/manager in admin detail) use truncation + tooltip title attribute
+- long summary values (employee/manager in Leave Management detail) use truncation + tooltip title attribute
 - Approve action button in review modals:
   - secondary (`outline`) style
   - green border/text (`border-emerald-300 text-emerald-700 hover:bg-emerald-50`)

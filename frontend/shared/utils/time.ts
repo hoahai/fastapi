@@ -111,3 +111,19 @@ export function shiftIsoDateByDays(isoDate: string, days: number): string {
   date.setUTCDate(date.getUTCDate() + days);
   return date.toISOString().slice(0, 10);
 }
+
+export function isIsoDateWithinInclusiveRange(
+  isoDate: string,
+  startIsoDate: string,
+  endIsoDate: string,
+): boolean {
+  const value = String(isoDate || "").trim();
+  const start = String(startIsoDate || "").trim();
+  const end = String(endIsoDate || "").trim();
+  if (!value || !start || !end) {
+    return false;
+  }
+  const lowerBound = start <= end ? start : end;
+  const upperBound = start <= end ? end : start;
+  return value >= lowerBound && value <= upperBound;
+}

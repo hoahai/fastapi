@@ -134,6 +134,7 @@ def _build_employee_rows(
             {
                 "employeeId": employee_id,
                 "employeeName": _employee_full_name(row),
+                "pictureUrl": _normalize_text(row.get("pictureUrl")) or None,
                 "title": _normalize_text(row.get("title")),
                 "managerId": manager_id or None,
                 "managerName": _employee_full_name(manager) if manager else (current_employee_name if employee_id == current_employee_id else ""),

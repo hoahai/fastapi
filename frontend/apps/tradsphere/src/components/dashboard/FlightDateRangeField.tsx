@@ -1,4 +1,5 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { createPortal } from "react-dom";
+import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { CalendarDays } from "lucide-react";
 
 import { TRADSPHERE_BROADCAST_TIMEZONE } from "@/lib/broadcastCalendar";
@@ -8,6 +9,11 @@ import { FlightRangeSelector, type FlightRangePresetState } from "./FlightRangeS
 
 const MONDAY_WEEKDAY_LABELS = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"];
 const DAY_CELL_COUNT = 42;
+const CALENDAR_POPUP_WIDTH_PX = 312;
+const CALENDAR_POPUP_EDGE_PADDING_PX = 12;
+const CALENDAR_POPUP_OFFSET_PX = 8;
+const CALENDAR_POPUP_MIN_HEIGHT_PX = 240;
+export const FLIGHT_DATE_PICKER_POPOVER_SELECTOR = '[data-flight-date-picker-popover="true"]';
 
 const CHICAGO_DATE_PARTS_FORMATTER = new Intl.DateTimeFormat("en-US", {
   timeZone: TRADSPHERE_BROADCAST_TIMEZONE,
@@ -163,8 +169,11 @@ export function DateInputField({
   openCalendarSignal?: number;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
+  const calendarPopoverRef = useRef<HTMLDivElement | null>(null);
   const [isCalendarOpen, setIsCalendarOpen] = useState(false);
   const lastOpenSignalRef = useRef<number | undefined>(openCalendarSignal);
+  const [calendarPopoverStyle, setCalendarPopoverStyle] = useState<CSSProperties | null>(null);
+  const [calendarPopoverMaxHeight, setCalendarPopoverMaxHeight] = useState<number>(440);
 
   const today = useMemo(() => getTodayInChicago(), []);
   const parsed = useMemo(() => parseIsoDate(value), [value]);
@@ -194,9 +203,47 @@ export function DateInputField({
       return;
     }
 
+    function updatePopoverPosition() {
+      const anchor = containerRef.current;
+      if (!anchor) {
+        return;
+      }
+
+      const rect = anchor.getBoundingClientRect();
+      const availableBelow = window.innerHeight - rect.bottom - CALENDAR_POPUP_EDGE_PADDING_PX;
+      const availableAbove = rect.top - CALENDAR_POPUP_EDGE_PADDING_PX;
+      const preferAbove = availableBelow < CALENDAR_POPUP_MIN_HEIGHT_PX && availableAbove > availableBelow;
+      const availableSpace = preferAbove ? availableAbove : availableBelow;
+      const resolvedMaxHeight = Math.max(
+        CALENDAR_POPUP_MIN_HEIGHT_PX,
+        Math.min(440, availableSpace - CALENDAR_POPUP_OFFSET_PX),
+      );
+      const resolvedWidth = Math.min(
+        CALENDAR_POPUP_WIDTH_PX,
+        Math.max(0, window.innerWidth - (CALENDAR_POPUP_EDGE_PADDING_PX * 2)),
+      );
+      const resolvedLeft = Math.min(
+        Math.max(CALENDAR_POPUP_EDGE_PADDING_PX, rect.left),
+        Math.max(CALENDAR_POPUP_EDGE_PADDING_PX, window.innerWidth - CALENDAR_POPUP_EDGE_PADDING_PX - resolvedWidth),
+      );
+
+      setCalendarPopoverMaxHeight(resolvedMaxHeight);
+      setCalendarPopoverStyle({
+        position: "fixed",
+        left: resolvedLeft,
+        top: preferAbove ? rect.top - CALENDAR_POPUP_OFFSET_PX : rect.bottom + CALENDAR_POPUP_OFFSET_PX,
+        width: resolvedWidth,
+        zIndex: 90,
+        transform: preferAbove ? "translateY(-100%)" : "none",
+      });
+    }
+
     function handleClickOutside(event: MouseEvent) {
       const target = event.target;
       if (!(target instanceof Node)) {
+        return;
+      }
+      if (calendarPopoverRef.current?.contains(target)) {
         return;
       }
       if (!containerRef.current?.contains(target)) {
@@ -204,9 +251,14 @@ export function DateInputField({
       }
     }
 
+    updatePopoverPosition();
     document.addEventListener("mousedown", handleClickOutside);
+    window.addEventListener("resize", updatePopoverPosition);
+    window.addEventListener("scroll", updatePopoverPosition, true);
     return () => {
       document.removeEventListener("mousedown", handleClickOutside);
+      window.removeEventListener("resize", updatePopoverPosition);
+      window.removeEventListener("scroll", updatePopoverPosition, true);
     };
   }, [isCalendarOpen]);
 
@@ -275,70 +327,80 @@ export function DateInputField({
         <CalendarDays className="size-4" />
       </button>
 
-      {isCalendarOpen ? (
-        <div className="absolute left-0 top-[calc(100%+0.375rem)] z-50 w-[19.5rem] rounded-xl border border-slate-200 bg-white p-3 shadow-xl">
-          <div className="mb-2 flex items-center justify-between">
-            <button
-              type="button"
-              onClick={handlePreviousMonth}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-700 transition-colors hover:bg-slate-100"
-              aria-label="Show previous month"
+      {isCalendarOpen && calendarPopoverStyle && typeof document !== "undefined"
+        ? createPortal(
+            <div
+              ref={calendarPopoverRef}
+              data-flight-date-picker-popover="true"
+              className="pointer-events-auto rounded-xl border border-slate-200 bg-white p-3 shadow-xl"
+              style={calendarPopoverStyle}
             >
-              {"<"}
-            </button>
-            <p className="text-sm font-medium text-slate-800">{monthLabel}</p>
-            <button
-              type="button"
-              onClick={handleNextMonth}
-              className="inline-flex h-8 w-8 items-center justify-center rounded-md border border-slate-200 text-slate-700 transition-colors hover:bg-slate-100"
-              aria-label="Show next month"
-            >
-              {">"}
-            </button>
-          </div>
+              <div className="overflow-auto" style={{ maxHeight: calendarPopoverMaxHeight }}>
+                <div className="mb-2 flex items-center justify-between">
+                  <button
+                    type="button"
+                    onClick={handlePreviousMonth}
+                    className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-slate-200 text-slate-700 transition-colors hover:bg-slate-100"
+                    aria-label="Show previous month"
+                  >
+                    {"<"}
+                  </button>
+                  <p className="text-sm font-medium text-slate-800">{monthLabel}</p>
+                  <button
+                    type="button"
+                    onClick={handleNextMonth}
+                    className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-slate-200 text-slate-700 transition-colors hover:bg-slate-100"
+                    aria-label="Show next month"
+                  >
+                    {">"}
+                  </button>
+                </div>
 
-          <div className="mb-1 grid grid-cols-7">
-            {MONDAY_WEEKDAY_LABELS.map((dayLabel) => (
-              <div
-                key={dayLabel}
-                className="py-1 text-center text-xs font-medium uppercase tracking-wide text-slate-500"
-              >
-                {dayLabel}
+                <div className="mb-1 grid grid-cols-7">
+                  {MONDAY_WEEKDAY_LABELS.map((dayLabel) => (
+                    <div
+                      key={dayLabel}
+                      className="py-1 text-center text-xs font-medium uppercase tracking-wide text-slate-500"
+                    >
+                      {dayLabel}
+                    </div>
+                  ))}
+                </div>
+
+                <div className="grid grid-cols-7 gap-1">
+                  {calendarDays.map((day) => {
+                    const isSelected = day.isoDate === value;
+                    const isToday = day.isoDate === toIsoDate(today.year, today.month, today.day);
+                    const isOutOfRange = Boolean(
+                      (minDate && day.isoDate < minDate)
+                      || (maxDate && day.isoDate > maxDate),
+                    );
+                    return (
+                      <button
+                        key={day.isoDate}
+                        type="button"
+                        onClick={() => handleSelectDate(day.isoDate)}
+                        disabled={isOutOfRange}
+                        className={[
+                          "h-9 rounded-md text-sm transition-colors",
+                          day.inCurrentMonth ? "text-slate-800" : "text-slate-400",
+                          isSelected
+                            ? "bg-blue-600 font-semibold text-white hover:bg-blue-600"
+                            : "hover:bg-slate-100",
+                          !isSelected && isToday ? "border border-blue-300" : "",
+                          isOutOfRange ? "cursor-not-allowed opacity-35 hover:bg-transparent" : "",
+                        ].join(" ")}
+                      >
+                        {day.dayNumber}
+                      </button>
+                    );
+                  })}
+                </div>
               </div>
-            ))}
-          </div>
-
-          <div className="grid grid-cols-7 gap-1">
-            {calendarDays.map((day) => {
-              const isSelected = day.isoDate === value;
-              const isToday = day.isoDate === toIsoDate(today.year, today.month, today.day);
-              const isOutOfRange = Boolean(
-                (minDate && day.isoDate < minDate)
-                || (maxDate && day.isoDate > maxDate),
-              );
-              return (
-                <button
-                  key={day.isoDate}
-                  type="button"
-                  onClick={() => handleSelectDate(day.isoDate)}
-                  disabled={isOutOfRange}
-                  className={[
-                    "h-9 rounded-md text-sm transition-colors",
-                    day.inCurrentMonth ? "text-slate-800" : "text-slate-400",
-                    isSelected
-                      ? "bg-blue-600 font-semibold text-white hover:bg-blue-600"
-                      : "hover:bg-slate-100",
-                    !isSelected && isToday ? "border border-blue-300" : "",
-                    isOutOfRange ? "cursor-not-allowed opacity-35 hover:bg-transparent" : "",
-                  ].join(" ")}
-                >
-                  {day.dayNumber}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
+            </div>,
+            document.body,
+          )
+        : null}
     </div>
   );
 }

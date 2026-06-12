@@ -301,6 +301,7 @@ def _resolve_direct_reports(manager_id: str) -> list[dict]:
             {
                 "employeeId": employee_id,
                 "employeeName": _employee_full_name(employee),
+                "pictureUrl": _normalize_text(employee.get("pictureUrl")) or None,
                 "title": _normalize_text(employee.get("title")),
             }
         )
@@ -365,7 +366,6 @@ def _build_request_rows(
         request = {
             "id": _normalize_text(row.get("id")),
             "employeeId": employee_id,
-            "employeeName": _employee_full_name(employee),
             "managerId": manager_id_by_employee_id.get(employee_id) or current_employee_id,
             "type": ui_type,
             "ptoTypeCode": pto_type_code,
@@ -457,6 +457,25 @@ def _build_employee_map(employees: list[dict]) -> dict[str, dict]:
     }
 
 
+def _build_employee_rows(employees: list[dict]) -> list[dict]:
+    rows: list[dict] = []
+    for employee in employees:
+        employee_id = _normalize_text(employee.get("id")) or _normalize_text(employee.get("employeeId"))
+        employee_name = _employee_full_name(employee) or _normalize_text(employee.get("employeeName"))
+        if not employee_id or not employee_name:
+            continue
+        rows.append(
+            {
+                "employeeId": employee_id,
+                "employeeName": employee_name,
+                "pictureUrl": _normalize_text(employee.get("pictureUrl")) or None,
+                "title": _normalize_text(employee.get("title")) or None,
+            }
+        )
+    rows.sort(key=lambda item: (item["employeeName"].lower(), item["employeeId"]))
+    return rows
+
+
 def load_my_pto_workspace(*, request, year: int | None = None) -> dict:
     selected_year = _normalize_year(year)
     employee = _resolve_current_employee(request, require_active=False)
@@ -512,6 +531,7 @@ def load_my_pto_workspace(*, request, year: int | None = None) -> dict:
         "managerId": manager_id_by_employee_id.get(employee_id),
         "currentUserTeamRegion": current_employee_region,
         "isManager": bool(direct_reports),
+        "employees": _build_employee_rows([employee, *direct_reports]),
         "ptoTypes": pto_types,
         "ptoActions": pto_actions,
         "defaultRequestActionCode": _resolve_default_action_code(

@@ -459,7 +459,7 @@ export function LeaveSpherePtoRequestDetailModal({
   return (
     <Dialog open={open} onOpenChange={handleDialogOpenChange}>
       <DialogContent
-        className={`${isMyPtoDetailLayout ? "max-w-3xl" : "max-w-2xl"} flex max-h-[90vh] flex-col overflow-hidden rounded-xl bg-white p-6`}
+        className={`${isMyPtoDetailLayout ? "max-w-3xl" : "max-w-2xl"} flex max-h-[90vh] flex-col overflow-visible rounded-xl bg-white p-6`}
         onInteractOutside={(event) => {
           if (shouldBlockOutsideClose({ isBusy: saving, hasUnsavedChanges })) {
             event.preventDefault();

@@ -17,7 +17,7 @@ import {
   SHIFTZY_ACCOUNTS_CHILD_ICON,
   SHIFTZY_SCHEDULES_CHILD_ICON,
   LEAVESPHERE_MY_PTO_CHILD_ICON,
-  LEAVESPHERE_ADMIN_PTO_CHILD_ICON,
+  LEAVESPHERE_LEAVE_MANAGEMENT_CHILD_ICON,
   TRADSPHERE_CONTACTS_CHILD_ICON,
   TRADSPHERE_ESTNUMS_CHILD_ICON,
   TRADSPHERE_HOME_CHILD_ICON,
@@ -775,7 +775,7 @@ function appCodeFromRoute(route: string): string {
 function SidebarChildItem({ child, currentPath, tenantSlug, activeTenantSlug, accessProfile, onNavigate }: SidebarChildItemProps) {
   const normalizedTenantSlug = String(tenantSlug || "").trim().toLowerCase();
   const appCode = appCodeFromRoute(child.route);
-  if (child.route === "/leavesphere/admin-pto" && !hasAppAdminAccess(accessProfile, "leavesphere")) {
+  if (child.route === "/leavesphere/leave-management" && !hasAppAdminAccess(accessProfile, "leavesphere")) {
     return null;
   }
   const hasPageAccess = child.route.endsWith("/admin")
@@ -811,8 +811,8 @@ function SidebarChildItem({ child, currentPath, tenantSlug, activeTenantSlug, ac
               ? SHIFTZY_ACCOUNTS_CHILD_ICON
             : child.route === "/leavesphere/home"
               ? LEAVESPHERE_MY_PTO_CHILD_ICON
-            : child.route === "/leavesphere/admin-pto"
-              ? LEAVESPHERE_ADMIN_PTO_CHILD_ICON
+            : child.route === "/leavesphere/leave-management"
+              ? LEAVESPHERE_LEAVE_MANAGEMENT_CHILD_ICON
           : TRADSPHERE_HOME_CHILD_ICON;
 
   return (

@@ -1337,5 +1337,5 @@ End with:
 
 
 
-Before edits, create a real git safety commit on a WIP branch.
+Before edits, please create a real git safety checkpoint commit on a WIP branch for all changes so I can restore my code back to current code.
 -->

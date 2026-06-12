@@ -20,7 +20,7 @@ const TrafficPage = lazy(() => import("@tradsphere/pages/TrafficPage"));
 const ShiftzyEmployeesPage = lazy(() => import("@shiftzy/pages/ShiftzyEmployeesPage"));
 const ShiftzySchedulePage = lazy(() => import("@shiftzy/pages/ShiftzySchedulePage"));
 const LeaveSphereMyPtoPage = lazy(() => import("@leavesphere/pages/MyPtoPage"));
-const LeaveSphereAdminPtoPage = lazy(() => import("@leavesphere/pages/AdminPtoPage"));
+const LeaveSphereLeaveManagementPage = lazy(() => import("@leavesphere/pages/LeaveManagementPage"));
 const LeaveSphereQuickApprovalPage = lazy(() => import("@leavesphere/pages/QuickApprovalPage"));
 const AdminUsersPage = lazy(() => import("@shell/pages/AdminUsersPage"));
 const AppScopedAdminPage = lazy(() => import("@shell/pages/AppScopedAdminPage"));
@@ -40,16 +40,19 @@ function getFrontendPath(pathname: string): string {
   if (normalizedPath === "/fe" || normalizedPath === "/fe/") {
     return "/";
   }
+  if (normalizedPath === "/leavesphere/admin-pto" || normalizedPath === "/leavesphere/admin-pto/") {
+    return "/leavesphere/leave-management";
+  }
 
   if (normalizedPath.startsWith("/fe/")) {
     const route = normalizedPath.slice(3);
     if (!route || route === "/") {
       return "/";
     }
-    return stripTrailingSlash(route);
+    return normalizeLegacyLeaveSphereRoute(stripTrailingSlash(route));
   }
 
-  return stripTrailingSlash(normalizedPath);
+  return normalizeLegacyLeaveSphereRoute(stripTrailingSlash(normalizedPath));
 }
 
 function stripTrailingSlash(path: string): string {
@@ -57,6 +60,14 @@ function stripTrailingSlash(path: string): string {
     return path.slice(0, -1);
   }
   return path || "/";
+}
+
+function normalizeLegacyLeaveSphereRoute(route: string): string {
+  const normalized = stripTrailingSlash(route);
+  if (normalized === "/leavesphere/admin-pto") {
+    return "/leavesphere/leave-management";
+  }
+  return normalized;
 }
 
 function parseScopedAdminRoute(path: string): string | null {
@@ -189,7 +200,7 @@ function resolveBrowserTitle(params: {
 }
 
 function toFrontendHref(route: string): string {
-  return route;
+  return normalizeLegacyLeaveSphereRoute(route);
 }
 
 function shouldRouteToUpdatePasswordFromHash(hash: string): boolean {
@@ -247,8 +258,8 @@ function toScrollStorageKey(route: string): string {
   if (route === "/leavesphere/home") {
     return "leavesphere.home.scrollY";
   }
-  if (route === "/leavesphere/admin-pto") {
-    return "leavesphere.admin-pto.scrollY";
+  if (route === "/leavesphere/leave-management") {
+    return "leavesphere.leave-management.scrollY";
   }
   if (route === "/admin/users") {
     return "workspace.admin.users.scrollY";
@@ -550,7 +561,7 @@ function App() {
       "/shiftzy/home",
       "/shiftzy/employees",
       "/leavesphere/home",
-      "/leavesphere/admin-pto",
+      "/leavesphere/leave-management",
     ]);
   }, []);
   const scopedAdminAppCode = useMemo(() => parseScopedAdminRoute(frontendPath), [frontendPath]);
@@ -708,11 +719,11 @@ function App() {
                 </Suspense>
               </RequireAppPageRoute>
             ) : null}
-            {frontendPath === "/leavesphere/admin-pto" ? (
+            {frontendPath === "/leavesphere/leave-management" ? (
               <RequireAppAdmin appCode="leavesphere" fallback={<RedirectToHome />}>
-                <RequireAppPageRoute appCode="leavesphere" route="/leavesphere/admin-pto" fallback={<RedirectToHome />}>
+                <RequireAppPageRoute appCode="leavesphere" route="/leavesphere/leave-management" fallback={<RedirectToHome />}>
                   <Suspense fallback={<RouteChunkFallback />}>
-                    <LeaveSphereAdminPtoPage />
+                    <LeaveSphereLeaveManagementPage />
                   </Suspense>
                 </RequireAppPageRoute>
               </RequireAppAdmin>

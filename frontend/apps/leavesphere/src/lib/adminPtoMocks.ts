@@ -25,6 +25,7 @@ import { DEFAULT_TIME_ZONE, getCurrentYearInTimeZone, getTodayIsoDateInTimeZone 
 export type LeaveSphereAdminEmployee = {
   employeeId: string;
   employeeName: string;
+  pictureUrl?: string | null;
   title: string;
   managerId: string;
   managerName: string;
@@ -402,7 +403,6 @@ function seedWorkspace(params: {
     {
       id: "admin-pto-rq-1",
       employeeId: "emp-lee-chen",
-      employeeName: "Lee Chen",
       managerId: currentUserId,
       type: "vacation",
       startDate: toIsoDate(addDays(now, 7)),
@@ -418,7 +418,6 @@ function seedWorkspace(params: {
     {
       id: "admin-pto-rq-2",
       employeeId: "emp-sara-johnson",
-      employeeName: "Sara Johnson",
       managerId: currentUserId,
       type: "sick",
       startDate: toIsoDate(addDays(now, 1)),
@@ -434,7 +433,6 @@ function seedWorkspace(params: {
     {
       id: "admin-pto-rq-3",
       employeeId: "emp-mateo-garcia",
-      employeeName: "Mateo Garcia",
       managerId: currentUserId,
       type: "floating",
       startDate: toIsoDate(addDays(now, -8)),
@@ -450,7 +448,6 @@ function seedWorkspace(params: {
     {
       id: "admin-pto-rq-4",
       employeeId: "emp-noah-park",
-      employeeName: "Noah Park",
       managerId: "emp-mateo-garcia",
       type: "personal",
       startDate: toIsoDate(addDays(now, 14)),
@@ -466,7 +463,6 @@ function seedWorkspace(params: {
     {
       id: "admin-pto-rq-5",
       employeeId: currentUserId,
-      employeeName: currentUserName,
       managerId: currentUserId,
       type: "vacation",
       startDate: toIsoDate(addDays(now, 18)),
@@ -596,6 +592,7 @@ function normalizeNetworkWorkspace(payload: unknown, timeZone?: string | null): 
       .map((item) => ({
         employeeId: asString(item.employeeId),
         employeeName: asString(item.employeeName),
+        pictureUrl: asString(item.pictureUrl) || null,
         title: asString(item.title),
         managerId: asString(item.managerId),
         managerName: asString(item.managerName),
@@ -648,7 +645,6 @@ function normalizeNetworkWorkspace(payload: unknown, timeZone?: string | null): 
     .map((item) => ({
       id: asString(item.id),
       employeeId: asString(item.employeeId),
-      employeeName: asString(item.employeeName),
       managerId: asString(item.managerId),
       type: asString(item.type) || "vacation",
       startDate: asString(item.startDate),
@@ -876,7 +872,6 @@ export async function createLeaveSphereAdminPtoRequest(params: CreateRequestArgs
   const request: LeaveSpherePtoRequest = {
     id: `admin-pto-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 6)}`,
     employeeId: employee.employeeId,
-    employeeName: employee.employeeName,
     managerId: employee.managerId,
     type,
     startDate,

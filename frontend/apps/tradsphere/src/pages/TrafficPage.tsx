@@ -37,7 +37,10 @@ import {
   type TrafficEmailWorkspacePayload,
 } from "@/lib/trafficEmailTemplate";
 import { useTradsphereAccountSelections } from "@/hooks/useTradsphereAccountSelections";
-import { DateInputField } from "@/components/dashboard/FlightDateRangeField";
+import {
+  DateInputField,
+  FLIGHT_DATE_PICKER_POPOVER_SELECTOR,
+} from "@/components/dashboard/FlightDateRangeField";
 import { ModalCloseButton, ModalShell } from "@shared/components";
 import { buildAuthHeaders as buildSharedAuthHeaders } from "@shared/api/authHeaders";
 import { useAuth } from "@shared/auth/useAuth";
@@ -531,7 +534,6 @@ const TrafficListItemCard = memo(function TrafficListItemCard({
                 }
                 void onDuplicateTraffic(item.id);
               }}
-              disabled={!canEditTradsphere || isSaving || isDeletingCard || isLoadingAccountTraffic || isLoadingDetail || isDuplicatingTraffic || isLockedTrafficCard}
               className="!h-6 !w-6 !rounded-full !p-0 text-blue-500 hover:!bg-blue-50 hover:!scale-105 hover:text-blue-600 focus-visible:!bg-blue-50 focus-visible:!scale-105 focus-visible:text-blue-600 [&_svg]:!h-3.5 [&_svg]:!w-3.5 [&_svg]:text-blue-500 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110 hover:[&_svg]:text-blue-600 focus-visible:[&_svg]:text-blue-600"
             />
             <ActionIconButton
@@ -9053,7 +9055,7 @@ export default function TrafficPage() {
       >
         <DialogContent className="!h-[92vh] !max-h-[92vh] !w-[min(96vw,1160px)] !max-w-[1160px] overflow-hidden p-0">
           <DialogClose asChild aria-label="Close email preview modal">
-            <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
+            <ModalCloseButton icon={<X className="size-4" />} className="absolute right-6 top-6 z-20" />
           </DialogClose>
           <DialogHeader className="border-b border-slate-200 px-5 py-4 pr-12">
             <div className="flex items-center justify-between gap-2">
@@ -9231,7 +9233,7 @@ export default function TrafficPage() {
         >
         <DialogContent className="max-w-lg">
           <DialogClose asChild aria-label="Close send traffic email dialog" disabled={isSaving || isSendingEmail || isMarkingTrafficSent}>
-            <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
+            <ModalCloseButton icon={<X className="size-4" />} className="absolute right-6 top-6 z-20" />
           </DialogClose>
           <DialogHeader className="pr-8">
             <DialogTitle>Send traffic email?</DialogTitle>
@@ -9454,6 +9456,11 @@ export default function TrafficPage() {
         <DialogContent
           className="flex max-h-[90vh] flex-col overflow-hidden rounded-xl bg-white p-6"
           onInteractOutside={(event) => {
+            const target = event.target;
+            if (target instanceof Element && target.closest(FLIGHT_DATE_PICKER_POPOVER_SELECTOR)) {
+              event.preventDefault();
+              return;
+            }
             if (shouldBlockOutsideClose({ isBusy: isSaving, hasUnsavedChanges: hasFlightModalChanges })) {
               event.preventDefault();
             }

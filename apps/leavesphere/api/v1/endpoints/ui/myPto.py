@@ -96,7 +96,6 @@ def get_my_pto_load_route(
               {
                 "id": "pto-1",
                 "employeeId": "emp-123",
-                "employeeName": "Alex Chen",
                 "managerId": "mgr-9",
                 "type": "vacation",
                 "ptoTypeCode": "VAC",
@@ -111,6 +110,10 @@ def get_my_pto_load_route(
             ],
             "directReports": [
               {"employeeId": "emp-456", "employeeName": "Jamie Lee", "title": "Coordinator"}
+            ],
+            "employees": [
+              {"employeeId": "emp-123", "employeeName": "Alex Chen", "pictureUrl": "https://example.com/avatars/alex-chen.jpg"},
+              {"employeeId": "emp-456", "employeeName": "Jamie Lee", "pictureUrl": "https://example.com/avatars/jamie-lee.jpg", "title": "Coordinator"}
             ]
           }
         }

@@ -38,10 +38,16 @@ export type LeaveSpherePtoActionConfig = {
   color?: string | null;
 };
 
+export type LeaveSpherePtoEmployee = {
+  employeeId: string;
+  employeeName: string;
+  pictureUrl?: string | null;
+  title?: string | null;
+};
+
 export type LeaveSpherePtoRequest = {
   id: string;
   employeeId: string;
-  employeeName: string;
   managerId: string | null;
   year?: number;
   type: string;
@@ -67,6 +73,7 @@ export type LeaveSphereHoliday = {
 export type LeaveSphereDirectReport = {
   employeeId: string;
   employeeName: string;
+  pictureUrl?: string | null;
   title: string;
 };
 
@@ -77,6 +84,7 @@ export type LeaveSpherePtoWorkspaceData = {
   managerId: string | null;
   currentUserTeamRegion: LeaveSphereTeamRegion;
   isManager: boolean;
+  employees: LeaveSpherePtoEmployee[];
   ptoTypes: LeaveSpherePtoTypeConfig[];
   ptoActions: LeaveSpherePtoActionConfig[];
   defaultRequestActionCode?: string;
@@ -302,7 +310,25 @@ function normalizeDirectReport(value: unknown): LeaveSphereDirectReport | null {
   return {
     employeeId,
     employeeName,
+    pictureUrl: value.pictureUrl === undefined ? null : asString(value.pictureUrl) || null,
     title: asString(value.title),
+  };
+}
+
+function normalizeEmployee(value: unknown): LeaveSpherePtoEmployee | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const employeeId = asString(value.employeeId);
+  const employeeName = asString(value.employeeName);
+  if (!employeeId || !employeeName) {
+    return null;
+  }
+  return {
+    employeeId,
+    employeeName,
+    pictureUrl: value.pictureUrl === undefined ? null : asString(value.pictureUrl) || null,
+    title: value.title === undefined ? undefined : asString(value.title) || null,
   };
 }
 
@@ -330,15 +356,13 @@ function normalizeRequest(value: unknown): LeaveSpherePtoRequest | null {
   }
   const id = asString(value.id);
   const employeeId = asString(value.employeeId);
-  const employeeName = asString(value.employeeName);
   const type = asString(value.type ?? value.ptoTypeCode);
-  if (!id || !employeeId || !employeeName || !type) {
+  if (!id || !employeeId || !type) {
     return null;
   }
   return {
     id,
     employeeId,
-    employeeName,
     managerId: value.managerId === undefined ? null : asString(value.managerId) || null,
     year: value.year === undefined ? undefined : asNumber(value.year),
     type,
@@ -375,6 +399,9 @@ function normalizeWorkspace(payload: unknown): LeaveSpherePtoWorkspaceData | nul
   const ptoActions = Array.isArray(workspace.ptoActions)
     ? workspace.ptoActions.map(normalizePtoActionConfig).filter((item): item is LeaveSpherePtoActionConfig => Boolean(item))
     : [];
+  const employees = Array.isArray(workspace.employees)
+    ? workspace.employees.map(normalizeEmployee).filter((item): item is LeaveSpherePtoEmployee => Boolean(item))
+    : [];
   const balances = Array.isArray(workspace.balances)
     ? workspace.balances.map(normalizeBalanceRow).filter((item): item is LeaveSpherePtoBalance => Boolean(item))
     : [];
@@ -395,6 +422,7 @@ function normalizeWorkspace(payload: unknown): LeaveSpherePtoWorkspaceData | nul
     managerId: workspace.managerId === undefined ? null : asString(workspace.managerId) || null,
     currentUserTeamRegion: normalizeLeaveSphereTeamRegion(workspace.currentUserTeamRegion),
     isManager: Boolean(workspace.isManager),
+    employees,
     ptoTypes,
     ptoActions,
     defaultRequestActionCode: asString(workspace.defaultRequestActionCode) || undefined,

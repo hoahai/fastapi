@@ -112,7 +112,20 @@ def get_leave_management_workspace_route(
             "ptoActions": [],
             "employeeBalances": [],
             "balanceTransactions": [],
-            "requests": [],
+            "requests": [
+              {
+                "id": "pto-1",
+                "employeeId": "emp-123",
+                "managerId": "mgr-9",
+                "type": "vacation",
+                "startDate": "2026-06-10",
+                "endDate": "2026-06-10",
+                "hours": 8,
+                "description": "Family trip",
+                "status": "pending",
+                "submittedAt": "2026-05-29"
+              }
+            ],
             "holidays": [],
             "employees": []
           }
