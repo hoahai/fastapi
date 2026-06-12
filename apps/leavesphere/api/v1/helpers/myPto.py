@@ -12,6 +12,7 @@ from apps.leavesphere.api.v1.helpers.dbQueries import (
     get_employees_by_email,
     get_employees_by_identity_key,
     get_employees_by_ids,
+    get_holidays,
     get_pto_actions,
     get_pto_transactions,
     get_pto_types,
@@ -310,29 +311,21 @@ def _resolve_direct_reports(manager_id: str) -> list[dict]:
 
 
 def _build_holidays(year: int, _region: str) -> list[dict]:
-    seed = [
-        ("new-year", "New Year's Day", f"{year}-01-01", "US"),
-        ("memorial-day", "Memorial Day", f"{year}-05-25", "US"),
-        ("independence-day", "Independence Day", f"{year}-07-04", "US"),
-        ("labor-day", "Labor Day", f"{year}-09-07", "US"),
-        ("mx-new-year", "New Year's Day", f"{year}-01-01", "Mexico"),
-        ("mx-labor-day", "Labor Day", f"{year}-05-01", "Mexico"),
-        ("mx-independence-day", "Independence Day", f"{year}-09-16", "Mexico"),
-        ("mx-revolution-day", "Revolution Day", f"{year}-11-20", "Mexico"),
-        ("ph-new-year", "New Year's Day", f"{year}-01-01", "Philippines"),
-        ("ph-day-of-valour", "Day of Valour", f"{year}-04-09", "Philippines"),
-        ("ph-independence-day", "Independence Day", f"{year}-06-12", "Philippines"),
-        ("ph-bonifacio-day", "Bonifacio Day", f"{year}-11-30", "Philippines"),
-    ]
-    return [
-        {
-            "id": f"{year}-{slug}",
-            "name": name,
-            "date": date_value,
-            "teamRegion": team_region,
-        }
-        for slug, name, date_value, team_region in seed
-    ]
+    holidays: list[dict] = []
+    for row in get_holidays(year=year):
+        holiday_date = _to_date_string(row.get("date"))
+        if not holiday_date.startswith(f"{year}-"):
+            continue
+        holidays.append(
+            {
+                "id": _normalize_text(row.get("id")),
+                "name": _normalize_text(row.get("name")),
+                "date": holiday_date,
+                "teamRegion": _normalize_team_region(row.get("teamRegion") or row.get("region")),
+            }
+        )
+    holidays.sort(key=lambda item: (item["date"], item["name"], item["id"]))
+    return holidays
 
 
 def _build_request_rows(

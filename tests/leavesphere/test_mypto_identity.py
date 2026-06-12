@@ -118,6 +118,21 @@ class LeaveSphereMyPtoIdentityTests(unittest.TestCase):
         self.assertIn("LOWER(TRIM(email)) = LOWER(TRIM(%s))", query)
         self.assertEqual(params, (" hai@theautoadagency.com ",))
 
+    def test_build_holidays_uses_holidays_table_rows_for_selected_year(self):
+        rows = [
+            {"id": "holiday-us-oct", "name": "October Holiday", "date": "2026-10-15", "region": "US"},
+            {"id": "holiday-mx-nov", "name": "November Holiday", "date": "2026-11-20", "region": "Mexico"},
+            {"id": "holiday-ph-dec", "name": "December Holiday", "date": "2026-12-31", "region": "Philippines"},
+            {"id": "holiday-next", "name": "Next Year Holiday", "date": "2027-01-01", "region": "US"},
+        ]
+
+        with patch.object(myPto, "get_holidays", return_value=rows):
+            holidays = myPto._build_holidays(2026, "US")
+
+        self.assertEqual([item["date"] for item in holidays], ["2026-10-15", "2026-11-20", "2026-12-31"])
+        self.assertEqual([item["teamRegion"] for item in holidays], ["US", "Mexico", "Philippines"])
+        self.assertEqual(len(holidays), 3)
+
 
 if __name__ == "__main__":
     unittest.main()
