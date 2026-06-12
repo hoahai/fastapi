@@ -1,4 +1,4 @@
-import { useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { Button } from "@tradsphere/components/ui/button";
@@ -98,6 +98,17 @@ function isBeforeMonthKey(left: string, right: string): boolean {
 
 function isAfterMonthKey(left: string, right: string): boolean {
   return left > right;
+}
+
+function clampMonthKey(monthKey: string, minMonthKey?: string, maxMonthKey?: string): string {
+  let nextMonthKey = monthKey;
+  if (minMonthKey && isBeforeMonthKey(nextMonthKey, minMonthKey)) {
+    nextMonthKey = minMonthKey;
+  }
+  if (maxMonthKey && isAfterMonthKey(nextMonthKey, maxMonthKey)) {
+    nextMonthKey = maxMonthKey;
+  }
+  return nextMonthKey;
 }
 
 function buildCalendarDays(monthKey: string, todayIsoDate?: string): CalendarDay[] {
@@ -341,13 +352,20 @@ export function LeaveSphereMonthCalendar({
   legend,
   todayIsoDate,
 }: LeaveSphereMonthCalendarProps) {
-  const calendarDays = buildCalendarDays(monthKey, todayIsoDate);
+  const boundedMonthKey = clampMonthKey(monthKey, minMonthKey, maxMonthKey);
+  useEffect(() => {
+    if (boundedMonthKey !== monthKey) {
+      onMonthChange(boundedMonthKey);
+    }
+  }, [boundedMonthKey, monthKey, onMonthChange]);
+
+  const calendarDays = buildCalendarDays(boundedMonthKey, todayIsoDate);
   const weeks = Array.from({ length: 6 }, (_, weekIndex) => (
     calendarDays.slice(weekIndex * 7, weekIndex * 7 + 7)
   ));
   const effectiveVisibleEventRows = resolveEffectiveVisibleEventRows(maxVisibleEventRows, dayMinHeightClassName);
-  const isPreviousMonthDisabled = Boolean(minMonthKey && isBeforeMonthKey(addMonths(monthKey, -1), minMonthKey));
-  const isNextMonthDisabled = Boolean(maxMonthKey && isAfterMonthKey(addMonths(monthKey, 1), maxMonthKey));
+  const isPreviousMonthDisabled = Boolean(minMonthKey && isBeforeMonthKey(addMonths(boundedMonthKey, -1), minMonthKey));
+  const isNextMonthDisabled = Boolean(maxMonthKey && isAfterMonthKey(addMonths(boundedMonthKey, 1), maxMonthKey));
   const [selectedOverflowDay, setSelectedOverflowDay] = useState<{
     isoDate: string;
     events: LeaveSphereMonthCalendarEvent[];
@@ -375,20 +393,20 @@ export function LeaveSphereMonthCalendar({
               tooltip="Load previous month"
               onClick={() => {
                 if (!isPreviousMonthDisabled) {
-                  onMonthChange(addMonths(monthKey, -1));
+                  onMonthChange(addMonths(boundedMonthKey, -1));
                 }
               }}
               icon={<ChevronLeft className="size-5" />}
               className="h-9 w-9"
               disabled={isPreviousMonthDisabled}
             />
-            <p className="min-w-[9rem] text-center text-sm font-semibold text-slate-800">{formatMonthHeading(monthKey, todayIsoDate)}</p>
+            <p className="min-w-[9rem] text-center text-sm font-semibold text-slate-800">{formatMonthHeading(boundedMonthKey, todayIsoDate)}</p>
             <ActionIconButton
               aria-label="Load next month"
               tooltip="Load next month"
               onClick={() => {
                 if (!isNextMonthDisabled) {
-                  onMonthChange(addMonths(monthKey, 1));
+                  onMonthChange(addMonths(boundedMonthKey, 1));
                 }
               }}
               icon={<ChevronRight className="size-5" />}

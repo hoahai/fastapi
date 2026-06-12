@@ -1051,6 +1051,10 @@ export default function LeaveSphereAdminPtoPage() {
     };
   }, [pendingAdjustAction]);
 
+  const holidayDates = useMemo(
+    () => new Set((workspaceForYear?.holidays ?? []).map((item) => item.date)),
+    [workspaceForYear?.holidays],
+  );
   const overview = useMemo(() => {
     return {
       pendingCount: pendingRequests.length,
@@ -1058,11 +1062,7 @@ export default function LeaveSphereAdminPtoPage() {
       employeeCount: workspaceForYear?.employees.filter((item) => item.active).length ?? 0,
       holidayCount: workspaceForYear?.holidays.length ?? 0,
     };
-  }, [pendingRequests.length, requests, workspaceForYear?.employees, workspaceForYear?.holidays.length]);
-  const holidayDates = useMemo(
-    () => new Set((workspaceForYear?.holidays ?? []).map((item) => item.date)),
-    [workspaceForYear?.holidays],
-  );
+  }, [pendingRequests.length, requests, todayIsoDate, workspaceForYear?.employees, workspaceForYear?.holidays.length]);
   const yearOptions = useMemo(
     () => [
       { value: String(currentYear - 1), label: String(currentYear - 1) },
@@ -2014,6 +2014,8 @@ export default function LeaveSphereAdminPtoPage() {
         description="Who is out and company holidays"
         monthKey={calendarMonth}
         onMonthChange={setCalendarMonth}
+        minMonthKey={loadedYearDateBounds?.minDate.slice(0, 7)}
+        maxMonthKey={loadedYearDateBounds?.maxDate.slice(0, 7)}
         todayIsoDate={todayIsoDate}
         dayMinHeightClassName="min-h-[8.2rem]"
         events={calendarEvents}
@@ -2661,32 +2663,25 @@ export default function LeaveSphereAdminPtoPage() {
         ) : null}
       />
 
-      {pendingReviewActionCopy ? (
-        <ConfirmDialog
-          open={Boolean(pendingReviewAction)}
-          title={pendingReviewActionCopy.title}
-          description={pendingReviewActionCopy.description}
-          confirmLabel={pendingReviewActionCopy.confirmLabel}
-          cancelLabel="Go back"
-          onCancel={() => setPendingReviewAction(null)}
-          onConfirm={() => {
-            void handleConfirmReviewAction();
-          }}
-        >
-          {pendingReviewAction === "revert" ? null : (
-            <label className="block space-y-1 text-sm">
-              <span className="text-slate-600">Admin note / reason</span>
-              <Textarea
-                value={reviewNote}
-                onChange={(event) => setReviewNote(event.target.value)}
-                className="min-h-[120px]"
-                placeholder="Add a note or reason for this decision"
-                disabled={isMutating}
-              />
-            </label>
-          )}
-        </ConfirmDialog>
-      ) : null}
+      <ConfirmDialog
+        open={Boolean(pendingReviewAction)}
+        title={pendingReviewActionCopy?.title ?? ""}
+        description={pendingReviewActionCopy?.description ?? ""}
+        confirmLabel={pendingReviewActionCopy?.confirmLabel ?? "Confirm"}
+        cancelLabel="Go back"
+        onCancel={() => setPendingReviewAction(null)}
+        onConfirm={() => {
+          void handleConfirmReviewAction();
+        }}
+        note={pendingReviewAction === "revert" ? undefined : {
+          label: "Admin note / reason",
+          value: reviewNote,
+          onChange: setReviewNote,
+          placeholder: "Add a note or reason for this decision",
+          disabled: isMutating,
+          helpText: pendingReviewActionCopy?.noteHelpText,
+        }}
+      />
 
       <Dialog open={Boolean(selectedHoliday)} onOpenChange={(open) => {
         if (!open) {

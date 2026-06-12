@@ -17,7 +17,6 @@ import {
 } from "@tradsphere/components/ui/dialog";
 import { AppDropdown } from "@tradsphere/components/ui/app-dropdown";
 import { Input } from "@tradsphere/components/ui/input";
-import { Textarea } from "@tradsphere/components/ui/textarea";
 import { ConfirmDialog } from "@tradsphere/components/ui/confirm-dialog";
 import { useToast } from "@shell/components/ui/toast";
 import { useApiRequest } from "@shared/hooks/useApiRequest";
@@ -1825,32 +1824,25 @@ export default function LeaveSphereMyPtoPage() {
         ) : null}
       />
 
-      {pendingReviewActionCopy ? (
-        <ConfirmDialog
-          open={Boolean(pendingReviewAction)}
-          title={pendingReviewActionCopy.title}
-          description={pendingReviewActionCopy.description}
-          confirmLabel={pendingReviewActionCopy.confirmLabel}
-          cancelLabel="Go back"
-          onCancel={() => setPendingReviewAction(null)}
-          onConfirm={() => {
-            void handleConfirmReviewAction();
-          }}
-        >
-          {pendingReviewAction === "revert" ? null : (
-            <label className="block space-y-1 text-sm">
-              <span className="text-slate-600">Manager note / reason</span>
-              <Textarea
-                value={reviewNote}
-                onChange={(event) => setReviewNote(event.target.value)}
-                className="min-h-[120px]"
-                placeholder="Add a note or reason for this decision"
-                disabled={isReviewing}
-              />
-            </label>
-          )}
-        </ConfirmDialog>
-      ) : null}
+      <ConfirmDialog
+        open={Boolean(pendingReviewAction)}
+        title={pendingReviewActionCopy?.title ?? ""}
+        description={pendingReviewActionCopy?.description ?? ""}
+        confirmLabel={pendingReviewActionCopy?.confirmLabel ?? "Confirm"}
+        cancelLabel="Go back"
+        onCancel={() => setPendingReviewAction(null)}
+        onConfirm={() => {
+          void handleConfirmReviewAction();
+        }}
+        note={pendingReviewAction === "revert" ? undefined : {
+          label: "Manager note / reason",
+          value: reviewNote,
+          onChange: setReviewNote,
+          placeholder: "Add a note or reason for this decision",
+          disabled: isReviewing,
+          helpText: pendingReviewActionCopy?.noteHelpText,
+        }}
+      />
 
       <PageLoadingLayer
         active={loadingContract.pageOverlayActive}
