@@ -26,6 +26,7 @@ import { Textarea } from "@tradsphere/components/ui/textarea";
 import { ConfirmDialog } from "@tradsphere/components/ui/confirm-dialog";
 import { canModalClose, shouldBlockOutsideClose } from "@tradsphere/components/ui/modal-close-guard";
 import { UnsavedChangesDialog } from "@tradsphere/components/ui/unsaved-changes-dialog";
+import { isAppDropdownInteractionEvent } from "@shared/components/ui/app-dropdown-interaction";
 import { useToast } from "@shell/components/ui/toast";
 import { hasAppAdminAccess } from "@shared/auth/permissions";
 import { useAuth } from "@shared/auth/useAuth";
@@ -2731,6 +2732,10 @@ export default function LeaveSphereAdminPtoPage() {
         <DialogContent
           className="flex max-h-[90vh] max-w-xl flex-col overflow-hidden rounded-xl bg-white p-6"
           onInteractOutside={(event) => {
+            if (isAppDropdownInteractionEvent(event)) {
+              event.preventDefault();
+              return;
+            }
             if (shouldBlockOutsideClose({ isBusy: isMutating, hasUnsavedChanges: hasAdjustFormChanges })) {
               event.preventDefault();
             }
@@ -2869,7 +2874,14 @@ export default function LeaveSphereAdminPtoPage() {
       />
 
       <Dialog open={isSetupModalOpen} onOpenChange={setIsSetupModalOpen}>
-        <DialogContent className="flex max-h-[90vh] max-w-2xl flex-col overflow-hidden rounded-xl bg-white p-6">
+        <DialogContent
+          className="flex max-h-[90vh] max-w-2xl flex-col overflow-hidden rounded-xl bg-white p-6"
+          onInteractOutside={(event) => {
+            if (isAppDropdownInteractionEvent(event)) {
+              event.preventDefault();
+            }
+          }}
+        >
           <ModalShell busy={isMutating} busyMessage="Saving setup..." className="min-h-0 flex-1">
             <DialogHeader>
               <DialogTitle>Setup / Admin Data</DialogTitle>

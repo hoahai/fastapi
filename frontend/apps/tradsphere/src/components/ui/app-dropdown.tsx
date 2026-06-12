@@ -57,6 +57,7 @@ export function AppDropdown({
   const [highlightedIndex, setHighlightedIndex] = useState(0);
   const [menuStyle, setMenuStyle] = useState<CSSProperties | null>(null);
   const [panelMaxHeight, setPanelMaxHeight] = useState<number>(320);
+  const portalTarget = containerRef.current?.closest("[role='dialog']") as HTMLElement | null;
 
   const selectedOption = options.find((option) => option.value === value) ?? null;
   const selectedValues = useMemo(() => {
@@ -283,90 +284,91 @@ export function AppDropdown({
 
       {isOpen && menuStyle && typeof document !== "undefined"
         ? createPortal(
-        <div
-          ref={menuRef}
-          data-app-dropdown-menu="true"
-          style={menuStyle}
-          className="pointer-events-auto rounded-xl border border-blue-100/95 bg-white/88 p-2 shadow-[0_16px_34px_-22px_rgba(59,130,246,0.5)] backdrop-blur-[14px]"
-        >
-          {searchable ? (
-            <input
-              type="text"
-              className={cn(
-                "mb-2 w-full rounded-lg border border-blue-100/85 bg-white/76 outline-none transition-[border-color,box-shadow,background-color] hover:border-blue-200 hover:bg-white/88 focus:border-blue-300 focus:bg-white/92 focus:shadow-[inset_0_0_0_1px_rgba(59,130,246,0.12)]",
-                isCompact ? "h-8 px-2.5 text-xs" : "h-9 px-3 text-sm",
-              )}
-              placeholder="Search..."
-              value={query}
-              onChange={(event) => {
-                setQuery(event.target.value);
-                setHighlightedIndex(0);
-              }}
-              onKeyDown={handleListKeyDown}
-              autoFocus
-            />
-          ) : null}
+            <div
+              ref={menuRef}
+              data-app-dropdown-menu="true"
+              style={menuStyle}
+              className="pointer-events-auto rounded-xl border border-blue-100/95 bg-white/88 p-2 shadow-[0_16px_34px_-22px_rgba(59,130,246,0.5)] backdrop-blur-[14px]"
+            >
+              {searchable ? (
+                <input
+                  type="text"
+                  className={cn(
+                    "mb-2 w-full rounded-lg border border-blue-100/85 bg-white/76 outline-none transition-[border-color,box-shadow,background-color] hover:border-blue-200 hover:bg-white/88 focus:border-blue-300 focus:bg-white/92 focus:shadow-[inset_0_0_0_1px_rgba(59,130,246,0.12)]",
+                    isCompact ? "h-8 px-2.5 text-xs" : "h-9 px-3 text-sm",
+                  )}
+                  placeholder="Search..."
+                  value={query}
+                  onChange={(event) => {
+                    setQuery(event.target.value);
+                    setHighlightedIndex(0);
+                  }}
+                  onKeyDown={handleListKeyDown}
+                  autoFocus
+                />
+              ) : null}
 
-          <div
-            className="overflow-auto"
-            style={{
-              maxHeight: searchable ? Math.max(140, panelMaxHeight - 74) : Math.max(160, panelMaxHeight - 16),
-            }}
-            onKeyDown={handleListKeyDown}
-          >
-            {!filteredOptionsWithCustom.length ? (
-              <p className={cn("px-2 py-3 text-slate-500", isCompact ? "text-xs" : "text-sm")}>
-                {emptyText}
-              </p>
-            ) : (
-              <ul>
-                {filteredOptionsWithCustom.map((option, index) => {
-                  const isSelected = multiple
-                    ? selectedValues.includes(option.value)
-                    : option.value === value;
-                  const isHighlighted = index === highlightedIndex;
-                  const isMuted = Boolean(option.muted);
-                  return (
-                    <li key={`${option.value}:${index}`}>
-                      <button
-                        type="button"
-                        className={cn(
-                          "flex w-full items-center justify-between rounded-lg border border-transparent px-2 text-left text-slate-800 transition-[background-color,border-color,box-shadow,color] hover:border-blue-200/50 hover:bg-blue-100/40",
-                          isCompact ? "py-1.5 text-xs" : "py-2 text-sm",
-                          isSelected && "border-blue-500/70 bg-blue-500/48 text-slate-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.42),inset_0_0_0_1px_rgba(30,64,175,0.18),0_10px_18px_-16px_rgba(30,64,175,0.55)]",
-                          isSelected && isHighlighted && "border-blue-600/75 bg-blue-600/52",
-                          isSelected && !isHighlighted && "hover:border-blue-600/75 hover:bg-blue-500/54",
-                          isHighlighted && !isSelected && "border-blue-200/70 bg-blue-100/56 text-slate-900",
-                        )}
-                        onMouseEnter={() => setHighlightedIndex(index)}
-                        onClick={() => selectValue(option.value)}
-                      >
-                        <span
-                          className={cn(
-                            "truncate",
-                            isSelected && "rounded-md bg-white/30 px-1.5 py-0.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.35)]",
-                            isMuted && "text-slate-400",
-                          )}
-                        >
-                          {option.label}
-                        </span>
-                        <Check
-                          className={cn(
-                            isSelected ? "text-blue-700" : "text-blue-600",
-                            isCompact ? "size-3.5" : "size-4",
-                            isSelected ? "opacity-100" : "opacity-0",
-                          )}
-                        />
-                      </button>
-                    </li>
-                  );
-                })}
-              </ul>
-            )}
-          </div>
-        </div>,
-        document.body,
-      ) : null}
+              <div
+                className="overflow-auto"
+                style={{
+                  maxHeight: searchable ? Math.max(140, panelMaxHeight - 74) : Math.max(160, panelMaxHeight - 16),
+                }}
+                onKeyDown={handleListKeyDown}
+              >
+                {!filteredOptionsWithCustom.length ? (
+                  <p className={cn("px-2 py-3 text-slate-500", isCompact ? "text-xs" : "text-sm")}>
+                    {emptyText}
+                  </p>
+                ) : (
+                  <ul>
+                    {filteredOptionsWithCustom.map((option, index) => {
+                      const isSelected = multiple
+                        ? selectedValues.includes(option.value)
+                        : option.value === value;
+                      const isHighlighted = index === highlightedIndex;
+                      const isMuted = Boolean(option.muted);
+                      return (
+                        <li key={`${option.value}:${index}`}>
+                          <button
+                            type="button"
+                            className={cn(
+                              "flex w-full items-center justify-between rounded-lg border border-transparent px-2 text-left text-slate-800 transition-[background-color,border-color,box-shadow,color] hover:border-blue-200/50 hover:bg-blue-100/40",
+                              isCompact ? "py-1.5 text-xs" : "py-2 text-sm",
+                              isSelected && "border-blue-500/70 bg-blue-500/48 text-slate-950 shadow-[inset_0_1px_0_rgba(255,255,255,0.42),inset_0_0_0_1px_rgba(30,64,175,0.18),0_10px_18px_-16px_rgba(30,64,175,0.55)]",
+                              isSelected && isHighlighted && "border-blue-600/75 bg-blue-600/52",
+                              isSelected && !isHighlighted && "hover:border-blue-600/75 hover:bg-blue-500/54",
+                              isHighlighted && !isSelected && "border-blue-200/70 bg-blue-100/56 text-slate-900",
+                            )}
+                            onMouseEnter={() => setHighlightedIndex(index)}
+                            onClick={() => selectValue(option.value)}
+                          >
+                            <span
+                              className={cn(
+                                "truncate",
+                                isSelected && "rounded-md bg-white/30 px-1.5 py-0.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.35)]",
+                                isMuted && "text-slate-400",
+                              )}
+                            >
+                              {option.label}
+                            </span>
+                            <Check
+                              className={cn(
+                                isSelected ? "text-blue-700" : "text-blue-600",
+                                isCompact ? "size-3.5" : "size-4",
+                                isSelected ? "opacity-100" : "opacity-0",
+                              )}
+                            />
+                          </button>
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </div>
+            </div>,
+            portalTarget ?? document.body,
+          )
+        : null}
     </div>
   );
 }

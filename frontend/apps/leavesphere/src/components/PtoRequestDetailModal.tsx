@@ -19,6 +19,7 @@ import { Textarea } from "@tradsphere/components/ui/textarea";
 import { UnsavedChangesDialog } from "@tradsphere/components/ui/unsaved-changes-dialog";
 import { LeaveSpherePtoStatusChip } from "@leavesphere/components/PtoStatusChip";
 import { ModalCloseButton, ModalShell } from "@shared/components";
+import { isAppDropdownInteractionEvent } from "@shared/components/ui/app-dropdown-interaction";
 import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
 
 import type { LeaveSpherePtoRequest, LeaveSpherePtoStatus, LeaveSpherePtoType } from "@leavesphere/lib/ptoMocks";
@@ -461,6 +462,10 @@ export function LeaveSpherePtoRequestDetailModal({
       <DialogContent
         className={`${isMyPtoDetailLayout ? "max-w-3xl" : "max-w-2xl"} flex max-h-[90vh] flex-col overflow-hidden rounded-xl bg-white p-6`}
         onInteractOutside={(event) => {
+          if (isAppDropdownInteractionEvent(event)) {
+            event.preventDefault();
+            return;
+          }
           if (shouldBlockOutsideClose({ isBusy: saving, hasUnsavedChanges })) {
             event.preventDefault();
           }
