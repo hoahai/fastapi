@@ -553,7 +553,7 @@ def _build_workspace(*, request, year: int) -> dict:
                 "id": _normalize_text(holiday.get("id")),
                 "name": _normalize_text(holiday.get("name")),
                 "date": holiday_date,
-                "teamRegion": _normalize_team_region(holiday.get("teamRegion")),
+                "teamRegion": _normalize_team_region(holiday.get("teamRegion") or holiday.get("region")),
             }
         )
     holidays.sort(key=lambda item: (item["date"], item["name"], item["id"]))

@@ -247,7 +247,7 @@ def get_holidays(*, year: int | None = None) -> list[dict]:
         filters.append(("date <= %s", f"{year}-12-31"))
     where, params = _build_where_clauses(filters)
     query = (
-        "SELECT dateCreated, dateUpdated, id, name, date, teamRegion "
+        "SELECT dateCreated, dateUpdated, id, name, date, region AS teamRegion, year, hours, active "
         f"FROM {tables['HOLIDAYS']}{where} "
         "ORDER BY date ASC, name ASC, id ASC"
     )
@@ -256,20 +256,21 @@ def get_holidays(*, year: int | None = None) -> list[dict]:
 
 def upsert_holiday(item: dict) -> int:
     tables = get_db_tables()
+    region = item.get("region") or item.get("teamRegion")
     query = (
-        f"INSERT INTO {tables['HOLIDAYS']} (id, name, date, teamRegion) "
+        f"INSERT INTO {tables['HOLIDAYS']} (id, name, date, region) "
         "VALUES (%s, %s, %s, %s) "
         "ON DUPLICATE KEY UPDATE "
         "name = VALUES(name), "
         "date = VALUES(date), "
-        "teamRegion = VALUES(teamRegion), "
+        "region = VALUES(region), "
         "dateUpdated = CURRENT_TIMESTAMP"
     )
     params = (
         item["id"],
         item["name"],
         item["date"],
-        item["teamRegion"],
+        region,
     )
     return execute_write(query, params)
 

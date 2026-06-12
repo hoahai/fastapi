@@ -91,7 +91,7 @@ class LeaveManagementBackendTests(unittest.TestCase):
         ), patch.object(
             leaveManagement, "get_employee_managers", return_value=[{"employeeId": "emp-2", "managerId": "emp-1"}]
         ), patch.object(leaveManagement, "get_pto_transactions", return_value=transactions), patch.object(
-            leaveManagement, "get_holidays", return_value=[{"id": "2026-us-new-year", "name": "New Year's Day", "date": "2026-01-01", "teamRegion": "US"}]
+            leaveManagement, "get_holidays", return_value=[{"id": "2026-us-new-year", "name": "New Year's Day", "date": "2026-01-01", "region": "US"}]
         ), patch.object(
             myPto, "get_pto_types", return_value=[{"code": "VAC", "name": "Vacation", "listingOrder": 1, "usaDefaultHour": 120, "phlDefaultHour": 0}]
         ), patch.object(
@@ -143,9 +143,9 @@ class LeaveManagementBackendTests(unittest.TestCase):
             leaveManagement,
             "get_holidays",
             return_value=[
-                {"id": "2026-us-oct", "name": "October Holiday", "date": "10/15/2026", "teamRegion": "US"},
-                {"id": "2026-us-nov", "name": "November Holiday", "date": datetime(2026, 11, 20, 0, 0, 0), "teamRegion": "US"},
-                {"id": "2026-us-dec", "name": "December Holiday", "date": "2026-12-31 00:00:00", "teamRegion": "US"},
+                {"id": "2026-us-oct", "name": "October Holiday", "date": "10/15/2026", "region": "US"},
+                {"id": "2026-us-nov", "name": "November Holiday", "date": datetime(2026, 11, 20, 0, 0, 0), "region": "US"},
+                {"id": "2026-us-dec", "name": "December Holiday", "date": "2026-12-31 00:00:00", "region": "US"},
             ],
         ), patch.object(
             myPto, "get_pto_types", return_value=[{"code": "VAC", "name": "Vacation", "listingOrder": 1, "usaDefaultHour": 120, "phlDefaultHour": 0}]
