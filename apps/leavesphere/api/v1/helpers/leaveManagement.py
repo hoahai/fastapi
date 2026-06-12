@@ -58,6 +58,40 @@ def _normalize_optional_iso_date(value: object | None) -> str:
         raise ValueError("Date must use YYYY-MM-DD format") from exc
 
 
+def _normalize_holiday_date(value: object | None) -> str:
+    if isinstance(value, datetime):
+        return value.date().isoformat()
+    if isinstance(value, date):
+        return value.isoformat()
+
+    text = _normalize_text(value)
+    if not text:
+        return ""
+
+    candidates = [text, text[:10]]
+    formats = (
+        "%Y-%m-%d",
+        "%Y/%m/%d",
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M:%S.%f",
+        "%m/%d/%Y",
+        "%m/%d/%Y %H:%M:%S",
+        "%m/%d/%Y %H:%M:%S.%f",
+        "%m-%d-%Y",
+    )
+    for candidate in candidates:
+        for fmt in formats:
+            try:
+                return datetime.strptime(candidate, fmt).date().isoformat()
+            except ValueError:
+                continue
+        try:
+            return date.fromisoformat(candidate).isoformat()
+        except ValueError:
+            continue
+    return ""
+
+
 def _normalize_decimal_hours(value: object) -> Decimal:
     try:
         hours = Decimal(str(value).strip())
@@ -511,8 +545,8 @@ def _build_workspace(*, request, year: int) -> dict:
 
     holidays = []
     for holiday in _get_holiday_rows():
-        holiday_date = _to_date_string(holiday.get("date"))
-        if not holiday_date.startswith(f"{selected_year}-"):
+        holiday_date = _normalize_holiday_date(holiday.get("date"))
+        if not holiday_date or not holiday_date.startswith(f"{selected_year}-"):
             continue
         holidays.append(
             {
