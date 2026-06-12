@@ -1051,10 +1051,15 @@ export default function LeaveSphereAdminPtoPage() {
     };
   }, [pendingAdjustAction]);
 
-  const holidayDates = useMemo(
-    () => new Set((workspaceForYear?.holidays ?? []).map((item) => item.date)),
-    [workspaceForYear?.holidays],
-  );
+  const resolvePtoHoursForEmployee = useCallback((startDate: string, endDate: string, employeeId: string) => {
+    const employeeRegion = (workspaceForYear?.employees ?? []).find((item) => item.employeeId === employeeId)?.teamRegion;
+    const employeeHolidayDates = new Set(
+      (workspaceForYear?.holidays ?? [])
+        .filter((item) => !employeeRegion || item.teamRegion === employeeRegion)
+        .map((item) => item.date),
+    );
+    return calculateLeaveSpherePtoHours(startDate, endDate, employeeHolidayDates);
+  }, [workspaceForYear?.employees, workspaceForYear?.holidays]);
   const overview = useMemo(() => {
     return {
       pendingCount: pendingRequests.length,
@@ -1307,16 +1312,17 @@ export default function LeaveSphereAdminPtoPage() {
     const defaultIsoDate = todayIsoDate >= loadedYearDateBounds.minDate && todayIsoDate <= loadedYearDateBounds.maxDate
       ? todayIsoDate
       : loadedYearDateBounds.minDate;
+    const defaultEmployeeId = employeeOptions[0]?.value || "";
     setCreateForm({
       ...EMPTY_CREATE_FORM,
-      employeeId: employeeOptions[0]?.value || "",
+      employeeId: defaultEmployeeId,
       type: (ptoTypeOptions[0]?.value as LeaveSpherePtoType) || "vacation",
       startDate: defaultIsoDate,
       endDate: defaultIsoDate,
-      hours: calculateLeaveSpherePtoHours(defaultIsoDate, defaultIsoDate, holidayDates),
+      hours: resolvePtoHoursForEmployee(defaultIsoDate, defaultIsoDate, defaultEmployeeId),
     });
     setIsCreateModalOpen(true);
-  }, [employeeOptions, holidayDates, loadedYearDateBounds, ptoTypeOptions, todayIsoDate]);
+  }, [employeeOptions, loadedYearDateBounds, ptoTypeOptions, resolvePtoHoursForEmployee, todayIsoDate]);
 
   useEffect(() => {
     if (!isCreateModalOpen) {
@@ -2484,7 +2490,7 @@ export default function LeaveSphereAdminPtoPage() {
         ptoTypeOptions={ptoTypeOptions}
         statusLabel={statusLabel}
         saving={isMutating}
-        calculateHours={(startDate, endDate) => calculateLeaveSpherePtoHours(startDate, endDate, holidayDates)}
+        calculateHours={(startDate, endDate) => resolvePtoHoursForEmployee(startDate, endDate, createForm.employeeId)}
         saveLabel="Submit request"
         onOpenChange={setIsCreateModalOpen}
         onClose={() => setIsCreateModalOpen(false)}
@@ -2497,7 +2503,13 @@ export default function LeaveSphereAdminPtoPage() {
             <span className="text-slate-600">Employee</span>
             <AppDropdown
               value={createForm.employeeId}
-              onValueChange={(value) => setCreateForm((current) => ({ ...current, employeeId: value }))}
+              onValueChange={(value) => {
+                setCreateForm((current) => ({
+                  ...current,
+                  employeeId: value,
+                  hours: resolvePtoHoursForEmployee(current.startDate, current.endDate, value),
+                }));
+              }}
               options={employeeOptions}
               searchable
               disabled={isMutating}
@@ -2551,7 +2563,7 @@ export default function LeaveSphereAdminPtoPage() {
         ptoTypeOptions={PTO_TYPE_OPTIONS.map((item) => ({ value: item.value, label: item.label }))}
         statusLabel={statusLabel}
         saving={isMutating}
-        calculateHours={(startDate, endDate) => calculateLeaveSpherePtoHours(startDate, endDate, holidayDates)}
+        calculateHours={(startDate, endDate) => resolvePtoHoursForEmployee(startDate, endDate, selectedRequest?.employeeId || "")}
         onOpenChange={(open) => {
           if (!open) {
             setSelectedRequestId(null);
