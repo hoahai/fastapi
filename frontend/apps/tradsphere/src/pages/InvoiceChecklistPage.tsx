@@ -54,7 +54,7 @@ import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
 import { LoadActionArea } from "@shared/components/layout/LoadActionArea";
 import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { SectionCard } from "@shared/components/layout/SectionCard";
-import { ModalShell } from "@shared/components";
+import { ModalCloseButton, ModalShell } from "@shared/components";
 import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 import { PageLoadingLayer, SectionLoadingLayer, SectionLoadingOverlay } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
@@ -7094,15 +7094,12 @@ export default function InvoiceChecklistPage() {
             setAttachmentModalNoteId(null);
           }
         }}
-      >
+        >
         <DialogContent className="max-w-3xl">
-          <DialogClose
-            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            aria-label="Close attachments modal"
-          >
-            <X className="size-4" />
+          <DialogClose asChild aria-label="Close attachments modal">
+            <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
           </DialogClose>
-          <DialogHeader>
+          <DialogHeader className="pr-8">
             <DialogTitle>Attachments</DialogTitle>
             <DialogDescription>
               {attachmentModalNote
@@ -7182,11 +7179,11 @@ export default function InvoiceChecklistPage() {
           aria-describedby={undefined}
         >
           <div className="relative flex w-full max-h-[90vh] items-center justify-center overflow-hidden rounded-2xl bg-white px-6 pb-6 pt-14 shadow-2xl sm:px-8 sm:pb-8 sm:pt-16">
-            <DialogClose
-              className="absolute right-4 top-4 z-10 rounded-md bg-slate-900/85 p-1.5 text-white transition-colors hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              aria-label="Close attachment preview"
-            >
-              <X className="size-4" />
+            <DialogClose asChild aria-label="Close attachment preview">
+              <ModalCloseButton
+                icon={<X className="size-4" />}
+                className="absolute right-0 top-0 z-10 rounded-md bg-slate-900/85 p-1.5 text-white transition-colors hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
             </DialogClose>
             {attachmentPreview ? (
               <img
@@ -7396,14 +7393,11 @@ function AddChecklistAccountDialog({
           }}
         >
           <ModalShell busy={isBusy} busyMessage="Adding checklist account..." className="min-h-0 flex-1">
-            <DialogClose
-              className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
-              aria-label="Close add checklist account modal"
-            >
-              <X className="size-4" />
+            <DialogClose asChild aria-label="Close add checklist account modal">
+              <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
             </DialogClose>
 
-            <DialogHeader className="pb-2">
+            <DialogHeader className="pb-2 pr-8">
               <DialogTitle>Add Checklist Account</DialogTitle>
               <DialogDescription>
                 Add a checklist account row for the selected period.
@@ -7576,14 +7570,11 @@ function AddChecklistStationDialog({
           }}
         >
           <ModalShell busy={isBusy} busyMessage="Adding station..." className="min-h-0 flex-1">
-            <DialogClose
-              className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
-              aria-label="Close add station modal"
-            >
-              <X className="size-4" />
+            <DialogClose asChild aria-label="Close add station modal">
+              <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
             </DialogClose>
 
-            <DialogHeader className="pb-2">
+            <DialogHeader className="pb-2 pr-8">
               <DialogTitle>Add Station</DialogTitle>
               <DialogDescription>
                 {formatAddChecklistStationSubtitle(checklist)}
@@ -7971,14 +7962,11 @@ function AddStationNoteDialog({
           }}
         >
           <ModalShell busy={isBusy} busyMessage={isEditMode ? "Saving note..." : "Adding note..."} className="min-h-0 flex-1">
-            <DialogClose
-              className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
-              aria-label={isEditMode ? "Close edit station note modal" : "Close add station note modal"}
-            >
-              <X className="size-4" />
+            <DialogClose asChild aria-label={isEditMode ? "Close edit station note modal" : "Close add station note modal"}>
+              <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
             </DialogClose>
 
-            <DialogHeader className="pb-2">
+            <DialogHeader className="pb-2 pr-8">
               <DialogTitle>{isEditMode ? "Edit Station Note" : "Add Station Note"}</DialogTitle>
               <DialogDescription>
                 {formatAddNoteStationSubtitle(station)}
@@ -8132,11 +8120,11 @@ function AddStationNoteDialog({
           aria-describedby={undefined}
         >
           <div className="relative flex w-full max-h-[90vh] items-center justify-center overflow-hidden rounded-2xl bg-white px-6 pb-6 pt-14 shadow-2xl sm:px-8 sm:pb-8 sm:pt-16">
-            <DialogClose
-              className="absolute right-4 top-4 z-10 rounded-md bg-slate-900/85 p-1.5 text-white transition-colors hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-              aria-label="Close image preview"
-            >
-              <X className="size-4" />
+            <DialogClose asChild aria-label="Close image preview">
+              <ModalCloseButton
+                icon={<X className="size-4" />}
+                className="absolute right-0 top-0 z-10 rounded-md bg-slate-900/85 p-1.5 text-white transition-colors hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
             </DialogClose>
             {previewImage ? (
               <img

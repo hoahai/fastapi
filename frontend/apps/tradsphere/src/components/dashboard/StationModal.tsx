@@ -21,7 +21,7 @@ import { useApiRequest } from "@/hooks/useApiRequest";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { readBrowserCacheSnapshot, writeBrowserCache } from "@/lib/browserCache";
 import { TRADSPHERE_CACHE_TTL_MS } from "@shared/cache";
-import { ModalCacheFooter, ModalShell } from "@shared/components";
+import { ModalCacheFooter, ModalCloseButton, ModalShell } from "@shared/components";
 import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
 import { playSuccessSound, primeSuccessSound } from "@shared/utils/audio";
 import {
@@ -2943,14 +2943,11 @@ export function StationModal({
           }}
         >
           <ModalShell busy={isSubmitting} busyMessage="Saving station..." className="min-h-0 flex-1">
-            <DialogClose
-              className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
-              aria-label="Close station modal"
-            >
-              <X className="size-4" />
+            <DialogClose asChild aria-label="Close station modal">
+              <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
             </DialogClose>
 
-            <DialogHeader>
+            <DialogHeader className="pr-8">
               <DialogTitle>{modalTitle}</DialogTitle>
               <DialogDescription>{description}</DialogDescription>
             </DialogHeader>
@@ -3103,15 +3100,14 @@ export function StationModal({
             }
           }}
         >
-          <button
-            type="button"
-            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            aria-label="Close select delivery method modal"
-            onClick={() => closeDeliveryMethodSelector()}
-          >
-            <X className="size-4" />
-          </button>
-          <DialogHeader>
+          <DialogClose asChild aria-label="Close select delivery method modal">
+            <ModalCloseButton
+              icon={<X className="size-4" />}
+              className="absolute right-0 top-0 z-20"
+              onClick={() => closeDeliveryMethodSelector()}
+            />
+          </DialogClose>
+          <DialogHeader className="pr-8">
             <DialogTitle>Select Delivery Method</DialogTitle>
             <DialogDescription>
               Choose an existing delivery method to use for this station draft.
@@ -3272,15 +3268,14 @@ export function StationModal({
             }
           }}
         >
-          <button
-            type="button"
-            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            aria-label="Close delivery method editor modal"
-            onClick={() => closeDeliveryMethodEditor()}
-          >
-            <X className="size-4" />
-          </button>
-          <DialogHeader>
+          <DialogClose asChild aria-label="Close delivery method editor modal">
+            <ModalCloseButton
+              icon={<X className="size-4" />}
+              className="absolute right-0 top-0 z-20"
+              onClick={() => closeDeliveryMethodEditor()}
+            />
+          </DialogClose>
+          <DialogHeader className="pr-8">
             <DialogTitle>
               {deliveryMethodEditorForm.id !== null ? "Edit Delivery Method" : "Add Delivery Method"}
             </DialogTitle>
@@ -3467,15 +3462,14 @@ export function StationModal({
             }
           }}
         >
-          <button
-            type="button"
-            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            aria-label="Close contact editor modal"
-            onClick={() => closeContactEditor()}
-          >
-            <X className="size-4" />
-          </button>
-          <DialogHeader>
+          <DialogClose asChild aria-label="Close contact editor modal">
+            <ModalCloseButton
+              icon={<X className="size-4" />}
+              className="absolute right-0 top-0 z-20"
+              onClick={() => closeContactEditor()}
+            />
+          </DialogClose>
+          <DialogHeader className="pr-8">
             <DialogTitle>{contactEditorIndex === null ? "Create Contact" : "Edit Contact"}</DialogTitle>
             <DialogDescription>
               Contact changes remain local in this station draft until you save the station.
@@ -3699,15 +3693,14 @@ export function StationModal({
             }
           }}
         >
-          <button
-            type="button"
-            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            aria-label="Close add existing contact modal"
-            onClick={() => closeAddExistingContact()}
-          >
-            <X className="size-4" />
-          </button>
-          <DialogHeader>
+          <DialogClose asChild aria-label="Close add existing contact modal">
+            <ModalCloseButton
+              icon={<X className="size-4" />}
+              className="absolute right-0 top-0 z-20"
+              onClick={() => closeAddExistingContact()}
+            />
+          </DialogClose>
+          <DialogHeader className="pr-8">
             <DialogTitle>Add Existing Contact</DialogTitle>
             <DialogDescription>
               Select an existing contact and link it to this station in draft state.

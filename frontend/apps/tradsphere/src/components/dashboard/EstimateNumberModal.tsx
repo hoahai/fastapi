@@ -25,7 +25,7 @@ import { UnsavedChangesDialog } from "@/components/ui/unsaved-changes-dialog";
 import { useApiRequest, type ApiRequestOptions } from "@/hooks/useApiRequest";
 import { readBrowserCacheSnapshot, writeBrowserCache } from "@/lib/browserCache";
 import { TRADSPHERE_CACHE_TTL_MS } from "@shared/cache";
-import { ModalCacheFooter, ModalShell } from "@shared/components";
+import { ModalCacheFooter, ModalCloseButton, ModalShell } from "@shared/components";
 import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
 
 import { FlightDateRangeField } from "./FlightDateRangeField";
@@ -988,19 +988,16 @@ export function EstimateNumberModal({
             event.preventDefault();
           }
         }}
-      >
-        <ModalShell busy={isSubmitting} busyMessage="Saving estimate number..." className="min-h-0 flex-1">
-          <DialogClose
-            className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
-            aria-label="Close estimate number modal"
-          >
-            <X className="size-4" />
-          </DialogClose>
+        >
+          <ModalShell busy={isSubmitting} busyMessage="Saving estimate number..." className="min-h-0 flex-1">
+            <DialogClose asChild aria-label="Close estimate number modal">
+              <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
+            </DialogClose>
 
-          <DialogHeader>
-            <DialogTitle>{modalTitle}</DialogTitle>
-            <DialogDescription>{description}</DialogDescription>
-          </DialogHeader>
+            <DialogHeader className="pr-8">
+              <DialogTitle>{modalTitle}</DialogTitle>
+              <DialogDescription>{description}</DialogDescription>
+            </DialogHeader>
 
           {isEditMode && !isDetailReady ? (
             <div className="mt-8 flex min-h-52 flex-col items-center justify-center gap-3 text-center">

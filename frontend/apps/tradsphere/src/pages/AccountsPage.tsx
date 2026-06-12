@@ -70,7 +70,7 @@ import { useScopedPersistentState } from "@shared/hooks/useScopedPersistentState
 import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
 import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { SectionCard } from "@shared/components/layout/SectionCard";
-import { ModalShell } from "@shared/components";
+import { ModalCloseButton, ModalShell } from "@shared/components";
 import { PageLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
@@ -1069,14 +1069,11 @@ function App() {
           }}
         >
           <ModalShell busy={isCreatingAccount} busyMessage="Creating account..." className="min-h-0 flex-1">
-            <DialogClose
-              className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
-              aria-label="Close create account modal"
-            >
-              <X className="size-4" />
+            <DialogClose asChild aria-label="Close create account modal">
+              <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
             </DialogClose>
 
-            <DialogHeader>
+            <DialogHeader className="pr-8">
               <DialogTitle>Create Account</DialogTitle>
               <DialogDescription>Add a TradSphere account mapping for an existing master account code.</DialogDescription>
             </DialogHeader>

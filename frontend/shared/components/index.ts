@@ -13,6 +13,7 @@ export * from "./layout/PageCacheFooter";
 export * from "./layout/SectionCard";
 export * from "./layout/SectionHeader";
 export * from "./modal/ModalCacheFooter";
+export * from "./modal/ModalCloseButton";
 export * from "./modal/ModalFooter";
 export * from "./modal/ModalShell";
 export * from "./status/CacheStatusChip";

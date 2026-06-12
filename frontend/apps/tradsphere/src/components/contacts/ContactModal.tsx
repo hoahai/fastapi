@@ -16,7 +16,7 @@ import { Input } from "@/components/ui/input";
 import { canModalClose, shouldBlockOutsideClose } from "@/components/ui/modal-close-guard";
 import { Textarea } from "@/components/ui/textarea";
 import { UnsavedChangesDialog } from "@/components/ui/unsaved-changes-dialog";
-import { ModalFooter, ModalShell, Section, SectionHeader } from "@shared/components";
+import { ModalCloseButton, ModalFooter, ModalShell, Section, SectionHeader } from "@shared/components";
 import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
 import {
   normalizeUsPhoneDisplay,
@@ -465,16 +465,13 @@ export function ContactModal({
               event.preventDefault();
             }
           }}
-          >
+        >
           <ModalShell busy={isSubmitting} busyMessage="Saving contact..." className="min-h-0 flex-1">
-            <DialogClose
-              className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
-              aria-label="Close contact modal"
-            >
-              <X className="size-4" />
+            <DialogClose asChild aria-label="Close contact modal">
+              <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
             </DialogClose>
 
-            <DialogHeader>
+            <DialogHeader className="pr-8">
               <DialogTitle>{modalTitle}</DialogTitle>
               <DialogDescription>
                 Manage contact details and review station usage.

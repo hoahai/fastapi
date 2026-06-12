@@ -18,7 +18,7 @@ import { canModalClose, shouldBlockOutsideClose } from "@tradsphere/components/u
 import { Textarea } from "@tradsphere/components/ui/textarea";
 import { UnsavedChangesDialog } from "@tradsphere/components/ui/unsaved-changes-dialog";
 import { LeaveSpherePtoStatusChip } from "@leavesphere/components/PtoStatusChip";
-import { ModalShell } from "@shared/components";
+import { ModalCloseButton, ModalShell } from "@shared/components";
 import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
 
 import type { LeaveSpherePtoRequest, LeaveSpherePtoStatus, LeaveSpherePtoType } from "@leavesphere/lib/ptoMocks";
@@ -472,10 +472,10 @@ export function LeaveSpherePtoRequestDetailModal({
           className="min-h-0 flex-1"
           closeButton={(
             <DialogClose
-              className="rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
+              asChild
               aria-label="Close PTO request modal"
             >
-              <X className="size-4" />
+              <ModalCloseButton icon={<X className="size-4" />} />
             </DialogClose>
           )}
         >

@@ -42,7 +42,7 @@ import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
 import { LoadActionArea } from "@shared/components/layout/LoadActionArea";
 import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { SectionCard } from "@shared/components/layout/SectionCard";
-import { ModalShell } from "@shared/components";
+import { ModalCloseButton, ModalShell } from "@shared/components";
 import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
@@ -2484,14 +2484,10 @@ export default function LeaveSphereAdminPtoPage() {
         }
       }}>
         <DialogContent className="max-w-lg">
-          <DialogClose
-            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
-            aria-label="Close submit choice dialog"
-            disabled={isMutating}
-          >
-            <X className="size-4" />
+          <DialogClose asChild aria-label="Close submit choice dialog" disabled={isMutating}>
+            <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
           </DialogClose>
-          <DialogHeader>
+          <DialogHeader className="pr-8">
             <DialogTitle>Submit PTO Request?</DialogTitle>
             <DialogDescription>
               Choose whether this admin-created request should be submitted as pending or submitted and approved immediately.
@@ -2695,13 +2691,10 @@ export default function LeaveSphereAdminPtoPage() {
         }}
       >
         <DialogContent className="max-w-xl">
-          <DialogClose
-            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            aria-label="Close request selection modal"
-          >
-            <X className="size-4" />
+          <DialogClose asChild aria-label="Close request selection modal">
+            <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
           </DialogClose>
-          <DialogHeader>
+          <DialogHeader className="pr-8">
             <DialogTitle>Choose Load Request</DialogTitle>
             <DialogDescription>
               Select the approved load request you want to adjust.
@@ -2744,13 +2737,10 @@ export default function LeaveSphereAdminPtoPage() {
           }}
         >
           <ModalShell busy={isMutating} busyMessage="Saving PTO hours..." className="min-h-0 flex-1">
-            <DialogClose
-              className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
-              aria-label="Close load PTO hours modal"
-            >
-              <X className="size-4" />
+            <DialogClose asChild aria-label="Close load PTO hours modal">
+              <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
             </DialogClose>
-            <DialogHeader>
+            <DialogHeader className="pr-8">
               <DialogTitle>{adjustDialogTitle}</DialogTitle>
               <DialogDescription>
                 {isAdjustEditMode

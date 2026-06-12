@@ -28,6 +28,7 @@ import {
   removeBrowserCache,
   writeBrowserCache,
 } from "@/lib/browserCache";
+import { ModalCloseButton } from "@shared/components";
 import { TRADSPHERE_BROADCAST_TIMEZONE } from "@/lib/broadcastCalendar";
 import {
   TRADSPHERE_CACHE_TTL_MS,
@@ -1340,13 +1341,10 @@ export function ScheduleTimelineSection({
 
       <Dialog open={Boolean(selectedDetail)} onOpenChange={(open) => !open && setSelectedDetail(null)}>
         <DialogContent className="max-w-xl">
-          <DialogClose
-            className="absolute right-4 top-4 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            aria-label="Close schedule timeline detail modal"
-          >
-            <X className="size-4" />
+          <DialogClose asChild aria-label="Close schedule timeline detail modal">
+            <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
           </DialogClose>
-          <DialogHeader>
+          <DialogHeader className="pr-8">
             <DialogTitle>Schedule Timeline Detail</DialogTitle>
             <DialogDescription>
               Read-only active range detail for the selected timeline segment.

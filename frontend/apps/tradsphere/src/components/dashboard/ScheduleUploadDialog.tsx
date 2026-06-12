@@ -15,7 +15,7 @@ import { canModalClose, shouldBlockOutsideClose } from "@/components/ui/modal-cl
 import { UnsavedChangesDialog } from "@/components/ui/unsaved-changes-dialog";
 import { useApiRequest } from "@/hooks/useApiRequest";
 import { cn } from "@/lib/utils";
-import { ModalShell } from "@shared/components";
+import { ModalCloseButton, ModalShell } from "@shared/components";
 
 interface ScheduleUploadDialogProps {
   open: boolean;
@@ -184,14 +184,11 @@ export function ScheduleUploadDialog({
         }}
       >
         <ModalShell busy={isUploading} busyMessage="Uploading schedule..." className="min-h-0 flex-1">
-          <DialogClose
-            className="absolute right-4 top-4 z-20 rounded-md p-1 text-slate-500 transition-colors hover:text-slate-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:pointer-events-none"
-            aria-label="Close upload schedule modal"
-          >
-            <X className="size-4" />
+          <DialogClose asChild aria-label="Close upload schedule modal">
+            <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
           </DialogClose>
 
-          <DialogHeader>
+          <DialogHeader className="pr-8">
             <DialogTitle>Upload STRATA Schedule File</DialogTitle>
             <DialogDescription>Drag and drop a .txt schedule file, or browse from your device.</DialogDescription>
           </DialogHeader>

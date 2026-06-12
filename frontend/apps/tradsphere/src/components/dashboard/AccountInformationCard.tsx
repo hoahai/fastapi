@@ -8,7 +8,7 @@ import {
   DialogContent,
 } from "@/components/ui/dialog";
 import { Spinner } from "@/components/ui/spinner";
-import { SectionCard } from "@shared/components/layout/SectionCard";
+import { ModalCloseButton, SectionCard } from "@shared/components";
 
 import { LabeledField, ReadOnlyValue } from "./FormFieldRow";
 import { AccountEditableFields } from "./AccountEditableFields";
@@ -134,11 +134,11 @@ function LogoBlock({ account }: { account: AccountInfo | null }) {
             aria-describedby={undefined}
           >
             <div className="relative flex w-full items-center justify-center overflow-hidden rounded-2xl bg-white px-6 pb-6 pt-14 shadow-2xl sm:px-8 sm:pb-8 sm:pt-16">
-              <DialogClose
-                className="absolute right-4 top-4 z-10 rounded-md bg-slate-900/85 p-1.5 text-white transition-colors hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                aria-label="Close logo preview"
-              >
-                <X className="size-4" />
+              <DialogClose asChild aria-label="Close logo preview">
+                <ModalCloseButton
+                  icon={<X className="size-4" />}
+                  className="absolute right-0 top-0 z-10 rounded-md bg-slate-900/85 p-1.5 text-white transition-colors hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
               </DialogClose>
               <img
                 src={account?.logoUrl ?? undefined}
