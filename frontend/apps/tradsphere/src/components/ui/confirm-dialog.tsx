@@ -57,13 +57,15 @@ export function ConfirmDialog({
       }}
       >
       <DialogContent className={cn("!z-[60]", note || children ? "max-w-lg" : "max-w-md")}>
-        <DialogClose asChild aria-label="Close confirm dialog">
-          <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
-        </DialogClose>
-        <DialogHeader>
-          <DialogTitle>{title}</DialogTitle>
-          <DialogDescription>{description}</DialogDescription>
-        </DialogHeader>
+        <div className="flex items-start justify-between gap-4">
+          <DialogHeader className="min-w-0 flex-1">
+            <DialogTitle>{title}</DialogTitle>
+            <DialogDescription>{description}</DialogDescription>
+          </DialogHeader>
+          <DialogClose asChild aria-label="Close confirm dialog">
+            <ModalCloseButton icon={<X className="size-4" />} className="mt-0.5 shrink-0" />
+          </DialogClose>
+        </div>
         {note ? (
           <label className="mt-4 block space-y-1 text-sm">
             <span className="text-slate-600">{note.label}</span>
