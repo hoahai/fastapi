@@ -35,6 +35,7 @@ export type LeaveSphereAdminEmployee = {
 
 export type LeaveSphereAdminPtoTypeConfig = {
   code: string;
+  type?: string;
   label: string;
   active: boolean;
 };
@@ -621,6 +622,7 @@ function normalizeNetworkWorkspace(payload: unknown, timeZone?: string | null): 
       .filter(isRecord)
       .map((item) => ({
         code: asString(item.code || item.type || item.name),
+        type: asString(item.type) || undefined,
         label: asString(item.label) || asString(item.name) || asString(item.code) || "PTO",
         active: Boolean(item.active ?? true),
       }))
@@ -647,6 +649,7 @@ function normalizeNetworkWorkspace(payload: unknown, timeZone?: string | null): 
       employeeId: asString(item.employeeId),
       managerId: asString(item.managerId),
       type: asString(item.type) || "vacation",
+      ptoTypeCode: asString(item.ptoTypeCode) || undefined,
       startDate: asString(item.startDate),
       endDate: asString(item.endDate),
       hours: asNumber(item.hours),

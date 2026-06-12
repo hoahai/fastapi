@@ -47,6 +47,7 @@ import { PageMessageStack, type StackMessage } from "@shared/components/status/M
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
 import { DEFAULT_TIME_ZONE, formatDateInTimeZone, getCurrentMonthKeyInTimeZone, getCurrentYearInTimeZone, getTodayIsoDateInTimeZone, isIsoDateWithinInclusiveRange, shiftIsoDateByDays } from "@shared/utils/time";
 import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
+import { LeaveSpherePtoEmployeeHeader } from "@leavesphere/components/LeaveSpherePtoEmployeeHeader";
 import { LeaveSpherePtoRequestCard } from "@leavesphere/components/LeaveSpherePtoRequestCard";
 import { LeaveSphereMonthCalendar, type LeaveSphereMonthCalendarEvent } from "@leavesphere/components/MonthCalendar";
 import { LeaveSpherePtoRequestDetailModal, type LeaveSpherePtoRequestFormState } from "@leavesphere/components/PtoRequestDetailModal";
@@ -168,6 +169,23 @@ type SetupForm = {
   active: boolean;
 };
 
+type BalanceCellDisplay = {
+  type: string;
+  label: string;
+  totalHours: number;
+  usedHours: number;
+  scheduledHours: number;
+  remainingHours: number;
+};
+
+type BalanceRowDisplay = {
+  employeeId: string;
+  employeeName: string;
+  pictureUrl: string | null;
+  subtitle: string | null;
+  balances: BalanceCellDisplay[];
+};
+
 type PersistedLeaveSphereAdminPtoPageState = {
   selectedYear?: string;
   loadedYear?: number | null;
@@ -235,6 +253,7 @@ const EMPTY_SETUP_FORM: SetupForm = {
 
 const LEAVESPHERE_APP_CODE = "leavesphere";
 const LEAVESPHERE_ADMIN_PTO_PAGE_CODE = "admin-pto";
+const BALANCE_EMPLOYEE_COLUMN_WIDTH = "28rem";
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -327,6 +346,57 @@ function requestTypeLabel(type: string): string {
     return matched.label;
   }
   return asString(type).toUpperCase() || "PTO";
+}
+
+function hasBalanceActivity(balance: { totalHours: number; usedHours: number; scheduledHours: number }): boolean {
+  return balance.totalHours !== 0 || balance.usedHours !== 0 || balance.scheduledHours !== 0;
+}
+
+type PtoTypeMeta = {
+  code: string;
+  label: string;
+  order: number;
+};
+
+function normalizePtoTypeLookupKey(value: string): string {
+  return asString(value).toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+function buildPtoTypeMetaLookup(ptoTypes: Array<{ code?: string | null; type?: string | null; label?: string | null }> | null | undefined): Map<string, PtoTypeMeta> {
+  const lookup = new Map<string, PtoTypeMeta>();
+  (ptoTypes ?? []).forEach((item, index) => {
+    const code = normalizePtoTypeLookupKey(asString(item.code));
+    if (!code) {
+      return;
+    }
+    const meta: PtoTypeMeta = {
+      code,
+      label: asString(item.label) || requestTypeLabel(code),
+      order: index,
+    };
+    const keys = [
+      code,
+      normalizePtoTypeLookupKey(asString(item.type) || code),
+      normalizePtoTypeLookupKey(asString(item.label)),
+    ];
+    for (const key of keys) {
+      if (key && !lookup.has(key)) {
+        lookup.set(key, meta);
+      }
+    }
+  });
+  return lookup;
+}
+
+function resolvePtoTypeMeta(
+  rawValue: string,
+  lookup: Map<string, PtoTypeMeta>,
+): PtoTypeMeta | null {
+  const normalized = normalizePtoTypeLookupKey(rawValue);
+  if (!normalized) {
+    return null;
+  }
+  return lookup.get(normalized) || null;
 }
 
 function buildYearDateBounds(year: number): { minDate: string; maxDate: string } {
@@ -911,27 +981,186 @@ export default function LeaveSphereAdminPtoPage() {
     [workspaceForYear?.employees],
   );
 
-  const balanceColumns = useMemo(() => {
-    const columns = new Map<string, { type: string; label: string }>();
-    for (const row of workspaceForYear?.employeeBalances ?? []) {
-      for (const balance of row.balances) {
-        const type = asString(balance.type);
-        if (!type || columns.has(type)) {
-          continue;
+  const employeeById = useMemo(
+    () => new Map((workspaceForYear?.employees ?? []).map((item) => [item.employeeId, item] as const)),
+    [workspaceForYear?.employees],
+  );
+  const ptoTypeMetaLookup = useMemo(
+    () => buildPtoTypeMetaLookup(workspaceForYear?.ptoTypes),
+    [workspaceForYear?.ptoTypes],
+  );
+  const resolveBalanceTypeMeta = useCallback((rawValue: string) => {
+    const resolved = resolvePtoTypeMeta(rawValue, ptoTypeMetaLookup);
+    if (resolved) {
+      return resolved;
+    }
+    const normalized = normalizePtoTypeLookupKey(rawValue);
+    return {
+      code: normalized,
+      label: requestTypeLabel(rawValue),
+      order: Number.MAX_SAFE_INTEGER,
+    };
+  }, [ptoTypeMetaLookup]);
+  const balanceTableState = useMemo(() => {
+    const rowsByEmployeeId = new Map<string, BalanceRowDisplay>();
+    const typeLabels = new Map<string, string>();
+    const typeOrders = new Map<string, number>();
+    const employeeOrder = new Map<string, number>();
+
+    const getEmployeeRow = (employeeId: string): BalanceRowDisplay | null => {
+      const normalizedEmployeeId = asString(employeeId);
+      if (!normalizedEmployeeId) {
+        return null;
+      }
+      const employee = employeeById.get(normalizedEmployeeId) || null;
+      const employeeDisplay = employeeLookupById.get(normalizedEmployeeId) || null;
+      const existing = rowsByEmployeeId.get(normalizedEmployeeId);
+      if (existing) {
+        return existing;
+      }
+      const row: BalanceRowDisplay = {
+        employeeId: normalizedEmployeeId,
+        employeeName: employeeDisplay?.employeeName || employee?.employeeName || normalizedEmployeeId,
+        pictureUrl: employeeDisplay?.pictureUrl || employee?.pictureUrl || null,
+        subtitle: employee?.title || null,
+        balances: [],
+      };
+      rowsByEmployeeId.set(normalizedEmployeeId, row);
+      employeeOrder.set(normalizedEmployeeId, employeeOrder.size);
+      return row;
+    };
+
+    const getCell = (row: BalanceRowDisplay, meta: PtoTypeMeta): BalanceCellDisplay => {
+      const normalizedType = meta.code;
+      let cell = row.balances.find((item) => item.type === normalizedType) || null;
+      if (cell) {
+        return cell;
+      }
+      cell = {
+        type: normalizedType,
+        label: meta.label,
+        totalHours: 0,
+        usedHours: 0,
+        scheduledHours: 0,
+        remainingHours: 0,
+      };
+      row.balances.push(cell);
+      if (!typeLabels.has(normalizedType)) {
+        typeLabels.set(normalizedType, meta.label);
+      }
+      if (!typeOrders.has(normalizedType)) {
+        typeOrders.set(normalizedType, meta.order);
+      }
+      return cell;
+    };
+
+    for (const request of workspaceForYear?.requests ?? []) {
+      const employeeId = asString(request.employeeId);
+      const meta = resolveBalanceTypeMeta(asString((request as { ptoTypeCode?: string | null }).ptoTypeCode || request.type));
+      if (!employeeId || !meta.code) {
+        continue;
+      }
+      const row = getEmployeeRow(employeeId);
+      if (!row) {
+        continue;
+      }
+      const cell = getCell(row, meta);
+      const hours = Math.abs(asNumber(request.hours));
+      if (request.status === "approved") {
+        cell.usedHours += hours;
+      } else if (request.status === "pending") {
+        cell.scheduledHours += hours;
+      }
+    }
+
+    for (const transaction of workspaceForYear?.balanceTransactions ?? []) {
+      if (transaction.year !== loadedYear || transaction.status !== "Approved") {
+        continue;
+      }
+      const employeeId = asString(transaction.employeeId);
+      const meta = resolveBalanceTypeMeta(asString(transaction.ptoTypeCode));
+      if (!employeeId || !meta.code) {
+        continue;
+      }
+      const row = getEmployeeRow(employeeId);
+      if (!row) {
+        continue;
+      }
+      const cell = getCell(row, meta);
+      if (transaction.ptoActionCode === "load_grant") {
+        cell.totalHours += Math.abs(asNumber(transaction.hours));
+      }
+    }
+
+    const rows = [...rowsByEmployeeId.values()]
+      .map((row) => {
+        row.balances = row.balances
+          .filter((cell) => cell.totalHours !== 0 || cell.usedHours !== 0 || cell.scheduledHours !== 0)
+          .map((cell) => ({
+            ...cell,
+            remainingHours: cell.totalHours - cell.usedHours - cell.scheduledHours,
+          }))
+          .sort((left, right) => {
+            const leftOrder = typeOrders.get(left.type) ?? Number.MAX_SAFE_INTEGER;
+            const rightOrder = typeOrders.get(right.type) ?? Number.MAX_SAFE_INTEGER;
+            if (leftOrder !== rightOrder) {
+              return leftOrder - rightOrder;
+            }
+            const leftLabel = typeLabels.get(left.type) || left.label;
+            const rightLabel = typeLabels.get(right.type) || right.label;
+            const labelCompare = leftLabel.localeCompare(rightLabel);
+            if (labelCompare !== 0) {
+              return labelCompare;
+            }
+            return left.type.localeCompare(right.type);
+          });
+        return row;
+      })
+      .filter((row) => row.balances.length > 0)
+      .sort((left, right) => {
+        const nameCompare = left.employeeName.localeCompare(right.employeeName);
+        if (nameCompare !== 0) {
+          return nameCompare;
         }
-        columns.set(type, {
-          type,
-          label: asString(balance.label) || requestTypeLabel(type),
-        });
-      }
-    }
-    if (columns.size === 0) {
-      for (const item of PTO_TYPE_OPTIONS) {
-        columns.set(item.value, { type: item.value, label: item.label });
-      }
-    }
-    return [...columns.values()];
-  }, [workspaceForYear?.employeeBalances]);
+        const leftOrder = employeeOrder.get(left.employeeId) ?? Number.MAX_SAFE_INTEGER;
+        const rightOrder = employeeOrder.get(right.employeeId) ?? Number.MAX_SAFE_INTEGER;
+        if (leftOrder !== rightOrder) {
+          return leftOrder - rightOrder;
+        }
+        return left.employeeId.localeCompare(right.employeeId);
+      });
+
+    const columns = [...typeOrders.keys()]
+      .map((type) => ({
+        type,
+        label: typeLabels.get(type) || resolveBalanceTypeMeta(type).label,
+        order: typeOrders.get(type) ?? Number.MAX_SAFE_INTEGER,
+      }))
+      .filter((column) => rows.some((row) => row.balances.some((balance) => balance.type === column.type)))
+      .sort((left, right) => {
+        if (left.order !== right.order) {
+          return left.order - right.order;
+        }
+        const labelCompare = left.label.localeCompare(right.label);
+        if (labelCompare !== 0) {
+          return labelCompare;
+        }
+        return left.type.localeCompare(right.type);
+      });
+
+    return {
+      rows,
+      columns,
+    };
+  }, [employeeById, employeeLookupById, loadedYear, resolveBalanceTypeMeta, workspaceForYear?.balanceTransactions, workspaceForYear?.requests]);
+  const visibleBalanceRows = balanceTableState.rows;
+  const balanceColumns = balanceTableState.columns;
+  const balanceTypeColumnWidth = useMemo(
+    () => (balanceColumns.length > 0
+      ? `calc((100% - ${BALANCE_EMPLOYEE_COLUMN_WIDTH}) / ${balanceColumns.length})`
+      : "0px"),
+    [balanceColumns.length],
+  );
   const loadRequestsByBalanceKey = useMemo(() => {
     const requestsByKey = new Map<string, LeaveSphereAdminLoadRequest[]>();
     if (typeof loadedYear !== "number") {
@@ -946,7 +1175,7 @@ export default function LeaveSphereAdminPtoPage() {
       ) {
         continue;
       }
-      const key = `${transaction.employeeId}::${transaction.ptoTypeCode}`;
+      const key = `${transaction.employeeId}::${resolveBalanceTypeMeta(transaction.ptoTypeCode).code}`;
       const currentRequests = requestsByKey.get(key);
       if (currentRequests) {
         currentRequests.push(transaction);
@@ -960,7 +1189,7 @@ export default function LeaveSphereAdminPtoPage() {
     }
 
     return requestsByKey;
-  }, [loadedYear, workspaceForYear?.balanceTransactions]);
+  }, [loadedYear, resolveBalanceTypeMeta, workspaceForYear?.balanceTransactions]);
 
   const getEmployeePtoTypeOptions = useCallback((employeeId: string) => {
     const employeeBalanceRow = (workspaceForYear?.employeeBalances ?? []).find((row) => row.employeeId === employeeId) || null;
@@ -2231,7 +2460,7 @@ export default function LeaveSphereAdminPtoPage() {
     return (
       <SectionCard
         title="Employee PTO Balances"
-        description="Click a balance to edit loaded PTO hours by employee"
+        description="Only employees with PTO activity in the loaded year are shown."
         actions={(
           <ActionIconButton
             tooltip="Load PTO Hours"
@@ -2243,81 +2472,113 @@ export default function LeaveSphereAdminPtoPage() {
           />
         )}
       >
-        <div className="overflow-x-auto rounded-xl border border-blue-100">
-          <table className="min-w-full text-left text-sm">
-            <thead className="bg-blue-50/70 text-xs uppercase tracking-[0.08em] text-slate-600">
-              <tr>
-                <th className="px-3 py-2.5">Employee</th>
-                {balanceColumns.map((column) => (
-                  <th key={column.type} className="px-3 py-2.5 text-center">{column.label}</th>
-                ))}
-              </tr>
-            </thead>
-            <tbody>
-              {(workspaceForYear?.employeeBalances ?? []).map((row) => {
-                const balanceByType = new Map(row.balances.map((item) => [item.type, item]));
-                const renderCell = (type: string) => {
-                  const balance = balanceByType.get(type);
-                  if (!balance) {
-                    return "-";
-                  }
-                  const usedHours = balance.usedHours + balance.scheduledHours;
-                  const usedRatio = balance.totalHours > 0
-                    ? Math.min(1, usedHours / balance.totalHours)
-                    : 0;
-                  const loadRequests = resolveAdjustLoadRequests(row.employeeId, type as LeaveSpherePtoType);
+        {visibleBalanceRows.length === 0 ? (
+          <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-8 text-center text-sm text-slate-600">
+            No PTO transactions were found for the selected year.
+          </div>
+        ) : (
+          <div className="overflow-x-auto rounded-xl border border-blue-100">
+            <table className="w-full table-fixed text-left text-sm">
+              <thead className="bg-blue-50/70 text-xs uppercase tracking-[0.08em] text-slate-600">
+                <tr>
+                  <th className="px-3 py-2.5" style={{ width: BALANCE_EMPLOYEE_COLUMN_WIDTH, minWidth: BALANCE_EMPLOYEE_COLUMN_WIDTH, maxWidth: BALANCE_EMPLOYEE_COLUMN_WIDTH }}>
+                    Employee
+                  </th>
+                  {balanceColumns.map((column) => (
+                    <th
+                      key={column.type}
+                      className="px-3 py-2.5 text-center"
+                      style={{ width: balanceTypeColumnWidth, minWidth: balanceTypeColumnWidth, maxWidth: balanceTypeColumnWidth }}
+                    >
+                      {column.label}
+                    </th>
+                  ))}
+                </tr>
+              </thead>
+              <tbody>
+                {visibleBalanceRows.map((row) => {
+                  const balanceByType = new Map(row.balances.map((item) => [asString(item.type).toLowerCase(), item] as const));
+                  const renderCell = (type: string) => {
+                    const normalizedType = asString(type).toLowerCase();
+                    const balance = balanceByType.get(normalizedType) || null;
+                    if (!balance || !hasBalanceActivity(balance)) {
+                      return <span className="text-slate-400">-</span>;
+                    }
+                    const usedHours = balance.usedHours + balance.scheduledHours;
+                    const usedRatio = balance.totalHours > 0
+                      ? Math.min(1, usedHours / balance.totalHours)
+                      : 0;
+                    const loadRequests = resolveAdjustLoadRequests(row.employeeId, normalizedType as LeaveSpherePtoType);
+                    return (
+                      <TooltipTarget text="click to edit hours">
+                        <button
+                          type="button"
+                          onClick={() => {
+                            if (loadRequests.length > 1) {
+                              openAdjustRequestPicker(row.employeeId, normalizedType as LeaveSpherePtoType);
+                              return;
+                            }
+
+                            const latestRequest = loadRequests[0] || null;
+                            if (latestRequest) {
+                              openAdjustRequestEditor(latestRequest);
+                              return;
+                            }
+
+                            openLoadHoursModal({
+                              mode: "create",
+                              employeeId: row.employeeId,
+                              ptoTypeCode: normalizedType as LeaveSpherePtoType,
+                            });
+                          }}
+                          className="group flex w-full flex-col items-center rounded-lg border border-transparent px-2 py-1.5 text-center transition hover:border-blue-200 hover:bg-blue-50/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
+                          aria-label={`Edit ${requestTypeLabel(normalizedType)} hours for ${row.employeeName}`}
+                        >
+                          <span className="text-sm font-semibold text-slate-900 transition group-hover:text-blue-700">
+                            {formatHoursLabel(usedHours)}
+                            {" / "}
+                            {formatHoursLabel(balance.totalHours)}
+                          </span>
+                          <span className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-blue-100">
+                            <span
+                              className="block h-full rounded-full bg-blue-500 transition-[width] duration-300 ease-out"
+                              style={{ width: `${usedRatio * 100}%` }}
+                            />
+                          </span>
+                        </button>
+                      </TooltipTarget>
+                    );
+                  };
                   return (
-                    <TooltipTarget text="click to edit hours">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          if (loadRequests.length > 1) {
-                            openAdjustRequestPicker(row.employeeId, type as LeaveSpherePtoType);
-                            return;
-                          }
-
-                          const latestRequest = loadRequests[0] || null;
-                          if (latestRequest) {
-                            openAdjustRequestEditor(latestRequest);
-                            return;
-                          }
-
-                          openLoadHoursModal({
-                            mode: "create",
-                            employeeId: row.employeeId,
-                            ptoTypeCode: type as LeaveSpherePtoType,
-                          });
-                        }}
-                        className="group flex w-full flex-col items-center rounded-lg border border-transparent px-2 py-1.5 text-center transition hover:border-blue-200 hover:bg-blue-50/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
-                        aria-label={`Edit ${requestTypeLabel(type)} hours for ${row.employeeName}`}
+                    <tr key={row.employeeId} className="border-t border-blue-100/80 bg-white text-slate-700">
+                      <td
+                        className="px-3 py-2.5 align-top"
+                        style={{ width: BALANCE_EMPLOYEE_COLUMN_WIDTH, minWidth: BALANCE_EMPLOYEE_COLUMN_WIDTH, maxWidth: BALANCE_EMPLOYEE_COLUMN_WIDTH }}
                       >
-                        <span className="text-sm font-semibold text-slate-900 transition group-hover:text-blue-700">
-                          {formatHoursLabel(usedHours)}
-                          {" / "}
-                          {formatHoursLabel(balance.totalHours)}
-                        </span>
-                        <span className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-blue-100">
-                          <span
-                            className="block h-full rounded-full bg-blue-500 transition-[width] duration-300 ease-out"
-                            style={{ width: `${usedRatio * 100}%` }}
-                          />
-                        </span>
-                      </button>
-                    </TooltipTarget>
+                        <LeaveSpherePtoEmployeeHeader
+                          employeeName={row.employeeName}
+                          pictureUrl={row.pictureUrl}
+                          title={row.employeeName}
+                          subtitle={row.subtitle || undefined}
+                          titleClassName="font-medium"
+                        />
+                      </td>
+                      {balanceColumns.map((column) => (
+                        <td
+                          key={column.type}
+                          className="px-3 py-2.5 text-center align-top"
+                          style={{ width: balanceTypeColumnWidth, minWidth: balanceTypeColumnWidth, maxWidth: balanceTypeColumnWidth }}
+                        >
+                          {renderCell(column.type)}
+                        </td>
+                      ))}
+                    </tr>
                   );
-                };
-                return (
-                  <tr key={row.employeeId} className="border-t border-blue-100/80 bg-white text-slate-700">
-                    <td className="px-3 py-2.5 font-medium text-slate-900">{row.employeeName}</td>
-                    {balanceColumns.map((column) => (
-                      <td key={column.type} className="px-3 py-2.5 text-center">{renderCell(column.type)}</td>
-                    ))}
-                  </tr>
-                );
-              })}
-            </tbody>
-          </table>
-        </div>
+                })}
+              </tbody>
+            </table>
+          </div>
+        )}
       </SectionCard>
     );
   };
