@@ -73,6 +73,12 @@ import {
 } from "@leavesphere/lib/ptoMocks";
 import { calculateLeaveSpherePtoHours } from "@leavesphere/lib/ptoHours";
 import {
+  buildLeaveSpherePtoTypeOptionsFromBalances,
+  resolveLeaveSpherePtoAvailableHours,
+  validateLeaveSpherePtoRequestedHours,
+} from "@leavesphere/lib/ptoAvailability";
+import { buildLeaveSphereHolidayDateSet } from "@leavesphere/lib/ptoHolidayScopes";
+import {
   buildLeaveSpherePtoCalendarRequestChipLabel,
   buildLeaveSpherePtoCalendarRequestTooltipLabel,
 } from "@leavesphere/lib/ptoCalendar";
@@ -115,18 +121,10 @@ type PersistedLeaveSphereMyPtoPageState = {
   scrollY: number;
 };
 
-const DEFAULT_PTO_TYPE_OPTIONS = [
-  { value: "vacation", label: "Vacation" },
-  { value: "sick", label: "Sick" },
-  { value: "personal", label: "Personal" },
-  { value: "floating", label: "Floating Holiday" },
-] as const;
-
 const DEFAULT_PTO_TYPE_LABELS: Record<LeaveSpherePtoType, string> = {
   vacation: "Vacation",
   sick: "Sick",
   personal: "Personal",
-  floating: "Floating Holiday",
 };
 
 const EMPTY_FORM: RequestFormState = {
@@ -258,23 +256,6 @@ function requestTypeLabel(type: string): string {
   return asString(type).toUpperCase() || "PTO";
 }
 
-function buildPtoTypeOptions(
-  ptoTypes: LeaveSpherePtoWorkspaceData["ptoTypes"] | undefined,
-): Array<{ value: LeaveSpherePtoType; label: string }> {
-  const labels = new Map<LeaveSpherePtoType, string>(
-    DEFAULT_PTO_TYPE_OPTIONS.map((item) => [item.value, item.label]),
-  );
-  for (const ptoType of ptoTypes ?? []) {
-    if (ptoType.active && isPtoTypeValue(ptoType.type)) {
-      labels.set(ptoType.type, ptoType.label || labels.get(ptoType.type) || requestTypeLabel(ptoType.type));
-    }
-  }
-  return DEFAULT_PTO_TYPE_OPTIONS.map((item) => ({
-    value: item.value,
-    label: labels.get(item.value) || item.label,
-  }));
-}
-
 function buildYearDateBounds(year: number): { minDate: string; maxDate: string } {
   return {
     minDate: `${year}-01-01`,
@@ -370,7 +351,7 @@ function filterWorkspaceByYear(workspace: LeaveSpherePtoWorkspaceData, year: num
 }
 
 function isPtoTypeValue(value: unknown): value is LeaveSpherePtoType {
-  return value === "vacation" || value === "sick" || value === "personal" || value === "floating";
+  return value === "vacation" || value === "sick" || value === "personal";
 }
 
 function isRequestFormState(value: unknown): value is RequestFormState {
@@ -621,10 +602,6 @@ export default function LeaveSphereMyPtoPage() {
   }, [loadedYear, workspace]);
 
   const isManager = Boolean(workspaceForYear?.isManager || workspace?.isManager);
-  const ptoTypeOptions = useMemo(
-    () => buildPtoTypeOptions(workspaceForYear?.ptoTypes),
-    [workspaceForYear?.ptoTypes],
-  );
   const selectedYearNumber = useMemo(() => Number(selectedYear), [selectedYear]);
   const loadedYearDateBounds = useMemo(
     () => (loadedYear === null ? null : buildYearDateBounds(loadedYear)),
@@ -830,14 +807,29 @@ export default function LeaveSphereMyPtoPage() {
     }
     return events;
   }, [directReportRequests, isManager, myRequests, workspaceForYear?.holidays]);
-  const holidayDates = useMemo(() => {
-    return new Set(
-      (workspaceForYear?.holidays ?? [])
-        .filter((item) => item.teamRegion === workspaceForYear?.currentUserTeamRegion)
-        .map((item) => item.date),
-    );
-  }, [workspaceForYear?.currentUserTeamRegion, workspaceForYear?.holidays]);
+  const holidayDates = useMemo(
+    () => buildLeaveSphereHolidayDateSet(workspaceForYear?.holidays, workspaceForYear?.currentUserTeamRegion),
+    [workspaceForYear?.currentUserTeamRegion, workspaceForYear?.holidays],
+  );
   const balanceRows = workspaceForYear?.balances ?? [];
+  const ptoTypeOptionsWithAvailability = useMemo(
+    () => buildLeaveSpherePtoTypeOptionsFromBalances(balanceRows),
+    [balanceRows],
+  );
+  const requestAvailableHours = useMemo(
+    () => resolveLeaveSpherePtoAvailableHours(balanceRows, requestForm.type),
+    [balanceRows, requestForm.type],
+  );
+  const canSubmitRequestWithinBalance = useMemo(() => {
+    const requestedHours = Number(requestForm.hours);
+    if (!Number.isFinite(requestedHours) || requestedHours < 0) {
+      return false;
+    }
+    if (requestAvailableHours == null) {
+      return false;
+    }
+    return requestedHours <= requestAvailableHours;
+  }, [requestAvailableHours, requestForm.hours]);
   const shouldCenterBalanceBlock = balanceRows.length > 0 && balanceRows.length <= 3;
 
   const commitWorkspace = useCallback((
@@ -1099,29 +1091,31 @@ export default function LeaveSphereMyPtoPage() {
     const defaultIsoDate = isDateWithinBounds(todayIsoDate, loadedYearDateBounds)
       ? todayIsoDate
       : loadedYearDateBounds.minDate;
+    const defaultType = ptoTypeOptionsWithAvailability[0]?.value || "";
     setRequestForm({
-      type: "vacation",
+      type: defaultType as LeaveSpherePtoType,
       startDate: defaultIsoDate,
       endDate: defaultIsoDate,
       hours: calculateLeaveSpherePtoHours(defaultIsoDate, defaultIsoDate, holidayDates),
       description: "",
     });
     setIsRequestDialogOpen(true);
-  }, [canRequestPto, holidayDates, loadedYearDateBounds, todayIsoDate]);
+  }, [canRequestPto, holidayDates, loadedYearDateBounds, ptoTypeOptionsWithAvailability, todayIsoDate]);
 
   const openSubmitDialogForDate = useCallback((isoDate: string) => {
     if (!canRequestPto || !loadedYearDateBounds || !isDateWithinBounds(isoDate, loadedYearDateBounds)) {
       return;
     }
+    const defaultType = ptoTypeOptionsWithAvailability[0]?.value || "";
     setRequestForm({
-      type: "vacation",
+      type: defaultType as LeaveSpherePtoType,
       startDate: isoDate,
       endDate: isoDate,
       hours: calculateLeaveSpherePtoHours(isoDate, isoDate, holidayDates),
       description: "",
     });
     setIsRequestDialogOpen(true);
-  }, [canRequestPto, holidayDates, loadedYearDateBounds]);
+  }, [canRequestPto, holidayDates, loadedYearDateBounds, ptoTypeOptionsWithAvailability]);
 
   const handleSubmitRequest = useCallback(async (params: {
       payload: {
@@ -1166,6 +1160,13 @@ export default function LeaveSphereMyPtoPage() {
     loadedYearDateBounds,
     loadedYearForRequests,
   ]);
+  const validateRequestHours = useCallback((form: LeaveSpherePtoRequestFormState) => {
+    const availableHours = resolveLeaveSpherePtoAvailableHours(balanceRows, form.type);
+    return validateLeaveSpherePtoRequestedHours({
+      requestedHours: form.hours,
+      availableHours,
+    });
+  }, [balanceRows]);
 
   const handleReviewRequest = useCallback(async (action: LeaveSphereReviewAction) => {
     if (!selectedReviewRequest) {
@@ -1597,10 +1598,12 @@ export default function LeaveSphereMyPtoPage() {
         initialForm={requestForm as LeaveSpherePtoRequestFormState}
         title="Submit PTO Request"
         description="Enter request details. Your manager can approve or reject from the Manager PTO queue."
-        ptoTypeOptions={ptoTypeOptions}
+        ptoTypeOptions={ptoTypeOptionsWithAvailability}
         statusLabel={statusLabel}
         saving={isSubmitting}
         calculateHours={(startDate, endDate) => calculateLeaveSpherePtoHours(startDate, endDate, holidayDates)}
+        validateSubmit={validateRequestHours}
+        canSubmitOverride={canSubmitRequestWithinBalance}
         saveLabel="Submit request"
         onOpenChange={setIsRequestDialogOpen}
         onClose={() => setIsRequestDialogOpen(false)}
@@ -1650,7 +1653,7 @@ export default function LeaveSphereMyPtoPage() {
         readOnly={!selectedMyRequestActionConfig?.canEditForm}
         title="My PTO Request Detail"
         description="Review or update your PTO submission details."
-        ptoTypeOptions={ptoTypeOptions}
+        ptoTypeOptions={ptoTypeOptionsWithAvailability}
         statusLabel={statusLabel}
         saving={isSavingRequestDetail}
         calculateHours={(startDate, endDate) => calculateLeaveSpherePtoHours(startDate, endDate, holidayDates)}
@@ -1721,7 +1724,7 @@ export default function LeaveSphereMyPtoPage() {
         readOnly={!selectedReviewRequestActionConfig?.canEditForm}
         title="Manager Request Preview"
         description="Review this direct employee PTO request and approve or reject."
-        ptoTypeOptions={ptoTypeOptions}
+        ptoTypeOptions={ptoTypeOptionsWithAvailability}
         statusLabel={statusLabel}
         saving={isReviewing}
         onOpenChange={(open) => {

@@ -28,8 +28,10 @@ export type LeaveSphereAdminEmployeeBalance = {
 export type LeaveSphereAdminEmployeeBalanceUsageItem = {
   type: string;
   label: string;
+  totalHours: number;
   usedHours: number;
   scheduledHours: number;
+  remainingHours?: number;
 };
 
 export type LeaveSphereAdminEmployeeBalanceUsageRow = {
@@ -62,8 +64,12 @@ export function buildLeaveSphereAdminBalanceUsageRows(
     balances: row.balances.map((balance) => ({
       type: balance.type,
       label: balance.label || PTO_TYPE_LABELS[balance.type] || balance.type,
+      totalHours: asFiniteNumber(balance.totalHours),
       usedHours: asFiniteNumber(balance.usedHours),
       scheduledHours: asFiniteNumber(balance.scheduledHours),
+      remainingHours: typeof balance.remainingHours === "number" && Number.isFinite(balance.remainingHours)
+        ? balance.remainingHours
+        : undefined,
     })),
   }));
 }
@@ -133,12 +139,18 @@ export function deriveLeaveSphereAdminEmployeeBalances(params: {
 
     const balances = [...typeOrder.keys()].map((type) => {
       const usage = row.balances.find((item) => item.type === type);
+      const balanceKey = makeBalanceKey(row.employeeId, type);
+      const totalHours = grantedHoursByKey.has(balanceKey)
+        ? grantedHoursByKey.get(balanceKey) || 0
+        : asFiniteNumber(usage?.totalHours);
+      const usedHours = asFiniteNumber(usage?.usedHours);
+      const scheduledHours = asFiniteNumber(usage?.scheduledHours);
       return {
         type,
         label: usage?.label || PTO_TYPE_LABELS[type] || type,
-        totalHours: grantedHoursByKey.get(makeBalanceKey(row.employeeId, type)) || 0,
-        usedHours: asFiniteNumber(usage?.usedHours),
-        scheduledHours: asFiniteNumber(usage?.scheduledHours),
+        totalHours,
+        usedHours,
+        scheduledHours,
       };
     });
 

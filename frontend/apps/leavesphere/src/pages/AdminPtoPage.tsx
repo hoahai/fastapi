@@ -85,6 +85,12 @@ import {
   type LeaveSphereAdminPtoActionCode,
 } from "@leavesphere/lib/adminPtoBalanceLedger";
 import { calculateLeaveSpherePtoHours } from "@leavesphere/lib/ptoHours";
+import { buildLeaveSphereHolidayDateSet } from "@leavesphere/lib/ptoHolidayScopes";
+import {
+  buildLeaveSpherePtoTypeOptionsFromBalances,
+  resolveLeaveSpherePtoAvailableHours,
+  validateLeaveSpherePtoRequestedHours,
+} from "@leavesphere/lib/ptoAvailability";
 import {
   buildLeaveSpherePtoCalendarRequestChipLabel,
   buildLeaveSpherePtoCalendarRequestTooltipLabel,
@@ -185,7 +191,6 @@ const PTO_TYPE_OPTIONS: Array<{ value: LeaveSpherePtoType; label: string }> = [
   { value: "vacation", label: "Vacation" },
   { value: "sick", label: "Sick" },
   { value: "personal", label: "Personal" },
-  { value: "floating", label: "Floating Holiday" },
 ];
 
 const TAB_OPTIONS: Array<{ id: AdminTab; label: string }> = [
@@ -371,7 +376,7 @@ function countUpcomingOutRequests(requests: LeaveSpherePtoRequest[], todayIsoDat
 }
 
 function isPtoTypeValue(value: unknown): value is LeaveSpherePtoType {
-  return value === "vacation" || value === "sick" || value === "personal" || value === "floating";
+  return value === "vacation" || value === "sick" || value === "personal";
 }
 
 function isAdminTab(value: unknown): value is AdminTab {
@@ -957,10 +962,10 @@ export default function LeaveSphereAdminPtoPage() {
     return requestsByKey;
   }, [loadedYear, workspaceForYear?.balanceTransactions]);
 
-  const ptoTypeOptions = useMemo(
-    () => (workspaceForYear?.ptoTypes ?? []).filter((item) => item.active).map((item) => ({ value: item.code, label: item.label })),
-    [workspaceForYear?.ptoTypes],
-  );
+  const getEmployeePtoTypeOptions = useCallback((employeeId: string) => {
+    const employeeBalanceRow = (workspaceForYear?.employeeBalances ?? []).find((row) => row.employeeId === employeeId) || null;
+    return buildLeaveSpherePtoTypeOptionsFromBalances(employeeBalanceRow?.balances);
+  }, [workspaceForYear?.employeeBalances]);
   const resolveAdjustLoadRequests = useCallback((employeeId: string, ptoTypeCode: LeaveSpherePtoType) => {
     if (!employeeId || !ptoTypeCode) {
       return [];
@@ -1053,13 +1058,47 @@ export default function LeaveSphereAdminPtoPage() {
 
   const resolvePtoHoursForEmployee = useCallback((startDate: string, endDate: string, employeeId: string) => {
     const employeeRegion = (workspaceForYear?.employees ?? []).find((item) => item.employeeId === employeeId)?.teamRegion;
-    const employeeHolidayDates = new Set(
-      (workspaceForYear?.holidays ?? [])
-        .filter((item) => !employeeRegion || item.teamRegion === employeeRegion)
-        .map((item) => item.date),
-    );
+    const employeeHolidayDates = buildLeaveSphereHolidayDateSet(workspaceForYear?.holidays, employeeRegion);
     return calculateLeaveSpherePtoHours(startDate, endDate, employeeHolidayDates);
   }, [workspaceForYear?.employees, workspaceForYear?.holidays]);
+  const createRequestEmployeeBalanceRow = useMemo(
+    () => (workspaceForYear?.employeeBalances ?? []).find((row) => row.employeeId === createForm.employeeId) || null,
+    [createForm.employeeId, workspaceForYear?.employeeBalances],
+  );
+  const createRequestPtoTypeOptions = useMemo(
+    () => buildLeaveSpherePtoTypeOptionsFromBalances(createRequestEmployeeBalanceRow?.balances),
+    [createRequestEmployeeBalanceRow?.balances],
+  );
+  const createRequestAvailableHours = useMemo(
+    () => resolveLeaveSpherePtoAvailableHours(createRequestEmployeeBalanceRow?.balances, createForm.type),
+    [createForm.type, createRequestEmployeeBalanceRow?.balances],
+  );
+  const canSubmitCreateRequestWithinBalance = useMemo(() => {
+    const requestedHours = Number(createForm.hours);
+    if (!Number.isFinite(requestedHours) || requestedHours < 0) {
+      return false;
+    }
+    if (createRequestAvailableHours == null) {
+      return false;
+    }
+    return requestedHours <= createRequestAvailableHours;
+  }, [createForm.hours, createRequestAvailableHours]);
+  const validateCreateRequestHours = useCallback((form: LeaveSpherePtoRequestFormState) => {
+    const employeeBalanceRow = (workspaceForYear?.employeeBalances ?? []).find((row) => row.employeeId === createForm.employeeId) || null;
+    const availableHours = resolveLeaveSpherePtoAvailableHours(employeeBalanceRow?.balances, form.type);
+    return validateLeaveSpherePtoRequestedHours({
+      requestedHours: form.hours,
+      availableHours,
+    });
+  }, [createForm.employeeId, workspaceForYear?.employeeBalances]);
+  const selectedRequestEmployeeBalanceRow = useMemo(
+    () => (workspaceForYear?.employeeBalances ?? []).find((row) => row.employeeId === selectedRequest?.employeeId) || null,
+    [selectedRequest?.employeeId, workspaceForYear?.employeeBalances],
+  );
+  const selectedRequestPtoTypeOptions = useMemo(
+    () => buildLeaveSpherePtoTypeOptionsFromBalances(selectedRequestEmployeeBalanceRow?.balances),
+    [selectedRequestEmployeeBalanceRow?.balances],
+  );
   const overview = useMemo(() => {
     return {
       pendingCount: pendingRequests.length,
@@ -1313,16 +1352,17 @@ export default function LeaveSphereAdminPtoPage() {
       ? todayIsoDate
       : loadedYearDateBounds.minDate;
     const defaultEmployeeId = employeeOptions[0]?.value || "";
+    const defaultType = getEmployeePtoTypeOptions(defaultEmployeeId)[0]?.value || "";
     setCreateForm({
       ...EMPTY_CREATE_FORM,
       employeeId: defaultEmployeeId,
-      type: (ptoTypeOptions[0]?.value as LeaveSpherePtoType) || "vacation",
+      type: defaultType as LeaveSpherePtoType,
       startDate: defaultIsoDate,
       endDate: defaultIsoDate,
       hours: resolvePtoHoursForEmployee(defaultIsoDate, defaultIsoDate, defaultEmployeeId),
     });
     setIsCreateModalOpen(true);
-  }, [employeeOptions, loadedYearDateBounds, ptoTypeOptions, resolvePtoHoursForEmployee, todayIsoDate]);
+  }, [employeeOptions, getEmployeePtoTypeOptions, loadedYearDateBounds, resolvePtoHoursForEmployee, todayIsoDate]);
 
   useEffect(() => {
     if (!isCreateModalOpen) {
@@ -1331,9 +1371,15 @@ export default function LeaveSphereAdminPtoPage() {
     setCreateForm((current) => ({
       ...current,
       employeeId: current.employeeId || employeeOptions[0]?.value || "",
-      type: current.type || (ptoTypeOptions[0]?.value || "vacation"),
+      type: (() => {
+        const nextEmployeeId = current.employeeId || employeeOptions[0]?.value || "";
+        const nextTypeOptions = getEmployeePtoTypeOptions(nextEmployeeId);
+        return nextTypeOptions.some((item) => item.value === current.type)
+          ? current.type
+          : (nextTypeOptions[0]?.value || "");
+      })(),
     }));
-  }, [employeeOptions, isCreateModalOpen, ptoTypeOptions]);
+  }, [employeeOptions, getEmployeePtoTypeOptions, isCreateModalOpen]);
 
   useEffect(() => {
     if (!isAdjustModalOpen) {
@@ -1342,9 +1388,15 @@ export default function LeaveSphereAdminPtoPage() {
     setAdjustForm((current) => ({
       ...current,
       employeeId: current.employeeId || employeeOptions[0]?.value || "",
-      ptoTypeCode: current.ptoTypeCode || (ptoTypeOptions[0]?.value || "vacation"),
+      ptoTypeCode: (() => {
+        const nextEmployeeId = current.employeeId || employeeOptions[0]?.value || "";
+        const nextTypeOptions = getEmployeePtoTypeOptions(nextEmployeeId);
+        return nextTypeOptions.some((item) => item.value === current.ptoTypeCode)
+          ? current.ptoTypeCode
+          : (nextTypeOptions[0]?.value || "");
+      })(),
     }));
-  }, [employeeOptions, isAdjustModalOpen, ptoTypeOptions]);
+  }, [employeeOptions, getEmployeePtoTypeOptions, isAdjustModalOpen]);
 
   useEffect(() => {
     const didJustOpen = isAdjustModalOpen && !adjustWasOpenRef.current;
@@ -1400,7 +1452,7 @@ export default function LeaveSphereAdminPtoPage() {
     const mode = params?.mode || "create";
     const isEditMode = mode === "edit";
     const employeeId = params?.employeeId || employeeOptions[0]?.value || "";
-    const ptoTypeCode = params?.ptoTypeCode || (ptoTypeOptions[0]?.value as LeaveSpherePtoType) || "vacation";
+    const ptoTypeCode = params?.ptoTypeCode || getEmployeePtoTypeOptions(employeeId)[0]?.value || "";
     const loadRequests = isEditMode ? resolveAdjustLoadRequests(employeeId, ptoTypeCode) : [];
     const nextTransactionId = isEditMode ? (params?.transactionId || loadRequests[0]?.id || "") : "";
     const selectedRequest = loadRequests.find((item) => item.id === nextTransactionId) || loadRequests[0] || null;
@@ -1420,7 +1472,7 @@ export default function LeaveSphereAdminPtoPage() {
     setAdjustForm(nextForm);
     setAdjustBaselineForm(nextForm);
     setIsAdjustModalOpen(true);
-  }, [employeeOptions, ptoTypeOptions, resolveAdjustLoadRequests]);
+  }, [employeeOptions, getEmployeePtoTypeOptions, resolveAdjustLoadRequests]);
 
   const handlePromptCreateRequest = useCallback(async ({ payload }: {
     requestId: string | null;
@@ -2487,16 +2539,17 @@ export default function LeaveSphereAdminPtoPage() {
         initialForm={createForm as LeaveSpherePtoRequestFormState}
         title="Submit PTO Request"
         description="Enter request details. Your manager can approve or reject from the Manager PTO queue."
-        ptoTypeOptions={ptoTypeOptions}
+        ptoTypeOptions={createRequestPtoTypeOptions}
         statusLabel={statusLabel}
         saving={isMutating}
         calculateHours={(startDate, endDate) => resolvePtoHoursForEmployee(startDate, endDate, createForm.employeeId)}
+        validateSubmit={validateCreateRequestHours}
+        canSubmitOverride={canSubmitCreateRequestWithinBalance}
         saveLabel="Submit request"
         onOpenChange={setIsCreateModalOpen}
         onClose={() => setIsCreateModalOpen(false)}
         onFormChange={(nextForm) => setCreateForm((current) => ({ ...current, ...nextForm }))}
         onSubmit={handlePromptCreateRequest}
-        canSubmitOverride={Boolean(createForm.employeeId)}
         allowedDateRange={loadedYearDateBounds ?? undefined}
         details={(
           <label className="block space-y-1 text-sm">
@@ -2560,7 +2613,7 @@ export default function LeaveSphereAdminPtoPage() {
         readOnly={!selectedRequestActionConfig?.canEditForm}
         title="Request Detail"
         description="Review and update employee PTO request details."
-        ptoTypeOptions={PTO_TYPE_OPTIONS.map((item) => ({ value: item.value, label: item.label }))}
+        ptoTypeOptions={selectedRequestPtoTypeOptions}
         statusLabel={statusLabel}
         saving={isMutating}
         calculateHours={(startDate, endDate) => resolvePtoHoursForEmployee(startDate, endDate, selectedRequest?.employeeId || "")}
@@ -2826,7 +2879,7 @@ export default function LeaveSphereAdminPtoPage() {
                         hours: isAdjustEditMode ? (nextRequest ? String(nextRequest.hours) : "") : current.hours,
                       }));
                     }}
-                    options={ptoTypeOptions}
+                    options={getEmployeePtoTypeOptions(adjustForm.employeeId)}
                     searchable={false}
                     disabled={isMutating || isAdjustEditMode}
                   />

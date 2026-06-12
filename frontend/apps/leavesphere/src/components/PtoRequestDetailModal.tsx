@@ -65,7 +65,7 @@ type LeaveSpherePtoRequestDetailModalProps = {
   }) => Promise<void | boolean> | void | boolean;
   onFormChange?: (form: LeaveSpherePtoRequestFormState) => void;
   calculateHours?: (startDate: string, endDate: string) => string;
-  hoursHelperText?: string;
+  validateSubmit?: (form: LeaveSpherePtoRequestFormState) => string | null;
   readOnly?: boolean;
   canSubmitOverride?: boolean;
   saveLabel?: string;
@@ -153,7 +153,7 @@ export function LeaveSpherePtoRequestDetailModal({
   onSave,
   onFormChange,
   calculateHours,
-  hoursHelperText,
+  validateSubmit,
   readOnly = false,
   canSubmitOverride,
   saveLabel = "Save changes",
@@ -277,6 +277,8 @@ export function LeaveSpherePtoRequestDetailModal({
   );
 
   const submitHandler = onSubmit ?? onSave;
+  const submitValidationError = validateSubmit?.(form) ?? null;
+  const isHoursInvalid = Boolean(submitValidationError);
   const hasValidCoreFields = Boolean(
     isValidDateRange(form.startDate, form.endDate)
     && isWithinRange(form.startDate, allowedDateRange?.minDate, allowedDateRange?.maxDate)
@@ -287,6 +289,7 @@ export function LeaveSpherePtoRequestDetailModal({
   const canSave = Boolean(
     submitHandler
     && hasValidCoreFields
+    && !submitValidationError
     && hasFormChanges
     && (canSubmitOverride ?? true),
   );
@@ -296,6 +299,17 @@ export function LeaveSpherePtoRequestDetailModal({
     ? (form.startDate > allowedDateRange.minDate ? form.startDate : allowedDateRange.minDate)
     : (form.startDate || allowedDateRange?.minDate);
   const descriptionMinHeightClassName = isMyPtoDetailLayout ? "min-h-[110px]" : "min-h-[100px]";
+
+  useEffect(() => {
+    if (!formError) {
+      return;
+    }
+    if (!hasValidCoreFields || submitValidationError) {
+      return;
+    }
+    setFormError(null);
+  }, [formError, hasValidCoreFields, submitValidationError]);
+
   const formFields = (
     <>
       <div className="grid gap-3 sm:grid-cols-2">
@@ -319,9 +333,10 @@ export function LeaveSpherePtoRequestDetailModal({
             value={form.hours}
             onChange={(event) => setForm((current) => ({ ...current, hours: event.target.value }))}
             disabled={saving || readOnly}
+            className={isHoursInvalid ? "border-rose-300 text-rose-900 focus-visible:border-rose-400 focus-visible:shadow-[inset_0_0_0_1px_rgba(244,63,94,0.15)]" : undefined}
           />
-          {hoursHelperText ? (
-            <p className="text-[11px] text-slate-500">{hoursHelperText}</p>
+          {submitValidationError ? (
+            <p className="text-[11px] font-medium text-rose-600">{submitValidationError}</p>
           ) : null}
         </label>
 
@@ -418,6 +433,10 @@ export function LeaveSpherePtoRequestDetailModal({
     }
     if (!normalizeDescription(form.description)) {
       setFormError("Description is required.");
+      return;
+    }
+    if (submitValidationError) {
+      setFormError(submitValidationError);
       return;
     }
 
@@ -539,7 +558,7 @@ export function LeaveSpherePtoRequestDetailModal({
           <DialogFooter className="gap-2">
             {footerActions}
             <div className="flex items-center gap-2">
-              {hasUnsavedChanges ? (
+              {mode !== "create" && hasUnsavedChanges ? (
                 <Button variant="outline" onClick={handleRevertChanges} disabled={saving}>
                   Revert
                 </Button>
