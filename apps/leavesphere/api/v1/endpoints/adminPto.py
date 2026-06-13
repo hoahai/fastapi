@@ -91,12 +91,19 @@ class LeaveManagementSetupRequest(_LeaveSphereModel):
 def get_leave_management_workspace_route(
     request: Request,
     year: int | None = Query(None, ge=1901, le=2155),
+    include_pending: bool = Query(True),
+    history_start_date: str | None = Query(None),
+    history_end_date: str | None = Query(None),
+    overlap_month: str | None = Query(None),
 ):
     """
     Load the Leave Management workspace for the selected year.
 
     Example request:
         GET /api/leavesphere/v1/admin/pto/workspace?year=2026
+
+    Example request (expanded history):
+        GET /api/leavesphere/v1/admin/pto/workspace?year=2026&include_pending=true&history_start_date=2026-05-01&history_end_date=2026-12-31&overlap_month=2026-06
 
     Example response:
         {
@@ -135,9 +142,20 @@ def get_leave_management_workspace_route(
         - Requires X-Tenant-Id header
         - Requires leavesphere.admin permission or workspace.super_admin
         - Requires valid API key or bearer token in compat mode
+        - Requests are loaded from the provided history/overlap window, not the full year
+        - Balances remain year-scoped for the selected year
+        - `history_start_date` and `history_end_date` must use YYYY-MM-DD format when provided
+        - `overlap_month` must use YYYY-MM format when provided
     """
     try:
-        return load_leave_management_workspace(request=request, year=year)
+        return load_leave_management_workspace(
+            request=request,
+            year=year,
+            include_pending=include_pending,
+            history_start_date=history_start_date,
+            history_end_date=history_end_date,
+            overlap_month=overlap_month,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

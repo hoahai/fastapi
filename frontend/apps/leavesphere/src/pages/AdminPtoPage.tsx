@@ -72,6 +72,7 @@ import {
   adjustLeaveSphereAdminPtoBalance,
   createLeaveSphereAdminPtoRequest,
   loadLeaveSphereAdminPtoWorkspace,
+  mergeLeaveSphereAdminWorkspace,
   reviewLeaveSphereAdminPtoRequest,
   updateLeaveSphereAdminPtoRequest,
   updateLeaveSphereAdminSetupData,
@@ -113,6 +114,13 @@ import {
 type CacheStatus = {
   source: "cache" | "network";
   fetchedAt: number;
+};
+
+type WorkspaceLoadOptions = {
+  historyStartDate?: string | null;
+  historyEndDate?: string | null;
+  overlapMonth?: string | null;
+  includePending?: boolean;
 };
 
 type AdminTab = "calendar" | "requests" | "balances" | "setup";
@@ -406,6 +414,99 @@ function buildYearDateBounds(year: number): { minDate: string; maxDate: string }
   };
 }
 
+function parseMonthKey(monthKey: string): { year: number; month: number } | null {
+  const match = /^(\d{4})-(\d{2})$/.exec(monthKey);
+  if (!match) {
+    return null;
+  }
+  const year = Number(match[1]);
+  const month = Number(match[2]);
+  if (!Number.isInteger(year) || !Number.isInteger(month) || month < 1 || month > 12) {
+    return null;
+  }
+  return { year, month };
+}
+
+function normalizeMonthKey(monthKey: string): string {
+  const parsed = parseMonthKey(monthKey);
+  if (!parsed) {
+    return "";
+  }
+  return `${parsed.year}-${String(parsed.month).padStart(2, "0")}`;
+}
+
+function shiftMonthKey(monthKey: string, offset: number): string {
+  const parsed = parseMonthKey(monthKey);
+  if (!parsed) {
+    return monthKey;
+  }
+  const date = new Date(Date.UTC(parsed.year, parsed.month - 1 + offset, 1));
+  return `${date.getUTCFullYear()}-${String(date.getUTCMonth() + 1).padStart(2, "0")}`;
+}
+
+function buildMonthStartDate(monthKey: string): string {
+  const normalized = normalizeMonthKey(monthKey);
+  return normalized ? `${normalized}-01` : "";
+}
+
+function buildMonthEndDate(monthKey: string): string {
+  const normalized = normalizeMonthKey(monthKey);
+  if (!normalized) {
+    return "";
+  }
+  const nextMonthKey = shiftMonthKey(normalized, 1);
+  const nextMonthStart = buildMonthStartDate(nextMonthKey);
+  return nextMonthStart ? shiftIsoDateByDays(nextMonthStart, -1) : "";
+}
+
+function buildInitialRequestLoadWindow(monthKey: string, year: number): {
+  historyStartDate: string;
+  historyEndDate: string;
+  overlapMonth: string;
+} {
+  const normalizedMonthKey = normalizeMonthKey(monthKey) || `${year}-01`;
+  const previousMonthKey = shiftMonthKey(normalizedMonthKey || monthKey, -1);
+  return {
+    historyStartDate: buildMonthStartDate(previousMonthKey),
+    historyEndDate: `${year}-12-31`,
+    overlapMonth: normalizedMonthKey,
+  };
+}
+
+function buildPreviousMonthHistoryWindow(monthKey: string): {
+  historyStartDate: string;
+  historyEndDate: string;
+} {
+  const normalizedMonthKey = normalizeMonthKey(monthKey) || `${getCurrentYearInTimeZone(DEFAULT_TIME_ZONE)}-01`;
+  const previousMonthKey = shiftMonthKey(normalizedMonthKey || monthKey, -1);
+  return {
+    historyStartDate: buildMonthStartDate(previousMonthKey),
+    historyEndDate: buildMonthEndDate(previousMonthKey),
+  };
+}
+
+function buildMonthKeyRange(startMonthKey: string, endMonthKey: string): string[] {
+  const normalizedStart = normalizeMonthKey(startMonthKey);
+  const normalizedEnd = normalizeMonthKey(endMonthKey);
+  if (!normalizedStart || !normalizedEnd || normalizedStart > normalizedEnd) {
+    return [];
+  }
+  const monthKeys: string[] = [];
+  let currentMonthKey = normalizedStart;
+  while (currentMonthKey <= normalizedEnd) {
+    monthKeys.push(currentMonthKey);
+    if (currentMonthKey === normalizedEnd) {
+      break;
+    }
+    const nextMonthKey = shiftMonthKey(currentMonthKey, 1);
+    if (!nextMonthKey || nextMonthKey === currentMonthKey) {
+      break;
+    }
+    currentMonthKey = nextMonthKey;
+  }
+  return monthKeys;
+}
+
 function requestIsOut(request: LeaveSpherePtoRequest): boolean {
   return request.status === "approved" || request.status === "pending";
 }
@@ -425,7 +526,7 @@ function filterWorkspaceByYear(workspace: LeaveSphereAdminWorkspaceData, year: n
       transactions: workspace.balanceTransactions,
       year,
     }),
-    requests: workspace.requests.filter((item) => requestOverlapsYear(item, year)),
+    requests: workspace.requests.filter((item) => item.status === "pending" || requestOverlapsYear(item, year)),
     holidays: workspace.holidays.filter((item) => item.date.startsWith(yearPrefix)),
   };
 }
@@ -664,6 +765,9 @@ export default function LeaveSphereAdminPtoPage() {
   const restoredWorkspaceScopeRef = useRef<string | null>(null);
   const adjustWasOpenRef = useRef(false);
   const workspaceLoadRequestTokenRef = useRef(0);
+  const workspaceRef = useRef<LeaveSphereAdminWorkspaceData | null>(null);
+  const loadedYearRef = useRef<number | null>(null);
+  const loadedRequestMonthKeysRef = useRef<Set<string>>(new Set());
 
   useEffect(() => {
     if (loadedYear !== null) {
@@ -680,6 +784,14 @@ export default function LeaveSphereAdminPtoPage() {
     initialYearRef.current = nextYear;
     initialMonthKeyRef.current = nextMonthKey;
   }, [loadedYear, tenantTimeZone]);
+
+  useEffect(() => {
+    workspaceRef.current = workspace;
+  }, [workspace]);
+
+  useEffect(() => {
+    loadedYearRef.current = loadedYear;
+  }, [loadedYear]);
 
   useEffect(() => {
     if (!canRestorePageState || !pageStateScope || !pageStateStorageKey) {
@@ -837,7 +949,14 @@ export default function LeaveSphereAdminPtoPage() {
     year: number,
     fetchedAt = Date.now(),
   ) => {
-    setWorkspace(nextWorkspace);
+    const currentWorkspace = workspaceRef.current;
+    const shouldMerge = currentWorkspace !== null && loadedYearRef.current === year;
+    const mergedWorkspace = shouldMerge
+      ? mergeLeaveSphereAdminWorkspace(currentWorkspace, nextWorkspace)
+      : nextWorkspace;
+    workspaceRef.current = mergedWorkspace;
+    loadedYearRef.current = year;
+    setWorkspace(mergedWorkspace);
     setLoadedYear(year);
     setSelectedYear(String(year));
     setCacheStatus({
@@ -851,13 +970,37 @@ export default function LeaveSphereAdminPtoPage() {
         userId: currentUserId,
         year,
       },
-      nextWorkspace,
+      mergedWorkspace,
       {
         source,
         fetchedAt,
       },
     );
   }, [currentUserId, tenantSlug]);
+
+  const recordLoadedRequestMonths = useCallback((options: WorkspaceLoadOptions) => {
+    const nextLoadedMonthKeys = new Set(loadedRequestMonthKeysRef.current);
+    const addMonthKey = (monthKey: string | null | undefined) => {
+      const normalizedMonthKey = normalizeMonthKey(asString(monthKey));
+      if (normalizedMonthKey) {
+        nextLoadedMonthKeys.add(normalizedMonthKey);
+      }
+    };
+
+    addMonthKey(options.overlapMonth);
+
+    const historyStartMonthKey = options.historyStartDate ? normalizeMonthKey(options.historyStartDate.slice(0, 7)) : "";
+    const historyEndMonthKey = options.historyEndDate ? normalizeMonthKey(options.historyEndDate.slice(0, 7)) : "";
+    if (historyStartMonthKey || historyEndMonthKey) {
+      const startMonthKey = historyStartMonthKey || historyEndMonthKey;
+      const endMonthKey = historyEndMonthKey || historyStartMonthKey;
+      for (const monthKey of buildMonthKeyRange(startMonthKey, endMonthKey)) {
+        nextLoadedMonthKeys.add(monthKey);
+      }
+    }
+
+    loadedRequestMonthKeysRef.current = nextLoadedMonthKeys;
+  }, []);
 
   const cachedEmployeeItems = useMemo(
     () => readLeaveSpherePtoEmployeeCacheSnapshot({ tenantSlug })?.data ?? [],
@@ -1479,7 +1622,11 @@ export default function LeaveSphereAdminPtoPage() {
     },
   );
 
-  const loadWorkspace = useCallback(async (year: number, policy: CachePolicy = "stale-while-revalidate"): Promise<boolean> => {
+  const loadWorkspace = useCallback(async (
+    year: number,
+    policy: CachePolicy = "stale-while-revalidate",
+    options: WorkspaceLoadOptions = {},
+  ): Promise<boolean> => {
     const requestToken = ++workspaceLoadRequestTokenRef.current;
     const cacheSnapshot = readLeaveSpherePtoWorkspaceCacheSnapshot<LeaveSphereAdminWorkspaceData>({
       pageCode: "admin-pto",
@@ -1492,9 +1639,11 @@ export default function LeaveSphereAdminPtoPage() {
     const shouldUseCache = policy !== "network-only" && hasCachedWorkspace;
     const shouldFetchFromNetwork = shouldFetchNetwork(policy, cacheSnapshot);
     const shouldShowRefreshing = hasCachedWorkspace || (loadedYear === year && workspaceForYear !== null);
+    const includePending = options.includePending ?? true;
 
     if (shouldUseCache && cachedWorkspace) {
       commitWorkspace(cachedWorkspace, "cache", year, cacheSnapshot?.fetchedAt ?? Date.now());
+      recordLoadedRequestMonths(options);
       setRefreshMessage(null);
     }
 
@@ -1510,6 +1659,7 @@ export default function LeaveSphereAdminPtoPage() {
       setIsRefreshing(false);
       if (hasCachedWorkspace && cachedWorkspace) {
         commitWorkspace(cachedWorkspace, "cache", year, cacheSnapshot?.fetchedAt ?? Date.now());
+        recordLoadedRequestMonths(options);
         setRefreshMessage("You're offline. Showing cached Leave Management workspace.");
         return true;
       }
@@ -1534,11 +1684,16 @@ export default function LeaveSphereAdminPtoPage() {
         currentUserName,
         timeZone: tenantTimeZone,
         freshData: policy !== "network-only",
+        includePending,
+        calendarMonth: options.overlapMonth ?? null,
+        historyStartDate: options.historyStartDate ?? null,
+        historyEndDate: options.historyEndDate ?? null,
       });
       if (requestToken !== workspaceLoadRequestTokenRef.current) {
         return false;
       }
       commitWorkspace(result.workspace, result.source === "mock" ? "cache" : "network", year, Date.now());
+      recordLoadedRequestMonths(options);
       setRefreshMessage(result.refreshMessage);
       return true;
     } catch {
@@ -1547,6 +1702,7 @@ export default function LeaveSphereAdminPtoPage() {
       }
       if (hasCachedWorkspace && cachedWorkspace) {
         commitWorkspace(cachedWorkspace, "cache", year, cacheSnapshot?.fetchedAt ?? Date.now());
+        recordLoadedRequestMonths(options);
         setRefreshMessage("Showing cached Leave Management workspace. Could not refresh.");
         return true;
       }
@@ -1567,9 +1723,25 @@ export default function LeaveSphereAdminPtoPage() {
     requestJson,
     tenantSlug,
     tenantTimeZone,
+    recordLoadedRequestMonths,
     workspaceForYear,
     workspaceKey,
   ]);
+
+  const prefetchPreviousMonthOverlap = useCallback(async (year: number, monthKey: string) => {
+    const normalizedMonthKey = normalizeMonthKey(monthKey);
+    if (!normalizedMonthKey) {
+      return false;
+    }
+    const previousMonthKey = shiftMonthKey(normalizedMonthKey, -1);
+    if (!previousMonthKey) {
+      return false;
+    }
+    return loadWorkspace(year, "network-only", {
+      overlapMonth: previousMonthKey,
+      includePending: true,
+    });
+  }, [loadWorkspace]);
 
   useEffect(() => {
     if (!hasHydratedPageState || !pageStateStorageKey) {
@@ -1583,23 +1755,100 @@ export default function LeaveSphereAdminPtoPage() {
     if (!Number.isInteger(requestedYear)) {
       return;
     }
+    const initialWindow = buildInitialRequestLoadWindow(calendarMonth, requestedYear);
     // If page-state hydration did not restore a workspace year, still hydrate the
     // selected year once so the page can show cached data without an extra click.
-    void loadWorkspace(requestedYear, loadedYear === null ? "cache-first" : "stale-while-revalidate");
-  }, [hasHydratedPageState, loadedYear, loadWorkspace, pageStateStorageKey, selectedYear]);
+    void (async () => {
+      const didLoad = await loadWorkspace(
+        requestedYear,
+        loadedYear === null ? "cache-first" : "stale-while-revalidate",
+        initialWindow,
+      );
+      if (didLoad) {
+        await prefetchPreviousMonthOverlap(requestedYear, initialWindow.overlapMonth);
+      }
+    })();
+  }, [calendarMonth, hasHydratedPageState, loadedYear, loadWorkspace, pageStateStorageKey, prefetchPreviousMonthOverlap, selectedYear]);
 
   const handleLoadByYear = useCallback(async () => {
     const parsedYear = Number(selectedYear);
     if (!Number.isInteger(parsedYear)) {
       return;
     }
-    const didLoad = await loadWorkspace(parsedYear, loadedYear === parsedYear ? "network-only" : "cache-first");
+    const requestedMonthKey = parsedYear === currentYear ? calendarMonth : `${parsedYear}-01`;
+    const didLoad = await loadWorkspace(
+      parsedYear,
+      loadedYear === parsedYear ? "network-only" : "cache-first",
+      buildInitialRequestLoadWindow(requestedMonthKey, parsedYear),
+    );
     if (didLoad) {
-      const defaultMonth = parsedYear === currentYear ? Number(currentMonthKey.slice(5, 7)) : 1;
-      setCalendarMonth(`${parsedYear}-${String(defaultMonth).padStart(2, "0")}`);
+      setCalendarMonth(requestedMonthKey);
+      await prefetchPreviousMonthOverlap(parsedYear, requestedMonthKey);
       applyRecentHistorySearchKeyword("");
     }
-  }, [applyRecentHistorySearchKeyword, currentMonthKey, currentYear, loadWorkspace, loadedYear, selectedYear]);
+  }, [applyRecentHistorySearchKeyword, calendarMonth, currentYear, loadWorkspace, loadedYear, prefetchPreviousMonthOverlap, selectedYear]);
+
+  const oldestLoadedRequestMonthKey = useMemo(() => {
+    let oldestMonthKey = "";
+    for (const request of requests) {
+      const requestMonthKey = normalizeMonthKey(request.startDate.slice(0, 7));
+      if (!requestMonthKey) {
+        continue;
+      }
+      if (!oldestMonthKey || requestMonthKey < oldestMonthKey) {
+        oldestMonthKey = requestMonthKey;
+      }
+    }
+    return oldestMonthKey;
+  }, [requests]);
+
+  const isRequestMonthAlreadyLoaded = useCallback((monthKey: string) => {
+    const normalizedMonthKey = normalizeMonthKey(monthKey);
+    if (!normalizedMonthKey) {
+      return false;
+    }
+    return loadedRequestMonthKeysRef.current.has(normalizedMonthKey);
+  }, []);
+
+  const handleCalendarMonthChange = useCallback((nextMonthKey: string) => {
+    const normalizedMonthKey = normalizeMonthKey(nextMonthKey) || nextMonthKey;
+    setCalendarMonth(normalizedMonthKey);
+    if (isRequestMonthAlreadyLoaded(normalizedMonthKey)) {
+      return;
+    }
+    const effectiveYear = loadedYearRef.current ?? Number(selectedYear);
+    if (!Number.isInteger(effectiveYear)) {
+      return;
+    }
+    void loadWorkspace(
+      effectiveYear,
+      "network-only",
+      {
+        overlapMonth: normalizedMonthKey,
+        includePending: true,
+      },
+    );
+  }, [isRequestMonthAlreadyLoaded, loadWorkspace, selectedYear]);
+
+  const handleLoadMoreRequests = useCallback(() => {
+    const fallbackMonthKey = normalizeMonthKey(calendarMonth) || `${Number(selectedYear) || currentYear}-01`;
+    const anchorMonthKey = oldestLoadedRequestMonthKey || fallbackMonthKey;
+    const historyWindow = buildPreviousMonthHistoryWindow(anchorMonthKey);
+    const overlapMonthKey = shiftMonthKey(normalizeMonthKey(anchorMonthKey) || anchorMonthKey, -1);
+    const effectiveYear = loadedYearRef.current ?? Number(selectedYear);
+    if (!Number.isInteger(effectiveYear)) {
+      return;
+    }
+    void loadWorkspace(
+      effectiveYear,
+      "network-only",
+      {
+        ...historyWindow,
+        overlapMonth: overlapMonthKey,
+        includePending: true,
+      },
+    );
+  }, [calendarMonth, currentYear, loadWorkspace, oldestLoadedRequestMonthKey, selectedYear]);
 
   const openCreateRequestModal = useCallback(() => {
     if (!loadedYearDateBounds) {
@@ -2314,7 +2563,7 @@ export default function LeaveSphereAdminPtoPage() {
         title="Month Calendar"
         description="Who is out and company holidays"
         monthKey={calendarMonth}
-        onMonthChange={setCalendarMonth}
+        onMonthChange={handleCalendarMonthChange}
         minMonthKey={loadedYearDateBounds?.minDate.slice(0, 7)}
         maxMonthKey={loadedYearDateBounds?.maxDate.slice(0, 7)}
         todayIsoDate={todayIsoDate}
@@ -2349,7 +2598,7 @@ export default function LeaveSphereAdminPtoPage() {
       <div className="grid gap-4 xl:grid-cols-[minmax(18rem,22rem)_minmax(0,1fr)]">
         <SectionCard
           title="Pending Requests"
-          description={`${pendingRequests.length} waiting for decision`}
+          description={`${pendingRequests.length} waiting for decision and always loaded`}
           contentClassName="space-y-3"
         >
           <div className="max-h-[40rem] space-y-2 overflow-y-auto pr-1">
@@ -2382,15 +2631,26 @@ export default function LeaveSphereAdminPtoPage() {
 
       <SectionCard
         title="Request History"
-        description="All PTO requests loaded for the selected year"
+        description="Shared request data for the calendar and history table. Load older months to expand the same cached set."
         actions={(
-          <ActionIconButton
-            tooltip="Create Request"
-            onClick={() => {
-              openCreateRequestModal();
-            }}
-            icon={<Plus />}
-          />
+          <div className="flex items-center gap-2">
+            <Button
+              variant="outline"
+              onClick={() => {
+                handleLoadMoreRequests();
+              }}
+              disabled={isInitializing || isRefreshing || isMutating}
+            >
+              Load older history
+            </Button>
+            <ActionIconButton
+              tooltip="Create Request"
+              onClick={() => {
+                openCreateRequestModal();
+              }}
+              icon={<Plus />}
+            />
+          </div>
         )}
         contentClassName="space-y-4"
       >
@@ -2439,7 +2699,7 @@ export default function LeaveSphereAdminPtoPage() {
           <LeaveSpherePtoRequestTable
             requests={filteredRecentRequests}
             emptyMessage={recentRequests.length === 0
-              ? "No requests found."
+              ? "No requests loaded yet. Use Load or Load older history to expand the shared set."
               : "No recent requests match your keyword filter."}
             resolveEmployee={resolveRequestEmployee}
             requestTypeLabel={requestTypeLabel}
@@ -2716,9 +2976,22 @@ export default function LeaveSphereAdminPtoPage() {
           text={cacheStatusText}
           onRefresh={() => {
             setIsChipRefreshOverlayVisible(true);
-            void loadWorkspace(loadedYear ?? currentYear, "network-only").finally(() => {
-              setIsChipRefreshOverlayVisible(false);
-            });
+            const loadYear = loadedYear ?? currentYear;
+            const requestedMonthKey = normalizeMonthKey(calendarMonth) || `${loadYear}-01`;
+            void (async () => {
+              try {
+                const didLoad = await loadWorkspace(
+                  loadYear,
+                  "network-only",
+                  buildInitialRequestLoadWindow(requestedMonthKey, loadYear),
+                );
+                if (didLoad) {
+                  await prefetchPreviousMonthOverlap(loadYear, requestedMonthKey);
+                }
+              } finally {
+                setIsChipRefreshOverlayVisible(false);
+              }
+            })();
           }}
           disabled={isInitializing || isRefreshing || isMutating || !isOnline}
           refreshing={isRefreshing || isChipRefreshOverlayVisible}

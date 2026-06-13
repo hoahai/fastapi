@@ -117,6 +117,47 @@ def _normalize_optional_text(value: object | None) -> str | None:
     return text or None
 
 
+def _normalize_optional_iso_date(value: object | None) -> str | None:
+    text = _normalize_text(value)
+    if not text:
+        return None
+    try:
+        return date.fromisoformat(text[:10]).isoformat()
+    except ValueError as exc:
+        raise ValueError("Date must use YYYY-MM-DD format") from exc
+
+
+def _normalize_optional_month_key(value: object | None) -> str | None:
+    text = _normalize_text(value)
+    if not text:
+        return None
+    try:
+        return datetime.strptime(text[:7], "%Y-%m").strftime("%Y-%m")
+    except ValueError as exc:
+        raise ValueError("Month must use YYYY-MM format") from exc
+
+
+def _build_month_bounds(month_key: str) -> tuple[str, str]:
+    month_start = datetime.strptime(month_key, "%Y-%m").date().replace(day=1)
+    if month_start.month == 12:
+        next_month_start = date(month_start.year + 1, 1, 1)
+    else:
+        next_month_start = date(month_start.year, month_start.month + 1, 1)
+    month_end = date.fromordinal(next_month_start.toordinal() - 1)
+    return month_start.isoformat(), month_end.isoformat()
+
+
+def _merge_request_rows(*groups: list[dict]) -> list[dict]:
+    requests_by_id: OrderedDict[str, dict] = OrderedDict()
+    for group in groups:
+        for row in group:
+            request_id = _normalize_text(row.get("id"))
+            if not request_id:
+                continue
+            requests_by_id[request_id] = row
+    return list(requests_by_id.values())
+
+
 def _build_action_haystack(row: dict, action_by_code: dict[str, dict]) -> str:
     action_code = _normalize_text(row.get("ptoActionCode")).upper()
     action = action_by_code.get(action_code)
@@ -481,7 +522,16 @@ def _resolve_current_employee_record(request) -> dict:
     return employee
 
 
-def _build_workspace(*, request, year: int) -> dict:
+def _build_workspace(
+    *,
+    request,
+    year: int,
+    include_year_requests: bool = True,
+    include_pending: bool = True,
+    history_start_date: str | None = None,
+    history_end_date: str | None = None,
+    overlap_month: str | None = None,
+) -> dict:
     selected_year = _normalize_year(year)
     employees = get_employees()
     try:
@@ -518,8 +568,38 @@ def _build_workspace(*, request, year: int) -> dict:
 
     pto_types, pto_type_by_code = _build_pto_type_catalog()
     pto_actions, pto_action_by_code = _build_pto_action_catalog()
-    transaction_rows = get_pto_transactions(year=selected_year)
-    request_rows = [row for row in transaction_rows if _is_request_action(row, pto_action_by_code)]
+    balance_transaction_rows = get_pto_transactions(year=selected_year)
+    request_rows: list[dict] = []
+    if include_year_requests:
+        request_rows = [row for row in balance_transaction_rows if _is_request_action(row, pto_action_by_code)]
+
+    if include_pending:
+        year_start = f"{selected_year}-01-01"
+        year_end = f"{selected_year}-12-31"
+        pending_rows = get_pto_transactions(
+            status="Pending",
+            start_date_to=year_end,
+            end_date_from=year_start,
+        )
+        request_rows = _merge_request_rows(request_rows, pending_rows)
+
+    normalized_history_start_date = _normalize_optional_iso_date(history_start_date)
+    normalized_history_end_date = _normalize_optional_iso_date(history_end_date)
+    if normalized_history_start_date or normalized_history_end_date:
+        historical_rows = get_pto_transactions(
+            start_date_from=normalized_history_start_date,
+            start_date_to=normalized_history_end_date,
+        )
+        request_rows = _merge_request_rows(request_rows, historical_rows)
+
+    normalized_overlap_month = _normalize_optional_month_key(overlap_month)
+    if normalized_overlap_month:
+        overlap_start_date, overlap_end_date = _build_month_bounds(normalized_overlap_month)
+        overlap_rows = get_pto_transactions(
+            start_date_to=overlap_end_date,
+            end_date_from=overlap_start_date,
+        )
+        request_rows = _merge_request_rows(request_rows, overlap_rows)
 
     requests = _build_request_rows(
         rows=request_rows,
@@ -535,10 +615,10 @@ def _build_workspace(*, request, year: int) -> dict:
         pto_type_by_code=pto_type_by_code,
         pto_action_by_code=pto_action_by_code,
         request_rows=request_rows,
-        balance_rows=transaction_rows,
+        balance_rows=balance_transaction_rows,
     )
     balance_transactions = _build_balance_transaction_rows(
-        transaction_rows=transaction_rows,
+        transaction_rows=balance_transaction_rows,
         employee_map=employee_map,
         pto_action_by_code=pto_action_by_code,
     )
@@ -591,9 +671,25 @@ def _build_workspace(*, request, year: int) -> dict:
     }
 
 
-def load_leave_management_workspace(*, request, year: int | None = None) -> dict:
+def load_leave_management_workspace(
+    *,
+    request,
+    year: int | None = None,
+    include_pending: bool = True,
+    history_start_date: str | None = None,
+    history_end_date: str | None = None,
+    overlap_month: str | None = None,
+) -> dict:
     selected_year = _normalize_year(year)
-    return _build_workspace(request=request, year=selected_year)
+    return _build_workspace(
+        request=request,
+        year=selected_year,
+        include_year_requests=False,
+        include_pending=include_pending,
+        history_start_date=history_start_date,
+        history_end_date=history_end_date,
+        overlap_month=overlap_month,
+    )
 
 
 def _resolve_request_year(payload: dict, transaction: dict | None = None) -> int:

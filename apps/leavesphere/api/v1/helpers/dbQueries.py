@@ -307,6 +307,10 @@ def get_pto_transactions(
     pto_type_code: str | None = None,
     year: int | None = None,
     status: str | None = None,
+    start_date_from: str | None = None,
+    start_date_to: str | None = None,
+    end_date_from: str | None = None,
+    end_date_to: str | None = None,
 ) -> list[dict]:
     tables = get_db_tables()
     clauses: list[tuple[str, object]] = [
@@ -315,6 +319,10 @@ def get_pto_transactions(
         ("ptoTypeCode = %s", pto_type_code),
         ("year = %s", year),
         ("status = %s", status),
+        ("startDate >= %s", start_date_from),
+        ("startDate <= %s", start_date_to),
+        ("endDate >= %s", end_date_from),
+        ("endDate <= %s", end_date_to),
     ]
     where, params = _build_where_clauses(clauses)
     if employee_ids:

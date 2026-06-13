@@ -153,6 +153,10 @@ type BaseArgs = {
 
 type LoadArgs = BaseArgs & {
   freshData?: boolean;
+  calendarMonth?: string | null;
+  historyStartDate?: string | null;
+  historyEndDate?: string | null;
+  includePending?: boolean;
 };
 
 type CreateRequestArgs = BaseArgs & {
@@ -261,6 +265,59 @@ function cloneWorkspace(workspace: LeaveSphereAdminWorkspaceData): LeaveSphereAd
     holidays: workspace.holidays.map((item) => ({ ...item })),
     ptoTypes: workspace.ptoTypes.map((item) => ({ ...item })),
     ptoActions: workspace.ptoActions.map((item) => ({ ...item })),
+  };
+}
+
+function mergeListByKey<T>(
+  baseItems: T[],
+  incomingItems: T[],
+  getKey: (item: T) => string,
+): T[] {
+  const merged: T[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const item of incomingItems) {
+    const key = getKey(item);
+    if (!key || seenKeys.has(key)) {
+      continue;
+    }
+    seenKeys.add(key);
+    merged.push(item);
+  }
+
+  for (const item of baseItems) {
+    const key = getKey(item);
+    if (!key || seenKeys.has(key)) {
+      continue;
+    }
+    seenKeys.add(key);
+    merged.push(item);
+  }
+
+  return merged;
+}
+
+export function mergeLeaveSphereAdminWorkspace(
+  current: LeaveSphereAdminWorkspaceData | null,
+  incoming: LeaveSphereAdminWorkspaceData,
+): LeaveSphereAdminWorkspaceData {
+  if (!current) {
+    return cloneWorkspace(incoming);
+  }
+
+  return {
+    ...current,
+    ...incoming,
+    currentUserId: incoming.currentUserId || current.currentUserId,
+    currentUserName: incoming.currentUserName || current.currentUserName,
+    employees: mergeListByKey(incoming.employees, current.employees, (item) => item.employeeId),
+    employeeBalanceUsage: mergeListByKey(incoming.employeeBalanceUsage, current.employeeBalanceUsage, (item) => item.employeeId),
+    balanceTransactions: mergeListByKey(incoming.balanceTransactions, current.balanceTransactions, (item) => item.id),
+    employeeBalances: mergeListByKey(incoming.employeeBalances, current.employeeBalances, (item) => item.employeeId),
+    requests: mergeListByKey(incoming.requests, current.requests, (item) => item.id),
+    holidays: mergeListByKey(incoming.holidays, current.holidays, (item) => item.id),
+    ptoTypes: mergeListByKey(incoming.ptoTypes, current.ptoTypes, (item) => item.code),
+    ptoActions: mergeListByKey(incoming.ptoActions, current.ptoActions, (item) => item.code),
   };
 }
 
@@ -792,19 +849,47 @@ function applyLeaveSphereAdminBalanceTransaction(
 }
 
 export async function loadLeaveSphereAdminPtoWorkspace(params: LoadArgs): Promise<LeaveSphereAdminLoadResult> {
-  const { requestJson, workspaceKey, currentUserId, currentUserName, freshData, timeZone } = params;
+  const {
+    requestJson,
+    workspaceKey,
+    currentUserId,
+    currentUserName,
+    freshData,
+    timeZone,
+    calendarMonth,
+    historyStartDate,
+    historyEndDate,
+    includePending,
+  } = params;
 
   if (resolveUseApi()) {
     try {
-      const payload = await requestJson("/api/leavesphere/v1/admin/pto/workspace", {
+      const query = new URLSearchParams();
+      if (calendarMonth) {
+        query.set("overlap_month", calendarMonth);
+      }
+      if (historyStartDate) {
+        query.set("history_start_date", historyStartDate);
+      }
+      if (historyEndDate) {
+        query.set("history_end_date", historyEndDate);
+      }
+      if (includePending !== undefined) {
+        query.set("include_pending", String(includePending));
+      }
+      const endpoint = query.toString()
+        ? `/api/leavesphere/v1/admin/pto/workspace?${query.toString()}`
+        : "/api/leavesphere/v1/admin/pto/workspace";
+      const payload = await requestJson(endpoint, {
         method: "GET",
         successToast: false,
         errorToast: false,
       });
       const normalized = normalizeNetworkWorkspace(payload, timeZone);
       if (normalized) {
+        const merged = mergeLeaveSphereAdminWorkspace(STORE.get(workspaceKey) || null, normalized);
         return {
-          workspace: writeWorkspace(workspaceKey, normalized),
+          workspace: writeWorkspace(workspaceKey, merged),
           source: "network",
           refreshMessage: null,
         };
@@ -846,10 +931,11 @@ export async function createLeaveSphereAdminPtoRequest(params: CreateRequestArgs
       });
       const normalized = normalizeNetworkWorkspace(response, params.timeZone);
       if (normalized) {
+        const merged = mergeLeaveSphereAdminWorkspace(STORE.get(workspaceKey) || null, normalized);
         return {
-          workspace: writeWorkspace(workspaceKey, normalized),
+          workspace: writeWorkspace(workspaceKey, merged),
           source: "network",
-          createdRequestId: normalized.requests[0]?.id ?? null,
+          createdRequestId: merged.requests[0]?.id ?? null,
         };
       }
     } catch {
@@ -920,8 +1006,9 @@ export async function updateLeaveSphereAdminPtoRequest(params: UpdateRequestArgs
       });
       const normalized = normalizeNetworkWorkspace(response, params.timeZone);
       if (normalized) {
+        const merged = mergeLeaveSphereAdminWorkspace(STORE.get(workspaceKey) || null, normalized);
         return {
-          workspace: writeWorkspace(workspaceKey, normalized),
+          workspace: writeWorkspace(workspaceKey, merged),
           source: "network",
         };
       }
@@ -968,8 +1055,9 @@ export async function reviewLeaveSphereAdminPtoRequest(params: ReviewRequestArgs
       });
       const normalized = normalizeNetworkWorkspace(response, params.timeZone);
       if (normalized) {
+        const merged = mergeLeaveSphereAdminWorkspace(STORE.get(workspaceKey) || null, normalized);
         return {
-          workspace: writeWorkspace(workspaceKey, normalized),
+          workspace: writeWorkspace(workspaceKey, merged),
           source: "network",
         };
       }
@@ -1033,6 +1121,7 @@ export async function adjustLeaveSphereAdminPtoBalance(params: AdjustBalanceArgs
       );
       const normalized = normalizeNetworkWorkspace(response, params.timeZone);
       if (normalized) {
+        const merged = mergeLeaveSphereAdminWorkspace(STORE.get(workspaceKey) || null, normalized);
         if (!hasExplicitBalanceTransactions) {
           const mergedWorkspace = cloneWorkspace(workspace);
           applyLeaveSphereAdminBalanceTransaction(mergedWorkspace, payload, currentUserName);
@@ -1042,7 +1131,7 @@ export async function adjustLeaveSphereAdminPtoBalance(params: AdjustBalanceArgs
           };
         }
         return {
-          workspace: writeWorkspace(workspaceKey, normalized),
+          workspace: writeWorkspace(workspaceKey, merged),
           source: "network",
         };
       }
@@ -1081,8 +1170,9 @@ export async function updateLeaveSphereAdminSetupData(params: SetupArgs): Promis
       });
       const normalized = normalizeNetworkWorkspace(response, params.timeZone);
       if (normalized) {
+        const merged = mergeLeaveSphereAdminWorkspace(STORE.get(workspaceKey) || null, normalized);
         return {
-          workspace: writeWorkspace(workspaceKey, normalized),
+          workspace: writeWorkspace(workspaceKey, merged),
           source: "network",
         };
       }
