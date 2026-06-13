@@ -203,6 +203,24 @@ function toFrontendHref(route: string): string {
   return normalizeLegacyLeaveSphereRoute(route);
 }
 
+function getCurrentRelativeUrl(): string {
+  if (typeof window === "undefined") {
+    return "/";
+  }
+  const pathname = String(window.location.pathname || "").trim() || "/";
+  const search = String(window.location.search || "");
+  const hash = String(window.location.hash || "");
+  return `${pathname}${search}${hash}`;
+}
+
+function buildLoginHref(returnTo: string): string {
+  const normalizedReturnTo = String(returnTo || "").trim();
+  if (!normalizedReturnTo || normalizedReturnTo === "/auth/login" || normalizedReturnTo.startsWith("/auth/login?")) {
+    return "/auth/login";
+  }
+  return `/auth/login?return_to=${encodeURIComponent(normalizedReturnTo)}`;
+}
+
 function shouldRouteToUpdatePasswordFromHash(hash: string): boolean {
   const normalizedHash = String(hash || "").replace(/^#/, "");
   if (!normalizedHash) {
@@ -276,7 +294,7 @@ function RedirectToLogin() {
     if (window.location.pathname === "/auth/login") {
       return;
     }
-    window.location.replace("/auth/login");
+    window.location.replace(buildLoginHref(getCurrentRelativeUrl()));
   }, []);
 
   return <div className="p-6 text-sm text-slate-600">Redirecting to login...</div>;

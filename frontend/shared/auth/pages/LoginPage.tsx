@@ -6,7 +6,10 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Spinner } from "@/components/ui/spinner";
 import { shouldProtectFrontendAuth } from "@shared/auth/guards";
+import { canAccessAppRoute } from "@shared/auth/pagePermissions";
+import { hasAppAdminAccess, hasAppViewAccess, hasSuperAdminAccess } from "@shared/auth/permissions";
 import { useAuth } from "@shared/auth/useAuth";
+import type { AccessProfile } from "@shared/auth/types";
 
 function normalizeAuthError(error: unknown, fallback: string): string {
   const raw = error instanceof Error ? error.message : "";
@@ -59,7 +62,7 @@ function normalizeAccessErrorMessage(message: string | null | undefined): string
   return raw;
 }
 
-function resolvePostLoginPath(): string {
+function resolvePostLoginPath(accessProfile: AccessProfile | null, tenantSlug: string): string {
   if (typeof window === "undefined") {
     return "/";
   }
@@ -67,7 +70,47 @@ function resolvePostLoginPath(): string {
   if (!raw || !raw.startsWith("/") || raw.startsWith("//")) {
     return "/";
   }
-  return raw;
+  try {
+    const url = new URL(raw, window.location.origin);
+    if (url.origin !== window.location.origin) {
+      return "/";
+    }
+
+    const pathname = String(url.pathname || "").trim();
+    if (!pathname || pathname === "/" || pathname.startsWith("/auth/")) {
+      return "/";
+    }
+
+    const fullPath = `${pathname}${url.search}${url.hash}`;
+    const appCode = pathname.split("/").filter(Boolean)[0]?.trim().toLowerCase() || "";
+
+    if (pathname === "/profile") {
+      return hasSuperAdminAccess(accessProfile) || hasAppViewAccess(accessProfile, "tradsphere") ? fullPath : "/";
+    }
+
+    if (pathname === "/admin/users") {
+      return hasSuperAdminAccess(accessProfile) ? fullPath : "/";
+    }
+
+    if (!appCode) {
+      return "/";
+    }
+
+    if (pathname === `/${appCode}/admin`) {
+      return hasSuperAdminAccess(accessProfile) || hasAppAdminAccess(accessProfile, appCode) ? fullPath : "/";
+    }
+
+    return canAccessAppRoute({
+      accessProfile,
+      appCode,
+      tenantSlug,
+      route: pathname,
+    })
+      ? fullPath
+      : "/";
+  } catch {
+    return "/";
+  }
 }
 
 export function LoginPage() {
@@ -80,7 +123,8 @@ export function LoginPage() {
   const passwordInputRef = useRef<HTMLInputElement | null>(null);
 
   const normalizedEmail = useMemo(() => email.trim().toLowerCase(), [email]);
-  const postLoginPath = useMemo(() => resolvePostLoginPath(), []);
+  const tenantSlug = auth.tenantSlug || String(import.meta.env.VITE_DEFAULT_TENANT_SLUG || "").trim().toLowerCase();
+  const postLoginPath = useMemo(() => resolvePostLoginPath(auth.accessProfile, tenantSlug), [auth.accessProfile, tenantSlug]);
   const tenantLabel = auth.tenantSlug || String(import.meta.env.VITE_DEFAULT_TENANT_SLUG || "").trim().toLowerCase();
   const authProtectionEnabled = shouldProtectFrontendAuth();
   const resolvedAccessError = normalizeAccessErrorMessage(auth.accessError);
