@@ -1058,15 +1058,19 @@ export default function LeaveSphereMyPtoPage() {
   ]);
 
   useEffect(() => {
-    if (!hasHydratedPageState || !pageStateStorageKey || loadedYear === null) {
+    if (!hasHydratedPageState || !pageStateStorageKey) {
       return;
     }
     if (restoredWorkspaceScopeRef.current === pageStateStorageKey) {
       return;
     }
     restoredWorkspaceScopeRef.current = pageStateStorageKey;
-    void loadWorkspace(loadedYear, "stale-while-revalidate");
-  }, [hasHydratedPageState, loadedYear, loadWorkspace, pageStateStorageKey]);
+    const requestedYear = loadedYear ?? Number(selectedYear);
+    if (!Number.isInteger(requestedYear)) {
+      return;
+    }
+    void loadWorkspace(requestedYear, loadedYear === null ? "cache-first" : "stale-while-revalidate");
+  }, [hasHydratedPageState, loadedYear, loadWorkspace, pageStateStorageKey, selectedYear]);
 
   const handleLoadByYear = useCallback(async () => {
     const parsedYear = Number(selectedYear);

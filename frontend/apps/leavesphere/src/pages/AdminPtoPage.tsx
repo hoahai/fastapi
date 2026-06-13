@@ -1572,15 +1572,21 @@ export default function LeaveSphereAdminPtoPage() {
   ]);
 
   useEffect(() => {
-    if (!hasHydratedPageState || !pageStateStorageKey || loadedYear === null) {
+    if (!hasHydratedPageState || !pageStateStorageKey) {
       return;
     }
     if (restoredWorkspaceScopeRef.current === pageStateStorageKey) {
       return;
     }
     restoredWorkspaceScopeRef.current = pageStateStorageKey;
-    void loadWorkspace(loadedYear, "stale-while-revalidate");
-  }, [hasHydratedPageState, loadedYear, loadWorkspace, pageStateStorageKey]);
+    const requestedYear = loadedYear ?? Number(selectedYear);
+    if (!Number.isInteger(requestedYear)) {
+      return;
+    }
+    // If page-state hydration did not restore a workspace year, still hydrate the
+    // selected year once so the page can show cached data without an extra click.
+    void loadWorkspace(requestedYear, loadedYear === null ? "cache-first" : "stale-while-revalidate");
+  }, [hasHydratedPageState, loadedYear, loadWorkspace, pageStateStorageKey, selectedYear]);
 
   const handleLoadByYear = useCallback(async () => {
     const parsedYear = Number(selectedYear);
