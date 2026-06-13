@@ -815,9 +815,6 @@ export default function LeaveSphereAdminPtoPage() {
       if (typeof persisted.selectedYear === "string") {
         setSelectedYear(persisted.selectedYear);
       }
-      if (persisted.loadedYear === null || typeof persisted.loadedYear === "number") {
-        setLoadedYear(persisted.loadedYear ?? null);
-      }
       setTab(persisted.tab);
       setCalendarMonth(persisted.calendarMonth);
       setSelectedRequestId(persisted.selectedRequestId);
@@ -842,9 +839,35 @@ export default function LeaveSphereAdminPtoPage() {
         setAppliedRecentHistorySearch(legacySearch);
       }
       setScrollY(Math.max(0, persisted.scrollY));
+      const restoredYear = typeof persisted.loadedYear === "number" ? persisted.loadedYear : null;
+      if (restoredYear !== null && restoredWorkspaceScopeRef.current !== pageStateStorageKey) {
+        restoredWorkspaceScopeRef.current = pageStateStorageKey;
+        const cacheSnapshot = readLeaveSpherePtoWorkspaceCacheSnapshot<LeaveSphereAdminWorkspaceData>({
+          pageCode: "admin-pto",
+          tenantSlug,
+          userId: currentUserId,
+          year: restoredYear,
+        });
+        if (cacheSnapshot?.data) {
+          setWorkspace(cacheSnapshot.data);
+          setLoadedYear(restoredYear);
+          setCacheStatus({
+            source: cacheSnapshot.source,
+            fetchedAt: cacheSnapshot.fetchedAt ?? Date.now(),
+          });
+        } else {
+          setLoadedYear(null);
+          setWorkspace(null);
+          setCacheStatus(null);
+        }
+      } else {
+        setLoadedYear(null);
+        setWorkspace(null);
+        setCacheStatus(null);
+      }
     }
     setHasHydratedPageState(true);
-  }, [canRestorePageState, pageStateScope, pageStateStorageKey]);
+  }, [canRestorePageState, currentUserId, pageStateScope, pageStateStorageKey, tenantSlug]);
 
   useEffect(() => {
     if (!hasHydratedPageState || !pageStateStorageKey) {
@@ -1742,33 +1765,6 @@ export default function LeaveSphereAdminPtoPage() {
       includePending: true,
     });
   }, [loadWorkspace]);
-
-  useEffect(() => {
-    if (!hasHydratedPageState || !pageStateStorageKey) {
-      return;
-    }
-    if (restoredWorkspaceScopeRef.current === pageStateStorageKey) {
-      return;
-    }
-    restoredWorkspaceScopeRef.current = pageStateStorageKey;
-    const requestedYear = loadedYear ?? Number(selectedYear);
-    if (!Number.isInteger(requestedYear)) {
-      return;
-    }
-    const initialWindow = buildInitialRequestLoadWindow(calendarMonth, requestedYear);
-    // If page-state hydration did not restore a workspace year, still hydrate the
-    // selected year once so the page can show cached data without an extra click.
-    void (async () => {
-      const didLoad = await loadWorkspace(
-        requestedYear,
-        loadedYear === null ? "cache-first" : "stale-while-revalidate",
-        initialWindow,
-      );
-      if (didLoad) {
-        await prefetchPreviousMonthOverlap(requestedYear, initialWindow.overlapMonth);
-      }
-    })();
-  }, [calendarMonth, hasHydratedPageState, loadedYear, loadWorkspace, pageStateStorageKey, prefetchPreviousMonthOverlap, selectedYear]);
 
   const handleLoadByYear = useCallback(async () => {
     const parsedYear = Number(selectedYear);

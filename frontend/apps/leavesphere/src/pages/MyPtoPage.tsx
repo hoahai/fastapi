@@ -427,7 +427,6 @@ export default function LeaveSphereMyPtoPage() {
   }, [pageStateScope]);
   const hydratedPageStateScopeRef = useRef<string | null>(null);
   const restoredScrollScopeRef = useRef<string | null>(null);
-  const restoredWorkspaceScopeRef = useRef<string | null>(null);
   const [hasHydratedPageState, setHasHydratedPageState] = useState(false);
   const [scrollY, setScrollY] = useState(0);
 
@@ -458,6 +457,7 @@ export default function LeaveSphereMyPtoPage() {
   const [draftManagerSearch, setDraftManagerSearch] = useState("");
   const [appliedManagerSearch, setAppliedManagerSearch] = useState("");
   const workspaceLoadRequestTokenRef = useRef(0);
+  const restoredWorkspaceScopeRef = useRef<string | null>(null);
 
   useEffect(() => {
     if (loadedYear !== null) {
@@ -495,7 +495,6 @@ export default function LeaveSphereMyPtoPage() {
     );
     if (persisted) {
       setSelectedYear(persisted.selectedYear);
-      setLoadedYear(persisted.loadedYear);
       setCalendarMonth(persisted.calendarMonth);
       setRequestForm(persisted.requestForm);
       setIsRequestDialogOpen(persisted.isRequestDialogOpen);
@@ -506,9 +505,35 @@ export default function LeaveSphereMyPtoPage() {
       setDraftManagerSearch(asString(persisted.managerSearchDraft));
       setAppliedManagerSearch(asString(persisted.managerSearchApplied));
       setScrollY(Math.max(0, persisted.scrollY));
+      const restoredYear = typeof persisted.loadedYear === "number" ? persisted.loadedYear : null;
+      if (restoredYear !== null && restoredWorkspaceScopeRef.current !== pageStateStorageKey) {
+        restoredWorkspaceScopeRef.current = pageStateStorageKey;
+        const cacheSnapshot = readLeaveSpherePtoWorkspaceCacheSnapshot<LeaveSpherePtoWorkspaceData>({
+          pageCode: LEAVESPHERE_MY_PTO_PAGE_CODE,
+          tenantSlug,
+          userId: currentUserId,
+          year: restoredYear,
+        });
+        if (cacheSnapshot?.data) {
+          setWorkspace(cacheSnapshot.data);
+          setLoadedYear(restoredYear);
+          setCacheStatus({
+            source: cacheSnapshot.source,
+            fetchedAt: cacheSnapshot.fetchedAt ?? Date.now(),
+          });
+        } else {
+          setLoadedYear(null);
+          setWorkspace(null);
+          setCacheStatus(null);
+        }
+      } else {
+        setLoadedYear(null);
+        setWorkspace(null);
+        setCacheStatus(null);
+      }
     }
     setHasHydratedPageState(true);
-  }, [canRestorePageState, pageStateScope, pageStateStorageKey]);
+  }, [canRestorePageState, currentUserId, pageStateScope, pageStateStorageKey, tenantSlug]);
 
   useEffect(() => {
     if (!hasHydratedPageState || !pageStateStorageKey) {
@@ -1056,21 +1081,6 @@ export default function LeaveSphereMyPtoPage() {
     tenantTimeZone,
     workspaceForYear,
   ]);
-
-  useEffect(() => {
-    if (!hasHydratedPageState || !pageStateStorageKey) {
-      return;
-    }
-    if (restoredWorkspaceScopeRef.current === pageStateStorageKey) {
-      return;
-    }
-    restoredWorkspaceScopeRef.current = pageStateStorageKey;
-    const requestedYear = loadedYear ?? Number(selectedYear);
-    if (!Number.isInteger(requestedYear)) {
-      return;
-    }
-    void loadWorkspace(requestedYear, loadedYear === null ? "cache-first" : "stale-while-revalidate");
-  }, [hasHydratedPageState, loadedYear, loadWorkspace, pageStateStorageKey, selectedYear]);
 
   const handleLoadByYear = useCallback(async () => {
     const parsedYear = Number(selectedYear);
