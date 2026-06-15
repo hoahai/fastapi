@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useRef, useState, type ReactNode, type Ref } from "react";
 import { ChevronLeft, ChevronRight } from "lucide-react";
 
 import { Button } from "@tradsphere/components/ui/button";
@@ -38,6 +38,8 @@ type CalendarDay = {
 };
 
 type LeaveSphereMonthCalendarProps = {
+  className?: string;
+  sectionRef?: Ref<HTMLElement>;
   title: ReactNode;
   description?: ReactNode;
   monthKey: string;
@@ -338,6 +340,8 @@ function resolveEffectiveVisibleEventRows(maxVisibleEventRows: number, dayMinHei
 }
 
 export function LeaveSphereMonthCalendar({
+  className,
+  sectionRef,
   title,
   description,
   monthKey,
@@ -384,6 +388,7 @@ export function LeaveSphereMonthCalendar({
   return (
     <>
       <SectionCard
+        ref={sectionRef}
         title={title}
         description={description}
         actions={(
@@ -415,6 +420,7 @@ export function LeaveSphereMonthCalendar({
             />
           </div>
         )}
+        className={className}
         contentClassName="space-y-3"
       >
         <div className="grid grid-cols-7 gap-1 text-center text-[11px] font-semibold uppercase tracking-[0.12em] text-slate-500">

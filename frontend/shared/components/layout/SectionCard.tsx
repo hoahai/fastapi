@@ -1,4 +1,4 @@
-import type { HTMLAttributes, ReactNode } from "react";
+import { forwardRef, type HTMLAttributes, type ReactNode } from "react";
 
 import { cn } from "../utils/cn";
 import { SectionHeader } from "./SectionHeader";
@@ -12,7 +12,7 @@ export interface SectionCardProps extends Omit<HTMLAttributes<HTMLElement>, "tit
   divider?: boolean;
 }
 
-export function SectionCard({
+export const SectionCard = forwardRef<HTMLElement, SectionCardProps>(function SectionCard({
   title,
   description,
   actions,
@@ -22,9 +22,10 @@ export function SectionCard({
   divider = true,
   children,
   ...props
-}: SectionCardProps) {
+}, ref) {
   return (
     <section
+      ref={ref}
       className={cn(
         "relative flex min-h-0 flex-col overflow-hidden rounded-[1.45rem] border border-blue-100/90 bg-white/95 p-5 shadow-soft",
         className,
@@ -42,4 +43,6 @@ export function SectionCard({
       <div className={cn("mt-5 min-h-0 flex-1", contentClassName)}>{children}</div>
     </section>
   );
-}
+});
+
+SectionCard.displayName = "SectionCard";

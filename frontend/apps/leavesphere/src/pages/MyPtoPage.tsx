@@ -21,6 +21,7 @@ import { ConfirmDialog } from "@tradsphere/components/ui/confirm-dialog";
 import { useToast } from "@shell/components/ui/toast";
 import { useApiRequest } from "@shared/hooks/useApiRequest";
 import { useOnlineStatus } from "@shared/hooks/useOnlineStatus";
+import { useObservedElementHeight } from "@shared/hooks/useObservedElementHeight";
 import { shouldFetchNetwork, type CachePolicy } from "@shared/cache";
 import { useAuth } from "@shared/auth/useAuth";
 import {
@@ -402,6 +403,7 @@ export default function LeaveSphereMyPtoPage() {
   const currentYear = useMemo(() => getCurrentYearInTimeZone(tenantTimeZone), [tenantTimeZone]);
   const currentMonthKey = useMemo(() => getCurrentMonthKeyInTimeZone(tenantTimeZone), [tenantTimeZone]);
   const todayIsoDate = useMemo(() => getTodayIsoDateInTimeZone(tenantTimeZone), [tenantTimeZone]);
+  const [calendarSectionRef, calendarSectionHeight] = useObservedElementHeight<HTMLElement>();
   const initialTimeZoneRef = useRef(tenantTimeZone);
   const initialYearRef = useRef(currentYear);
   const initialMonthKeyRef = useRef(currentMonthKey);
@@ -1431,7 +1433,7 @@ export default function LeaveSphereMyPtoPage() {
         )}
       </SectionCard>
 
-      <div className="relative grid gap-4 xl:grid-cols-[minmax(18rem,23rem)_minmax(0,1fr)]">
+      <div className="relative grid items-stretch gap-4 xl:grid-cols-[minmax(19rem,25rem)_minmax(0,1fr)]">
         <SectionCard
           title="My Requests"
           description={`${myRequests.length} request${myRequests.length === 1 ? "" : "s"} total`}
@@ -1444,7 +1446,8 @@ export default function LeaveSphereMyPtoPage() {
               className="h-9 w-9"
             />
           ) : null}
-          contentClassName="space-y-3"
+          style={calendarSectionHeight > 0 ? { height: `${calendarSectionHeight}px` } : undefined}
+          contentClassName="flex min-h-0 flex-1 flex-col gap-3"
         >
           <div className="grid grid-cols-3 gap-2">
             <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-center">
@@ -1461,7 +1464,7 @@ export default function LeaveSphereMyPtoPage() {
             </div>
           </div>
 
-          <div className="max-h-[38rem] space-y-2 overflow-y-auto pr-1">
+          <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
             {myRequests.length === 0 ? (
               <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
                 No PTO requests yet.
@@ -1486,9 +1489,11 @@ export default function LeaveSphereMyPtoPage() {
         </SectionCard>
 
         <LeaveSphereMonthCalendar
+          sectionRef={calendarSectionRef}
           title="PTO Calendar"
           description="Your PTO requests and holidays"
           monthKey={calendarMonth}
+          className="self-start"
           onMonthChange={setCalendarMonth}
           minMonthKey={loadedYear === null ? undefined : `${loadedYear}-01`}
           maxMonthKey={loadedYear === null ? undefined : `${loadedYear}-12`}
