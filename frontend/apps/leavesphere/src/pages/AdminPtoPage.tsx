@@ -49,6 +49,7 @@ import { DEFAULT_TIME_ZONE, formatDateInTimeZone, getCurrentMonthKeyInTimeZone, 
 import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 import { LeaveSpherePtoEmployeeHeader } from "@leavesphere/components/LeaveSpherePtoEmployeeHeader";
 import { LeaveSpherePtoRequestCard } from "@leavesphere/components/LeaveSpherePtoRequestCard";
+import { LeaveSpherePtoMonthSeparator } from "@leavesphere/components/LeaveSpherePtoMonthSeparator";
 import { LeaveSphereMonthCalendar, type LeaveSphereMonthCalendarEvent } from "@leavesphere/components/MonthCalendar";
 import { LeaveSpherePtoRequestDetailModal, type LeaveSpherePtoRequestFormState } from "@leavesphere/components/PtoRequestDetailModal";
 import { LeaveSpherePtoTypeChip } from "@leavesphere/components/PtoTypeChip";
@@ -107,6 +108,7 @@ import { ActionIconButton } from "@tradsphere/components/dashboard/ActionIconBut
 import {
   formatMonthDayYearLabel,
   formatPtoRequestDateRangeLabel,
+  groupLeaveSpherePtoRequestsByStartMonth,
   getLeaveSpherePtoRequestCardTone,
 } from "@leavesphere/lib/ptoDate";
 import {
@@ -1089,6 +1091,14 @@ export default function LeaveSphereAdminPtoPage() {
       return tokens.some((token) => normalizeSearchKeyword(token).includes(keyword));
     });
   }, [normalizedRecentHistorySearch, recentRequests, resolveRequestEmployee]);
+  const filteredRecentRequestMonthGroups = useMemo(
+    () => groupLeaveSpherePtoRequestsByStartMonth(filteredRecentRequests, tenantTimeZone),
+    [filteredRecentRequests, tenantTimeZone],
+  );
+  const pendingRequestMonthGroups = useMemo(
+    () => groupLeaveSpherePtoRequestsByStartMonth(pendingRequests, tenantTimeZone),
+    [pendingRequests, tenantTimeZone],
+  );
   const selectedRequest = useMemo(
     () => requests.find((item) => item.id === selectedRequestId) || null,
     [requests, selectedRequestId],
@@ -2506,7 +2516,7 @@ export default function LeaveSphereAdminPtoPage() {
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1 pt-1.5">
+        <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 pt-1.5">
           {filteredRecentRequests.length === 0 ? (
             <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
               {recentRequests.length === 0
@@ -2514,23 +2524,30 @@ export default function LeaveSphereAdminPtoPage() {
                 : "No requests match your keyword filter."}
             </div>
           ) : (
-            filteredRecentRequests.map((request) => (
-              <LeaveSpherePtoRequestCard
-                key={request.id}
-                onClick={() => {
-                  setSelectedRequestId(request.id);
-                  setReviewNote(request.approverNote || "");
-                }}
-                tone={getLeaveSpherePtoRequestCardTone(request.startDate, request.endDate, todayIsoDate)}
-                employeeName={resolveRequestEmployee(request).employeeName}
-                title={resolveRequestEmployee(request).employeeName}
-                pictureUrl={resolveRequestEmployee(request).pictureUrl}
-                typeChip={<LeaveSpherePtoTypeChip type={request.type} label={requestTypeLabel(request.type)} />}
-                statusChip={<LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} />}
-                dateLabel={formatPtoRequestDateRangeLabel(request.startDate, request.endDate, tenantTimeZone)}
-                detailLabel={request.description}
-                hoursLabel={formatHoursLabel(request.hours)}
-              />
+            filteredRecentRequestMonthGroups.map((group) => (
+              <section key={group.monthKey} className="space-y-3">
+                <LeaveSpherePtoMonthSeparator label={group.monthLabel} />
+                <div className="space-y-1.5">
+                  {group.requests.map((request) => (
+                    <LeaveSpherePtoRequestCard
+                      key={request.id}
+                      onClick={() => {
+                        setSelectedRequestId(request.id);
+                        setReviewNote(request.approverNote || "");
+                      }}
+                      tone={getLeaveSpherePtoRequestCardTone(request.startDate, request.endDate, todayIsoDate)}
+                      employeeName={resolveRequestEmployee(request).employeeName}
+                      title={resolveRequestEmployee(request).employeeName}
+                      pictureUrl={resolveRequestEmployee(request).pictureUrl}
+                      typeChip={<LeaveSpherePtoTypeChip type={request.type} label={requestTypeLabel(request.type)} />}
+                      statusChip={<LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} />}
+                      dateLabel={formatPtoRequestDateRangeLabel(request.startDate, request.endDate, tenantTimeZone)}
+                      detailLabel={request.description}
+                      hoursLabel={formatHoursLabel(request.hours)}
+                    />
+                  ))}
+                </div>
+              </section>
             ))
           )}
         </div>
@@ -3066,29 +3083,36 @@ export default function LeaveSphereAdminPtoPage() {
               </DialogDescription>
             </DialogHeader>
 
-            <div className="mt-4 max-h-[60vh] space-y-2 overflow-y-auto pr-1 pt-1.5">
+            <div className="mt-4 max-h-[60vh] space-y-4 overflow-y-auto pr-1 pt-1.5">
               {pendingRequests.length === 0 ? (
                 <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
                   No pending PTO requests.
                 </div>
               ) : (
-                pendingRequests.map((request) => (
-                  <LeaveSpherePtoRequestCard
-                    key={request.id}
-                  onClick={() => {
-                    setSelectedRequestId(request.id);
-                    setReviewNote(request.approverNote || "");
-                  }}
-                    tone={getLeaveSpherePtoRequestCardTone(request.startDate, request.endDate, todayIsoDate)}
-                    employeeName={resolveRequestEmployee(request).employeeName}
-                    title={resolveRequestEmployee(request).employeeName}
-                    pictureUrl={resolveRequestEmployee(request).pictureUrl}
-                    typeChip={<LeaveSpherePtoTypeChip type={request.type} label={requestTypeLabel(request.type)} />}
-                    statusChip={<LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} />}
-                    dateLabel={formatPtoRequestDateRangeLabel(request.startDate, request.endDate, tenantTimeZone)}
-                    detailLabel={request.description}
-                    hoursLabel={formatHoursLabel(request.hours)}
-                  />
+                pendingRequestMonthGroups.map((group) => (
+                  <section key={group.monthKey} className="space-y-3">
+                    <LeaveSpherePtoMonthSeparator label={group.monthLabel} />
+                    <div className="space-y-1.5">
+                      {group.requests.map((request) => (
+                        <LeaveSpherePtoRequestCard
+                          key={request.id}
+                          onClick={() => {
+                            setSelectedRequestId(request.id);
+                            setReviewNote(request.approverNote || "");
+                          }}
+                          tone={getLeaveSpherePtoRequestCardTone(request.startDate, request.endDate, todayIsoDate)}
+                          employeeName={resolveRequestEmployee(request).employeeName}
+                          title={resolveRequestEmployee(request).employeeName}
+                          pictureUrl={resolveRequestEmployee(request).pictureUrl}
+                          typeChip={<LeaveSpherePtoTypeChip type={request.type} label={requestTypeLabel(request.type)} />}
+                          statusChip={<LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} />}
+                          dateLabel={formatPtoRequestDateRangeLabel(request.startDate, request.endDate, tenantTimeZone)}
+                          detailLabel={request.description}
+                          hoursLabel={formatHoursLabel(request.hours)}
+                        />
+                      ))}
+                    </div>
+                  </section>
                 ))
               )}
             </div>

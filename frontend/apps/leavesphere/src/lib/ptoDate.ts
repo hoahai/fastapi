@@ -46,6 +46,50 @@ export function formatMonthDayYearRangeLabel(startDate: string, endDate: string,
   return `${startLabel} - ${endLabel}`;
 }
 
+export function formatMonthYearLabel(monthKey: string, timeZone?: string | null): string {
+  if (!monthKey) {
+    return "-";
+  }
+  return formatDateInTimeZone(`${monthKey}-01`, timeZone, {
+    month: "long",
+    year: "numeric",
+  });
+}
+
+export type LeaveSpherePtoMonthGroup<T> = {
+  monthKey: string;
+  monthLabel: string;
+  requests: T[];
+};
+
+export function groupLeaveSpherePtoRequestsByStartMonth<T extends { startDate: string }>(
+  requests: T[],
+  timeZone?: string | null,
+): LeaveSpherePtoMonthGroup<T>[] {
+  const groups: LeaveSpherePtoMonthGroup<T>[] = [];
+  const groupByMonth = new Map<string, LeaveSpherePtoMonthGroup<T>>();
+
+  for (const request of requests) {
+    const monthKey = request.startDate.slice(0, 7);
+    if (!monthKey) {
+      continue;
+    }
+    let group = groupByMonth.get(monthKey);
+    if (!group) {
+      group = {
+        monthKey,
+        monthLabel: formatMonthYearLabel(monthKey, timeZone),
+        requests: [],
+      };
+      groupByMonth.set(monthKey, group);
+      groups.push(group);
+    }
+    group.requests.push(request);
+  }
+
+  return groups;
+}
+
 export function getLeaveSpherePtoRequestCardTone(
   startDate: string,
   endDate: string,
