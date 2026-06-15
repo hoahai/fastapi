@@ -104,7 +104,11 @@ import {
 import { LEAVESPHERE_TEAM_REGION_OPTIONS } from "@leavesphere/lib/ptoMocks";
 import type { LeaveSpherePtoRequest, LeaveSpherePtoStatus, LeaveSpherePtoType, LeaveSphereTeamRegion } from "@leavesphere/lib/ptoMocks";
 import { ActionIconButton } from "@tradsphere/components/dashboard/ActionIconButton";
-import { formatMonthDayYearLabel, formatPtoRequestDateRangeLabel } from "@leavesphere/lib/ptoDate";
+import {
+  formatMonthDayYearLabel,
+  formatPtoRequestDateRangeLabel,
+  getLeaveSpherePtoRequestCardTone,
+} from "@leavesphere/lib/ptoDate";
 import {
   readLeaveSpherePtoWorkspaceCacheSnapshot,
   writeLeaveSpherePtoWorkspaceCache,
@@ -2517,6 +2521,7 @@ export default function LeaveSphereAdminPtoPage() {
                   setSelectedRequestId(request.id);
                   setReviewNote(request.approverNote || "");
                 }}
+                tone={getLeaveSpherePtoRequestCardTone(request.startDate, request.endDate, todayIsoDate)}
                 employeeName={resolveRequestEmployee(request).employeeName}
                 title={resolveRequestEmployee(request).employeeName}
                 pictureUrl={resolveRequestEmployee(request).pictureUrl}
@@ -2581,6 +2586,7 @@ export default function LeaveSphereAdminPtoPage() {
           monthKey={calendarMonth}
           className="self-start"
           onMonthChange={handleCalendarMonthChange}
+          onMonthHeadingClick={loadedYear === currentYear ? () => setCalendarMonth(currentMonthKey) : undefined}
           minMonthKey={loadedYearDateBounds?.minDate.slice(0, 7)}
           maxMonthKey={loadedYearDateBounds?.maxDate.slice(0, 7)}
           todayIsoDate={todayIsoDate}
@@ -3069,6 +3075,7 @@ export default function LeaveSphereAdminPtoPage() {
                     setReviewNote(request.approverNote || "");
                     setIsPendingRequestsModalOpen(false);
                   }}
+                  tone={getLeaveSpherePtoRequestCardTone(request.startDate, request.endDate, todayIsoDate)}
                   employeeName={resolveRequestEmployee(request).employeeName}
                   title={resolveRequestEmployee(request).employeeName}
                   pictureUrl={resolveRequestEmployee(request).pictureUrl}

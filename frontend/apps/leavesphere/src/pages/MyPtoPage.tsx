@@ -84,7 +84,11 @@ import {
   buildLeaveSpherePtoCalendarRequestChipLabel,
   buildLeaveSpherePtoCalendarRequestTooltipLabel,
 } from "@leavesphere/lib/ptoCalendar";
-import { formatMonthDayYearLabel, formatPtoRequestDateRangeLabel } from "@leavesphere/lib/ptoDate";
+import {
+  formatMonthDayYearLabel,
+  formatPtoRequestDateRangeLabel,
+  getLeaveSpherePtoRequestCardTone,
+} from "@leavesphere/lib/ptoDate";
 import { getPtoRequestActionConfig } from "@leavesphere/lib/ptoRequestActionConfig";
 import {
   getLeaveSphereReviewActionConfirmCopy,
@@ -1474,6 +1478,7 @@ export default function LeaveSphereMyPtoPage() {
                 <LeaveSpherePtoRequestCard
                   key={request.id}
                   onClick={() => setSelectedMyRequestId(request.id)}
+                  tone={getLeaveSpherePtoRequestCardTone(request.startDate, request.endDate, todayIsoDate)}
                   employeeName={resolveRequestEmployee(request).employeeName}
                   title={resolveRequestEmployee(request).employeeName}
                   pictureUrl={resolveRequestEmployee(request).pictureUrl}
@@ -1495,6 +1500,7 @@ export default function LeaveSphereMyPtoPage() {
           monthKey={calendarMonth}
           className="self-start"
           onMonthChange={setCalendarMonth}
+          onMonthHeadingClick={loadedYear === currentYear ? () => setCalendarMonth(currentMonthKey) : undefined}
           minMonthKey={loadedYear === null ? undefined : `${loadedYear}-01`}
           maxMonthKey={loadedYear === null ? undefined : `${loadedYear}-12`}
           todayIsoDate={todayIsoDate}

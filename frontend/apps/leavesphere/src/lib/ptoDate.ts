@@ -1,4 +1,6 @@
-import { formatDateInTimeZone } from "@shared/utils/time";
+import { formatDateInTimeZone, shiftIsoDateByDays } from "@shared/utils/time";
+
+export type LeaveSpherePtoRequestCardTone = "past" | "current" | "future";
 
 export function formatMonthDayYearLabel(isoDate: string, timeZone?: string | null): string {
   if (!isoDate) {
@@ -42,4 +44,25 @@ export function formatMonthDayYearRangeLabel(startDate: string, endDate: string,
     return startLabel;
   }
   return `${startLabel} - ${endLabel}`;
+}
+
+export function getLeaveSpherePtoRequestCardTone(
+  startDate: string,
+  endDate: string,
+  todayIsoDate: string,
+): LeaveSpherePtoRequestCardTone {
+  if (!startDate || !endDate || !todayIsoDate) {
+    return "future";
+  }
+
+  if (endDate < todayIsoDate) {
+    return "past";
+  }
+
+  const next7DaysIsoDate = shiftIsoDateByDays(todayIsoDate, 7);
+  if (startDate <= next7DaysIsoDate) {
+    return "current";
+  }
+
+  return "future";
 }

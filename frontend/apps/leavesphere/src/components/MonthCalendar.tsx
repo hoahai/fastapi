@@ -12,6 +12,7 @@ import {
   DialogTitle,
 } from "@tradsphere/components/ui/dialog";
 import { Tooltip } from "@shared/components/actions/Tooltip";
+import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 import { SectionCard } from "@shared/components/layout/SectionCard";
 import { formatDateInTimeZone } from "@shared/utils/time";
 import {
@@ -44,6 +45,7 @@ type LeaveSphereMonthCalendarProps = {
   description?: ReactNode;
   monthKey: string;
   onMonthChange: (nextMonthKey: string) => void;
+  onMonthHeadingClick?: () => void;
   minMonthKey?: string;
   maxMonthKey?: string;
   events: LeaveSphereMonthCalendarEvent[];
@@ -346,6 +348,7 @@ export function LeaveSphereMonthCalendar({
   description,
   monthKey,
   onMonthChange,
+  onMonthHeadingClick,
   minMonthKey,
   maxMonthKey,
   events,
@@ -405,7 +408,22 @@ export function LeaveSphereMonthCalendar({
               className="h-9 w-9"
               disabled={isPreviousMonthDisabled}
             />
-            <p className="min-w-[9rem] text-center text-sm font-semibold text-slate-800">{formatMonthHeading(boundedMonthKey, todayIsoDate)}</p>
+            {onMonthHeadingClick ? (
+              <TooltipTarget text="Click the month name to jump to the current month">
+                <button
+                  type="button"
+                  onClick={onMonthHeadingClick}
+                  className="min-w-[9rem] rounded-md px-2 py-1 text-center text-sm font-semibold text-slate-800 transition-colors hover:bg-slate-100 hover:text-slate-950 focus:outline-none focus-visible:ring-2 focus-visible:ring-sky-400"
+                  aria-label={`Jump to current month, ${formatMonthHeading(boundedMonthKey, todayIsoDate)}`}
+                >
+                  {formatMonthHeading(boundedMonthKey, todayIsoDate)}
+                </button>
+              </TooltipTarget>
+            ) : (
+              <p className="min-w-[9rem] text-center text-sm font-semibold text-slate-800">
+                {formatMonthHeading(boundedMonthKey, todayIsoDate)}
+              </p>
+            )}
             <ActionIconButton
               aria-label="Load next month"
               tooltip="Load next month"
