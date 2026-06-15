@@ -347,6 +347,9 @@ export function LeaveSpherePtoRequestDetailModal({
             value={form.startDate}
             label="Start date"
             onChange={(value) => {
+              if (!isWithinRange(value, allowedDateRange?.minDate, allowedDateRange?.maxDate)) {
+                return;
+              }
               setForm((current) => ({
                 ...current,
                 startDate: value,
@@ -357,6 +360,7 @@ export function LeaveSpherePtoRequestDetailModal({
             disabled={saving || readOnly}
             minDate={allowedDateRange?.minDate}
             maxDate={allowedDateRange?.maxDate}
+            restrictMonthNavigation={Boolean(allowedDateRange)}
           />
         </label>
 
@@ -366,11 +370,17 @@ export function LeaveSpherePtoRequestDetailModal({
             id="pto-detail-end-date"
             value={form.endDate}
             label="End date"
-            onChange={(value) => setForm((current) => ({ ...current, endDate: value }))}
+            onChange={(value) => {
+              if (!isWithinRange(value, allowedDateRange?.minDate, allowedDateRange?.maxDate)) {
+                return;
+              }
+              setForm((current) => ({ ...current, endDate: value }));
+            }}
             disabled={saving || readOnly}
             minDate={endDateMin}
             maxDate={allowedDateRange?.maxDate}
             openCalendarSignal={openEndDatePickerSignal}
+            restrictMonthNavigation={Boolean(allowedDateRange)}
           />
         </label>
       </div>

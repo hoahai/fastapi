@@ -1690,6 +1690,7 @@ export default function LeaveSphereMyPtoPage() {
         }}
         onClose={() => setSelectedMyRequestId(null)}
         onSave={selectedMyRequestActionConfig?.canSubmit ? handleSaveMyRequestDetail : undefined}
+        allowedDateRange={loadedYearDateBounds ?? undefined}
         details={selectedMyRequest ? (
           <div className="grid gap-2 text-sm text-slate-700 sm:grid-cols-2">
             <p>

@@ -108,6 +108,24 @@ function shiftMonth(year: number, month: number, delta: number): { year: number;
   return { year: date.getUTCFullYear(), month: date.getUTCMonth() + 1 };
 }
 
+function monthHasSelectableDates(
+  year: number,
+  month: number,
+  minDate?: string,
+  maxDate?: string,
+): boolean {
+  const monthStart = toIsoDate(year, month, 1);
+  const monthEnd = toIsoDate(year, month, new Date(Date.UTC(year, month, 0)).getUTCDate());
+
+  if (minDate && monthEnd < minDate) {
+    return false;
+  }
+  if (maxDate && monthStart > maxDate) {
+    return false;
+  }
+  return true;
+}
+
 function buildMondayFirstCalendarDays(year: number, month: number): CalendarDay[] {
   const firstDay = new Date(Date.UTC(year, month - 1, 1)).getUTCDay();
   const startOffset = (firstDay + 6) % 7;
@@ -158,6 +176,7 @@ export function DateInputField({
   minDate,
   maxDate,
   openCalendarSignal,
+  restrictMonthNavigation = false,
 }: {
   id: string;
   value: string;
@@ -167,6 +186,7 @@ export function DateInputField({
   minDate?: string;
   maxDate?: string;
   openCalendarSignal?: number;
+  restrictMonthNavigation?: boolean;
 }) {
   const containerRef = useRef<HTMLDivElement | null>(null);
   const calendarPopoverRef = useRef<HTMLDivElement | null>(null);
@@ -303,6 +323,13 @@ export function DateInputField({
     setDisplayYear(next.year);
   }
 
+  const previousMonth = useMemo(() => shiftMonth(displayYear, displayMonth, -1), [displayMonth, displayYear]);
+  const nextMonth = useMemo(() => shiftMonth(displayYear, displayMonth, 1), [displayMonth, displayYear]);
+  const isPreviousMonthDisabled = restrictMonthNavigation
+    && !monthHasSelectableDates(previousMonth.year, previousMonth.month, minDate, maxDate);
+  const isNextMonthDisabled = restrictMonthNavigation
+    && !monthHasSelectableDates(nextMonth.year, nextMonth.month, minDate, maxDate);
+
   return (
     <div ref={containerRef} className="relative">
       <TooltipTarget text={`Scheduling date in ${TRADSPHERE_BROADCAST_TIMEZONE}. Calendar starts Monday.`}>
@@ -340,7 +367,8 @@ export function DateInputField({
                   <button
                     type="button"
                     onClick={handlePreviousMonth}
-                    className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-slate-200 text-slate-700 transition-colors hover:bg-slate-100"
+                    disabled={isPreviousMonthDisabled}
+                    className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-slate-200 text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent"
                     aria-label="Show previous month"
                   >
                     {"<"}
@@ -349,7 +377,8 @@ export function DateInputField({
                   <button
                     type="button"
                     onClick={handleNextMonth}
-                    className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-slate-200 text-slate-700 transition-colors hover:bg-slate-100"
+                    disabled={isNextMonthDisabled}
+                    className="inline-flex h-8 w-8 cursor-pointer items-center justify-center rounded-md border border-slate-200 text-slate-700 transition-colors hover:bg-slate-100 disabled:cursor-not-allowed disabled:opacity-35 disabled:hover:bg-transparent"
                     aria-label="Show next month"
                   >
                     {">"}

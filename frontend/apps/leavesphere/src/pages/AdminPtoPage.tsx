@@ -3050,44 +3050,49 @@ export default function LeaveSphereAdminPtoPage() {
           setIsPendingRequestsModalOpen(open);
         }}
       >
-        <DialogContent className="max-w-3xl">
-          <DialogClose asChild aria-label="Close pending requests modal">
-            <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
-          </DialogClose>
-          <DialogHeader className="pr-8">
-            <DialogTitle>Pending requests</DialogTitle>
-            <DialogDescription>
-              Select a pending PTO request to open its review modal.
-            </DialogDescription>
-          </DialogHeader>
+        <DialogContent className="max-w-3xl flex max-h-[90vh] flex-col overflow-visible rounded-xl bg-white p-6">
+          <ModalShell
+            className="min-h-0 flex-1"
+            closeButton={(
+              <DialogClose asChild aria-label="Close pending requests modal">
+                <ModalCloseButton icon={<X className="size-4" />} />
+              </DialogClose>
+            )}
+          >
+            <DialogHeader className="pr-8">
+              <DialogTitle>Pending requests</DialogTitle>
+              <DialogDescription>
+                Select a pending PTO request to open its review modal.
+              </DialogDescription>
+            </DialogHeader>
 
-          <div className="mt-4 max-h-[60vh] space-y-2 overflow-y-auto pr-1 pt-1.5">
-            {pendingRequests.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
-                No pending PTO requests.
-              </div>
-            ) : (
-              pendingRequests.map((request) => (
-                <LeaveSpherePtoRequestCard
-                  key={request.id}
+            <div className="mt-4 max-h-[60vh] space-y-2 overflow-y-auto pr-1 pt-1.5">
+              {pendingRequests.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
+                  No pending PTO requests.
+                </div>
+              ) : (
+                pendingRequests.map((request) => (
+                  <LeaveSpherePtoRequestCard
+                    key={request.id}
                   onClick={() => {
                     setSelectedRequestId(request.id);
                     setReviewNote(request.approverNote || "");
-                    setIsPendingRequestsModalOpen(false);
                   }}
-                  tone={getLeaveSpherePtoRequestCardTone(request.startDate, request.endDate, todayIsoDate)}
-                  employeeName={resolveRequestEmployee(request).employeeName}
-                  title={resolveRequestEmployee(request).employeeName}
-                  pictureUrl={resolveRequestEmployee(request).pictureUrl}
-                  typeChip={<LeaveSpherePtoTypeChip type={request.type} label={requestTypeLabel(request.type)} />}
-                  statusChip={<LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} />}
-                  dateLabel={formatPtoRequestDateRangeLabel(request.startDate, request.endDate, tenantTimeZone)}
-                  detailLabel={request.description}
-                  hoursLabel={formatHoursLabel(request.hours)}
-                />
-              ))
-            )}
-          </div>
+                    tone={getLeaveSpherePtoRequestCardTone(request.startDate, request.endDate, todayIsoDate)}
+                    employeeName={resolveRequestEmployee(request).employeeName}
+                    title={resolveRequestEmployee(request).employeeName}
+                    pictureUrl={resolveRequestEmployee(request).pictureUrl}
+                    typeChip={<LeaveSpherePtoTypeChip type={request.type} label={requestTypeLabel(request.type)} />}
+                    statusChip={<LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} />}
+                    dateLabel={formatPtoRequestDateRangeLabel(request.startDate, request.endDate, tenantTimeZone)}
+                    detailLabel={request.description}
+                    hoursLabel={formatHoursLabel(request.hours)}
+                  />
+                ))
+              )}
+            </div>
+          </ModalShell>
         </DialogContent>
       </Dialog>
 
@@ -3115,6 +3120,7 @@ export default function LeaveSphereAdminPtoPage() {
           setPendingReviewAction(null);
         }}
         onSave={selectedRequestActionConfig?.canSubmit ? handleSaveRequestDetail : undefined}
+        allowedDateRange={loadedYearDateBounds ?? undefined}
         details={selectedRequest ? (
           <div className="grid gap-2 text-sm text-slate-700 sm:grid-cols-2">
             <p className="min-w-0">
