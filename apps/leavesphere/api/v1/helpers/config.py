@@ -34,6 +34,8 @@ _DB_KEY_ALIASES = {
     "holidays": "HOLIDAYS",
 }
 
+_EMPLOYEE_EMAIL_MAP_CONFIG_KEY = "EMPLOYEE_EMAIL_MAP"
+
 _VALIDATED_TENANTS: set[str] = set()
 _VALIDATION_LOCK = threading.Lock()
 
@@ -59,11 +61,15 @@ def _get_scoped_env(key: str) -> str | None:
     )
 
 
+def _normalize_email(value: object | None) -> str:
+    return str(value or "").strip().lower()
+
+
 def _has_leavesphere_config() -> bool:
     app_section = str(get_env("leavesphere") or "").strip()
     if app_section:
         return True
-    for key in ("DB_TABLES", "CACHE", "ENABLED"):
+    for key in ("DB_TABLES", "CACHE", "ENABLED", _EMPLOYEE_EMAIL_MAP_CONFIG_KEY):
         raw = _get_scoped_env(key)
         if raw is not None and str(raw).strip() != "":
             return True
@@ -94,6 +100,51 @@ def get_db_tables() -> dict[str, str]:
     return resolved
 
 
+def get_employee_email_map() -> dict[str, str]:
+    raw = _get_scoped_env(_EMPLOYEE_EMAIL_MAP_CONFIG_KEY)
+    if raw is None or str(raw).strip() == "":
+        return {}
+
+    parsed = _parse_raw_value(str(raw), "LEAVESPHERE_EMPLOYEE_EMAIL_MAP", dict)
+    resolved: dict[str, str] = {}
+    for raw_login_email, raw_employee_email in parsed.items():
+        login_email = _normalize_email(raw_login_email)
+        employee_email = _normalize_email(raw_employee_email)
+        if not login_email or "@" not in login_email:
+            raise TenantConfigValidationError(
+                app_name=APP_NAME,
+                invalid=[f"leavesphere.{_EMPLOYEE_EMAIL_MAP_CONFIG_KEY}.{raw_login_email}"],
+            )
+        if not employee_email or "@" not in employee_email:
+            raise TenantConfigValidationError(
+                app_name=APP_NAME,
+                invalid=[f"leavesphere.{_EMPLOYEE_EMAIL_MAP_CONFIG_KEY}.{raw_login_email}"],
+            )
+        resolved[login_email] = employee_email
+    return resolved
+
+
+def resolve_employee_email(value: object | None) -> str:
+    email = _normalize_email(value)
+    if not email:
+        return ""
+    return get_employee_email_map().get(email, email)
+
+
+def resolve_employee_email_candidates(*values: object | None) -> list[str]:
+    candidates: list[str] = []
+    email_map = get_employee_email_map()
+    for value in values:
+        email = _normalize_email(value)
+        if not email:
+            continue
+        mapped_email = email_map.get(email)
+        for candidate in (mapped_email, email):
+            if candidate and candidate not in candidates:
+                candidates.append(candidate)
+    return candidates
+
+
 def validate_tenant_config(tenant_id: str | None = None) -> None:
     tenant_id = tenant_id or get_tenant_id()
     if not tenant_id:
@@ -111,6 +162,7 @@ def validate_tenant_config(tenant_id: str | None = None) -> None:
         else:
             try:
                 get_db_tables()
+                get_employee_email_map()
             except TenantConfigValidationError as exc:
                 missing.extend(exc.missing)
                 invalid.extend(exc.invalid)

@@ -4,6 +4,7 @@ from unittest.mock import patch
 
 from apps.leavesphere.api.v1.helpers import myPto
 from apps.leavesphere.api.v1.helpers import dbQueries
+from apps.leavesphere.api.v1.helpers import config
 from shared.auth.types import AuthPrincipal
 
 
@@ -94,6 +95,24 @@ class LeaveSphereMyPtoIdentityTests(unittest.TestCase):
             employee = myPto._resolve_current_employee(request)
 
         self.assertEqual(employee["id"], "emp-identity")
+
+    def test_resolve_current_employee_uses_login_email_mapping_before_fallbacks(self):
+        request = SimpleNamespace(
+            headers={},
+            state=SimpleNamespace(
+                auth_principal=AuthPrincipal(user_id="identity-123", email="login@example.com", raw_user={})
+            ),
+        )
+        rows = [
+            {"id": "emp-mapped", "active": 1, "email": "employee@example.com"},
+        ]
+
+        with patch.object(config, "get_app_scoped_env", return_value="{'login@example.com': 'employee@example.com'}"), patch.object(
+            myPto, "get_employees_by_email", side_effect=lambda *, email: rows if email == "employee@example.com" else []
+        ), patch.object(myPto, "get_employees_by_identity_key", return_value=[]):
+            employee = myPto._resolve_current_employee(request)
+
+        self.assertEqual(employee["id"], "emp-mapped")
 
     def test_resolve_current_employee_allows_loads_for_inactive_rows(self):
         request = SimpleNamespace(

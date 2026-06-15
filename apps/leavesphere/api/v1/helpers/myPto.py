@@ -19,6 +19,7 @@ from apps.leavesphere.api.v1.helpers.dbQueries import (
     reject_pending_pto_request,
     update_pto_transaction,
 )
+from apps.leavesphere.api.v1.helpers.config import resolve_employee_email_candidates
 from shared.auth.dependencies import get_auth_principal, get_tenant_access
 from shared.db import run_transaction
 
@@ -238,22 +239,17 @@ def _resolve_current_principal_email(request) -> str:
 
 
 def _resolve_current_employee_candidates(request) -> list[str]:
-    candidates: list[str] = []
     principal = get_auth_principal(request)
     if principal is None:
-        return candidates
+        return []
 
     legacy_user_name = _normalize_text(getattr(request, "headers", {}).get("x-user-name"))
-    for value in (
+    return resolve_employee_email_candidates(
         principal.email,
         _extract_email_from_auth_payload(principal.raw_user),
         _normalize_text(getattr(request, "headers", {}).get("x-user-email")),
         legacy_user_name if "@" in legacy_user_name else "",
-    ):
-        normalized = _normalize_email(value)
-        if normalized and normalized not in candidates:
-            candidates.append(normalized)
-    return candidates
+    )
 
 
 def _resolve_current_employee(request, *, require_active: bool = False) -> dict:

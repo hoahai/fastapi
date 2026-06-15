@@ -31,11 +31,14 @@ from apps.leavesphere.api.v1.helpers.myPto import (
     _normalize_text,
     _normalize_year,
     _resolve_current_employee,
-    _resolve_current_principal_email,
     _resolve_default_action_code,
     _resolve_primary_manager_id,
     _split_ui_type_tokens,
     _to_date_string,
+)
+from apps.leavesphere.api.v1.helpers.config import (
+    resolve_employee_email,
+    resolve_employee_email_candidates,
 )
 from apps.leavesphere.api.v1.helpers.ptoActions import create_pto_action, modify_pto_action
 from apps.leavesphere.api.v1.helpers.ptoTypes import create_pto_type, modify_pto_type
@@ -430,7 +433,7 @@ def _build_synthetic_current_employee(request) -> dict:
         principal_id = _normalize_text(getattr(principal, "user_id", ""))
 
     header_email = _normalize_email(getattr(request, "headers", {}).get("x-user-email"))
-    current_email = principal_email or header_email
+    current_email = resolve_employee_email(principal_email or header_email)
     current_name = current_email.split("@", 1)[0].replace(".", " ").replace("_", " ").strip() if current_email else ""
     current_name = " ".join(part.capitalize() for part in current_name.split() if part) or "LeaveSphere Admin"
     identity_key, synthetic_email = _make_synthetic_identity(current_name)
@@ -457,21 +460,14 @@ def _get_holiday_rows() -> list[dict]:
 def _resolve_current_employee_from_rows(request, employees: list[dict]) -> dict:
     principal = get_auth_principal(request)
 
-    candidate_emails: list[str] = []
-    principal_values = (
+    candidate_emails = resolve_employee_email_candidates(
         getattr(principal, "email", None),
         _extract_email_from_auth_payload(getattr(principal, "raw_user", None)) if principal is not None else "",
-    )
-    for value in (
-        *principal_values,
         _normalize_text(getattr(request, "headers", {}).get("x-user-email")),
         _normalize_text(getattr(request, "headers", {}).get("x-user-name"))
         if "@" in _normalize_text(getattr(request, "headers", {}).get("x-user-name"))
         else "",
-    ):
-        normalized = _normalize_email(value)
-        if normalized and normalized not in candidate_emails:
-            candidate_emails.append(normalized)
+    )
 
     identity_key = _normalize_text(getattr(principal, "user_id", "")).lower() if principal is not None else ""
     candidate_identity_keys = [identity_key] if identity_key else []

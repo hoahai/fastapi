@@ -9,6 +9,6 @@
     "build:all": "npm --prefix frontend run build:all",
     "sync-ui:tradsphere": "mkdir -p apps/tradsphere/ui_dist && rm -rf apps/tradsphere/ui_dist/assets apps/tradsphere/ui_dist/index.html && cp -R frontend/apps/tradsphere/dist/* apps/tradsphere/ui_dist/",
     "sync-ui:all": "bash -lc 'for name in tradsphere home shiftzy; do src=\"frontend/apps/$name/dist\"; dst=\"apps/$name/ui_dist\"; if [ ! -d \"$src\" ] || [ -z \"$(ls -A \"$src\" 2>/dev/null)\" ]; then echo \"==> skip $name (no dist)\"; continue; fi; echo \"==> sync $name\"; mkdir -p \"$dst\"; rm -rf \"$dst/assets\" \"$dst/index.html\"; cp -R \"$src\"/* \"$dst\"/ || exit 1; done'",
-    "serve:api": "uvicorn main:app --reload --host 0.0.0.0 --port 8000"
+    "serve:api": ".venv/bin/python -m uvicorn main:app --reload --host 0.0.0.0 --port 8000"
   }
 }

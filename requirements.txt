@@ -1,6 +1,6 @@
 fastapi==0.128.0
-uvicorn==0.40.0
-mysql-connector-python==9.5.0
+uvicorn==0.39.0
+mysql-connector-python==9.4.0
 datetime
 pydantic>=2.0,<3
 pytz==2025.2
@@ -19,5 +19,5 @@ openpyxl==3.1.5
 pyyaml==6.0.3
 fpdf2==2.7.9
 watchfiles==1.1.1
-python-multipart==0.0.26
+python-multipart==0.0.20
 cloudinary==1.44.1

@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from apps.leavesphere.api.v1.helpers import leaveManagement
 from apps.leavesphere.api.v1.helpers import myPto
+from apps.leavesphere.api.v1.helpers import config
 from shared.auth.types import AuthPrincipal, TenantAccessProfile
 
 
@@ -157,6 +158,38 @@ class LeaveManagementBackendTests(unittest.TestCase):
         self.assertEqual(balance["usedHours"], 8.0)
         self.assertEqual(balance["scheduledHours"], 4.0)
         self.assertEqual(balance["remainingHours"], 28.0)
+
+    def test_load_workspace_uses_login_email_mapping_for_current_employee(self):
+        request = self._build_request(email="login@example.com")
+        employees = [
+            {
+                "id": "emp-1",
+                "firstName": "Hai",
+                "lastName": "Truong",
+                "email": "employee@example.com",
+                "title": "Director",
+                "region": "US",
+                "active": 1,
+            },
+        ]
+
+        with patch.object(config, "get_app_scoped_env", return_value="{'login@example.com': 'employee@example.com'}"), patch.object(
+            leaveManagement, "get_employees", return_value=employees
+        ), patch.object(
+            leaveManagement, "get_employee_managers", return_value=[]
+        ), patch.object(
+            leaveManagement, "get_pto_transactions", return_value=[]
+        ), patch.object(
+            leaveManagement, "get_holidays", return_value=[]
+        ), patch.object(
+            myPto, "get_pto_types", return_value=[{"code": "VAC", "name": "Vacation", "listingOrder": 1, "usaDefaultHour": 120, "phlDefaultHour": 0}]
+        ), patch.object(
+            myPto, "get_pto_actions", return_value=[{"code": "LOAD", "name": "Load"}, {"code": "REQUEST", "name": "Request"}]
+        ):
+            workspace = leaveManagement.load_leave_management_workspace(request=request, year=2026)
+
+        self.assertEqual(workspace["currentUserEmail"], "employee@example.com")
+        self.assertEqual(workspace["currentUserName"], "Hai Truong")
 
     def test_load_workspace_normalizes_holiday_dates_before_year_filtering(self):
         request = self._build_request()

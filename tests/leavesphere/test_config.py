@@ -34,6 +34,40 @@ class LeaveSphereConfigTests(unittest.TestCase):
         ):
             config.validate_tenant_config()
 
+    def test_validate_tenant_config_accepts_employee_email_map(self):
+        with patch.object(config, "get_tenant_id", return_value="taaa"), patch.object(
+            config, "_has_leavesphere_config", return_value=True
+        ), patch.object(config, "get_db_tables", return_value=dict(config._DEFAULT_DB_TABLES)), patch.object(
+            config,
+            "get_employee_email_map",
+            return_value={"login@example.com": "employee@example.com"},
+        ):
+            config.validate_tenant_config()
+
+    def test_get_employee_email_map_parses_and_normalizes_aliases(self):
+        with patch.object(
+            config,
+            "get_app_scoped_env",
+            return_value="{'Login@Example.com': 'Employee@Example.com'}",
+        ):
+            self.assertEqual(
+                config.get_employee_email_map(),
+                {"login@example.com": "employee@example.com"},
+            )
+
+    def test_validate_tenant_config_rejects_invalid_employee_email_map(self):
+        with patch.object(config, "get_tenant_id", return_value="taaa"), patch.object(
+            config, "_has_leavesphere_config", return_value=True
+        ), patch.object(config, "get_db_tables", return_value=dict(config._DEFAULT_DB_TABLES)), patch.object(
+            config,
+            "get_app_scoped_env",
+            return_value="{'Login@Example.com': 'not-an-email'}",
+        ):
+            with self.assertRaises(TenantConfigValidationError) as exc:
+                config.validate_tenant_config()
+
+        self.assertIn("leavesphere.EMPLOYEE_EMAIL_MAP.Login@Example.com", exc.exception.invalid)
+
 
 if __name__ == "__main__":
     unittest.main()
