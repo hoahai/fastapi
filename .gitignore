@@ -68,7 +68,7 @@ apps/tradsphere/ui_dist/
 # Local Artifacts
 # ------------------
 checkpoints/
-docs/
+.tasteSkills/
 .codegraph/
 
 # Python / pytest

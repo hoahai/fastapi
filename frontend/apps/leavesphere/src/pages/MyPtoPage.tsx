@@ -56,6 +56,7 @@ import {
   LeaveSpherePtoStatusChip,
   LeaveSpherePtoToneChip,
 } from "@leavesphere/components/PtoStatusChip";
+import { LeaveSpherePtoTypeChip } from "@leavesphere/components/PtoTypeChip";
 import {
   LeaveSpherePtoRequestDetailModal,
   type LeaveSpherePtoRequestFormState,
@@ -1476,7 +1477,7 @@ export default function LeaveSphereMyPtoPage() {
                   dateLabel={formatPtoRequestDateRangeLabel(request.startDate, request.endDate, tenantTimeZone)}
                   detailLabel={request.description}
                   hoursLabel={formatHoursLabel(request.hours)}
-                  submittedLabel={`Submitted ${formatMonthDayYearLabel(request.submittedAt, tenantTimeZone)}`}
+                  typeChip={<LeaveSpherePtoTypeChip type={request.type} label={requestTypeLabel(request.type)} />}
                   statusChip={<LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} />}
                 />
               ))

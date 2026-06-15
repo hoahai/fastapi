@@ -2618,7 +2618,6 @@ export default function LeaveSphereAdminPtoPage() {
                   dateLabel={formatPtoRequestDateRangeLabel(request.startDate, request.endDate, tenantTimeZone)}
                   detailLabel={request.description}
                   hoursLabel={formatHoursLabel(request.hours)}
-                  submittedLabel={`Submitted ${formatMonthDayYearLabel(request.submittedAt, tenantTimeZone)}`}
                 />
               ))
             )}
@@ -2630,15 +2629,6 @@ export default function LeaveSphereAdminPtoPage() {
         description="Shared request data for the calendar and history table. Load older months to expand the same cached set."
         actions={(
           <div className="flex items-center gap-2">
-            <Button
-              variant="outline"
-              onClick={() => {
-                handleLoadMoreRequests();
-              }}
-              disabled={isInitializing || isRefreshing || isMutating}
-            >
-              Load older history
-            </Button>
             <ActionIconButton
               tooltip="Create Request"
               onClick={() => {
@@ -2721,6 +2711,17 @@ export default function LeaveSphereAdminPtoPage() {
             dateRangeColumnClassName="w-[18rem] whitespace-nowrap px-3 py-2.5"
             descriptionColumnClassName="px-3 py-2.5 text-slate-600"
           />
+          <div className="flex justify-end">
+            <Button
+              variant="outline"
+              onClick={() => {
+                handleLoadMoreRequests();
+              }}
+              disabled={isInitializing || isRefreshing || isMutating}
+            >
+              Load older history
+            </Button>
+          </div>
         </SectionCard>
       </div>
     );
