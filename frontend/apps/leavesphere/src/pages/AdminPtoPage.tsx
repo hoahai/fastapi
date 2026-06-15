@@ -491,10 +491,10 @@ function requestIsOut(request: LeaveSpherePtoRequest): boolean {
   return request.status === "approved" || request.status === "pending";
 }
 
-function requestOverlapsYear(request: LeaveSpherePtoRequest, year: number): boolean {
+function requestIsWithinYear(request: LeaveSpherePtoRequest, year: number): boolean {
   const yearStart = `${year}-01-01`;
   const yearEnd = `${year}-12-31`;
-  return request.startDate <= yearEnd && request.endDate >= yearStart;
+  return request.startDate >= yearStart && request.endDate <= yearEnd;
 }
 
 function filterWorkspaceByYear(workspace: LeaveSphereAdminWorkspaceData, year: number): LeaveSphereAdminWorkspaceData {
@@ -506,7 +506,7 @@ function filterWorkspaceByYear(workspace: LeaveSphereAdminWorkspaceData, year: n
       transactions: workspace.balanceTransactions,
       year,
     }),
-    requests: workspace.requests.filter((item) => item.status === "pending" || requestOverlapsYear(item, year)),
+    requests: workspace.requests.filter((item) => requestIsWithinYear(item, year)),
     holidays: workspace.holidays.filter((item) => item.date.startsWith(yearPrefix)),
   };
 }
@@ -2506,7 +2506,7 @@ export default function LeaveSphereAdminPtoPage() {
           </div>
         </div>
 
-        <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
+        <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1 pt-1.5">
           {filteredRecentRequests.length === 0 ? (
             <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
               {recentRequests.length === 0
@@ -3061,7 +3061,7 @@ export default function LeaveSphereAdminPtoPage() {
             </DialogDescription>
           </DialogHeader>
 
-          <div className="mt-4 max-h-[60vh] space-y-2 overflow-y-auto pr-1">
+          <div className="mt-4 max-h-[60vh] space-y-2 overflow-y-auto pr-1 pt-1.5">
             {pendingRequests.length === 0 ? (
               <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
                 No pending PTO requests.

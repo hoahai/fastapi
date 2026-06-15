@@ -341,17 +341,17 @@ function managerRequestMatchesSearch(request: LeaveSpherePtoRequest, keyword: st
   return tokens.some((item) => asString(item).toLowerCase().includes(keyword));
 }
 
-function requestOverlapsYear(request: LeaveSpherePtoRequest, year: number): boolean {
+function requestIsWithinYear(request: LeaveSpherePtoRequest, year: number): boolean {
   const yearStart = `${year}-01-01`;
   const yearEnd = `${year}-12-31`;
-  return request.startDate <= yearEnd && request.endDate >= yearStart;
+  return request.startDate >= yearStart && request.endDate <= yearEnd;
 }
 
 function filterWorkspaceByYear(workspace: LeaveSpherePtoWorkspaceData, year: number): LeaveSpherePtoWorkspaceData {
   const yearPrefix = `${year}-`;
   return {
     ...workspace,
-    requests: workspace.requests.filter((item) => requestOverlapsYear(item, year)),
+    requests: workspace.requests.filter((item) => requestIsWithinYear(item, year)),
     holidays: workspace.holidays.filter((item) => item.date.startsWith(yearPrefix)),
   };
 }
@@ -1468,7 +1468,7 @@ export default function LeaveSphereMyPtoPage() {
             </div>
           </div>
 
-          <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1">
+          <div className="min-h-0 flex-1 space-y-1.5 overflow-y-auto pr-1 pt-1.5">
             {myRequests.length === 0 ? (
               <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
                 No PTO requests yet.

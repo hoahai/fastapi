@@ -39,7 +39,7 @@ export function LeaveSpherePtoRequestCard({
   return (
     <button
       type="button"
-      className={`group w-full rounded-2xl border px-3.5 py-2.5 text-left shadow-sm transition-all duration-200 hover:-translate-y-0.5 focus-visible:outline-none focus-visible:ring-2 ${CARD_TONE_CLASS_NAMES[tone]} ${className ?? ""}`.trim()}
+      className={`group relative w-full rounded-2xl border px-3.5 py-2.5 text-left shadow-sm transition-all duration-200 hover:z-10 hover:-translate-y-0.5 hover:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 ${CARD_TONE_CLASS_NAMES[tone]} ${className ?? ""}`.trim()}
       onClick={onClick}
     >
       <div className="flex items-start gap-2">
