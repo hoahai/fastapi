@@ -698,6 +698,7 @@ export default function LeaveSphereAdminPtoPage() {
   const [createForm, setCreateForm] = useState<CreateRequestForm>(EMPTY_CREATE_FORM);
   const [pendingCreateRequest, setPendingCreateRequest] = useState<PendingCreateRequest | null>(null);
   const [isCreateDecisionDialogOpen, setIsCreateDecisionDialogOpen] = useState(false);
+  const createRequestEmployeeIdRef = useRef<string>("");
 
   const [selectedRequestId, setSelectedRequestId] = useState<string | null>(null);
   const [selectedHolidayId, setSelectedHolidayId] = useState<string | null>(null);
@@ -1708,6 +1709,7 @@ export default function LeaveSphereAdminPtoPage() {
       ? todayIsoDate
       : loadedYearDateBounds.minDate;
     const defaultEmployeeId = employeeOptions[0]?.value || "";
+    createRequestEmployeeIdRef.current = defaultEmployeeId;
     const defaultType = getEmployeePtoTypeOptions(defaultEmployeeId)[0]?.value || "";
     setCreateForm({
       ...EMPTY_CREATE_FORM,
@@ -1814,7 +1816,7 @@ export default function LeaveSphereAdminPtoPage() {
       description: string;
     };
   }) => {
-    const employeeId = asString(createForm.employeeId);
+    const employeeId = asString(createRequestEmployeeIdRef.current) || asString(createForm.employeeId);
     if (!employeeId) {
       toast.error("Create failed", "Employee is required.");
       return false;
@@ -1847,32 +1849,16 @@ export default function LeaveSphereAdminPtoPage() {
         payload: {
           employeeId: nextPendingCreateRequest.employeeId,
           ...nextPendingCreateRequest.payload,
+          approveImmediately,
         },
       });
       applyWorkspace(createdResult.workspace);
-
-      if (approveImmediately) {
-        const createdRequestId = createdResult.createdRequestId || createdResult.workspace.requests[0]?.id || null;
-        if (createdRequestId) {
-          const approvedResult = await reviewLeaveSphereAdminPtoRequest({
-            requestJson,
-            workspaceKey,
-            currentUserId,
-          currentUserName,
-          payload: {
-            requestId: createdRequestId,
-            approve: true,
-            approverNote: "",
-          },
-        });
-          applyWorkspace(approvedResult.workspace);
-          toast.success("Request approved", "PTO request was created and approved.");
-        } else {
-          toast.error("Approval failed", "The request was created, but the approval target could not be resolved.");
-        }
-      } else {
-        toast.success("Request created", "PTO request was created on behalf of the selected employee.");
-      }
+      toast.success(
+        approveImmediately ? "Request approved" : "Request created",
+        approveImmediately
+          ? "PTO request was created and approved."
+          : "PTO request was created on behalf of the selected employee.",
+      );
       setIsCreateModalOpen(false);
       setCreateForm(EMPTY_CREATE_FORM);
     } catch {
@@ -2903,6 +2889,7 @@ export default function LeaveSphereAdminPtoPage() {
             <AppDropdown
               value={createForm.employeeId}
               onValueChange={(value) => {
+                createRequestEmployeeIdRef.current = value;
                 setCreateForm((current) => ({
                   ...current,
                   employeeId: value,
@@ -2924,15 +2911,17 @@ export default function LeaveSphereAdminPtoPage() {
         }
       }}>
         <DialogContent className="max-w-lg">
-          <DialogClose asChild aria-label="Close submit choice dialog" disabled={isMutating}>
-            <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
-          </DialogClose>
-          <DialogHeader className="pr-8">
-            <DialogTitle>Submit PTO Request?</DialogTitle>
-            <DialogDescription>
-              Choose whether this admin-created request should be submitted as pending or submitted and approved immediately.
-            </DialogDescription>
-          </DialogHeader>
+          <div className="flex items-start justify-between gap-4">
+            <DialogHeader className="min-w-0 flex-1">
+              <DialogTitle>Submit PTO Request?</DialogTitle>
+              <DialogDescription>
+                Choose whether this admin-created request should be submitted as pending or submitted and approved immediately.
+              </DialogDescription>
+            </DialogHeader>
+            <DialogClose asChild aria-label="Close submit choice dialog" disabled={isMutating}>
+              <ModalCloseButton icon={<X className="size-4" />} className="mt-0.5 shrink-0" />
+            </DialogClose>
+          </div>
 
           <DialogFooter className="gap-2 sm:gap-2">
             <Button

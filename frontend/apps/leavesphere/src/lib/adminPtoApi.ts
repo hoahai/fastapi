@@ -72,6 +72,7 @@ export type LeaveSphereAdminCreateRequestInput = {
   endDate: string;
   hours: number;
   description: string;
+  approveImmediately?: boolean;
 };
 
 export type LeaveSphereAdminReviewRequestInput = {

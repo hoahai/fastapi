@@ -308,7 +308,13 @@ def _require_direct_manager(*, employee_id: str, manager_id: str) -> None:
         raise ValueError("Only a direct manager can approve or reject this PTO request")
 
 
-def approve_request(*, request, transaction_id: str, approverNote: object | None = None) -> dict:
+def approve_request(
+    *,
+    request,
+    transaction_id: str,
+    approverNote: object | None = None,
+    force_admin_override: bool = False,
+) -> dict:
     normalized_id = str(transaction_id or "").strip()
     if not normalized_id:
         raise ValueError("transaction_id is required")
@@ -317,7 +323,7 @@ def approve_request(*, request, transaction_id: str, approverNote: object | None
     if transaction is None:
         raise ValueError("PTO transaction not found")
 
-    admin_override = _has_admin_override(request) or _is_legacy_compat_bypass(request)
+    admin_override = force_admin_override or _has_admin_override(request) or _is_legacy_compat_bypass(request)
     actor_employee_id = _resolve_actor_employee_id(request, allow_unmapped=admin_override)
     if not admin_override:
         employee_id = str(transaction.get("employeeId") or "").strip()
@@ -331,7 +337,13 @@ def approve_request(*, request, transaction_id: str, approverNote: object | None
     return {"id": normalized_id, "status": "Approved", "updated": updated}
 
 
-def reject_request(*, request, transaction_id: str, approverNote: object | None = None) -> dict:
+def reject_request(
+    *,
+    request,
+    transaction_id: str,
+    approverNote: object | None = None,
+    force_admin_override: bool = False,
+) -> dict:
     normalized_id = str(transaction_id or "").strip()
     if not normalized_id:
         raise ValueError("transaction_id is required")
@@ -340,7 +352,7 @@ def reject_request(*, request, transaction_id: str, approverNote: object | None 
     if transaction is None:
         raise ValueError("PTO transaction not found")
 
-    admin_override = _has_admin_override(request) or _is_legacy_compat_bypass(request)
+    admin_override = force_admin_override or _has_admin_override(request) or _is_legacy_compat_bypass(request)
     actor_employee_id = _resolve_actor_employee_id(request, allow_unmapped=admin_override)
     if not admin_override:
         employee_id = str(transaction.get("employeeId") or "").strip()

@@ -42,6 +42,7 @@ class LeaveManagementRequestCreateRequest(_LeaveSphereModel):
     year: int | str | None = None
     ptoTypeCode: str | None = None
     calendarId: str | None = None
+    approveImmediately: bool | None = None
 
 
 class LeaveManagementRequestUpdateRequest(_LeaveSphereModel):
@@ -179,6 +180,18 @@ def create_leave_management_request_route(
           "description": "Family trip"
         }
 
+    Example request (approve immediately):
+        POST /api/leavesphere/v1/admin/pto/requests
+        {
+          "employeeId": "emp-123",
+          "type": "vacation",
+          "startDate": "2026-06-10",
+          "endDate": "2026-06-10",
+          "hours": 8,
+          "description": "Family trip",
+          "approveImmediately": true
+        }
+
     Example response:
         {
           "meta": {"timestamp": "2026-05-29T10:00:00+07:00", "duration_ms": 2},
@@ -193,8 +206,10 @@ def create_leave_management_request_route(
 
     Requirements:
         - Requires leavesphere.admin permission or workspace.super_admin
+        - employeeId is required and must identify an active employee
         - `hours` must be greater than zero
-        - The request is stored as a pending debit transaction
+        - The request is stored as a pending debit transaction unless `approveImmediately=true`
+        - `approveImmediately=true` inserts the request directly in `Approved` state with the admin as approver
     """
     try:
         body = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
@@ -273,6 +288,7 @@ def review_leave_management_request_route(
         - Requires leavesphere.admin permission or workspace.super_admin
         - `action` must be `approve` or `reject`
         - The transaction must already exist
+        - Admin review bypasses direct-manager validation
     """
     try:
         body = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()

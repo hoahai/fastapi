@@ -42,9 +42,9 @@ from apps.leavesphere.api.v1.helpers.config import (
 )
 from apps.leavesphere.api.v1.helpers.ptoActions import create_pto_action, modify_pto_action
 from apps.leavesphere.api.v1.helpers.ptoTypes import create_pto_type, modify_pto_type
-from apps.leavesphere.api.v1.helpers.ptoTransactions import create_adjustment, create_request
+from apps.leavesphere.api.v1.helpers.ptoTransactions import approve_request, create_adjustment, create_request
 from shared.auth.dependencies import get_auth_principal
-from shared.db import execute_write
+from shared.db import execute_write, run_transaction
 
 _REQUEST_ACTION_TOKENS = ("request", "req")
 _LOAD_ACTION_TOKENS = ("load", "grant", "accrual", "carry")
@@ -704,6 +704,72 @@ def _resolve_request_year(payload: dict, transaction: dict | None = None) -> int
     return date.today().year
 
 
+def _create_immediate_approved_request(
+    *,
+    employee_id: str,
+    pto_type_code: str,
+    pto_action_code: str,
+    requested_hours: Decimal,
+    year: int,
+    start_date: str | None,
+    end_date: str | None,
+    description: str | None,
+    approver_id: str | None,
+    calendar_id: str | None,
+) -> tuple[str, int]:
+    transaction_id = str(uuid4())
+
+    def _work(cursor) -> int:
+        tables = get_db_tables()
+        cursor.execute(
+            "SELECT hours, status "
+            f"FROM {tables['PTOTRANSACTIONS']} "
+            "WHERE employeeId = %s AND ptoTypeCode = %s AND year = %s "
+            "FOR UPDATE",
+            (employee_id, pto_type_code, year),
+        )
+        rows = cursor.fetchall() or []
+        approved = Decimal("0.00")
+        pending_negative = Decimal("0.00")
+        for row in rows:
+            hours = Decimal(str(row[0] or 0)).quantize(Decimal("0.01"))
+            status = str(row[1] or "").strip().lower()
+            if status == "approved":
+                approved += hours
+            elif status == "pending" and hours < 0:
+                pending_negative += hours
+
+        available_after_approval = approved + pending_negative - requested_hours
+        if available_after_approval < 0:
+            raise ValueError("Cannot approve request because available balance is below zero")
+
+        cursor.execute(
+            f"INSERT INTO {tables['PTOTRANSACTIONS']} ("
+            "id, employeeId, ptoTypeCode, ptoActionCode, hours, year, startDate, endDate, "
+            "status, description, approverNote, approverId, calendarId"
+            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            (
+                transaction_id,
+                employee_id,
+                pto_type_code,
+                pto_action_code,
+                (requested_hours * Decimal("-1")).quantize(Decimal("0.01")),
+                year,
+                start_date,
+                end_date,
+                "Approved",
+                description,
+                None,
+                approver_id,
+                calendar_id,
+            ),
+        )
+        return int(cursor.rowcount or 0)
+
+    inserted = int(run_transaction(_work) or 0)
+    return transaction_id, inserted
+
+
 def create_leave_management_request(*, request, payload: dict) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("Payload must be an object")
@@ -713,7 +779,7 @@ def create_leave_management_request(*, request, payload: dict) -> dict:
     pto_types, pto_type_by_code = _build_pto_type_catalog()
     pto_actions, _ = _build_pto_action_catalog()
 
-    employee_id = _normalize_text(payload.get("employeeId")) or current_employee_id
+    employee_id = _normalize_text(payload.get("employeeId"))
     if not employee_id:
         raise ValueError("employeeId is required")
 
@@ -738,44 +804,50 @@ def create_leave_management_request(*, request, payload: dict) -> dict:
         raise ValueError("startDate must be on or before endDate")
 
     year = _resolve_request_year(payload)
-    item = {
-        "id": str(uuid4()),
-        "employeeId": employee_id,
-        "ptoTypeCode": pto_type_code,
-        "ptoActionCode": pto_action_code,
-        "hours": (requested_hours * Decimal("-1")).quantize(Decimal("0.01")),
-        "year": year,
-        "startDate": start_date or None,
-        "endDate": end_date or None,
-        "status": "Pending",
-        "description": _normalize_text(payload.get("description")) or None,
-        "approverNote": None,
-        "approverId": None,
-        "calendarId": _normalize_text(payload.get("calendarId")) or None,
-    }
-    if item["calendarId"] and len(item["calendarId"]) > 30:
+    description = _normalize_text(payload.get("description")) or None
+    calendar_id = _normalize_text(payload.get("calendarId")) or None
+    if calendar_id and len(calendar_id) > 30:
         raise ValueError("calendarId must be <= 30 characters")
 
-    inserted = create_request(
-        {
-            "employeeId": employee_id,
-            "ptoTypeCode": pto_type_code,
-            "ptoActionCode": pto_action_code,
-            "hours": requested_hours,
-            "year": year,
-            "startDate": start_date or None,
-            "endDate": end_date or None,
-            "description": item["description"],
-            "approverNote": item["approverNote"],
-            "calendarId": item["calendarId"],
-        }
-    ).get("inserted")
+    approve_immediately = bool(payload.get("approveImmediately"))
+    if approve_immediately:
+        created_request_id, inserted = _create_immediate_approved_request(
+            employee_id=employee_id,
+            pto_type_code=pto_type_code,
+            pto_action_code=pto_action_code,
+            requested_hours=requested_hours,
+            year=year,
+            start_date=start_date or None,
+            end_date=end_date or None,
+            description=description,
+            approver_id=current_employee_id,
+            calendar_id=calendar_id,
+        )
+    else:
+        created_request = create_request(
+            {
+                "employeeId": employee_id,
+                "ptoTypeCode": pto_type_code,
+                "ptoActionCode": pto_action_code,
+                "hours": requested_hours,
+                "year": year,
+                "startDate": start_date or None,
+                "endDate": end_date or None,
+                "description": description,
+                "approverNote": None,
+                "calendarId": calendar_id,
+            }
+        )
+        created_request_id = str(created_request.get("id") or "").strip()
+        inserted = created_request.get("inserted")
+        if not created_request_id:
+            raise ValueError("Failed to create PTO request")
     return {
         "workspace": _build_workspace(request=request, year=year),
         "source": "network",
-        "createdRequestId": item["id"],
+        "createdRequestId": created_request_id,
         "inserted": inserted,
-        "status": "Pending",
+        "status": "Approved" if approve_immediately else "Pending",
     }
 
 
@@ -835,9 +907,19 @@ def review_leave_management_request(*, request, payload: dict) -> dict:
     transaction = transaction_rows[0]
 
     if action == "approve":
-        result = approve_request(request=request, transaction_id=transaction_id, approverNote=approver_note)
+        result = approve_request(
+            request=request,
+            transaction_id=transaction_id,
+            approverNote=approver_note,
+            force_admin_override=True,
+        )
     elif action == "reject":
-        result = reject_request(request=request, transaction_id=transaction_id, approverNote=approver_note)
+        result = reject_request(
+            request=request,
+            transaction_id=transaction_id,
+            approverNote=approver_note,
+            force_admin_override=True,
+        )
     else:
         raise ValueError("action must be approve or reject")
 
