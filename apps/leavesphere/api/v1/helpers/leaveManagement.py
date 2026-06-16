@@ -565,6 +565,7 @@ def _build_workspace(
     pto_types, pto_type_by_code = _build_pto_type_catalog()
     pto_actions, pto_action_by_code = _build_pto_action_catalog()
     balance_transaction_rows = get_pto_transactions(year=selected_year)
+    year_request_rows = [row for row in balance_transaction_rows if _is_request_action(row, pto_action_by_code)]
     request_rows: list[dict] = []
     if include_year_requests:
         request_rows = [row for row in balance_transaction_rows if _is_request_action(row, pto_action_by_code)]
@@ -610,7 +611,7 @@ def _build_workspace(
         pto_types=pto_types,
         pto_type_by_code=pto_type_by_code,
         pto_action_by_code=pto_action_by_code,
-        request_rows=request_rows,
+        request_rows=year_request_rows,
         balance_rows=balance_transaction_rows,
     )
     balance_transactions = _build_balance_transaction_rows(

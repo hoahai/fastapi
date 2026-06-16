@@ -80,9 +80,8 @@ import {
   type LeaveSphereAdminPtoTypeConfig,
   type LeaveSphereAdminSetupInput,
   type LeaveSphereAdminWorkspaceData,
-} from "@leavesphere/lib/adminPtoMocks";
+} from "@leavesphere/lib/adminPtoApi";
 import {
-  deriveLeaveSphereAdminEmployeeBalances,
   type LeaveSphereAdminLoadRequest,
   type LeaveSphereAdminPtoActionCode,
 } from "@leavesphere/lib/adminPtoBalanceLedger";
@@ -102,8 +101,9 @@ import {
   getLeaveSphereReviewActionConfirmCopy,
   type LeaveSphereReviewAction,
 } from "@leavesphere/lib/reviewActionConfirm";
-import { LEAVESPHERE_TEAM_REGION_OPTIONS } from "@leavesphere/lib/ptoMocks";
-import type { LeaveSpherePtoRequest, LeaveSpherePtoStatus, LeaveSpherePtoType, LeaveSphereTeamRegion } from "@leavesphere/lib/ptoMocks";
+import { LEAVESPHERE_TEAM_REGION_OPTIONS } from "@leavesphere/lib/ptoTypes";
+import type { LeaveSpherePtoRequest, LeaveSpherePtoStatus, LeaveSpherePtoType, LeaveSphereTeamRegion } from "@leavesphere/lib/ptoTypes";
+import type { LeaveSpherePtoBalance } from "@leavesphere/lib/ptoTypes";
 import { ActionIconButton } from "@tradsphere/components/dashboard/ActionIconButton";
 import {
   formatMonthDayYearLabel,
@@ -182,21 +182,12 @@ type SetupForm = {
   active: boolean;
 };
 
-type BalanceCellDisplay = {
-  type: string;
-  label: string;
-  totalHours: number;
-  usedHours: number;
-  scheduledHours: number;
-  remainingHours: number;
-};
-
 type BalanceRowDisplay = {
   employeeId: string;
   employeeName: string;
   pictureUrl: string | null;
   subtitle: string | null;
-  balances: BalanceCellDisplay[];
+  balances: LeaveSpherePtoBalance[];
 };
 
 type PersistedLeaveSphereAdminPtoPageState = {
@@ -503,11 +494,6 @@ function filterWorkspaceByYear(workspace: LeaveSphereAdminWorkspaceData, year: n
   const yearPrefix = `${year}-`;
   return {
     ...workspace,
-    employeeBalances: deriveLeaveSphereAdminEmployeeBalances({
-      usageRows: workspace.employeeBalanceUsage,
-      transactions: workspace.balanceTransactions,
-      year,
-    }),
     requests: workspace.requests.filter((item) => requestIsWithinYear(item, year)),
     holidays: workspace.holidays.filter((item) => item.date.startsWith(yearPrefix)),
   };
@@ -1163,104 +1149,40 @@ export default function LeaveSphereAdminPtoPage() {
     };
   }, [ptoTypeMetaLookup]);
   const balanceTableState = useMemo(() => {
-    const rowsByEmployeeId = new Map<string, BalanceRowDisplay>();
     const typeLabels = new Map<string, string>();
     const typeOrders = new Map<string, number>();
-    const employeeOrder = new Map<string, number>();
 
-    const getEmployeeRow = (employeeId: string): BalanceRowDisplay | null => {
-      const normalizedEmployeeId = asString(employeeId);
-      if (!normalizedEmployeeId) {
-        return null;
-      }
-      const employee = employeeById.get(normalizedEmployeeId) || null;
-      const employeeDisplay = employeeLookupById.get(normalizedEmployeeId) || null;
-      const existing = rowsByEmployeeId.get(normalizedEmployeeId);
-      if (existing) {
-        return existing;
-      }
-      const row: BalanceRowDisplay = {
-        employeeId: normalizedEmployeeId,
-        employeeName: employeeDisplay?.employeeName || employee?.employeeName || normalizedEmployeeId,
-        pictureUrl: employeeDisplay?.pictureUrl || employee?.pictureUrl || null,
-        subtitle: employee?.title || null,
-        balances: [],
-      };
-      rowsByEmployeeId.set(normalizedEmployeeId, row);
-      employeeOrder.set(normalizedEmployeeId, employeeOrder.size);
-      return row;
-    };
-
-    const getCell = (row: BalanceRowDisplay, meta: PtoTypeMeta): BalanceCellDisplay => {
-      const normalizedType = meta.code;
-      let cell = row.balances.find((item) => item.type === normalizedType) || null;
-      if (cell) {
-        return cell;
-      }
-      cell = {
-        type: normalizedType,
-        label: meta.label,
-        totalHours: 0,
-        usedHours: 0,
-        scheduledHours: 0,
-        remainingHours: 0,
-      };
-      row.balances.push(cell);
-      if (!typeLabels.has(normalizedType)) {
-        typeLabels.set(normalizedType, meta.label);
-      }
-      if (!typeOrders.has(normalizedType)) {
-        typeOrders.set(normalizedType, meta.order);
-      }
-      return cell;
-    };
-
-    for (const request of workspaceForYear?.requests ?? []) {
-      const employeeId = asString(request.employeeId);
-      const meta = resolveBalanceTypeMeta(asString((request as { ptoTypeCode?: string | null }).ptoTypeCode || request.type));
-      if (!employeeId || !meta.code) {
-        continue;
-      }
-      const row = getEmployeeRow(employeeId);
-      if (!row) {
-        continue;
-      }
-      const cell = getCell(row, meta);
-      const hours = Math.abs(asNumber(request.hours));
-      if (request.status === "approved") {
-        cell.usedHours += hours;
-      } else if (request.status === "pending") {
-        cell.scheduledHours += hours;
-      }
-    }
-
-    for (const transaction of workspaceForYear?.balanceTransactions ?? []) {
-      if (transaction.year !== loadedYear || transaction.status !== "Approved") {
-        continue;
-      }
-      const employeeId = asString(transaction.employeeId);
-      const meta = resolveBalanceTypeMeta(asString(transaction.ptoTypeCode));
-      if (!employeeId || !meta.code) {
-        continue;
-      }
-      const row = getEmployeeRow(employeeId);
-      if (!row) {
-        continue;
-      }
-      const cell = getCell(row, meta);
-      if (transaction.ptoActionCode === "load_grant") {
-        cell.totalHours += Math.abs(asNumber(transaction.hours));
-      }
-    }
-
-    const rows = [...rowsByEmployeeId.values()]
+    const rows = (workspaceForYear?.employeeBalances ?? [])
       .map((row) => {
-        row.balances = row.balances
-          .filter((cell) => cell.totalHours !== 0 || cell.usedHours !== 0 || cell.scheduledHours !== 0)
-          .map((cell) => ({
-            ...cell,
-            remainingHours: cell.totalHours - cell.usedHours - cell.scheduledHours,
-          }))
+        const employeeId = asString(row.employeeId);
+        const employee = employeeById.get(employeeId) || null;
+        const employeeDisplay = employeeLookupById.get(employeeId) || null;
+        const balances = (row.balances ?? [])
+          .map((balance) => {
+            const normalizedType = asString(balance.type);
+            const meta = resolveBalanceTypeMeta(normalizedType);
+            const label = asString(balance.label) || typeLabels.get(normalizedType) || meta.label;
+            const order = meta.order;
+            if (normalizedType) {
+              if (!typeLabels.has(normalizedType)) {
+                typeLabels.set(normalizedType, label);
+              }
+              if (!typeOrders.has(normalizedType)) {
+                typeOrders.set(normalizedType, order);
+              }
+            }
+            return {
+              type: normalizedType,
+              label,
+              totalHours: asNumber(balance.totalHours),
+              usedHours: asNumber(balance.usedHours),
+              scheduledHours: asNumber(balance.scheduledHours),
+              remainingHours: typeof balance.remainingHours === "number" && Number.isFinite(balance.remainingHours)
+                ? balance.remainingHours
+                : undefined,
+            };
+          })
+          .filter((cell) => cell.type && (cell.totalHours !== 0 || cell.usedHours !== 0 || cell.scheduledHours !== 0 || cell.remainingHours !== 0))
           .sort((left, right) => {
             const leftOrder = typeOrders.get(left.type) ?? Number.MAX_SAFE_INTEGER;
             const rightOrder = typeOrders.get(right.type) ?? Number.MAX_SAFE_INTEGER;
@@ -1275,21 +1197,16 @@ export default function LeaveSphereAdminPtoPage() {
             }
             return left.type.localeCompare(right.type);
           });
-        return row;
+        const displayRow: BalanceRowDisplay = {
+          employeeId,
+          employeeName: employeeDisplay?.employeeName || employee?.employeeName || row.employeeName || employeeId,
+          pictureUrl: employeeDisplay?.pictureUrl || employee?.pictureUrl || null,
+          subtitle: employee?.title || null,
+          balances,
+        };
+        return displayRow;
       })
-      .filter((row) => row.balances.length > 0)
-      .sort((left, right) => {
-        const nameCompare = left.employeeName.localeCompare(right.employeeName);
-        if (nameCompare !== 0) {
-          return nameCompare;
-        }
-        const leftOrder = employeeOrder.get(left.employeeId) ?? Number.MAX_SAFE_INTEGER;
-        const rightOrder = employeeOrder.get(right.employeeId) ?? Number.MAX_SAFE_INTEGER;
-        if (leftOrder !== rightOrder) {
-          return leftOrder - rightOrder;
-        }
-        return left.employeeId.localeCompare(right.employeeId);
-      });
+      .filter((row) => row.balances.length > 0);
 
     const columns = [...typeOrders.keys()]
       .map((type) => ({
@@ -1313,7 +1230,7 @@ export default function LeaveSphereAdminPtoPage() {
       rows,
       columns,
     };
-  }, [employeeById, employeeLookupById, loadedYear, resolveBalanceTypeMeta, workspaceForYear?.balanceTransactions, workspaceForYear?.requests]);
+  }, [employeeById, employeeLookupById, resolveBalanceTypeMeta, workspaceForYear?.employeeBalances]);
   const visibleBalanceRows = balanceTableState.rows;
   const balanceColumns = balanceTableState.columns;
   const balanceTypeColumnWidth = useMemo(
@@ -1706,7 +1623,7 @@ export default function LeaveSphereAdminPtoPage() {
       if (requestToken !== workspaceLoadRequestTokenRef.current) {
         return false;
       }
-      commitWorkspace(result.workspace, result.source === "mock" ? "cache" : "network", year, Date.now());
+      commitWorkspace(result.workspace, "network", year, Date.now());
       recordLoadedRequestMonths(options);
       setRefreshMessage(result.refreshMessage);
       return true;
@@ -1870,9 +1787,9 @@ export default function LeaveSphereAdminPtoPage() {
     setAdjustBaselineForm({ ...adjustForm });
   }, [adjustForm, isAdjustModalOpen]);
 
-  const applyWorkspace = useCallback((next: LeaveSphereAdminWorkspaceData, source: "mock" | "network") => {
+  const applyWorkspace = useCallback((next: LeaveSphereAdminWorkspaceData) => {
     const effectiveYear = loadedYear ?? (Number.isInteger(selectedYearNumber) ? selectedYearNumber : currentYear);
-    commitWorkspace(next, source === "mock" ? "cache" : "network", effectiveYear);
+    commitWorkspace(next, "network", effectiveYear);
   }, [commitWorkspace, currentYear, loadedYear, selectedYearNumber]);
 
   const openLoadHoursModal = useCallback((params?: {
@@ -1954,7 +1871,7 @@ export default function LeaveSphereAdminPtoPage() {
           ...nextPendingCreateRequest.payload,
         },
       });
-      applyWorkspace(createdResult.workspace, createdResult.source);
+      applyWorkspace(createdResult.workspace);
 
       if (approveImmediately) {
         const createdRequestId = createdResult.createdRequestId || createdResult.workspace.requests[0]?.id || null;
@@ -1970,7 +1887,7 @@ export default function LeaveSphereAdminPtoPage() {
             approverNote: "",
           },
         });
-          applyWorkspace(approvedResult.workspace, approvedResult.source);
+          applyWorkspace(approvedResult.workspace);
           toast.success("Request approved", "PTO request was created and approved.");
         } else {
           toast.error("Approval failed", "The request was created, but the approval target could not be resolved.");
@@ -2051,7 +1968,7 @@ export default function LeaveSphereAdminPtoPage() {
           approverNote: reviewNote,
         },
       });
-      applyWorkspace(result.workspace, result.source);
+      applyWorkspace(result.workspace);
       setSelectedRequestId(null);
       setReviewNote("");
       toast.success(
@@ -2240,7 +2157,7 @@ export default function LeaveSphereAdminPtoPage() {
           approverNote: asString(adjustSaveNote),
         },
       });
-      applyWorkspace(result.workspace, result.source);
+      applyWorkspace(result.workspace);
       setIsAdjustModalOpen(false);
       setAdjustForm(EMPTY_ADJUST_FORM);
       setAdjustSaveNote("");
@@ -2298,7 +2215,7 @@ export default function LeaveSphereAdminPtoPage() {
           approverNote: asString(note),
         },
       });
-      applyWorkspace(result.workspace, result.source);
+      applyWorkspace(result.workspace);
       closeAdjustModal(false);
       setAdjustForm(EMPTY_ADJUST_FORM);
       toast.success("Load request canceled", "Approved PTO load request was canceled.");
@@ -2405,7 +2322,7 @@ export default function LeaveSphereAdminPtoPage() {
         currentUserName,
         payload,
       });
-      applyWorkspace(result.workspace, result.source);
+      applyWorkspace(result.workspace);
       setIsSetupModalOpen(false);
       setSetupForm(EMPTY_SETUP_FORM);
       toast.success("Setup saved", "LeaveSphere admin setup data was updated.");
@@ -2466,7 +2383,7 @@ export default function LeaveSphereAdminPtoPage() {
           year: loadedYear,
         },
       });
-      applyWorkspace(result.workspace, result.source);
+      applyWorkspace(result.workspace);
       setSelectedRequestId(null);
       setReviewNote("");
       toast.success("Request updated", "PTO request details were updated.");

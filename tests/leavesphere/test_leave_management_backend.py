@@ -155,9 +155,9 @@ class LeaveManagementBackendTests(unittest.TestCase):
         vacation_balance = next(row["balances"] for row in [employee_balance] if row["employeeId"] == "emp-2")
         balance = next(item for item in vacation_balance if item["code"] == "VAC")
         self.assertEqual(balance["totalHours"], 40.0)
-        self.assertEqual(balance["usedHours"], 8.0)
+        self.assertEqual(balance["usedHours"], 12.0)
         self.assertEqual(balance["scheduledHours"], 4.0)
-        self.assertEqual(balance["remainingHours"], 28.0)
+        self.assertEqual(balance["remainingHours"], 24.0)
 
     def test_load_workspace_uses_login_email_mapping_for_current_employee(self):
         request = self._build_request(email="login@example.com")
@@ -319,9 +319,11 @@ class LeaveManagementBackendTests(unittest.TestCase):
             if transaction_id:
                 return []
             if status == "Pending":
+                if start_date_to is not None or end_date_from is not None or start_date_from is not None or end_date_to is not None:
+                    return [pending_current_year]
                 return [pending_previous_year, pending_current_year]
             if start_date_to is not None or end_date_from is not None or start_date_from is not None or end_date_to is not None:
-                return [cross_year_overlap]
+                return [year_request, cross_year_overlap]
             if year == 2026:
                 return [year_request]
             return []

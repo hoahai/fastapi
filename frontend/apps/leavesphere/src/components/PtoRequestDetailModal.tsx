@@ -21,7 +21,7 @@ import { LeaveSpherePtoStatusChip } from "@leavesphere/components/PtoStatusChip"
 import { ModalCloseButton, ModalShell } from "@shared/components";
 import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
 
-import type { LeaveSpherePtoRequest, LeaveSpherePtoStatus, LeaveSpherePtoType } from "@leavesphere/lib/ptoMocks";
+import type { LeaveSpherePtoRequest, LeaveSpherePtoStatus, LeaveSpherePtoType } from "@leavesphere/lib/ptoTypes";
 
 export type LeaveSpherePtoRequestFormState = {
   type: LeaveSpherePtoType;

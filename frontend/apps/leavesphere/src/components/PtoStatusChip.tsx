@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Ban, CalendarDays, CheckCircle2, Clock3, Users, XCircle, type LucideIcon } from "lucide-react";
 
-import type { LeaveSpherePtoStatus, LeaveSphereTeamRegion } from "@leavesphere/lib/ptoMocks";
+import type { LeaveSpherePtoStatus, LeaveSphereTeamRegion } from "@leavesphere/lib/ptoTypes";
 import { Tooltip, type TooltipPlacement } from "@shared/components/actions/Tooltip";
 
 export type LeaveSpherePtoChipTone =

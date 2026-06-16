@@ -5,7 +5,7 @@ import { LeaveSpherePtoEmployeeHeader } from "@leavesphere/components/LeaveSpher
 import { LeaveSpherePtoTypeChip } from "@leavesphere/components/PtoTypeChip";
 import { LeaveSpherePtoStatusChip } from "@leavesphere/components/PtoStatusChip";
 import type { LeaveSpherePtoEmployeeDisplay } from "@leavesphere/lib/ptoEmployeeLookup";
-import type { LeaveSpherePtoRequest, LeaveSpherePtoStatus } from "@leavesphere/lib/ptoMocks";
+import type { LeaveSpherePtoRequest, LeaveSpherePtoStatus } from "@leavesphere/lib/ptoTypes";
 
 type LeaveSpherePtoRequestTableProps = {
   requests: LeaveSpherePtoRequest[];

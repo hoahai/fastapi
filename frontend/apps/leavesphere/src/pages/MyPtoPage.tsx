@@ -69,11 +69,13 @@ import {
   reviewLeaveSpherePtoRequest,
   submitLeaveSpherePtoRequest,
   updateLeaveSpherePtoRequest,
-  type LeaveSpherePtoRequest,
-  type LeaveSpherePtoStatus,
-  type LeaveSpherePtoType,
-  type LeaveSpherePtoWorkspaceData,
-} from "@leavesphere/lib/ptoMocks";
+} from "@leavesphere/lib/ptoWorkspaceApi";
+import type {
+  LeaveSpherePtoRequest,
+  LeaveSpherePtoStatus,
+  LeaveSpherePtoType,
+  LeaveSpherePtoWorkspaceData,
+} from "@leavesphere/lib/ptoTypes";
 import { calculateLeaveSpherePtoHours } from "@leavesphere/lib/ptoHours";
 import {
   buildLeaveSpherePtoTypeOptionsFromBalances,

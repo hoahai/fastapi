@@ -1,4 +1,4 @@
-import type { LeaveSpherePtoStatus } from "@leavesphere/lib/ptoMocks";
+import type { LeaveSpherePtoStatus } from "@leavesphere/lib/ptoTypes";
 import { DEFAULT_TIME_ZONE, getTodayIsoDateInTimeZone } from "@shared/utils/time";
 
 export type LeaveSpherePtoActionRole = "user" | "approver" | "admin";

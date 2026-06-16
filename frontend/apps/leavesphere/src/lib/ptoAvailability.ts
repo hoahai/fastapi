@@ -1,4 +1,4 @@
-import type { LeaveSpherePtoBalance } from "@leavesphere/lib/ptoMocks";
+import type { LeaveSpherePtoBalance } from "@leavesphere/lib/ptoTypes";
 
 type LeaveSphereBalanceLike = Pick<
   LeaveSpherePtoBalance,

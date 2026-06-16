@@ -143,7 +143,7 @@ def get_leave_management_workspace_route(
         - Requires leavesphere.admin permission or workspace.super_admin
         - Requires valid API key or bearer token in compat mode
         - Requests are loaded from the provided history/overlap window, not the full year
-        - Balances remain year-scoped for the selected year
+        - Balances remain year-scoped for the selected year and are computed from full-year transaction data
         - `history_start_date` and `history_end_date` must use YYYY-MM-DD format when provided
         - `overlap_month` must use YYYY-MM format when provided
     """

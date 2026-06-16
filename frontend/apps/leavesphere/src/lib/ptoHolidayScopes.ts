@@ -1,4 +1,4 @@
-import { normalizeLeaveSphereTeamRegion, type LeaveSphereHoliday, type LeaveSphereTeamRegion } from "@leavesphere/lib/ptoMocks";
+import { normalizeLeaveSphereTeamRegion, type LeaveSphereHoliday, type LeaveSphereTeamRegion } from "@leavesphere/lib/ptoTypes";
 
 type LeaveSphereHolidaySource = Pick<LeaveSphereHoliday, "date" | "teamRegion">;
 

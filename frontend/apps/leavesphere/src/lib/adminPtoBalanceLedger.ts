@@ -1,4 +1,4 @@
-import type { LeaveSpherePtoBalance } from "@leavesphere/lib/ptoMocks";
+import type { LeaveSpherePtoBalance } from "@leavesphere/lib/ptoTypes";
 
 export type LeaveSphereAdminPtoActionCode = "load_grant" | "adjustment";
 export type LeaveSphereAdminPtoTransactionStatus = "Pending" | "Approved" | "Rejected" | "Canceled";
