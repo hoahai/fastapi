@@ -62,7 +62,7 @@ export type LeaveSpherePtoMonthGroup<T> = {
   requests: T[];
 };
 
-export function groupLeaveSpherePtoRequestsByStartMonth<T extends { startDate: string }>(
+export function groupLeaveSpherePtoRequestsByEndMonth<T extends { startDate: string; endDate: string }>(
   requests: T[],
   timeZone?: string | null,
 ): LeaveSpherePtoMonthGroup<T>[] {
@@ -70,7 +70,7 @@ export function groupLeaveSpherePtoRequestsByStartMonth<T extends { startDate: s
   const groupByMonth = new Map<string, LeaveSpherePtoMonthGroup<T>>();
 
   for (const request of requests) {
-    const monthKey = request.startDate.slice(0, 7);
+    const monthKey = (request.endDate || request.startDate).slice(0, 7);
     if (!monthKey) {
       continue;
     }

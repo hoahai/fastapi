@@ -90,7 +90,7 @@ import {
 import {
   formatMonthDayYearLabel,
   formatPtoRequestDateRangeLabel,
-  groupLeaveSpherePtoRequestsByStartMonth,
+  groupLeaveSpherePtoRequestsByEndMonth,
   getLeaveSpherePtoRequestCardTone,
 } from "@leavesphere/lib/ptoDate";
 import { getPtoRequestActionConfig } from "@leavesphere/lib/ptoRequestActionConfig";
@@ -100,7 +100,7 @@ import {
 } from "@leavesphere/lib/reviewActionConfirm";
 import {
   readLeaveSpherePtoWorkspaceCacheSnapshot,
-  writeLeaveSpherePtoWorkspaceCache,
+  syncLeaveSpherePtoWorkspaceCache,
 } from "@leavesphere/lib/ptoWorkspaceCache";
 
 type CacheStatus = {
@@ -687,7 +687,7 @@ export default function LeaveSphereMyPtoPage() {
       });
   }, [workspaceForYear]);
   const myRequestMonthGroups = useMemo(
-    () => groupLeaveSpherePtoRequestsByStartMonth(myRequests, tenantTimeZone),
+    () => groupLeaveSpherePtoRequestsByEndMonth(myRequests, tenantTimeZone),
     [myRequests, tenantTimeZone],
   );
 
@@ -891,7 +891,7 @@ export default function LeaveSphereMyPtoPage() {
       source,
       fetchedAt,
     });
-    writeLeaveSpherePtoWorkspaceCache(
+    syncLeaveSpherePtoWorkspaceCache(
       {
         pageCode: "my-pto",
         tenantSlug,

@@ -72,7 +72,6 @@ import {
   adjustLeaveSphereAdminPtoBalance,
   createLeaveSphereAdminPtoRequest,
   loadLeaveSphereAdminPtoWorkspace,
-  mergeLeaveSphereAdminWorkspace,
   reviewLeaveSphereAdminPtoRequest,
   updateLeaveSphereAdminPtoRequest,
   updateLeaveSphereAdminSetupData,
@@ -108,12 +107,12 @@ import { ActionIconButton } from "@tradsphere/components/dashboard/ActionIconBut
 import {
   formatMonthDayYearLabel,
   formatPtoRequestDateRangeLabel,
-  groupLeaveSpherePtoRequestsByStartMonth,
+  groupLeaveSpherePtoRequestsByEndMonth,
   getLeaveSpherePtoRequestCardTone,
 } from "@leavesphere/lib/ptoDate";
 import {
   readLeaveSpherePtoWorkspaceCacheSnapshot,
-  writeLeaveSpherePtoWorkspaceCache,
+  syncLeaveSpherePtoWorkspaceCache,
 } from "@leavesphere/lib/ptoWorkspaceCache";
 
 type CacheStatus = {
@@ -943,28 +942,23 @@ export default function LeaveSphereAdminPtoPage() {
     year: number,
     fetchedAt = Date.now(),
   ) => {
-    const currentWorkspace = workspaceRef.current;
-    const shouldMerge = currentWorkspace !== null && loadedYearRef.current === year;
-    const mergedWorkspace = shouldMerge
-      ? mergeLeaveSphereAdminWorkspace(currentWorkspace, nextWorkspace)
-      : nextWorkspace;
-    workspaceRef.current = mergedWorkspace;
+    workspaceRef.current = nextWorkspace;
     loadedYearRef.current = year;
-    setWorkspace(mergedWorkspace);
+    setWorkspace(nextWorkspace);
     setLoadedYear(year);
     setSelectedYear(String(year));
     setCacheStatus({
       source,
       fetchedAt,
     });
-    writeLeaveSpherePtoWorkspaceCache(
+    syncLeaveSpherePtoWorkspaceCache(
       {
         pageCode: "admin-pto",
         tenantSlug,
         userId: currentUserId,
         year,
       },
-      mergedWorkspace,
+      nextWorkspace,
       {
         source,
         fetchedAt,
@@ -1078,11 +1072,11 @@ export default function LeaveSphereAdminPtoPage() {
     });
   }, [normalizedRecentHistorySearch, recentRequests, resolveRequestEmployee]);
   const filteredRecentRequestMonthGroups = useMemo(
-    () => groupLeaveSpherePtoRequestsByStartMonth(filteredRecentRequests, tenantTimeZone),
+    () => groupLeaveSpherePtoRequestsByEndMonth(filteredRecentRequests, tenantTimeZone),
     [filteredRecentRequests, tenantTimeZone],
   );
   const pendingRequestMonthGroups = useMemo(
-    () => groupLeaveSpherePtoRequestsByStartMonth(pendingRequests, tenantTimeZone),
+    () => groupLeaveSpherePtoRequestsByEndMonth(pendingRequests, tenantTimeZone),
     [pendingRequests, tenantTimeZone],
   );
   const selectedRequest = useMemo(
@@ -1659,21 +1653,6 @@ export default function LeaveSphereAdminPtoPage() {
     workspaceKey,
   ]);
 
-  const prefetchPreviousMonthOverlap = useCallback(async (year: number, monthKey: string) => {
-    const normalizedMonthKey = normalizeMonthKey(monthKey);
-    if (!normalizedMonthKey) {
-      return false;
-    }
-    const previousMonthKey = shiftMonthKey(normalizedMonthKey, -1);
-    if (!previousMonthKey) {
-      return false;
-    }
-    return loadWorkspace(year, "network-only", {
-      overlapMonth: previousMonthKey,
-      includePending: true,
-    });
-  }, [loadWorkspace]);
-
   const handleLoadByYear = useCallback(async () => {
     const parsedYear = Number(selectedYear);
     if (!Number.isInteger(parsedYear)) {
@@ -1687,10 +1666,9 @@ export default function LeaveSphereAdminPtoPage() {
     );
     if (didLoad) {
       setCalendarMonth(requestedMonthKey);
-      await prefetchPreviousMonthOverlap(parsedYear, requestedMonthKey);
       applyRecentHistorySearchKeyword("");
     }
-  }, [applyRecentHistorySearchKeyword, calendarMonth, currentYear, loadWorkspace, loadedYear, prefetchPreviousMonthOverlap, selectedYear]);
+  }, [applyRecentHistorySearchKeyword, calendarMonth, currentYear, loadWorkspace, loadedYear, selectedYear]);
 
   const isRequestMonthAlreadyLoaded = useCallback((monthKey: string) => {
     const normalizedMonthKey = normalizeMonthKey(monthKey);
@@ -1895,7 +1873,6 @@ export default function LeaveSphereAdminPtoPage() {
       } else {
         toast.success("Request created", "PTO request was created on behalf of the selected employee.");
       }
-
       setIsCreateModalOpen(false);
       setCreateForm(EMPTY_CREATE_FORM);
     } catch {
@@ -2801,14 +2778,11 @@ export default function LeaveSphereAdminPtoPage() {
             const requestedMonthKey = normalizeMonthKey(calendarMonth) || `${loadYear}-01`;
             void (async () => {
               try {
-                const didLoad = await loadWorkspace(
+                await loadWorkspace(
                   loadYear,
                   "network-only",
                   buildInitialRequestLoadWindow(requestedMonthKey, loadYear),
                 );
-                if (didLoad) {
-                  await prefetchPreviousMonthOverlap(loadYear, requestedMonthKey);
-                }
               } finally {
                 setIsChipRefreshOverlayVisible(false);
               }

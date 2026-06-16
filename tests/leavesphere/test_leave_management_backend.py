@@ -5,6 +5,7 @@ from unittest.mock import patch
 
 from apps.leavesphere.api.v1.helpers import leaveManagement
 from apps.leavesphere.api.v1.helpers import myPto
+from apps.leavesphere.api.v1.helpers import ptoTransactions
 from apps.leavesphere.api.v1.helpers import config
 from shared.auth.types import AuthPrincipal, TenantAccessProfile
 
@@ -190,6 +191,97 @@ class LeaveManagementBackendTests(unittest.TestCase):
 
         self.assertEqual(workspace["currentUserEmail"], "employee@example.com")
         self.assertEqual(workspace["currentUserName"], "Hai Truong")
+
+    def test_create_request_returns_fresh_workspace_payload(self):
+        request = self._build_request(email="hai@theautoadagency.com")
+        employee = {
+            "id": "emp-1",
+            "firstName": "Hai",
+            "lastName": "Truong",
+            "email": "hai@theautoadagency.com",
+            "title": "Director",
+            "region": "US",
+            "active": 1,
+        }
+        fresh_workspace = {
+            "currentUserId": "emp-1",
+            "currentUserName": "Hai Truong",
+            "currentUserEmail": "hai@theautoadagency.com",
+            "managerId": None,
+            "currentUserTeamRegion": "US",
+            "isManager": False,
+            "employees": [employee],
+            "ptoTypes": [{"code": "VAC", "type": "vacation", "label": "Vacation", "active": True, "listingOrder": 1}],
+            "ptoActions": [{"code": "REQUEST", "name": "Request"}],
+            "defaultRequestActionCode": "REQUEST",
+            "defaultCancelActionCode": "REQUEST",
+            "balances": [
+                {
+                    "type": "vacation",
+                    "code": "VAC",
+                    "label": "Vacation",
+                    "totalHours": 32.0,
+                    "usedHours": 8.0,
+                    "scheduledHours": 8.0,
+                    "remainingHours": 16.0,
+                }
+            ],
+            "requests": [
+                {
+                    "id": "pto-1",
+                    "employeeId": "emp-1",
+                    "managerId": None,
+                    "type": "vacation",
+                    "ptoTypeCode": "VAC",
+                    "startDate": "2026-06-10",
+                    "endDate": "2026-06-10",
+                    "hours": -8.0,
+                    "description": "Family trip",
+                    "approverNote": None,
+                    "status": "pending",
+                    "submittedAt": "2026-06-01",
+                    "reviewedAt": None,
+                    "reviewerName": None,
+                }
+            ],
+            "holidays": [],
+            "directReports": [],
+        }
+
+        with patch.object(myPto, "get_employees_by_email", return_value=[employee]), patch.object(
+            myPto, "get_employee_managers", return_value=[]
+        ), patch.object(
+            myPto, "get_pto_transactions", return_value=[]
+        ), patch.object(
+            myPto, "get_holidays", return_value=[]
+        ), patch.object(
+            myPto, "get_pto_types", return_value=[{"code": "VAC", "name": "Vacation", "listingOrder": 1, "usaDefaultHour": 120, "phlDefaultHour": 0}]
+        ), patch.object(
+            myPto, "get_pto_actions", return_value=[{"code": "REQUEST", "name": "Request"}]
+        ), patch.object(
+            myPto, "load_my_pto_workspace", return_value=fresh_workspace
+        ) as mock_load, patch.object(
+            ptoTransactions, "create_request", return_value={"inserted": 1, "status": "Pending"}
+        ) as mock_create:
+            result = myPto.create_my_pto_request(
+                request=request,
+                payload={
+                    "type": "vacation",
+                    "startDate": "2026-06-10",
+                    "endDate": "2026-06-10",
+                    "hours": 8,
+                    "description": "Family trip",
+                    "year": 2026,
+                    "transactionId": "pto-1",
+                },
+            )
+
+        self.assertEqual(result["workspace"], fresh_workspace)
+        self.assertEqual(result["createdRequestId"], "pto-1")
+        self.assertEqual(result["inserted"], 1)
+        self.assertEqual(result["status"], "Pending")
+        mock_load.assert_called_once_with(request=request, year=2026)
+        mock_create.assert_called_once()
 
     def test_load_workspace_normalizes_holiday_dates_before_year_filtering(self):
         request = self._build_request()

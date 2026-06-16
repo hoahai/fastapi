@@ -439,7 +439,7 @@ def create_pto_request_transaction(*, item: dict, requested_hours: Decimal) -> i
             f"INSERT INTO {tables['PTOTRANSACTIONS']} ("
             "id, employeeId, ptoTypeCode, ptoActionCode, hours, year, startDate, endDate, "
             "status, description, approverNote, approverId, calendarId"
-            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
             (
                 item["id"],
                 item["employeeId"],

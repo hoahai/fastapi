@@ -172,6 +172,7 @@ export function useApiRequest() {
       try {
         response = await fetch(url, {
           method,
+          cache: "no-store",
           headers: requestHeaders,
           body,
         });

@@ -1,4 +1,5 @@
 import unittest
+from decimal import Decimal
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -110,6 +111,65 @@ class LeaveSphereBalancesTests(unittest.TestCase):
         self.assertEqual(item["ptoTypeCode"], "VAC")
         self.assertEqual(item["ptoActionCode"], "REQUEST")
         self.assertEqual(str(call_kwargs["requested_hours"]), "8.00")
+
+    def test_request_transaction_insert_uses_matching_placeholders(self):
+        class FakeCursor:
+            def __init__(self):
+                self.executions = []
+                self._last_query = ""
+                self.rowcount = 0
+
+            def execute(self, query, params=()):
+                if query.count("%s") != len(params):
+                    raise AssertionError(
+                        f"placeholder mismatch: query has {query.count('%s')} placeholders but {len(params)} params"
+                    )
+                self.executions.append((query, params))
+                self._last_query = query
+                self.rowcount = 1 if query.lstrip().upper().startswith("INSERT") else 0
+
+            def fetchone(self):
+                if "SELECT id FROM" in self._last_query:
+                    return ("emp-1",)
+                return None
+
+            def fetchall(self):
+                if "FROM" in self._last_query and "pto_transactions" in self._last_query:
+                    return [("8.00", "Approved")]
+                return []
+
+        fake_cursor = FakeCursor()
+
+        def _run_transaction(work):
+            return work(fake_cursor)
+
+        item = {
+            "id": "pto-1",
+            "employeeId": "emp-1",
+            "ptoTypeCode": "VAC",
+            "ptoActionCode": "REQUEST",
+            "hours": Decimal("-8.00"),
+            "year": 2026,
+            "startDate": "2026-06-10",
+            "endDate": "2026-06-10",
+            "status": "Pending",
+            "description": "Family trip",
+            "approverNote": None,
+            "approverId": None,
+            "calendarId": "cal-1",
+        }
+
+        with patch.object(dbQueries, "get_db_tables", return_value={"EMPLOYEES": "employees", "PTOTRANSACTIONS": "pto_transactions"}), patch.object(
+            dbQueries,
+            "run_transaction",
+            side_effect=_run_transaction,
+        ):
+            inserted = dbQueries.create_pto_request_transaction(item=item, requested_hours=Decimal("8.00"))
+
+        self.assertEqual(inserted, 1)
+        insert_query, insert_params = fake_cursor.executions[-1]
+        self.assertEqual(insert_query.count("%s"), len(insert_params))
+        self.assertEqual(len(insert_params), 13)
 
     def test_request_submit_rejects_zero_or_negative_hours(self):
         for invalid in (0, -1, "-3.5"):

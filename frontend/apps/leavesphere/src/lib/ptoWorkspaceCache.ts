@@ -1,6 +1,6 @@
 import { CACHE_TIME, type CacheSource } from "@shared/cache";
 
-import { readBrowserCacheSnapshot, writeBrowserCache } from "@leavesphere/lib/browserCache";
+import { readBrowserCacheSnapshot, removeBrowserCache, writeBrowserCache } from "@leavesphere/lib/browserCache";
 
 export const LEAVESPHERE_PTO_WORKSPACE_CACHE_TTL_MS = CACHE_TIME.WEEK;
 const LEAVESPHERE_PTO_WORKSPACE_CACHE_VERSION = "v2";
@@ -33,6 +33,34 @@ export function readLeaveSpherePtoWorkspaceCacheSnapshot<T>(
   return readBrowserCacheSnapshot<T>(buildLeaveSpherePtoWorkspaceCacheKey(context));
 }
 
+export function syncLeaveSpherePtoWorkspaceCache<T>(
+  context: LeaveSpherePtoWorkspaceCacheContext,
+  workspace: T,
+  options?: {
+    source?: CacheSource;
+    fetchedAt?: number;
+  },
+): {
+  changed: boolean;
+  previous: T | null;
+} {
+  const snapshot = readLeaveSpherePtoWorkspaceCacheSnapshot<T>(context);
+  const previous = snapshot?.data ?? null;
+  let changed = true;
+  try {
+    changed = JSON.stringify(previous) !== JSON.stringify(workspace);
+  } catch {
+    changed = true;
+  }
+
+  writeLeaveSpherePtoWorkspaceCache(context, workspace, options);
+
+  return {
+    changed,
+    previous,
+  };
+}
+
 export function writeLeaveSpherePtoWorkspaceCache<T>(
   context: LeaveSpherePtoWorkspaceCacheContext,
   workspace: T,
@@ -51,4 +79,10 @@ export function writeLeaveSpherePtoWorkspaceCache<T>(
       version: LEAVESPHERE_PTO_WORKSPACE_CACHE_VERSION,
     },
   );
+}
+
+export function removeLeaveSpherePtoWorkspaceCache(
+  context: LeaveSpherePtoWorkspaceCacheContext,
+): void {
+  removeBrowserCache(buildLeaveSpherePtoWorkspaceCacheKey(context));
 }
