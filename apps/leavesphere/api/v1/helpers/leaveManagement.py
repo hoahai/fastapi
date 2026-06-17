@@ -1006,6 +1006,41 @@ def _build_leave_management_workspace_patch(
     return patch
 
 
+def _build_leave_management_request_patch_from_transaction(
+    *,
+    request,
+    transaction_id: str,
+) -> dict | None:
+    transaction_rows = get_pto_transactions(transaction_id=transaction_id)
+    if not transaction_rows:
+        return None
+
+    employees = get_employees()
+    try:
+        current_employee = _resolve_current_employee_from_rows(request, employees)
+    except ValueError:
+        current_employee = _build_synthetic_current_employee(request)
+    current_employee_id = _normalize_text(current_employee.get("id"))
+    if not current_employee_id:
+        return None
+
+    employee_map = build_pto_employee_map(employees)
+    employee_map.setdefault(current_employee_id, current_employee)
+    manager_map = _build_employee_manager_map(get_employee_managers())
+    catalogs = load_leave_sphere_pto_workspace_catalogs()
+    request_rows = build_pto_request_rows(
+        rows=transaction_rows,
+        employee_map=employee_map,
+        pto_type_by_code=catalogs.pto_type_by_code,
+        current_employee_id=current_employee_id,
+        manager_id_by_employee_id=manager_map,
+        employee_full_name_fn=_employee_full_name,
+    )
+    if not request_rows:
+        return None
+    return request_rows[0]
+
+
 def load_leave_management_workspace(
     *,
     request,
@@ -1251,7 +1286,14 @@ def create_leave_management_request(*, request, payload: dict) -> dict:
     if workspace_patch is not None:
         response["workspacePatch"] = workspace_patch
     else:
-        response["workspace"] = workspace
+        request_patch_row = _build_leave_management_request_patch_from_transaction(
+            request=request,
+            transaction_id=created_request_id,
+        )
+        if request_patch_row is not None:
+            response["workspacePatch"] = {"requests": [request_patch_row]}
+        else:
+            response["workspace"] = workspace
     return response
 
 
@@ -1336,7 +1378,14 @@ def update_leave_management_request(*, request, payload: dict) -> dict:
     if workspace_patch is not None:
         response["workspacePatch"] = workspace_patch
     else:
-        response["workspace"] = workspace
+        request_patch_row = _build_leave_management_request_patch_from_transaction(
+            request=request,
+            transaction_id=transaction_id,
+        )
+        if request_patch_row is not None:
+            response["workspacePatch"] = {"requests": [request_patch_row]}
+        else:
+            response["workspace"] = workspace
     return response
 
 
@@ -1441,7 +1490,14 @@ def review_leave_management_request(*, request, payload: dict) -> dict:
     if workspace_patch is not None:
         response["workspacePatch"] = workspace_patch
     else:
-        response["workspace"] = workspace
+        request_patch_row = _build_leave_management_request_patch_from_transaction(
+            request=request,
+            transaction_id=transaction_id,
+        )
+        if request_patch_row is not None:
+            response["workspacePatch"] = {"requests": [request_patch_row]}
+        else:
+            response["workspace"] = workspace
     return response
 
 
