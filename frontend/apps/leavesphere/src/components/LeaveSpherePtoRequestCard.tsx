@@ -1,13 +1,7 @@
 import type { ReactNode } from "react";
 
 import { LeaveSpherePtoEmployeeHeader } from "@leavesphere/components/LeaveSpherePtoEmployeeHeader";
-import type { LeaveSpherePtoRequestCardTone } from "@leavesphere/lib/ptoDate";
-
-const CARD_TONE_CLASS_NAMES: Record<LeaveSpherePtoRequestCardTone, string> = {
-  past: "border-slate-300 bg-slate-100 hover:border-slate-400 hover:bg-slate-200/70 focus-visible:ring-slate-300",
-  current: "border-emerald-300 bg-emerald-50 hover:border-emerald-400 hover:bg-emerald-100/80 focus-visible:ring-emerald-300",
-  future: "border-slate-200 bg-white hover:border-blue-200 hover:bg-blue-50/55 focus-visible:ring-blue-300",
-};
+import { getLeaveSpherePtoRequestSurfaceClassName, type LeaveSpherePtoRequestTimelineTone } from "@leavesphere/lib/ptoStatus";
 
 type LeaveSpherePtoRequestCardProps = {
   employeeName: string;
@@ -19,7 +13,7 @@ type LeaveSpherePtoRequestCardProps = {
   statusChip?: ReactNode;
   pictureUrl?: string | null;
   onClick: () => void;
-  tone?: LeaveSpherePtoRequestCardTone;
+  tone?: LeaveSpherePtoRequestTimelineTone;
   className?: string;
 };
 
@@ -39,7 +33,7 @@ export function LeaveSpherePtoRequestCard({
   return (
     <button
       type="button"
-      className={`group relative w-full rounded-2xl border px-3.5 py-2.5 text-left shadow-sm transition-all duration-200 hover:z-10 hover:-translate-y-0.5 hover:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 ${CARD_TONE_CLASS_NAMES[tone]} ${className ?? ""}`.trim()}
+      className={`group relative w-full rounded-2xl border px-3.5 py-2.5 text-left shadow-sm transition-all duration-200 hover:z-10 hover:-translate-y-0.5 hover:scale-[0.99] focus-visible:outline-none focus-visible:ring-2 ${getLeaveSpherePtoRequestSurfaceClassName(tone)} ${className ?? ""}`.trim()}
       onClick={onClick}
     >
       <div className="flex items-start gap-2">

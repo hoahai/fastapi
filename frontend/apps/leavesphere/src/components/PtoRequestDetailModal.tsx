@@ -20,8 +20,9 @@ import { UnsavedChangesDialog } from "@tradsphere/components/ui/unsaved-changes-
 import { LeaveSpherePtoStatusChip } from "@leavesphere/components/PtoStatusChip";
 import { ModalCloseButton, ModalShell } from "@shared/components";
 import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
+import { formatLeaveSpherePtoStatusLabel } from "@leavesphere/lib/ptoStatus";
 
-import type { LeaveSpherePtoRequest, LeaveSpherePtoStatus, LeaveSpherePtoType } from "@leavesphere/lib/ptoTypes";
+import type { LeaveSpherePtoRequest, LeaveSpherePtoType } from "@leavesphere/lib/ptoTypes";
 
 export type LeaveSpherePtoRequestFormState = {
   type: LeaveSpherePtoType;
@@ -40,7 +41,6 @@ type LeaveSpherePtoRequestDetailModalProps = {
   title: string;
   description: string;
   ptoTypeOptions: Array<{ value: LeaveSpherePtoType; label: string }>;
-  statusLabel: (status: LeaveSpherePtoStatus) => string;
   onOpenChange: (open: boolean) => void;
   onClose: () => void;
   onSubmit?: (params: {
@@ -146,7 +146,6 @@ export function LeaveSpherePtoRequestDetailModal({
   title,
   description,
   ptoTypeOptions,
-  statusLabel,
   onOpenChange,
   onClose,
   onSubmit,
@@ -529,7 +528,7 @@ export function LeaveSpherePtoRequestDetailModal({
                     {request ? (
                       <LeaveSpherePtoStatusChip
                         status={request.status}
-                        label={statusLabel(request.status)}
+                        label={formatLeaveSpherePtoStatusLabel(request.status)}
                         className="px-2.5 py-1 text-xs"
                       />
                     ) : null}
@@ -556,7 +555,7 @@ export function LeaveSpherePtoRequestDetailModal({
                 <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs text-slate-600">
                   Status:
                   {" "}
-                  <LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} className="font-semibold" />
+                  <LeaveSpherePtoStatusChip status={request.status} label={formatLeaveSpherePtoStatusLabel(request.status)} className="font-semibold" />
                 </div>
               ) : null}
 

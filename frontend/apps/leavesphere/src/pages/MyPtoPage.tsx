@@ -39,8 +39,7 @@ import { PageMessageStack, type StackMessage } from "@shared/components/status/M
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
 import { DEFAULT_TIME_ZONE, formatDateInTimeZone, getCurrentMonthKeyInTimeZone, getCurrentYearInTimeZone, getTodayIsoDateInTimeZone } from "@shared/utils/time";
 import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
-import { LeaveSpherePtoRequestCard } from "@leavesphere/components/LeaveSpherePtoRequestCard";
-import { LeaveSpherePtoMonthSeparator } from "@leavesphere/components/LeaveSpherePtoMonthSeparator";
+import { LeaveSpherePtoRequestList } from "@leavesphere/components/LeaveSpherePtoRequestList";
 import { LeaveSphereMonthCalendar, type LeaveSphereMonthCalendarEvent } from "@leavesphere/components/MonthCalendar";
 import { LeaveSpherePtoRequestTable } from "@leavesphere/components/LeaveSpherePtoRequestTable";
 import {
@@ -55,10 +54,8 @@ import {
 import {
   mapLeaveSphereHolidayRegionToChipTone,
   mapLeaveSpherePtoStatusToChipTone,
-  LeaveSpherePtoStatusChip,
   LeaveSpherePtoToneChip,
 } from "@leavesphere/components/PtoStatusChip";
-import { LeaveSpherePtoTypeChip } from "@leavesphere/components/PtoTypeChip";
 import {
   LeaveSpherePtoRequestDetailModal,
   type LeaveSpherePtoRequestFormState,
@@ -72,7 +69,6 @@ import {
 } from "@leavesphere/lib/ptoWorkspaceApi";
 import type {
   LeaveSpherePtoRequest,
-  LeaveSpherePtoStatus,
   LeaveSpherePtoType,
   LeaveSpherePtoWorkspaceData,
 } from "@leavesphere/lib/ptoTypes";
@@ -93,10 +89,8 @@ import {
 } from "@leavesphere/lib/ptoCalendar";
 import {
   formatMonthDayYearLabel,
-  formatPtoRequestDateRangeLabel,
-  groupLeaveSpherePtoRequestsByEndMonth,
-  getLeaveSpherePtoRequestCardTone,
 } from "@leavesphere/lib/ptoDate";
+import { formatLeaveSpherePtoStatusLabel, getLeaveSpherePtoRequestSurfaceClassName } from "@leavesphere/lib/ptoStatus";
 import { getPtoRequestActionConfig } from "@leavesphere/lib/ptoRequestActionConfig";
 import {
   getLeaveSphereReviewActionConfirmCopy,
@@ -224,19 +218,6 @@ function formatHoursLabel(hours: number): string {
   return `${hours.toFixed(1)}h`;
 }
 
-function statusLabel(status: LeaveSpherePtoStatus): string {
-  if (status === "approved") {
-    return "Approved";
-  }
-  if (status === "rejected") {
-    return "Rejected";
-  }
-  if (status === "cancelled") {
-    return "Cancelled";
-  }
-  return "Pending";
-}
-
 function normalizeOptionalNote(value: string | null | undefined): string {
   return asString(value);
 }
@@ -328,7 +309,7 @@ function managerRequestMatchesSearch(
   const tokens = [
     employeeName,
     requestTypeLabel(request.ptoTypeCode ?? request.type, lookup),
-    statusLabel(request.status),
+    formatLeaveSpherePtoStatusLabel(request.status),
     request.description,
     request.approverNote ?? "",
     ...buildDateSearchTokens(request.startDate),
@@ -684,10 +665,6 @@ export default function LeaveSphereMyPtoPage() {
         return right.submittedAt.localeCompare(left.submittedAt);
       });
   }, [workspaceForYear]);
-  const myRequestMonthGroups = useMemo(
-    () => groupLeaveSpherePtoRequestsByEndMonth(myRequests, tenantTimeZone),
-    [myRequests, tenantTimeZone],
-  );
 
   const directReportRequests = useMemo(() => {
     if (!workspaceForYear || !isManager) {
@@ -1481,49 +1458,31 @@ export default function LeaveSphereMyPtoPage() {
           contentClassName="flex min-h-0 flex-1 flex-col gap-3"
         >
           <div className="grid grid-cols-3 gap-2">
-            <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2 text-center">
+            <div className={`rounded-xl border px-3 py-2 text-center ${getLeaveSpherePtoRequestSurfaceClassName("pending", "tile")}`}>
               <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-amber-800">Pending</p>
               <p className="mt-1 text-lg font-semibold text-amber-900">{requestStatusSummary.pending}</p>
             </div>
-            <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2 text-center">
+            <div className={`rounded-xl border px-3 py-2 text-center ${getLeaveSpherePtoRequestSurfaceClassName("approved", "tile")}`}>
               <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-emerald-800">Approved</p>
               <p className="mt-1 text-lg font-semibold text-emerald-900">{requestStatusSummary.approved}</p>
             </div>
-            <div className="rounded-xl border border-rose-200 bg-rose-50 px-3 py-2 text-center">
+            <div className={`rounded-xl border px-3 py-2 text-center ${getLeaveSpherePtoRequestSurfaceClassName("rejected", "tile")}`}>
               <p className="text-[11px] font-semibold uppercase tracking-[0.1em] text-rose-800">Rejected</p>
               <p className="mt-1 text-lg font-semibold text-rose-900">{requestStatusSummary.rejected}</p>
             </div>
           </div>
 
           <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 pt-1.5">
-            {myRequests.length === 0 ? (
-              <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
-                No PTO requests yet.
-              </div>
-            ) : (
-              myRequestMonthGroups.map((group) => (
-                <section key={group.monthKey} className="space-y-3">
-                  <LeaveSpherePtoMonthSeparator label={group.monthLabel} />
-                  <div className="space-y-1.5">
-                    {group.requests.map((request) => (
-                      <LeaveSpherePtoRequestCard
-                        key={request.id}
-                        onClick={() => setSelectedMyRequestId(request.id)}
-                        tone={getLeaveSpherePtoRequestCardTone(request.startDate, request.endDate, todayIsoDate)}
-                        employeeName={resolveRequestEmployee(request).employeeName}
-                        title={resolveRequestEmployee(request).employeeName}
-                        pictureUrl={resolveRequestEmployee(request).pictureUrl}
-                        dateLabel={formatPtoRequestDateRangeLabel(request.startDate, request.endDate, tenantTimeZone)}
-                        detailLabel={request.description}
-                        hoursLabel={formatHoursLabel(request.hours)}
-                        typeChip={<LeaveSpherePtoTypeChip type={request.ptoTypeCode ?? request.type} label={requestTypeLabel(request.ptoTypeCode ?? request.type, ptoTypeMetaLookup)} />}
-                        statusChip={<LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} />}
-                      />
-                    ))}
-                  </div>
-                </section>
-              ))
-            )}
+            <LeaveSpherePtoRequestList
+              requests={myRequests}
+              emptyMessage="No PTO requests yet."
+              timeZone={tenantTimeZone}
+              todayIsoDate={todayIsoDate}
+              resolveEmployee={resolveRequestEmployee}
+              getTypeLabel={(request) => requestTypeLabel(request.ptoTypeCode ?? request.type, ptoTypeMetaLookup)}
+              getHoursLabel={(request) => formatHoursLabel(request.hours)}
+              onRequestClick={(request) => setSelectedMyRequestId(request.id)}
+            />
           </div>
         </SectionCard>
 
@@ -1581,11 +1540,11 @@ export default function LeaveSphereMyPtoPage() {
           contentClassName="space-y-4"
         >
           <div className="grid gap-3 md:grid-cols-3">
-            <article className="rounded-2xl border border-amber-200 bg-amber-50 p-4">
+            <article className={`rounded-2xl border p-4 ${getLeaveSpherePtoRequestSurfaceClassName("pending", "tile")}`}>
               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-amber-800">Pending Approvals</p>
               <p className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-amber-900">{pendingDirectReportRequests.length}</p>
             </article>
-            <article className="rounded-2xl border border-emerald-200 bg-emerald-50 p-4">
+            <article className={`rounded-2xl border p-4 ${getLeaveSpherePtoRequestSurfaceClassName("approved", "tile")}`}>
               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-emerald-800">Reviewed</p>
               <p className="mt-2 text-2xl font-semibold tracking-[-0.03em] text-emerald-900">
                 {Math.max(0, directReportRequests.length - pendingDirectReportRequests.length)}
@@ -1629,7 +1588,7 @@ export default function LeaveSphereMyPtoPage() {
               : "No manager requests match your keyword filter."}
             resolveEmployee={resolveRequestEmployee}
             requestTypeLabel={(type) => requestTypeLabel(type, ptoTypeMetaLookup)}
-            statusLabel={statusLabel}
+            todayIsoDate={todayIsoDate}
             formatSubmittedLabel={(request) => `Submitted ${formatDateInTimeZone(request.submittedAt, tenantTimeZone, {
               month: "numeric",
               day: "numeric",
@@ -1659,7 +1618,6 @@ export default function LeaveSphereMyPtoPage() {
         title="Submit PTO Request"
         description="Enter request details. Your manager can approve or reject from the Manager PTO queue."
         ptoTypeOptions={ptoTypeOptionsWithAvailability}
-        statusLabel={statusLabel}
         saving={isSubmitting}
         calculateHours={(startDate, endDate) => calculateLeaveSpherePtoHours(startDate, endDate, holidayDates)}
         validateSubmit={validateRequestHours}
@@ -1714,7 +1672,6 @@ export default function LeaveSphereMyPtoPage() {
         title="My PTO Request Detail"
         description="Review or update your PTO submission details."
         ptoTypeOptions={ptoTypeOptionsWithAvailability}
-        statusLabel={statusLabel}
         saving={isSavingRequestDetail}
         calculateHours={(startDate, endDate) => calculateLeaveSpherePtoHours(startDate, endDate, holidayDates)}
         onOpenChange={(open) => {
@@ -1786,7 +1743,6 @@ export default function LeaveSphereMyPtoPage() {
         title="Manager Request Preview"
         description="Review this direct employee PTO request and approve or reject."
         ptoTypeOptions={ptoTypeOptionsWithAvailability}
-        statusLabel={statusLabel}
         saving={isReviewing}
         onOpenChange={(open) => {
           if (!open) {

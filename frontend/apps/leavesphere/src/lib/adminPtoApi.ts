@@ -4,11 +4,11 @@ import type {
   LeaveSphereHoliday,
   LeaveSpherePtoBalance,
   LeaveSpherePtoRequest,
-  LeaveSpherePtoStatus,
   LeaveSpherePtoType,
   LeaveSphereTeamRegion,
 } from "@leavesphere/lib/ptoTypes";
 import { normalizeLeaveSphereTeamRegion } from "@leavesphere/lib/ptoTypes";
+import { normalizeLeaveSpherePtoStatus } from "@leavesphere/lib/ptoStatus";
 import type {
   LeaveSphereAdminPtoActionCode,
   LeaveSphereAdminPtoTransaction,
@@ -358,7 +358,7 @@ function normalizeWorkspaceResponse(payload: unknown): LeaveSphereAdminWorkspace
           hours: asNumber(item.hours),
           description: asString(item.description),
           approverNote: asString(item.approverNote) || null,
-          status: (asString(item.status) as LeaveSpherePtoStatus) || "pending",
+          status: normalizeLeaveSpherePtoStatus(item.status),
           submittedAt: asString(item.submittedAt),
           reviewedAt: asString(item.reviewedAt) || null,
           reviewerName: asString(item.reviewerName) || null,

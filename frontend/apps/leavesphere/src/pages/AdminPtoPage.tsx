@@ -48,11 +48,9 @@ import { resolveSharedLoadingContract } from "@shared/components/status/loadingC
 import { DEFAULT_TIME_ZONE, formatDateInTimeZone, getCurrentMonthKeyInTimeZone, getCurrentYearInTimeZone, getTodayIsoDateInTimeZone, shiftIsoDateByDays } from "@shared/utils/time";
 import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 import { LeaveSpherePtoEmployeeHeader } from "@leavesphere/components/LeaveSpherePtoEmployeeHeader";
-import { LeaveSpherePtoRequestCard } from "@leavesphere/components/LeaveSpherePtoRequestCard";
-import { LeaveSpherePtoMonthSeparator } from "@leavesphere/components/LeaveSpherePtoMonthSeparator";
+import { LeaveSpherePtoRequestList } from "@leavesphere/components/LeaveSpherePtoRequestList";
 import { LeaveSphereMonthCalendar, type LeaveSphereMonthCalendarEvent } from "@leavesphere/components/MonthCalendar";
 import { LeaveSpherePtoRequestDetailModal, type LeaveSpherePtoRequestFormState } from "@leavesphere/components/PtoRequestDetailModal";
-import { LeaveSpherePtoTypeChip } from "@leavesphere/components/PtoTypeChip";
 import {
   buildLeaveSpherePtoEmployeeLookup,
   resolveLeaveSpherePtoEmployeeDisplay,
@@ -65,7 +63,6 @@ import {
 import {
   mapLeaveSphereHolidayRegionToChipTone,
   mapLeaveSpherePtoStatusToChipTone,
-  LeaveSpherePtoStatusChip,
   LeaveSpherePtoToneChip,
 } from "@leavesphere/components/PtoStatusChip";
 import {
@@ -101,15 +98,11 @@ import {
   type LeaveSphereReviewAction,
 } from "@leavesphere/lib/reviewActionConfirm";
 import { LEAVESPHERE_TEAM_REGION_OPTIONS } from "@leavesphere/lib/ptoTypes";
-import type { LeaveSpherePtoRequest, LeaveSpherePtoStatus, LeaveSpherePtoType, LeaveSphereTeamRegion } from "@leavesphere/lib/ptoTypes";
+import type { LeaveSpherePtoRequest, LeaveSpherePtoType, LeaveSphereTeamRegion } from "@leavesphere/lib/ptoTypes";
 import type { LeaveSpherePtoBalance } from "@leavesphere/lib/ptoTypes";
 import { ActionIconButton } from "@tradsphere/components/dashboard/ActionIconButton";
-import {
-  formatMonthDayYearLabel,
-  formatPtoRequestDateRangeLabel,
-  groupLeaveSpherePtoRequestsByEndMonth,
-  getLeaveSpherePtoRequestCardTone,
-} from "@leavesphere/lib/ptoDate";
+import { formatMonthDayYearLabel } from "@leavesphere/lib/ptoDate";
+import { formatLeaveSpherePtoStatusLabel, getLeaveSpherePtoRequestSurfaceClassName } from "@leavesphere/lib/ptoStatus";
 import {
   readLeaveSpherePtoWorkspaceCacheSnapshot,
   syncLeaveSpherePtoWorkspaceCache,
@@ -311,19 +304,6 @@ function formatHoursLabel(hours: number): string {
     return "0h";
   }
   return Number.isInteger(hours) ? `${hours}h` : `${hours.toFixed(1)}h`;
-}
-
-function statusLabel(status: LeaveSpherePtoStatus): string {
-  if (status === "approved") {
-    return "Approved";
-  }
-  if (status === "rejected") {
-    return "Rejected";
-  }
-  if (status === "cancelled") {
-    return "Cancelled";
-  }
-  return "Pending";
 }
 
 function normalizeOptionalNote(value: string | null | undefined): string {
@@ -1060,26 +1040,18 @@ export default function LeaveSphereAdminPtoPage() {
     }
     return recentRequests.filter((request) => {
       const employee = resolveRequestEmployee(request);
-      const tokens = [
-        employee.employeeName,
-        requestTypeLabel(request.type),
-        statusLabel(request.status),
-        formatDateLabel(request.startDate, tenantTimeZone),
-        formatDateLabel(request.endDate, tenantTimeZone),
-        formatDateLabel(request.submittedAt, tenantTimeZone),
-        request.description,
+        const tokens = [
+          employee.employeeName,
+          requestTypeLabel(request.type),
+          formatLeaveSpherePtoStatusLabel(request.status),
+          formatDateLabel(request.startDate, tenantTimeZone),
+          formatDateLabel(request.endDate, tenantTimeZone),
+          formatDateLabel(request.submittedAt, tenantTimeZone),
+          request.description,
       ];
       return tokens.some((token) => normalizeSearchKeyword(token).includes(keyword));
     });
   }, [normalizedRecentHistorySearch, recentRequests, resolveRequestEmployee]);
-  const filteredRecentRequestMonthGroups = useMemo(
-    () => groupLeaveSpherePtoRequestsByEndMonth(filteredRecentRequests, tenantTimeZone),
-    [filteredRecentRequests, tenantTimeZone],
-  );
-  const pendingRequestMonthGroups = useMemo(
-    () => groupLeaveSpherePtoRequestsByEndMonth(pendingRequests, tenantTimeZone),
-    [pendingRequests, tenantTimeZone],
-  );
   const selectedRequest = useMemo(
     () => requests.find((item) => item.id === selectedRequestId) || null,
     [requests, selectedRequestId],
@@ -2292,39 +2264,21 @@ export default function LeaveSphereAdminPtoPage() {
         </div>
 
         <div className="min-h-0 flex-1 space-y-4 overflow-y-auto pr-1 pt-1.5">
-          {filteredRecentRequests.length === 0 ? (
-            <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
-              {recentRequests.length === 0
-                ? "No requests loaded yet."
-                : "No requests match your keyword filter."}
-            </div>
-          ) : (
-            filteredRecentRequestMonthGroups.map((group) => (
-              <section key={group.monthKey} className="space-y-3">
-                <LeaveSpherePtoMonthSeparator label={group.monthLabel} />
-                <div className="space-y-1.5">
-                  {group.requests.map((request) => (
-                    <LeaveSpherePtoRequestCard
-                      key={request.id}
-                      onClick={() => {
-                        setSelectedRequestId(request.id);
-                        setReviewNote(request.approverNote || "");
-                      }}
-                      tone={getLeaveSpherePtoRequestCardTone(request.startDate, request.endDate, todayIsoDate)}
-                      employeeName={resolveRequestEmployee(request).employeeName}
-                      title={resolveRequestEmployee(request).employeeName}
-                      pictureUrl={resolveRequestEmployee(request).pictureUrl}
-                      typeChip={<LeaveSpherePtoTypeChip type={request.type} label={requestTypeLabel(request.type)} />}
-                      statusChip={<LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} />}
-                      dateLabel={formatPtoRequestDateRangeLabel(request.startDate, request.endDate, tenantTimeZone)}
-                      detailLabel={request.description}
-                      hoursLabel={formatHoursLabel(request.hours)}
-                    />
-                  ))}
-                </div>
-              </section>
-            ))
-          )}
+          <LeaveSpherePtoRequestList
+            requests={filteredRecentRequests}
+            emptyMessage={recentRequests.length === 0
+              ? "No requests loaded yet."
+              : "No requests match your keyword filter."}
+            timeZone={tenantTimeZone}
+            todayIsoDate={todayIsoDate}
+            resolveEmployee={resolveRequestEmployee}
+            getTypeLabel={(request) => requestTypeLabel(request.type)}
+            getHoursLabel={(request) => formatHoursLabel(request.hours)}
+            onRequestClick={(request) => {
+              setSelectedRequestId(request.id);
+              setReviewNote(request.approverNote || "");
+            }}
+          />
         </div>
       </SectionCard>
     );
@@ -2710,7 +2664,8 @@ export default function LeaveSphereAdminPtoPage() {
               }}
               className={[
                 "rounded-2xl border p-4 text-left transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-300",
-                "border-amber-200 bg-amber-50 hover:-translate-y-0.5 hover:border-amber-300 hover:bg-amber-100/70",
+                getLeaveSpherePtoRequestSurfaceClassName("pending", "tile"),
+                "hover:-translate-y-0.5",
               ].join(" ")}
             >
               <p className="text-xs font-semibold uppercase tracking-[0.12em] text-amber-800">Pending requests</p>
@@ -2767,7 +2722,6 @@ export default function LeaveSphereAdminPtoPage() {
         title="Submit PTO Request"
         description="Enter request details. Your manager can approve or reject from the Manager PTO queue."
         ptoTypeOptions={createRequestPtoTypeOptions}
-        statusLabel={statusLabel}
         saving={isMutating}
         calculateHours={(startDate, endDate) => resolvePtoHoursForEmployee(startDate, endDate, createForm.employeeId)}
         validateSubmit={validateCreateRequestHours}
@@ -2859,37 +2813,19 @@ export default function LeaveSphereAdminPtoPage() {
             </DialogHeader>
 
             <div className="mt-4 max-h-[60vh] space-y-4 overflow-y-auto pr-1 pt-1.5">
-              {pendingRequests.length === 0 ? (
-                <div className="rounded-xl border border-dashed border-slate-200 bg-slate-50 px-4 py-6 text-sm text-slate-600">
-                  No pending PTO requests.
-                </div>
-              ) : (
-                pendingRequestMonthGroups.map((group) => (
-                  <section key={group.monthKey} className="space-y-3">
-                    <LeaveSpherePtoMonthSeparator label={group.monthLabel} />
-                    <div className="space-y-1.5">
-                      {group.requests.map((request) => (
-                        <LeaveSpherePtoRequestCard
-                          key={request.id}
-                          onClick={() => {
-                            setSelectedRequestId(request.id);
-                            setReviewNote(request.approverNote || "");
-                          }}
-                          tone={getLeaveSpherePtoRequestCardTone(request.startDate, request.endDate, todayIsoDate)}
-                          employeeName={resolveRequestEmployee(request).employeeName}
-                          title={resolveRequestEmployee(request).employeeName}
-                          pictureUrl={resolveRequestEmployee(request).pictureUrl}
-                          typeChip={<LeaveSpherePtoTypeChip type={request.type} label={requestTypeLabel(request.type)} />}
-                          statusChip={<LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} />}
-                          dateLabel={formatPtoRequestDateRangeLabel(request.startDate, request.endDate, tenantTimeZone)}
-                          detailLabel={request.description}
-                          hoursLabel={formatHoursLabel(request.hours)}
-                        />
-                      ))}
-                    </div>
-                  </section>
-                ))
-              )}
+              <LeaveSpherePtoRequestList
+                requests={pendingRequests}
+                emptyMessage="No pending PTO requests."
+                timeZone={tenantTimeZone}
+                todayIsoDate={todayIsoDate}
+                resolveEmployee={resolveRequestEmployee}
+                getTypeLabel={(request) => requestTypeLabel(request.type)}
+                getHoursLabel={(request) => formatHoursLabel(request.hours)}
+                onRequestClick={(request) => {
+                  setSelectedRequestId(request.id);
+                  setReviewNote(request.approverNote || "");
+                }}
+              />
             </div>
           </ModalShell>
         </DialogContent>
@@ -2903,7 +2839,6 @@ export default function LeaveSphereAdminPtoPage() {
         title="Request Detail"
         description="Review and update employee PTO request details."
         ptoTypeOptions={selectedRequestPtoTypeOptions}
-        statusLabel={statusLabel}
         saving={isMutating}
         calculateHours={(startDate, endDate) => resolvePtoHoursForEmployee(startDate, endDate, selectedRequest?.employeeId || "")}
         onOpenChange={(open) => {

@@ -9,7 +9,6 @@ import {
   type LeaveSpherePtoMutationResult,
   type LeaveSpherePtoRequest,
   type LeaveSpherePtoReviewInput,
-  type LeaveSpherePtoStatus,
   type LeaveSpherePtoSubmitInput,
   type LeaveSpherePtoType,
   type LeaveSpherePtoTypeConfig,
@@ -17,6 +16,7 @@ import {
   type LeaveSpherePtoWorkspaceData,
   normalizeLeaveSphereTeamRegion,
 } from "@leavesphere/lib/ptoTypes";
+import { normalizeLeaveSpherePtoStatus } from "@leavesphere/lib/ptoStatus";
 
 type RequestJson = (url: string, options?: { method?: "GET" | "POST" | "PUT" | "PATCH" | "DELETE"; body?: unknown; successToast?: boolean | string | { title: string; message?: string }; errorToast?: boolean | string | { title: string; message?: string } }) => Promise<unknown>;
 
@@ -67,20 +67,6 @@ function unwrapEnvelope(payload: unknown): unknown {
 function normalizePtoType(value: unknown): LeaveSpherePtoType | null {
   const text = asString(value);
   return text || null;
-}
-
-function normalizePtoStatus(value: unknown): LeaveSpherePtoStatus {
-  const normalized = asString(value).toLowerCase();
-  if (normalized === "approved") {
-    return "approved";
-  }
-  if (normalized === "rejected") {
-    return "rejected";
-  }
-  if (normalized === "cancelled" || normalized === "canceled") {
-    return "cancelled";
-  }
-  return "pending";
 }
 
 function normalizeDate(value: unknown): string {
@@ -224,7 +210,7 @@ function normalizeRequest(value: unknown): LeaveSpherePtoRequest | null {
     hours: asNumber(value.hours),
     description: asString(value.description),
     approverNote: value.approverNote === undefined ? null : asString(value.approverNote) || null,
-    status: normalizePtoStatus(value.status),
+    status: normalizeLeaveSpherePtoStatus(value.status),
     submittedAt: normalizeDate(value.submittedAt),
     reviewedAt: value.reviewedAt === undefined ? null : normalizeDate(value.reviewedAt) || null,
     reviewerName: value.reviewerName === undefined ? null : asString(value.reviewerName) || null,

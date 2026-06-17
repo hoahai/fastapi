@@ -5,20 +5,20 @@ import { LeaveSpherePtoEmployeeHeader } from "@leavesphere/components/LeaveSpher
 import { LeaveSpherePtoTypeChip } from "@leavesphere/components/PtoTypeChip";
 import { LeaveSpherePtoStatusChip } from "@leavesphere/components/PtoStatusChip";
 import type { LeaveSpherePtoEmployeeDisplay } from "@leavesphere/lib/ptoEmployeeLookup";
-import type { LeaveSpherePtoRequest, LeaveSpherePtoStatus } from "@leavesphere/lib/ptoTypes";
+import type { LeaveSpherePtoRequest } from "@leavesphere/lib/ptoTypes";
+import { formatLeaveSpherePtoStatusLabel, getLeaveSpherePtoRequestSurfaceClassName, getLeaveSpherePtoRequestTimelineTone } from "@leavesphere/lib/ptoStatus";
 
 type LeaveSpherePtoRequestTableProps = {
   requests: LeaveSpherePtoRequest[];
   emptyMessage: string;
   resolveEmployee: (request: LeaveSpherePtoRequest) => LeaveSpherePtoEmployeeDisplay;
   requestTypeLabel: (type: string) => string;
-  statusLabel: (status: LeaveSpherePtoStatus) => string;
   formatSubmittedLabel: (request: LeaveSpherePtoRequest) => string;
   formatDateRangeLabel: (request: LeaveSpherePtoRequest) => string;
   formatHoursLabel: (hours: number) => string;
   onRequestClick: (request: LeaveSpherePtoRequest) => void;
+  todayIsoDate: string;
   showDescription?: boolean;
-  isRowHighlighted?: (request: LeaveSpherePtoRequest) => boolean;
   getDescriptionLabel?: (request: LeaveSpherePtoRequest) => ReactNode;
   employeeColumnClassName?: string;
   dateRangeColumnClassName?: string;
@@ -31,13 +31,12 @@ export function LeaveSpherePtoRequestTable({
   emptyMessage,
   resolveEmployee,
   requestTypeLabel,
-  statusLabel,
   formatSubmittedLabel,
   formatDateRangeLabel,
   formatHoursLabel,
   onRequestClick,
+  todayIsoDate,
   showDescription = false,
-  isRowHighlighted,
   getDescriptionLabel,
   employeeColumnClassName,
   dateRangeColumnClassName,
@@ -46,9 +45,31 @@ export function LeaveSpherePtoRequestTable({
 }: LeaveSpherePtoRequestTableProps) {
   const colSpan = showDescription ? 6 : 5;
   const normalizedPageSize = Math.max(1, Math.trunc(pageSize || 20));
-  const requestSignature = useMemo(() => requests.map((request) => request.id).join("::"), [requests]);
+  const sortedRequests = useMemo(() => {
+    return [...requests].sort((left, right) => {
+      const startDateCompare = right.startDate.localeCompare(left.startDate);
+      if (startDateCompare !== 0) {
+        return startDateCompare;
+      }
+
+      const leftEmployeeName = resolveEmployee(left).employeeName;
+      const rightEmployeeName = resolveEmployee(right).employeeName;
+      const employeeCompare = leftEmployeeName.localeCompare(rightEmployeeName);
+      if (employeeCompare !== 0) {
+        return employeeCompare;
+      }
+
+      const submittedAtCompare = right.submittedAt.localeCompare(left.submittedAt);
+      if (submittedAtCompare !== 0) {
+        return submittedAtCompare;
+      }
+
+      return left.id.localeCompare(right.id);
+    });
+  }, [requests, resolveEmployee]);
+  const requestSignature = useMemo(() => sortedRequests.map((request) => request.id).join("::"), [sortedRequests]);
   const [currentPage, setCurrentPage] = useState(1);
-  const totalPages = Math.max(1, Math.ceil(requests.length / normalizedPageSize));
+  const totalPages = Math.max(1, Math.ceil(sortedRequests.length / normalizedPageSize));
 
   useEffect(() => {
     setCurrentPage(1);
@@ -60,10 +81,10 @@ export function LeaveSpherePtoRequestTable({
 
   const visibleRequests = useMemo(() => {
     const startIndex = (currentPage - 1) * normalizedPageSize;
-    return requests.slice(startIndex, startIndex + normalizedPageSize);
-  }, [currentPage, normalizedPageSize, requests]);
-  const startIndex = requests.length === 0 ? 0 : ((currentPage - 1) * normalizedPageSize) + 1;
-  const endIndex = Math.min(requests.length, currentPage * normalizedPageSize);
+    return sortedRequests.slice(startIndex, startIndex + normalizedPageSize);
+  }, [currentPage, normalizedPageSize, sortedRequests]);
+  const startIndex = sortedRequests.length === 0 ? 0 : ((currentPage - 1) * normalizedPageSize) + 1;
+  const endIndex = Math.min(sortedRequests.length, currentPage * normalizedPageSize);
 
   return (
     <div className="overflow-hidden rounded-xl border border-blue-100">
@@ -80,7 +101,7 @@ export function LeaveSpherePtoRequestTable({
             </tr>
           </thead>
           <tbody>
-            {requests.length === 0 ? (
+            {sortedRequests.length === 0 ? (
               <tr>
                 <td colSpan={colSpan} className="px-3 py-6 text-center text-sm text-slate-600">
                   {emptyMessage}
@@ -88,14 +109,16 @@ export function LeaveSpherePtoRequestTable({
               </tr>
             ) : visibleRequests.map((request) => {
               const employee = resolveEmployee(request);
-              const rowIsHighlighted = isRowHighlighted?.(request) ?? false;
-              const rowClassName = rowIsHighlighted
-                ? "cursor-pointer border-t border-emerald-200/80 bg-emerald-50 text-slate-700 transition-colors hover:bg-emerald-100/70"
-                : "cursor-pointer border-t border-blue-100/80 bg-white text-slate-700 transition-colors hover:bg-blue-50/40";
+              const rowTone = getLeaveSpherePtoRequestTimelineTone({
+                status: request.status,
+                startDate: request.startDate,
+                endDate: request.endDate,
+                todayIsoDate,
+              });
               return (
                 <tr
                   key={request.id}
-                  className={rowClassName}
+                  className={`cursor-pointer ${getLeaveSpherePtoRequestSurfaceClassName(rowTone, "row")}`}
                   onClick={() => onRequestClick(request)}
                 >
                   <td className={`${employeeColumnClassName ?? "px-3 py-2.5"}`}>
@@ -117,7 +140,7 @@ export function LeaveSpherePtoRequestTable({
                     </td>
                   ) : null}
                   <td className="px-3 py-2.5 text-center">
-                    <LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} />
+                    <LeaveSpherePtoStatusChip status={request.status} label={formatLeaveSpherePtoStatusLabel(request.status)} />
                   </td>
                   <td className="px-3 py-2.5 text-center">{formatHoursLabel(request.hours)}</td>
                 </tr>
@@ -126,10 +149,10 @@ export function LeaveSpherePtoRequestTable({
           </tbody>
         </table>
       </div>
-      {requests.length > 0 && totalPages > 1 ? (
+      {sortedRequests.length > 0 && totalPages > 1 ? (
         <div className="flex flex-wrap items-center justify-between gap-3 border-t border-blue-100 bg-white px-3 py-2.5 text-sm text-slate-600">
           <p>
-            Showing {startIndex}-{endIndex} of {requests.length} requests
+            Showing {startIndex}-{endIndex} of {sortedRequests.length} requests
           </p>
           <div className="flex items-center gap-2">
             <Button
