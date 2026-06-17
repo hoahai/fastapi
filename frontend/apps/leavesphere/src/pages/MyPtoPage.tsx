@@ -88,6 +88,7 @@ import {
   buildLeaveSpherePtoCalendarRequestTooltipLabel,
 } from "@leavesphere/lib/ptoCalendar";
 import {
+  buildMonthKeyForYear,
   formatMonthDayYearLabel,
 } from "@leavesphere/lib/ptoDate";
 import { formatLeaveSpherePtoStatusLabel, getLeaveSpherePtoRequestSurfaceClassName } from "@leavesphere/lib/ptoStatus";
@@ -443,6 +444,7 @@ export default function LeaveSphereMyPtoPage() {
   const [draftManagerSearch, setDraftManagerSearch] = useState("");
   const [appliedManagerSearch, setAppliedManagerSearch] = useState("");
   const workspaceLoadRequestTokenRef = useRef(0);
+  const workspaceRef = useRef<LeaveSpherePtoWorkspaceData | null>(null);
   const restoredWorkspaceScopeRef = useRef<string | null>(null);
 
   useEffect(() => {
@@ -460,6 +462,10 @@ export default function LeaveSphereMyPtoPage() {
     initialYearRef.current = nextYear;
     initialMonthKeyRef.current = nextMonthKey;
   }, [loadedYear, tenantTimeZone]);
+
+  useEffect(() => {
+    workspaceRef.current = workspace;
+  }, [workspace]);
 
   useEffect(() => {
     if (!canRestorePageState || !pageStateScope || !pageStateStorageKey) {
@@ -864,6 +870,7 @@ export default function LeaveSphereMyPtoPage() {
     year: number,
     fetchedAt = Date.now(),
   ) => {
+    workspaceRef.current = nextWorkspace;
     setWorkspace(nextWorkspace);
     setLoadedYear(year);
     setSelectedYear(String(year));
@@ -1088,16 +1095,13 @@ export default function LeaveSphereMyPtoPage() {
     if (!Number.isInteger(parsedYear)) {
       return;
     }
-
+    const requestedMonthKey = buildMonthKeyForYear(currentMonthKey, parsedYear) || `${parsedYear}-01`;
+    setCalendarMonth(requestedMonthKey);
     const didLoad = await loadWorkspace(parsedYear, loadedYear === parsedYear ? "network-only" : "cache-first");
     if (!didLoad) {
       return;
     }
-
-    const currentMonthMatch = /^(\d{4})-(\d{2})$/.exec(calendarMonth);
-    const defaultMonth = currentMonthMatch ? Number(currentMonthMatch[2]) : (parsedYear === currentYear ? Number(currentMonthKey.slice(5, 7)) : 1);
-    setCalendarMonth(`${parsedYear}-${String(defaultMonth).padStart(2, "0")}`);
-  }, [calendarMonth, currentMonthKey, currentYear, loadWorkspace, loadedYear, selectedYear]);
+  }, [currentMonthKey, loadWorkspace, loadedYear, selectedYear]);
 
   const openSubmitDialog = useCallback(() => {
     if (!canRequestPto || !loadedYearDateBounds) {
@@ -1158,6 +1162,7 @@ export default function LeaveSphereMyPtoPage() {
     try {
       const result = await submitLeaveSpherePtoRequest({
         requestJson,
+        currentWorkspace: workspaceRef.current,
         payload: {
           ...params.payload,
           ptoTypeCode: params.payload.type,
@@ -1201,6 +1206,7 @@ export default function LeaveSphereMyPtoPage() {
     try {
       const result = await reviewLeaveSpherePtoRequest({
         requestJson,
+        currentWorkspace: workspaceRef.current,
         payload: {
           requestId: selectedReviewRequest.id,
           action,
@@ -1242,6 +1248,7 @@ export default function LeaveSphereMyPtoPage() {
       const result = await cancelLeaveSpherePtoRequest({
         requestJson,
         transactionId: selectedMyRequest.id,
+        currentWorkspace: workspaceRef.current,
       });
       commitWorkspace(result.workspace, result.source, loadedYearForRequests);
       setSelectedMyRequestId(null);
@@ -1280,6 +1287,7 @@ export default function LeaveSphereMyPtoPage() {
       const selectedRequestYear = selectedMyRequest?.year ?? loadedYearForRequests;
       const result = await updateLeaveSpherePtoRequest({
         requestJson,
+        currentWorkspace: workspaceRef.current,
         payload: {
           transactionId: params.requestId,
           type: params.payload.type,
@@ -1365,6 +1373,8 @@ export default function LeaveSphereMyPtoPage() {
           text={cacheStatusText}
           onRefresh={() => {
             setIsChipRefreshOverlayVisible(true);
+            const requestedMonthKey = buildMonthKeyForYear(currentMonthKey, loadedYearForRequests) || `${loadedYearForRequests}-01`;
+            setCalendarMonth(requestedMonthKey);
             void loadWorkspace(loadedYearForRequests, "network-only").finally(() => {
               setIsChipRefreshOverlayVisible(false);
             });

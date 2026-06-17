@@ -7,6 +7,7 @@ from apps.leavesphere.api.v1.helpers.dbQueries import (
     insert_employee,
     update_employee,
 )
+from apps.leavesphere.api.v1.helpers.readCache import read_leave_sphere_read_cache, write_leave_sphere_read_cache
 
 _VALID_REGIONS = {"US", "MEXICO", "PHILIPPINES"}
 
@@ -77,12 +78,28 @@ def _normalize_duplicate_error(exc: Exception) -> str | None:
 
 
 def list_employees() -> list[dict]:
-    return get_employees()
+    cached = read_leave_sphere_read_cache(namespace="employees:list")
+    if isinstance(cached, list):
+        return cached
+    rows = get_employees()
+    write_leave_sphere_read_cache(namespace="employees:list", value=rows)
+    return rows
 
 
 def get_employee(employee_id: str) -> dict | None:
-    rows = get_employees(employee_id=employee_id)
-    return rows[0] if rows else None
+    normalized_employee_id = str(employee_id or "").strip()
+    cached = read_leave_sphere_read_cache(namespace="employees:item", params={"employee_id": normalized_employee_id})
+    if isinstance(cached, dict):
+        return cached
+    rows = get_employees(employee_id=normalized_employee_id)
+    item = rows[0] if rows else None
+    if item is not None:
+        write_leave_sphere_read_cache(
+            namespace="employees:item",
+            params={"employee_id": normalized_employee_id},
+            value=item,
+        )
+    return item
 
 
 def create_employee(payload: dict) -> dict:

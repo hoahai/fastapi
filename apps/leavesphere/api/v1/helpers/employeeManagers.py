@@ -8,6 +8,7 @@ from apps.leavesphere.api.v1.helpers.dbQueries import (
     get_employees,
     insert_employee_manager,
 )
+from apps.leavesphere.api.v1.helpers.readCache import read_leave_sphere_read_cache, write_leave_sphere_read_cache
 
 
 def list_employee_managers(
@@ -15,12 +16,34 @@ def list_employee_managers(
     employee_id: str | None = None,
     manager_id: str | None = None,
 ) -> list[dict]:
-    return get_employee_managers(employee_id=employee_id, manager_id=manager_id)
+    normalized_employee_id = str(employee_id or "").strip() or None
+    normalized_manager_id = str(manager_id or "").strip() or None
+    cache_params = {
+        "employee_id": normalized_employee_id,
+        "manager_id": normalized_manager_id,
+    }
+    cached = read_leave_sphere_read_cache(namespace="employee-managers:list", params=cache_params)
+    if isinstance(cached, list):
+        return cached
+    rows = get_employee_managers(employee_id=normalized_employee_id, manager_id=normalized_manager_id)
+    write_leave_sphere_read_cache(namespace="employee-managers:list", params=cache_params, value=rows)
+    return rows
 
 
 def get_employee_manager(mapping_id: str) -> dict | None:
-    rows = get_employee_managers(mapping_id=mapping_id)
-    return rows[0] if rows else None
+    normalized_mapping_id = str(mapping_id or "").strip()
+    cached = read_leave_sphere_read_cache(namespace="employee-managers:item", params={"mapping_id": normalized_mapping_id})
+    if isinstance(cached, dict):
+        return cached
+    rows = get_employee_managers(mapping_id=normalized_mapping_id)
+    item = rows[0] if rows else None
+    if item is not None:
+        write_leave_sphere_read_cache(
+            namespace="employee-managers:item",
+            params={"mapping_id": normalized_mapping_id},
+            value=item,
+        )
+    return item
 
 
 def _require_active_employee(employee_id: str, *, field: str) -> None:

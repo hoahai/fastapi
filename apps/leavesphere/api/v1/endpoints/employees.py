@@ -9,6 +9,7 @@ from apps.leavesphere.api.v1.helpers.employees import (
     list_employees,
     modify_employee,
 )
+from apps.leavesphere.api.v1.helpers.workspaceCache import invalidate_leave_sphere_workspace_caches
 from apps.leavesphere.api.v1.permissions import require_leavesphere_admin
 
 router = APIRouter(prefix="/employees")
@@ -149,7 +150,9 @@ def create_employee_route(
         - Legacy API key compat behavior remains unchanged
     """
     try:
-        return create_employee(payload.model_dump() if hasattr(payload, "model_dump") else payload.dict())
+        result = create_employee(payload.model_dump() if hasattr(payload, "model_dump") else payload.dict())
+        invalidate_leave_sphere_workspace_caches()
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -179,10 +182,12 @@ def update_employee_route(
         - Legacy API key compat behavior remains unchanged
     """
     try:
-        return modify_employee(
+        result = modify_employee(
             employee_id=employee_id,
             payload=payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True),
         )
+        invalidate_leave_sphere_workspace_caches()
+        return result
     except ValueError as exc:
         detail = str(exc)
         status_code = 404 if detail == "Employee not found" else 400

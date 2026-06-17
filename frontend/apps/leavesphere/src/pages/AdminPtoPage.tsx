@@ -69,6 +69,7 @@ import {
   adjustLeaveSphereAdminPtoBalance,
   createLeaveSphereAdminPtoRequest,
   loadLeaveSphereAdminPtoWorkspace,
+  mergeLeaveSphereAdminWorkspace,
   reviewLeaveSphereAdminPtoRequest,
   updateLeaveSphereAdminPtoRequest,
   updateLeaveSphereAdminSetupData,
@@ -101,7 +102,7 @@ import { LEAVESPHERE_TEAM_REGION_OPTIONS } from "@leavesphere/lib/ptoTypes";
 import type { LeaveSpherePtoRequest, LeaveSpherePtoType, LeaveSphereTeamRegion } from "@leavesphere/lib/ptoTypes";
 import type { LeaveSpherePtoBalance } from "@leavesphere/lib/ptoTypes";
 import { ActionIconButton } from "@tradsphere/components/dashboard/ActionIconButton";
-import { formatMonthDayYearLabel } from "@leavesphere/lib/ptoDate";
+import { buildMonthKeyForYear, formatMonthDayYearLabel } from "@leavesphere/lib/ptoDate";
 import { formatLeaveSpherePtoStatusLabel, getLeaveSpherePtoRequestSurfaceClassName } from "@leavesphere/lib/ptoStatus";
 import {
   readLeaveSpherePtoWorkspaceCacheSnapshot,
@@ -1631,17 +1632,17 @@ export default function LeaveSphereAdminPtoPage() {
     if (!Number.isInteger(parsedYear)) {
       return;
     }
-    const requestedMonthKey = parsedYear === currentYear ? calendarMonth : `${parsedYear}-01`;
+    const requestedMonthKey = buildMonthKeyForYear(currentMonthKey, parsedYear) || `${parsedYear}-01`;
+    setCalendarMonth(requestedMonthKey);
     const didLoad = await loadWorkspace(
       parsedYear,
       loadedYear === parsedYear ? "network-only" : "cache-first",
       buildInitialRequestLoadWindow(requestedMonthKey, parsedYear),
     );
     if (didLoad) {
-      setCalendarMonth(requestedMonthKey);
       applyRecentHistorySearchKeyword("");
     }
-  }, [applyRecentHistorySearchKeyword, calendarMonth, currentYear, loadWorkspace, loadedYear, selectedYear]);
+  }, [applyRecentHistorySearchKeyword, currentMonthKey, loadWorkspace, loadedYear, selectedYear]);
 
   const isRequestMonthAlreadyLoaded = useCallback((monthKey: string) => {
     const normalizedMonthKey = normalizeMonthKey(monthKey);
@@ -1741,7 +1742,8 @@ export default function LeaveSphereAdminPtoPage() {
 
   const applyWorkspace = useCallback((next: LeaveSphereAdminWorkspaceData) => {
     const effectiveYear = loadedYear ?? (Number.isInteger(selectedYearNumber) ? selectedYearNumber : currentYear);
-    commitWorkspace(next, "network", effectiveYear);
+    const merged = mergeLeaveSphereAdminWorkspace(workspaceRef.current, next);
+    commitWorkspace(merged, "network", effectiveYear);
   }, [commitWorkspace, currentYear, loadedYear, selectedYearNumber]);
 
   const openLoadHoursModal = useCallback((params?: {
@@ -1818,6 +1820,7 @@ export default function LeaveSphereAdminPtoPage() {
         workspaceKey,
         currentUserId,
         currentUserName,
+        currentWorkspace: workspaceRef.current,
         payload: {
           employeeId: nextPendingCreateRequest.employeeId,
           ...nextPendingCreateRequest.payload,
@@ -1866,6 +1869,7 @@ export default function LeaveSphereAdminPtoPage() {
         workspaceKey,
         currentUserId,
         currentUserName,
+        currentWorkspace: workspaceRef.current,
         payload: {
           requestId: selectedRequest.id,
           action,
@@ -1976,6 +1980,7 @@ export default function LeaveSphereAdminPtoPage() {
         workspaceKey,
         currentUserId,
         currentUserName,
+        currentWorkspace: workspaceRef.current,
         payload: {
           employeeId: adjustForm.employeeId,
           ptoTypeCode: adjustForm.ptoTypeCode,
@@ -2034,6 +2039,7 @@ export default function LeaveSphereAdminPtoPage() {
         workspaceKey,
         currentUserId,
         currentUserName,
+        currentWorkspace: workspaceRef.current,
         payload: {
           employeeId: selectedAdjustRequest.employeeId,
           ptoTypeCode: selectedAdjustRequest.ptoTypeCode,
@@ -2150,6 +2156,7 @@ export default function LeaveSphereAdminPtoPage() {
         workspaceKey,
         currentUserId,
         currentUserName,
+        currentWorkspace: workspaceRef.current,
         payload,
       });
       applyWorkspace(result.workspace);
@@ -2203,6 +2210,7 @@ export default function LeaveSphereAdminPtoPage() {
         workspaceKey,
         currentUserId,
         currentUserName,
+        currentWorkspace: workspaceRef.current,
         payload: {
           transactionId: params.requestId,
           type: params.payload.type,
@@ -2610,7 +2618,8 @@ export default function LeaveSphereAdminPtoPage() {
           onRefresh={() => {
             setIsChipRefreshOverlayVisible(true);
             const loadYear = loadedYear ?? currentYear;
-            const requestedMonthKey = normalizeMonthKey(calendarMonth) || `${loadYear}-01`;
+            const requestedMonthKey = buildMonthKeyForYear(currentMonthKey, loadYear) || `${loadYear}-01`;
+            setCalendarMonth(requestedMonthKey);
             void (async () => {
               try {
                 await loadWorkspace(

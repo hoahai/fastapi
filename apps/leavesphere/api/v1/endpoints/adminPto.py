@@ -196,7 +196,7 @@ def create_leave_management_request_route(
         {
           "meta": {"timestamp": "2026-05-29T10:00:00+07:00", "duration_ms": 2},
           "data": {
-            "workspace": { "...": "refreshed Leave Management workspace payload" },
+            "workspacePatch": { "...": "changed Leave Management rows only" },
             "source": "network",
             "createdRequestId": "pto-1",
             "inserted": 1,
@@ -210,6 +210,7 @@ def create_leave_management_request_route(
         - `hours` must be greater than zero
         - The request is stored as a pending debit transaction unless `approveImmediately=true`
         - `approveImmediately=true` inserts the request directly in `Approved` state with the admin as approver
+        - Mutation responses may return `workspacePatch` instead of a full `workspace` when the server can patch a cached snapshot
     """
     try:
         body = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
@@ -241,7 +242,7 @@ def update_leave_management_request_route(
         {
           "meta": {"timestamp": "2026-05-29T10:00:00+07:00", "duration_ms": 2},
           "data": {
-            "workspace": { "...": "refreshed Leave Management workspace payload" },
+            "workspacePatch": { "...": "changed Leave Management rows only" },
             "source": "network",
             "updated": 1
           }
@@ -251,6 +252,7 @@ def update_leave_management_request_route(
         - Requires leavesphere.admin permission or workspace.super_admin
         - The transaction must already exist
         - Request hours are stored as positive values
+        - Mutation responses may return `workspacePatch` instead of a full `workspace` when the server can patch a cached snapshot
     """
     try:
         body = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
@@ -281,7 +283,7 @@ def review_leave_management_request_route(
         {
           "meta": {"timestamp": "2026-05-29T10:00:00+07:00", "duration_ms": 2},
           "data": {
-            "workspace": { "...": "refreshed Leave Management workspace payload" },
+            "workspacePatch": { "...": "changed Leave Management rows only" },
             "source": "network",
             "updated": 1,
             "status": "Approved"
@@ -293,6 +295,7 @@ def review_leave_management_request_route(
         - `action` must be `approve`, `reject`, `cancel`, or `revert`
         - The transaction must already exist
         - Admin review bypasses direct-manager validation
+        - Mutation responses may return `workspacePatch` instead of a full `workspace` when the server can patch a cached snapshot
     """
     try:
         body = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
@@ -329,7 +332,7 @@ def adjust_leave_management_balance_route(
         {
           "meta": {"timestamp": "2026-05-29T10:00:00+07:00", "duration_ms": 2},
           "data": {
-            "workspace": { "...": "refreshed Leave Management workspace payload" },
+            "workspacePatch": { "...": "changed Leave Management rows only" },
             "source": "network",
             "updated": 1,
             "status": "Approved"
@@ -340,6 +343,7 @@ def adjust_leave_management_balance_route(
         - Requires leavesphere.admin permission or workspace.super_admin
         - `hours` must be zero or greater
         - `status` must be `Approved`
+        - Mutation responses may return `workspacePatch` instead of a full `workspace` when the server can patch a cached snapshot
     """
     try:
         body = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
@@ -364,7 +368,7 @@ def update_leave_management_setup_route(
         {
           "meta": {"timestamp": "2026-05-29T10:00:00+07:00", "duration_ms": 2},
           "data": {
-            "workspace": { "...": "refreshed Leave Management workspace payload" },
+            "workspacePatch": { "...": "changed Leave Management rows only" },
             "source": "network"
           }
         }
@@ -373,6 +377,7 @@ def update_leave_management_setup_route(
         - Requires leavesphere.admin permission or workspace.super_admin
         - `kind` must be one of `pto_type`, `pto_action`, `employee`, `employee_manager`, or `holiday`
         - Employee setup may generate synthetic identity values when the UI does not provide them
+        - Mutation responses may return `workspacePatch` instead of a full `workspace` when the server can patch a cached snapshot
     """
     try:
         body = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()

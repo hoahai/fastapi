@@ -9,6 +9,7 @@ from apps.leavesphere.api.v1.helpers.employeeManagers import (
     list_employee_managers,
     remove_employee_manager,
 )
+from apps.leavesphere.api.v1.helpers.workspaceCache import invalidate_leave_sphere_workspace_caches
 from apps.leavesphere.api.v1.permissions import require_leavesphere_admin
 
 router = APIRouter(prefix="/employeeManagers")
@@ -123,7 +124,9 @@ def create_employee_manager_route(
         - Legacy API key compat behavior remains unchanged
     """
     try:
-        return create_employee_manager(payload.model_dump() if hasattr(payload, "model_dump") else payload.dict())
+        result = create_employee_manager(payload.model_dump() if hasattr(payload, "model_dump") else payload.dict())
+        invalidate_leave_sphere_workspace_caches()
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -151,7 +154,9 @@ def delete_employee_manager_route(
         - Legacy API key compat behavior remains unchanged
     """
     try:
-        return remove_employee_manager(id)
+        result = remove_employee_manager(id)
+        invalidate_leave_sphere_workspace_caches()
+        return result
     except ValueError as exc:
         detail = str(exc)
         status_code = 404 if detail == "Employee manager mapping not found" else 400

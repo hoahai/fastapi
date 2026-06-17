@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from copy import deepcopy
 from datetime import date, datetime
 from decimal import Decimal, InvalidOperation
 from uuid import uuid4
@@ -52,12 +53,21 @@ from apps.leavesphere.api.v1.helpers.ptoWorkspaceShared import (
     build_leave_sphere_workspace_common_payload,
     build_pto_employee_map,
     build_pto_request_rows,
+    clear_leave_sphere_pto_workspace_catalog_cache,
     load_leave_sphere_pto_workspace_catalogs,
     resolve_pto_type_code_from_catalog,
 )
+from apps.leavesphere.api.v1.helpers.readCache import clear_leave_sphere_read_cache
 from apps.leavesphere.api.v1.helpers.ptoActions import create_pto_action, modify_pto_action
 from apps.leavesphere.api.v1.helpers.ptoTypes import create_pto_type, modify_pto_type
 from apps.leavesphere.api.v1.helpers.ptoTransactions import approve_request, create_adjustment, create_request, reject_request
+from apps.leavesphere.api.v1.helpers.workspaceCache import (
+    clear_leave_sphere_workspace_cache_by_page,
+    read_leave_sphere_workspace_cache,
+    read_leave_sphere_workspace_latest_cache,
+    write_leave_sphere_workspace_cache,
+    write_leave_sphere_workspace_cache_value,
+)
 from shared.auth.dependencies import get_auth_principal
 from shared.db import execute_write, run_transaction
 
@@ -626,6 +636,357 @@ def _build_workspace(
     }
 
 
+def _resolve_workspace_cache_user_key(request) -> str:
+    principal = get_auth_principal(request)
+    if principal is not None:
+        principal_email = _normalize_email(getattr(principal, "email", ""))
+        if principal_email:
+            return principal_email
+        principal_id = _normalize_text(getattr(principal, "user_id", "")).lower()
+        if principal_id:
+            return principal_id
+        raw_email = _extract_email_from_auth_payload(getattr(principal, "raw_user", None))
+        if raw_email:
+            return raw_email
+
+    headers = getattr(request, "headers", {})
+    header_email = _normalize_email(headers.get("x-user-email"))
+    if header_email:
+        return header_email
+    header_name = _normalize_text(headers.get("x-user-name")).lower()
+    if header_name:
+        return header_name
+    return "unknown"
+
+
+def _load_cached_workspace_snapshot(
+    *,
+    request,
+    page_code: str,
+    year: int,
+    params: dict[str, object] | None = None,
+) -> dict | None:
+    user_key = _resolve_workspace_cache_user_key(request)
+    snapshot = read_leave_sphere_workspace_cache(
+        page_code=page_code,
+        user_key=user_key,
+        year=year,
+        params=params,
+    )
+    if snapshot and int(snapshot.get("year") or 0) == int(year):
+        workspace = snapshot.get("workspace")
+        if isinstance(workspace, dict):
+            return workspace
+    return None
+
+
+def _store_cached_workspace_snapshot(
+    *,
+    request,
+    page_code: str,
+    year: int,
+    workspace: dict,
+    params: dict[str, object] | None = None,
+) -> None:
+    user_key = _resolve_workspace_cache_user_key(request)
+    write_leave_sphere_workspace_cache(
+        page_code=page_code,
+        user_key=user_key,
+        year=year,
+        workspace=workspace,
+        params=params,
+    )
+
+
+def _sort_admin_request_rows(request_rows: list[dict]) -> list[dict]:
+    return sorted(
+        request_rows,
+        key=lambda item: (
+            _normalize_text(item.get("submittedAt")),
+            _normalize_text(item.get("id")),
+        ),
+        reverse=True,
+    )
+
+
+def _sort_admin_balance_transaction_rows(transaction_rows: list[dict]) -> list[dict]:
+    return sorted(
+        transaction_rows,
+        key=lambda item: (
+            _normalize_text(item.get("createdAt")),
+            _normalize_text(item.get("id")),
+        ),
+        reverse=True,
+    )
+
+
+def _build_admin_pto_type_by_code(workspace: dict) -> dict[str, dict]:
+    pto_types = workspace.get("ptoTypes") if isinstance(workspace.get("ptoTypes"), list) else []
+    return {
+        _normalize_text(row.get("code")).upper(): row
+        for row in pto_types
+        if isinstance(row, dict) and _normalize_text(row.get("code"))
+    }
+
+
+def _rebuild_admin_workspace_employee_balances(workspace: dict) -> None:
+    employees = workspace.get("employees") if isinstance(workspace.get("employees"), list) else []
+    pto_types = workspace.get("ptoTypes") if isinstance(workspace.get("ptoTypes"), list) else []
+    pto_actions = workspace.get("ptoActions") if isinstance(workspace.get("ptoActions"), list) else []
+    requests = workspace.get("requests") if isinstance(workspace.get("requests"), list) else []
+    balance_transactions = workspace.get("balanceTransactions") if isinstance(workspace.get("balanceTransactions"), list) else []
+
+    employee_map = build_pto_employee_map([row for row in employees if isinstance(row, dict)])
+    pto_type_by_code = {
+        _normalize_text(row.get("code")).upper(): row
+        for row in pto_types
+        if isinstance(row, dict) and _normalize_text(row.get("code"))
+    }
+    pto_action_by_code = {
+        _normalize_text(row.get("code")).upper(): row
+        for row in pto_actions
+        if isinstance(row, dict) and _normalize_text(row.get("code"))
+    }
+    employee_balances = _build_employee_balances(
+        employees=[row for row in employees if isinstance(row, dict)],
+        employee_map=employee_map,
+        pto_types=[row for row in pto_types if isinstance(row, dict)],
+        pto_type_by_code=pto_type_by_code,
+        pto_action_by_code=pto_action_by_code,
+        request_rows=[row for row in requests if isinstance(row, dict)],
+        balance_rows=[row for row in balance_transactions if isinstance(row, dict)],
+    )
+    workspace["employeeBalances"] = employee_balances
+
+    current_user_id = _normalize_text(workspace.get("currentUserId"))
+    current_user_balances = next(
+        (row.get("balances") for row in employee_balances if row.get("employeeId") == current_user_id),
+        [],
+    )
+    workspace["balances"] = current_user_balances if isinstance(current_user_balances, list) else []
+
+
+def _upsert_admin_request_row(
+    *,
+    workspace: dict,
+    request_row: dict,
+) -> None:
+    requests = [row for row in workspace.get("requests", []) if isinstance(row, dict)]
+    request_id = _normalize_text(request_row.get("id"))
+    updated = False
+    for index, row in enumerate(requests):
+        if _normalize_text(row.get("id")) != request_id:
+            continue
+        requests[index] = request_row
+        updated = True
+        break
+    if not updated:
+        requests.append(request_row)
+    workspace["requests"] = _sort_admin_request_rows(requests)
+
+
+def _replace_admin_request_row(
+    *,
+    workspace: dict,
+    transaction_id: str,
+    updates: dict,
+) -> bool:
+    requests = [row for row in workspace.get("requests", []) if isinstance(row, dict)]
+    for index, row in enumerate(requests):
+        if _normalize_text(row.get("id")) != _normalize_text(transaction_id):
+            continue
+        next_row = {**row, **updates}
+        requests[index] = next_row
+        workspace["requests"] = _sort_admin_request_rows(requests)
+        return True
+    return False
+
+
+def _upsert_admin_balance_transaction_row(
+    *,
+    workspace: dict,
+    transaction_row: dict,
+) -> None:
+    rows = [row for row in workspace.get("balanceTransactions", []) if isinstance(row, dict)]
+    transaction_id = _normalize_text(transaction_row.get("id"))
+    updated = False
+    for index, row in enumerate(rows):
+        if _normalize_text(row.get("id")) != transaction_id:
+            continue
+        rows[index] = transaction_row
+        updated = True
+        break
+    if not updated:
+        rows.append(transaction_row)
+    workspace["balanceTransactions"] = _sort_admin_balance_transaction_rows(rows)
+
+
+def _build_admin_request_row_from_payload(
+    *,
+    workspace: dict,
+    request_id: str,
+    payload: dict,
+    status: str,
+    current_user_name: str,
+) -> dict:
+    pto_types = [row for row in workspace.get("ptoTypes", []) if isinstance(row, dict)]
+    pto_type_by_code = {
+        _normalize_text(row.get("code")).upper(): row
+        for row in pto_types
+        if _normalize_text(row.get("code"))
+    }
+    pto_type_code = _resolve_pto_type_code(
+        value=payload.get("ptoTypeCode") or payload.get("type"),
+        pto_type_by_code=pto_type_by_code,
+    )
+    pto_type = pto_type_by_code.get(pto_type_code, {})
+    employee_id = _normalize_text(payload.get("employeeId"))
+    employee_row = next(
+        (row for row in workspace.get("employees", []) if isinstance(row, dict) and _normalize_text(row.get("employeeId")) == employee_id),
+        {},
+    )
+    manager_id = _normalize_text(employee_row.get("managerId")) or _normalize_text(workspace.get("managerId")) or _normalize_text(workspace.get("currentUserId"))
+    today = date.today().isoformat()
+    request_type = _normalize_text(pto_type.get("type"))
+    if not request_type:
+        request_type = pto_type_code.lower() if pto_type_code else _normalize_text(payload.get("type")) or "vacation"
+    return {
+        "id": request_id,
+        "employeeId": employee_id,
+        "managerId": manager_id or None,
+        "type": request_type,
+        "ptoTypeCode": pto_type_code,
+        "startDate": _normalize_optional_iso_date(payload.get("startDate")) or today,
+        "endDate": _normalize_optional_iso_date(payload.get("endDate")) or today,
+        "hours": float(_normalize_positive_requested_hours(payload.get("hours"))),
+        "description": _normalize_text(payload.get("description")) or None,
+        "status": status.lower(),
+        "submittedAt": today,
+        "reviewedAt": today if status.lower() != "pending" else None,
+        "reviewerName": current_user_name if status.lower() != "pending" else None,
+        "approverNote": None,
+    }
+
+
+def _apply_admin_workspace_mutation_from_cache(
+    *,
+    request,
+    year: int,
+    mutate_workspace,
+) -> dict | None:
+    user_key = _resolve_workspace_cache_user_key(request)
+    latest = read_leave_sphere_workspace_latest_cache(page_code="admin-pto", user_key=user_key)
+    if not isinstance(latest, dict) or int(latest.get("year") or 0) != int(year):
+        return None
+    cached_workspace = latest.get("workspace")
+    if not isinstance(cached_workspace, dict):
+        return None
+    cache_key = _normalize_text(latest.get("cacheKey"))
+    if not cache_key:
+        return None
+
+    workspace = cached_workspace
+    mutated = mutate_workspace(workspace)
+    if not mutated:
+        return None
+
+    _rebuild_admin_workspace_employee_balances(workspace)
+    write_leave_sphere_workspace_cache_value(
+        cache_key=cache_key,
+        page_code="admin-pto",
+        user_key=user_key,
+        year=year,
+        workspace=workspace,
+    )
+    return workspace
+
+
+def _copy_workspace_row(row: dict) -> dict:
+    return deepcopy(row)
+
+
+def _build_admin_workspace_patch(
+    *,
+    workspace: dict,
+    request_ids: list[str] | None = None,
+    balance_transaction_ids: list[str] | None = None,
+    employee_ids: list[str] | None = None,
+    holiday_ids: list[str] | None = None,
+    pto_type_codes: list[str] | None = None,
+    pto_action_codes: list[str] | None = None,
+    include_current_balances: bool = False,
+) -> dict:
+    patch = {
+        "currentUserId": workspace.get("currentUserId"),
+        "currentUserName": workspace.get("currentUserName"),
+        "currentUserEmail": workspace.get("currentUserEmail"),
+        "managerId": workspace.get("managerId"),
+        "currentUserTeamRegion": workspace.get("currentUserTeamRegion"),
+        "isManager": workspace.get("isManager"),
+    }
+    if request_ids:
+        request_id_set = {_normalize_text(item) for item in request_ids if _normalize_text(item)}
+        patch["requests"] = [
+            _copy_workspace_row(row)
+            for row in workspace.get("requests", [])
+            if isinstance(row, dict) and _normalize_text(row.get("id")) in request_id_set
+        ]
+    if balance_transaction_ids:
+        transaction_id_set = {_normalize_text(item) for item in balance_transaction_ids if _normalize_text(item)}
+        patch["balanceTransactions"] = [
+            _copy_workspace_row(row)
+            for row in workspace.get("balanceTransactions", [])
+            if isinstance(row, dict) and _normalize_text(row.get("id")) in transaction_id_set
+        ]
+    if employee_ids:
+        employee_id_set = {_normalize_text(item) for item in employee_ids if _normalize_text(item)}
+        patch["employees"] = [
+            _copy_workspace_row(row)
+            for row in workspace.get("employees", [])
+            if isinstance(row, dict) and _normalize_text(row.get("employeeId")) in employee_id_set
+        ]
+        patch["employeeBalances"] = [
+            _copy_workspace_row(row)
+            for row in workspace.get("employeeBalances", [])
+            if isinstance(row, dict) and _normalize_text(row.get("employeeId")) in employee_id_set
+        ]
+    if holiday_ids:
+        holiday_id_set = {_normalize_text(item) for item in holiday_ids if _normalize_text(item)}
+        patch["holidays"] = [
+            _copy_workspace_row(row)
+            for row in workspace.get("holidays", [])
+            if isinstance(row, dict) and _normalize_text(row.get("id")) in holiday_id_set
+        ]
+    if pto_type_codes:
+        pto_type_code_set = {_normalize_text(item).upper() for item in pto_type_codes if _normalize_text(item)}
+        patch["ptoTypes"] = [
+            _copy_workspace_row(row)
+            for row in workspace.get("ptoTypes", [])
+            if isinstance(row, dict) and _normalize_text(row.get("code")).upper() in pto_type_code_set
+        ]
+    if pto_action_codes:
+        pto_action_code_set = {_normalize_text(item).upper() for item in pto_action_codes if _normalize_text(item)}
+        patch["ptoActions"] = [
+            _copy_workspace_row(row)
+            for row in workspace.get("ptoActions", [])
+            if isinstance(row, dict) and _normalize_text(row.get("code")).upper() in pto_action_code_set
+        ]
+    if include_current_balances:
+        current_user_id = _normalize_text(workspace.get("currentUserId"))
+        current_row = next(
+            (
+                row
+                for row in workspace.get("employeeBalances", [])
+                if isinstance(row, dict) and _normalize_text(row.get("employeeId")) == current_user_id
+            ),
+            None,
+        )
+        if isinstance(current_row, dict):
+            balances = current_row.get("balances") if isinstance(current_row.get("balances"), list) else []
+            patch["balances"] = [_copy_workspace_row(row) for row in balances if isinstance(row, dict)]
+    return patch
+
+
 def load_leave_management_workspace(
     *,
     request,
@@ -636,7 +997,22 @@ def load_leave_management_workspace(
     overlap_month: str | None = None,
 ) -> dict:
     selected_year = _normalize_year(year)
-    return _build_workspace(
+    cache_params = {
+        "include_pending": include_pending,
+        "history_start_date": history_start_date,
+        "history_end_date": history_end_date,
+        "overlap_month": overlap_month,
+    }
+    cached_workspace = _load_cached_workspace_snapshot(
+        request=request,
+        page_code="admin-pto",
+        year=selected_year,
+        params=cache_params,
+    )
+    if isinstance(cached_workspace, dict):
+        return cached_workspace
+
+    workspace = _build_workspace(
         request=request,
         year=selected_year,
         include_year_requests=False,
@@ -645,6 +1021,14 @@ def load_leave_management_workspace(
         history_end_date=history_end_date,
         overlap_month=overlap_month,
     )
+    _store_cached_workspace_snapshot(
+        request=request,
+        page_code="admin-pto",
+        year=selected_year,
+        workspace=workspace,
+        params=cache_params,
+    )
+    return workspace
 
 
 def _resolve_request_year(payload: dict, transaction: dict | None = None) -> int:
@@ -735,6 +1119,7 @@ def create_leave_management_request(*, request, payload: dict) -> dict:
 
     current_employee = _resolve_current_employee_record(request)
     current_employee_id = _normalize_text(current_employee.get("id"))
+    current_employee_name = _employee_full_name(current_employee)
     catalogs = load_leave_sphere_pto_workspace_catalogs()
     pto_type_by_code = catalogs.pto_type_by_code
     pto_actions = catalogs.pto_actions
@@ -802,13 +1187,51 @@ def create_leave_management_request(*, request, payload: dict) -> dict:
         inserted = created_request.get("inserted")
         if not created_request_id:
             raise ValueError("Failed to create PTO request")
-    return {
-        "workspace": _build_workspace(request=request, year=year),
+
+    workspace = _apply_admin_workspace_mutation_from_cache(
+        request=request,
+        year=year,
+        mutate_workspace=lambda cached_workspace: (
+            _upsert_admin_request_row(
+                workspace=cached_workspace,
+                request_row=_build_admin_request_row_from_payload(
+                    workspace=cached_workspace,
+                    request_id=created_request_id,
+                    payload=payload,
+                    status="Approved" if approve_immediately else "Pending",
+                    current_user_name=current_employee_name,
+                ),
+            )
+            or True
+        ),
+    )
+    workspace_patch = None
+    if workspace is not None:
+        workspace_patch = _build_admin_workspace_patch(
+            workspace=workspace,
+            request_ids=[created_request_id],
+            employee_ids=[employee_id],
+            include_current_balances=_normalize_text(employee_id) == _normalize_text(workspace.get("currentUserId")),
+        )
+    if workspace is None:
+        workspace = _build_workspace(request=request, year=year)
+        _store_cached_workspace_snapshot(
+            request=request,
+            page_code="admin-pto",
+            year=year,
+            workspace=workspace,
+        )
+    response = {
         "source": "network",
         "createdRequestId": created_request_id,
         "inserted": inserted,
         "status": "Approved" if approve_immediately else "Pending",
     }
+    if workspace_patch is not None:
+        response["workspacePatch"] = workspace_patch
+    else:
+        response["workspace"] = workspace
+    return response
 
 
 def update_leave_management_request(*, request, payload: dict) -> dict:
@@ -845,11 +1268,55 @@ def update_leave_management_request(*, request, payload: dict) -> dict:
         "description": _normalize_text(payload.get("description")) or transaction.get("description"),
     }
     updated = update_pto_transaction(transaction_id=transaction_id, updates=updates)
-    return {
-        "workspace": _build_workspace(request=request, year=_resolve_workspace_year_from_transaction(transaction)),
+    requested_status = _normalize_text(transaction.get("status")).lower()
+    year_key = _resolve_workspace_year_from_transaction(transaction)
+    workspace = _apply_admin_workspace_mutation_from_cache(
+        request=request,
+        year=year_key,
+        mutate_workspace=lambda cached_workspace: (
+            _replace_admin_request_row(
+                workspace=cached_workspace,
+                transaction_id=transaction_id,
+                updates={
+                    "ptoTypeCode": pto_type_code,
+                    "type": _normalize_text(_build_admin_pto_type_by_code(cached_workspace).get(pto_type_code, {}).get("type"))
+                    or _normalize_text(payload.get("type"))
+                    or "vacation",
+                    "hours": float(stored_hours),
+                    "startDate": updates["startDate"],
+                    "endDate": updates["endDate"],
+                    "description": updates["description"],
+                    "status": requested_status,
+                },
+            )
+            or True
+        ),
+    )
+    workspace_patch = None
+    if workspace is not None:
+        workspace_patch = _build_admin_workspace_patch(
+            workspace=workspace,
+            request_ids=[transaction_id],
+            employee_ids=[_normalize_text(transaction.get("employeeId"))],
+            include_current_balances=_normalize_text(transaction.get("employeeId")) == _normalize_text(workspace.get("currentUserId")),
+        )
+    if workspace is None:
+        workspace = _build_workspace(request=request, year=year_key)
+        _store_cached_workspace_snapshot(
+            request=request,
+            page_code="admin-pto",
+            year=year_key,
+            workspace=workspace,
+        )
+    response = {
         "source": "network",
         "updated": updated,
     }
+    if workspace_patch is not None:
+        response["workspacePatch"] = workspace_patch
+    else:
+        response["workspace"] = workspace
+    return response
 
 
 def review_leave_management_request(*, request, payload: dict) -> dict:
@@ -912,12 +1379,49 @@ def review_leave_management_request(*, request, payload: dict) -> dict:
     else:
         raise ValueError("action must be approve, reject, cancel, or revert")
 
-    return {
-        "workspace": _build_workspace(request=request, year=_resolve_workspace_year_from_transaction(transaction)),
+    workspace = _apply_admin_workspace_mutation_from_cache(
+        request=request,
+        year=_resolve_workspace_year_from_transaction(transaction),
+        mutate_workspace=lambda cached_workspace: (
+            _replace_admin_request_row(
+                workspace=cached_workspace,
+                transaction_id=transaction_id,
+                updates={
+                    "status": result.get("status", "Pending").lower(),
+                    "approverNote": approver_note,
+                    "reviewedAt": date.today().isoformat(),
+                    "reviewerName": _normalize_text(cached_workspace.get("currentUserName")),
+                },
+            )
+            or True
+        ),
+    )
+    workspace_patch = None
+    if workspace is not None:
+        workspace_patch = _build_admin_workspace_patch(
+            workspace=workspace,
+            request_ids=[transaction_id],
+            employee_ids=[_normalize_text(transaction.get("employeeId"))],
+            include_current_balances=_normalize_text(transaction.get("employeeId")) == _normalize_text(workspace.get("currentUserId")),
+        )
+    if workspace is None:
+        workspace = _build_workspace(request=request, year=_resolve_workspace_year_from_transaction(transaction))
+        _store_cached_workspace_snapshot(
+            request=request,
+            page_code="admin-pto",
+            year=_resolve_workspace_year_from_transaction(transaction),
+            workspace=workspace,
+        )
+    response = {
         "source": "network",
         "updated": result.get("updated"),
         "status": result.get("status"),
     }
+    if workspace_patch is not None:
+        response["workspacePatch"] = workspace_patch
+    else:
+        response["workspace"] = workspace
+    return response
 
 
 def adjust_leave_management_balance(*, request, payload: dict) -> dict:
@@ -971,8 +1475,10 @@ def adjust_leave_management_balance(*, request, payload: dict) -> dict:
             },
         )
     else:
-        updated = create_adjustment(
+        generated_transaction_id = str(uuid4())
+        created_adjustment = create_adjustment(
             {
+                "transactionId": generated_transaction_id,
                 "employeeId": employee_id,
                 "ptoTypeCode": pto_type_code,
                 "ptoActionCode": resolved_action_code,
@@ -981,14 +1487,58 @@ def adjust_leave_management_balance(*, request, payload: dict) -> dict:
                 "approverNote": approver_note,
                 "status": "Approved",
             }
-        ).get("inserted")
+        )
+        updated = created_adjustment.get("inserted")
+        transaction_id = str(created_adjustment.get("id") or generated_transaction_id or transaction_id or "").strip()
 
-    return {
-        "workspace": _build_workspace(request=request, year=year),
+    workspace = _apply_admin_workspace_mutation_from_cache(
+        request=request,
+        year=year,
+        mutate_workspace=lambda cached_workspace: (
+            _upsert_admin_balance_transaction_row(
+                workspace=cached_workspace,
+                transaction_row={
+                    "id": transaction_id or f"adjustment-{year}-{employee_id}-{pto_type_code}-{hours}",
+                    "employeeId": employee_id,
+                    "ptoTypeCode": pto_type_code,
+                    "ptoActionCode": resolved_action_code,
+                    "hours": float(hours),
+                    "year": year,
+                    "status": "Approved",
+                    "approverNote": approver_note,
+                    "createdAt": date.today().isoformat(),
+                    "createdByName": _normalize_text(cached_workspace.get("currentUserName")),
+                },
+            )
+            or True
+        ),
+    )
+    workspace_patch = None
+    if workspace is not None:
+        workspace_patch = _build_admin_workspace_patch(
+            workspace=workspace,
+            balance_transaction_ids=[transaction_id],
+            employee_ids=[employee_id],
+            include_current_balances=employee_id == _normalize_text(workspace.get("currentUserId")),
+        )
+    if workspace is None:
+        workspace = _build_workspace(request=request, year=year)
+        _store_cached_workspace_snapshot(
+            request=request,
+            page_code="admin-pto",
+            year=year,
+            workspace=workspace,
+        )
+    response = {
         "source": "network",
         "updated": updated,
         "status": "Approved",
     }
+    if workspace_patch is not None:
+        response["workspacePatch"] = workspace_patch
+    else:
+        response["workspace"] = workspace
+    return response
 
 
 def _replace_employee_manager_mapping(*, employee_id: str, manager_id: str) -> int:
@@ -1052,6 +1602,7 @@ def update_leave_management_setup_data(*, request, payload: dict) -> dict:
     current_employee = _resolve_current_employee_record(request)
     current_user_name = _employee_full_name(current_employee)
     current_year = date.today().year
+    workspace_patch_kwargs: dict[str, object] = {}
 
     if kind == "pto_type":
         code = _normalize_text(payload.get("code")).upper()
@@ -1077,6 +1628,7 @@ def update_leave_management_setup_data(*, request, payload: dict) -> dict:
             )
         if not active:
             modify_pto_type(code=code, payload={"name": label})
+        workspace_patch_kwargs["pto_type_codes"] = [code]
     elif kind == "pto_action":
         code = _normalize_text(payload.get("code")).upper()
         label = _normalize_text(payload.get("label"))
@@ -1084,10 +1636,12 @@ def update_leave_management_setup_data(*, request, payload: dict) -> dict:
         if not label:
             raise ValueError("label is required")
         existing = get_pto_actions(code=code) if code else []
+        action_code = code or f"ACT{uuid4().hex[:5]}"
         if existing:
-            modify_pto_action(code=code, payload={"name": label, "color": detail or None})
+            modify_pto_action(code=action_code, payload={"name": label, "color": detail or None})
         else:
-            create_pto_action({"code": code or f"ACT{uuid4().hex[:5]}", "name": label, "color": detail or None})
+            create_pto_action({"code": action_code, "name": label, "color": detail or None})
+        workspace_patch_kwargs["pto_action_codes"] = [action_code]
     elif kind == "employee":
         employee_name = _normalize_text(payload.get("employeeName"))
         if not employee_name:
@@ -1116,30 +1670,50 @@ def update_leave_management_setup_data(*, request, payload: dict) -> dict:
             year=current_year,
             current_user_name=current_user_name,
         )
+        workspace_patch_kwargs["employee_ids"] = [employee_id]
     elif kind == "employee_manager":
         employee_id = _normalize_text(payload.get("employeeId"))
         manager_id = _normalize_text(payload.get("managerId"))
         if not employee_id or not manager_id:
             raise ValueError("employeeId and managerId are required")
         _replace_employee_manager_mapping(employee_id=employee_id, manager_id=manager_id)
+        workspace_patch_kwargs["employee_ids"] = [employee_id]
     elif kind == "holiday":
         holiday_name = _normalize_text(payload.get("name"))
         holiday_date = _normalize_optional_iso_date(payload.get("date"))
         team_region = _normalize_team_region(payload.get("teamRegion"))
         if not holiday_name or not holiday_date:
             raise ValueError("Holiday name and date are required")
+        holiday_id = f"holiday-{team_region.lower()}-{holiday_date}"
         upsert_holiday(
             {
-                "id": f"holiday-{team_region.lower()}-{holiday_date}",
+                "id": holiday_id,
                 "name": holiday_name,
                 "date": holiday_date,
                 "teamRegion": team_region,
             }
         )
+        workspace_patch_kwargs["holiday_ids"] = [holiday_id]
     else:
         raise ValueError("kind is required")
 
-    return {
-        "workspace": _build_workspace(request=request, year=current_year),
+    clear_leave_sphere_pto_workspace_catalog_cache()
+    clear_leave_sphere_read_cache()
+    clear_leave_sphere_workspace_cache_by_page(page_code="admin-pto")
+    clear_leave_sphere_workspace_cache_by_page(page_code="my-pto")
+
+    workspace = _build_workspace(request=request, year=current_year)
+    _store_cached_workspace_snapshot(
+        request=request,
+        page_code="admin-pto",
+        year=current_year,
+        workspace=workspace,
+    )
+    response = {
         "source": "network",
     }
+    if workspace_patch_kwargs:
+        response["workspacePatch"] = _build_admin_workspace_patch(workspace=workspace, **workspace_patch_kwargs)
+    else:
+        response["workspace"] = workspace
+    return response

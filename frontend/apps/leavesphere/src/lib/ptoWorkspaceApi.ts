@@ -29,17 +29,22 @@ type WorkspaceArgs = {
 type SubmitArgs = {
   requestJson: RequestJson;
   payload: LeaveSpherePtoSubmitInput;
+  currentWorkspace?: LeaveSpherePtoWorkspaceData | null;
 };
 
 type UpdateArgs = {
   requestJson: RequestJson;
   payload: LeaveSpherePtoUpdateInput;
+  currentWorkspace?: LeaveSpherePtoWorkspaceData | null;
 };
 
 type ReviewArgs = {
   requestJson: RequestJson;
   payload: LeaveSpherePtoReviewInput;
+  currentWorkspace?: LeaveSpherePtoWorkspaceData | null;
 };
+
+type LeaveSpherePtoWorkspaceDelta = Partial<LeaveSpherePtoWorkspaceData>;
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -62,6 +67,66 @@ function unwrapEnvelope(payload: unknown): unknown {
     return payload.data;
   }
   return payload;
+}
+
+function cloneWorkspace(workspace: LeaveSpherePtoWorkspaceData): LeaveSpherePtoWorkspaceData {
+  return {
+    ...workspace,
+    employees: workspace.employees.map((item) => ({ ...item })),
+    ptoTypes: workspace.ptoTypes.map((item) => ({ ...item })),
+    ptoActions: workspace.ptoActions.map((item) => ({ ...item })),
+    balances: workspace.balances.map((item) => ({ ...item })),
+    requests: workspace.requests.map((item) => ({ ...item })),
+    holidays: workspace.holidays.map((item) => ({ ...item })),
+    directReports: workspace.directReports.map((item) => ({ ...item })),
+  };
+}
+
+function mergeListByKey<T>(
+  currentItems: T[],
+  incomingItems: T[] | undefined | null,
+  getKey: (item: T) => string,
+): T[] {
+  if (!Array.isArray(incomingItems)) {
+    return currentItems.map((item) => ({ ...item }));
+  }
+
+  const incomingByKey = new Map<string, T>();
+  const incomingOrder: string[] = [];
+  for (const item of incomingItems) {
+    const key = getKey(item);
+    if (!key || incomingByKey.has(key)) {
+      continue;
+    }
+    incomingByKey.set(key, item);
+    incomingOrder.push(key);
+  }
+
+  const merged: T[] = [];
+  const seenKeys = new Set<string>();
+
+  for (const item of currentItems) {
+    const key = getKey(item);
+    if (!key || seenKeys.has(key)) {
+      continue;
+    }
+    seenKeys.add(key);
+    const incoming = incomingByKey.get(key);
+    merged.push(incoming ? incoming : { ...item });
+  }
+
+  for (const key of incomingOrder) {
+    if (seenKeys.has(key)) {
+      continue;
+    }
+    seenKeys.add(key);
+    const incoming = incomingByKey.get(key);
+    if (incoming) {
+      merged.push(incoming);
+    }
+  }
+
+  return merged;
 }
 
 function normalizePtoType(value: unknown): LeaveSpherePtoType | null {
@@ -272,6 +337,141 @@ function normalizeWorkspace(payload: unknown): LeaveSpherePtoWorkspaceData | nul
   };
 }
 
+function normalizeWorkspaceDelta(payload: unknown): LeaveSpherePtoWorkspaceDelta | null {
+  const raw = unwrapEnvelope(payload);
+  const workspace = isRecord(raw) && isRecord(raw.workspacePatch) ? raw.workspacePatch : null;
+  if (!isRecord(workspace)) {
+    return null;
+  }
+
+  const patch: LeaveSpherePtoWorkspaceDelta = {};
+  if ("currentUserId" in workspace) {
+    patch.currentUserId = asString(workspace.currentUserId);
+  }
+  if ("currentUserName" in workspace) {
+    patch.currentUserName = asString(workspace.currentUserName);
+  }
+  if ("currentUserEmail" in workspace) {
+    patch.currentUserEmail = asString(workspace.currentUserEmail) || undefined;
+  }
+  if ("managerId" in workspace) {
+    patch.managerId = workspace.managerId === undefined ? undefined : asString(workspace.managerId) || null;
+  }
+  if ("currentUserTeamRegion" in workspace) {
+    patch.currentUserTeamRegion = normalizeLeaveSphereTeamRegion(workspace.currentUserTeamRegion);
+  }
+  if ("isManager" in workspace) {
+    patch.isManager = Boolean(workspace.isManager);
+  }
+  if ("defaultRequestActionCode" in workspace) {
+    patch.defaultRequestActionCode = asString(workspace.defaultRequestActionCode) || undefined;
+  }
+  if ("defaultCancelActionCode" in workspace) {
+    patch.defaultCancelActionCode = asString(workspace.defaultCancelActionCode) || undefined;
+  }
+  if (Array.isArray(workspace.employees)) {
+    patch.employees = workspace.employees
+      .filter(isRecord)
+      .map((item) => ({
+        employeeId: asString(item.employeeId),
+        employeeName: asString(item.employeeName),
+        pictureUrl: asString(item.pictureUrl) || null,
+        title: item.title === undefined ? undefined : asString(item.title) || null,
+      }))
+      .filter((item) => item.employeeId && item.employeeName);
+  }
+  if (Array.isArray(workspace.ptoTypes)) {
+    patch.ptoTypes = workspace.ptoTypes
+      .filter(isRecord)
+      .map((item) => ({
+        code: asString(item.code || item.type || item.name),
+        type: asString(item.type) || undefined,
+        label: asString(item.label) || asString(item.name) || asString(item.code) || "PTO",
+        active: Boolean(item.active ?? true),
+      }))
+      .filter((item) => item.code && item.label);
+  }
+  if (Array.isArray(workspace.ptoActions)) {
+    patch.ptoActions = workspace.ptoActions
+      .filter(isRecord)
+      .map((item) => ({
+        code: asString(item.code).toUpperCase(),
+        name: asString(item.name) || asString(item.label) || asString(item.code) || "PTO Action",
+        color: item.color === undefined ? null : asString(item.color) || null,
+      }))
+      .filter((item) => item.code && item.name);
+  }
+  if (Array.isArray(workspace.balances)) {
+    patch.balances = workspace.balances
+      .filter(isRecord)
+      .map(normalizeBalanceRow)
+      .filter((item): item is LeaveSpherePtoBalance => Boolean(item));
+  }
+  if (Array.isArray(workspace.requests)) {
+    patch.requests = workspace.requests
+      .filter(isRecord)
+      .map(normalizeRequest)
+      .filter((item): item is LeaveSpherePtoRequest => Boolean(item));
+  }
+  if (Array.isArray(workspace.holidays)) {
+    patch.holidays = workspace.holidays
+      .filter(isRecord)
+      .map(normalizeHoliday)
+      .filter((item): item is LeaveSphereHoliday => Boolean(item));
+  }
+  if (Array.isArray(workspace.directReports)) {
+    patch.directReports = workspace.directReports
+      .filter(isRecord)
+      .map(normalizeDirectReport)
+      .filter((item): item is LeaveSphereDirectReport => Boolean(item));
+  }
+
+  return Object.keys(patch).length > 0 ? patch : null;
+}
+
+function resolveWorkspaceFromMutationResponse(
+  response: unknown,
+  currentWorkspace: LeaveSpherePtoWorkspaceData | null | undefined,
+): LeaveSpherePtoWorkspaceData | null {
+  const workspacePatch = normalizeWorkspaceDelta(response);
+  if (workspacePatch) {
+    if (!currentWorkspace) {
+      return null;
+    }
+    return mergeLeaveSpherePtoWorkspace(currentWorkspace, workspacePatch);
+  }
+  return buildWorkspacePayload(response);
+}
+
+export function mergeLeaveSpherePtoWorkspace(
+  current: LeaveSpherePtoWorkspaceData | null,
+  incoming: LeaveSpherePtoWorkspaceDelta,
+): LeaveSpherePtoWorkspaceData {
+  if (!current) {
+    return cloneWorkspace(incoming as LeaveSpherePtoWorkspaceData);
+  }
+
+  return {
+    ...current,
+    ...incoming,
+    currentUserId: incoming.currentUserId || current.currentUserId,
+    currentUserName: incoming.currentUserName || current.currentUserName,
+    currentUserEmail: incoming.currentUserEmail || current.currentUserEmail,
+    managerId: incoming.managerId === undefined ? current.managerId : incoming.managerId,
+    currentUserTeamRegion: incoming.currentUserTeamRegion || current.currentUserTeamRegion,
+    isManager: Boolean(incoming.isManager || current.isManager),
+    employees: mergeListByKey(current.employees, incoming.employees, (item) => item.employeeId),
+    ptoTypes: mergeListByKey(current.ptoTypes, incoming.ptoTypes, (item) => item.code),
+    ptoActions: mergeListByKey(current.ptoActions, incoming.ptoActions, (item) => item.code),
+    balances: mergeListByKey(current.balances, incoming.balances, (item) => item.code || item.type || item.label),
+    requests: mergeListByKey(current.requests, incoming.requests, (item) => item.id),
+    holidays: mergeListByKey(current.holidays, incoming.holidays, (item) => item.id),
+    directReports: mergeListByKey(current.directReports, incoming.directReports, (item) => item.employeeId),
+    defaultRequestActionCode: incoming.defaultRequestActionCode || current.defaultRequestActionCode,
+    defaultCancelActionCode: incoming.defaultCancelActionCode || current.defaultCancelActionCode,
+  };
+}
+
 function buildWorkspacePayload(response: unknown): LeaveSpherePtoWorkspaceData | null {
   const normalized = normalizeWorkspace(response);
   if (normalized) {
@@ -315,7 +515,7 @@ export async function submitLeaveSpherePtoRequest(params: SubmitArgs): Promise<L
     successToast: false,
     errorToast: false,
   });
-  const workspace = buildWorkspacePayload(response);
+  const workspace = resolveWorkspaceFromMutationResponse(response, params.currentWorkspace);
   if (!workspace) {
     throw new Error("Unable to submit PTO request.");
   }
@@ -334,7 +534,7 @@ export async function updateLeaveSpherePtoRequest(params: UpdateArgs): Promise<L
     successToast: false,
     errorToast: false,
   });
-  const workspace = buildWorkspacePayload(response);
+  const workspace = resolveWorkspaceFromMutationResponse(response, params.currentWorkspace);
   if (!workspace) {
     throw new Error("Unable to update PTO request.");
   }
@@ -349,6 +549,7 @@ export async function updateLeaveSpherePtoRequest(params: UpdateArgs): Promise<L
 export async function cancelLeaveSpherePtoRequest(params: {
   requestJson: RequestJson;
   transactionId: string;
+  currentWorkspace?: LeaveSpherePtoWorkspaceData | null;
 }): Promise<LeaveSpherePtoMutationResult> {
   const response = await params.requestJson("/api/leavesphere/v1/ui/my-pto/requests", {
     method: "DELETE",
@@ -356,7 +557,7 @@ export async function cancelLeaveSpherePtoRequest(params: {
     successToast: false,
     errorToast: false,
   });
-  const workspace = buildWorkspacePayload(response);
+  const workspace = resolveWorkspaceFromMutationResponse(response, params.currentWorkspace);
   if (!workspace) {
     throw new Error("Unable to cancel PTO request.");
   }
@@ -380,7 +581,7 @@ export async function reviewLeaveSpherePtoRequest(params: ReviewArgs): Promise<L
     successToast: false,
     errorToast: false,
   });
-  const workspace = buildWorkspacePayload(response);
+  const workspace = resolveWorkspaceFromMutationResponse(response, params.currentWorkspace);
   if (!workspace) {
     throw new Error("Unable to review PTO request.");
   }

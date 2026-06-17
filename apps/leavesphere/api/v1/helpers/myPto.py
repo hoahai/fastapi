@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
+from copy import deepcopy
 from datetime import date, datetime
 from decimal import Decimal
 import re
@@ -31,6 +32,12 @@ from apps.leavesphere.api.v1.helpers.ptoWorkspaceShared import (
     build_pto_request_rows,
     load_leave_sphere_pto_workspace_catalogs,
     resolve_pto_type_code_from_catalog,
+)
+from apps.leavesphere.api.v1.helpers.workspaceCache import (
+    read_leave_sphere_workspace_cache,
+    read_leave_sphere_workspace_latest_cache,
+    write_leave_sphere_workspace_cache,
+    write_leave_sphere_workspace_cache_value,
 )
 from shared.auth.dependencies import get_auth_principal, get_tenant_access
 from shared.db import run_transaction
@@ -343,8 +350,252 @@ def _build_employee_rows(employees: list[dict]) -> list[dict]:
     return rows
 
 
+def _resolve_workspace_cache_user_key(request) -> str:
+    principal = get_auth_principal(request)
+    if principal is not None:
+        if principal.email:
+            return _normalize_email(principal.email)
+        principal_id = _normalize_text(getattr(principal, "user_id", "")).lower()
+        if principal_id:
+            return principal_id
+        raw_email = _extract_email_from_auth_payload(getattr(principal, "raw_user", None))
+        if raw_email:
+            return raw_email
+
+    headers = getattr(request, "headers", {})
+    header_email = _normalize_email(headers.get("x-user-email"))
+    if header_email:
+        return header_email
+    header_name = _normalize_text(headers.get("x-user-name")).lower()
+    if header_name:
+        return header_name
+    return "unknown"
+
+
+def _load_cached_workspace_snapshot(
+    *,
+    request,
+    year: int,
+) -> dict | None:
+    user_key = _resolve_workspace_cache_user_key(request)
+    snapshot = read_leave_sphere_workspace_cache(
+        page_code="my-pto",
+        user_key=user_key,
+        year=year,
+        params={},
+    )
+    if not snapshot or int(snapshot.get("year") or 0) != int(year):
+        return None
+    workspace = snapshot.get("workspace")
+    return workspace if isinstance(workspace, dict) else None
+
+
+def _store_cached_workspace_snapshot(
+    *,
+    request,
+    year: int,
+    workspace: dict,
+) -> None:
+    user_key = _resolve_workspace_cache_user_key(request)
+    write_leave_sphere_workspace_cache(
+        page_code="my-pto",
+        user_key=user_key,
+        year=year,
+        workspace=workspace,
+        params={},
+    )
+
+
+def _apply_my_pto_workspace_mutation_from_cache(
+    *,
+    request,
+    year: int,
+    mutate_workspace,
+) -> dict | None:
+    user_key = _resolve_workspace_cache_user_key(request)
+    latest = read_leave_sphere_workspace_latest_cache(page_code="my-pto", user_key=user_key)
+    if not isinstance(latest, dict) or int(latest.get("year") or 0) != int(year):
+        return None
+    cached_workspace = latest.get("workspace")
+    cache_key = _normalize_text(latest.get("cacheKey"))
+    if not isinstance(cached_workspace, dict) or not cache_key:
+        return None
+
+    mutated = mutate_workspace(cached_workspace)
+    if not mutated:
+        return None
+
+    write_leave_sphere_workspace_cache_value(
+        cache_key=cache_key,
+        page_code="my-pto",
+        user_key=user_key,
+        year=year,
+        workspace=cached_workspace,
+        params={},
+    )
+    return cached_workspace
+
+
+def _sort_my_pto_requests(requests: list[dict]) -> list[dict]:
+    return sorted(
+        requests,
+        key=lambda item: (
+            _normalize_text(item.get("submittedAt")),
+            _normalize_text(item.get("id")),
+        ),
+        reverse=True,
+    )
+
+
+def _find_my_pto_request_row(workspace: dict, transaction_id: str) -> dict | None:
+    for row in workspace.get("requests", []):
+        if isinstance(row, dict) and _normalize_text(row.get("id")) == _normalize_text(transaction_id):
+            return row
+    return None
+
+
+def _upsert_my_pto_request_row(
+    *,
+    workspace: dict,
+    request_row: dict,
+) -> None:
+    requests = [row for row in workspace.get("requests", []) if isinstance(row, dict)]
+    request_id = _normalize_text(request_row.get("id"))
+    for index, row in enumerate(requests):
+        if _normalize_text(row.get("id")) != request_id:
+            continue
+        requests[index] = request_row
+        workspace["requests"] = _sort_my_pto_requests(requests)
+        return
+    requests.append(request_row)
+    workspace["requests"] = _sort_my_pto_requests(requests)
+
+
+def _adjust_my_pto_balance_row(
+    *,
+    workspace: dict,
+    pto_type_code: str,
+    used_delta: float = 0.0,
+    scheduled_delta: float = 0.0,
+) -> None:
+    balances = [row for row in workspace.get("balances", []) if isinstance(row, dict)]
+    normalized_code = _normalize_text(pto_type_code).upper()
+    for row in balances:
+        row_code = _normalize_text(row.get("code") or row.get("type")).upper()
+        if row_code != normalized_code:
+            continue
+        total = float(row.get("totalHours") or 0)
+        used = float(row.get("usedHours") or 0) + float(used_delta)
+        scheduled = float(row.get("scheduledHours") or 0) + float(scheduled_delta)
+        row["usedHours"] = round(used, 2)
+        row["scheduledHours"] = round(scheduled, 2)
+        row["remainingHours"] = round(total - used - scheduled, 2)
+        workspace["balances"] = balances
+        return
+
+    total = 0.0
+    used = max(0.0, float(used_delta))
+    scheduled = max(0.0, float(scheduled_delta))
+    balances.append(
+        {
+            "type": normalized_code.lower() or normalized_code,
+            "code": normalized_code,
+            "label": normalized_code,
+            "totalHours": total,
+            "usedHours": round(used, 2),
+            "scheduledHours": round(scheduled, 2),
+            "remainingHours": round(total - used - scheduled, 2),
+        }
+    )
+    workspace["balances"] = balances
+
+
+def _request_balance_effect(request_row: dict | None) -> dict[str, tuple[float, float]]:
+    if not isinstance(request_row, dict):
+        return {}
+
+    pto_type_code = _normalize_text(request_row.get("ptoTypeCode") or request_row.get("type")).upper()
+    if not pto_type_code:
+        return {}
+
+    status = _normalize_text(request_row.get("status")).lower()
+    hours = float(abs(Decimal(str(request_row.get("hours") or 0)).quantize(Decimal("0.01"))))
+    if hours <= 0:
+        return {}
+
+    if status == "pending":
+        return {pto_type_code: (0.0, hours)}
+    if status == "approved":
+        return {pto_type_code: (hours, 0.0)}
+    return {}
+
+
+def _apply_my_pto_request_balance_delta(
+    *,
+    workspace: dict,
+    old_row: dict | None,
+    new_row: dict | None,
+) -> None:
+    current_user_id = _normalize_text(workspace.get("currentUserId"))
+    employee_id = _normalize_text((new_row or old_row or {}).get("employeeId"))
+    if not current_user_id or employee_id != current_user_id:
+        return
+
+    old_effects = _request_balance_effect(old_row)
+    new_effects = _request_balance_effect(new_row)
+    for pto_type_code in set(old_effects) | set(new_effects):
+        old_used, old_scheduled = old_effects.get(pto_type_code, (0.0, 0.0))
+        new_used, new_scheduled = new_effects.get(pto_type_code, (0.0, 0.0))
+        _adjust_my_pto_balance_row(
+            workspace=workspace,
+            pto_type_code=pto_type_code,
+            used_delta=new_used - old_used,
+            scheduled_delta=new_scheduled - old_scheduled,
+        )
+
+
+def _copy_workspace_row(row: dict) -> dict:
+    return deepcopy(row)
+
+
+def _build_my_pto_workspace_patch(
+    *,
+    workspace: dict,
+    request_ids: list[str] | None = None,
+    include_balances: bool = False,
+) -> dict:
+    patch = {
+        "currentUserId": workspace.get("currentUserId"),
+        "currentUserName": workspace.get("currentUserName"),
+        "currentUserEmail": workspace.get("currentUserEmail"),
+        "managerId": workspace.get("managerId"),
+        "currentUserTeamRegion": workspace.get("currentUserTeamRegion"),
+        "isManager": workspace.get("isManager"),
+        "defaultRequestActionCode": workspace.get("defaultRequestActionCode"),
+        "defaultCancelActionCode": workspace.get("defaultCancelActionCode"),
+    }
+    if request_ids:
+        request_id_set = {_normalize_text(item) for item in request_ids if _normalize_text(item)}
+        patch["requests"] = [
+            _copy_workspace_row(row)
+            for row in workspace.get("requests", [])
+            if isinstance(row, dict) and _normalize_text(row.get("id")) in request_id_set
+        ]
+    if include_balances:
+        patch["balances"] = [
+            _copy_workspace_row(row)
+            for row in workspace.get("balances", [])
+            if isinstance(row, dict)
+        ]
+    return patch
+
+
 def load_my_pto_workspace(*, request, year: int | None = None) -> dict:
     selected_year = _normalize_year(year)
+    cached_workspace = _load_cached_workspace_snapshot(request=request, year=selected_year)
+    if isinstance(cached_workspace, dict):
+        return cached_workspace
+
     employee = _resolve_current_employee(request, require_active=False)
     employee_id = _normalize_text(employee.get("id"))
     current_employee_name = _employee_full_name(employee)
@@ -397,7 +648,7 @@ def load_my_pto_workspace(*, request, year: int | None = None) -> dict:
     )
     holidays = _build_holidays(selected_year, current_employee_region)
 
-    return {
+    workspace = {
         "currentUserId": employee_id,
         "currentUserName": current_employee_name,
         "currentUserEmail": _normalize_email(employee.get("email")),
@@ -411,6 +662,8 @@ def load_my_pto_workspace(*, request, year: int | None = None) -> dict:
         "holidays": holidays,
         "directReports": direct_reports,
     }
+    _store_cached_workspace_snapshot(request=request, year=selected_year, workspace=workspace)
+    return workspace
 
 
 def _resolve_transaction_for_current_employee(
@@ -482,13 +735,63 @@ def create_my_pto_request(*, request, payload: dict) -> dict:
     from apps.leavesphere.api.v1.helpers.ptoTransactions import create_request as create_request_transaction
 
     created = create_request_transaction(item)
-    return {
-        "workspace": load_my_pto_workspace(request=request, year=selected_year),
+    workspace = _apply_my_pto_workspace_mutation_from_cache(
+        request=request,
+        year=selected_year,
+        mutate_workspace=lambda cached_workspace: (
+            (
+                lambda new_row: (
+                    _upsert_my_pto_request_row(
+                        workspace=cached_workspace,
+                        request_row=new_row,
+                    )
+                    or _apply_my_pto_request_balance_delta(
+                        workspace=cached_workspace,
+                        old_row=None,
+                        new_row=new_row,
+                    )
+                    or True
+                )
+            )(
+                {
+                    "id": item["id"],
+                    "employeeId": employee_id,
+                    "managerId": _normalize_text(cached_workspace.get("managerId")) or employee_id,
+                    "type": _normalize_text(pto_type.get("type")) or pto_type["code"].lower(),
+                    "ptoTypeCode": pto_type["code"],
+                    "startDate": start_date or None,
+                    "endDate": end_date or None,
+                    "hours": float(requested_hours.quantize(Decimal("0.01"))),
+                    "description": _normalize_text(payload.get("description")) or None,
+                    "status": "pending",
+                    "submittedAt": date.today().isoformat(),
+                    "reviewedAt": None,
+                    "reviewerName": None,
+                    "approverNote": None,
+                }
+            )
+        ),
+    )
+    workspace_patch = None
+    if workspace is not None:
+        workspace_patch = _build_my_pto_workspace_patch(
+            workspace=workspace,
+            request_ids=[item["id"]],
+            include_balances=employee_id == _normalize_text(workspace.get("currentUserId")),
+        )
+    if workspace is None:
+        workspace = load_my_pto_workspace(request=request, year=selected_year)
+    response = {
         "source": "network",
         "createdRequestId": item["id"],
         "inserted": created.get("inserted", 0),
         "status": created.get("status", "Pending"),
     }
+    if workspace_patch is not None:
+        response["workspacePatch"] = workspace_patch
+    else:
+        response["workspace"] = workspace
+    return response
 
 
 def update_my_pto_request(*, request, payload: dict) -> dict:
@@ -595,11 +898,52 @@ def update_my_pto_request(*, request, payload: dict) -> dict:
         return int(cursor.rowcount or 0)
 
     updated = int(run_transaction(_work) or 0)
-    return {
-        "workspace": load_my_pto_workspace(request=request, year=requested_year),
+    def _apply_update(cached_workspace: dict) -> bool:
+        old_row = _find_my_pto_request_row(cached_workspace, transaction_id)
+        new_row = {
+            **(old_row or {}),
+            "type": _normalize_text(pto_type.get("type")) or pto_type["code"].lower(),
+            "ptoTypeCode": pto_type["code"],
+            "startDate": start_date or transaction.get("startDate") or None,
+            "endDate": end_date or transaction.get("endDate") or None,
+            "hours": float(requested_hours.quantize(Decimal("0.01"))),
+            "description": _normalize_text(payload.get("description")) or transaction.get("description") or None,
+            "status": "pending",
+        }
+        _upsert_my_pto_request_row(
+            workspace=cached_workspace,
+            request_row=new_row,
+        )
+        _apply_my_pto_request_balance_delta(
+            workspace=cached_workspace,
+            old_row=old_row,
+            new_row=new_row,
+        )
+        return True
+
+    workspace = _apply_my_pto_workspace_mutation_from_cache(
+        request=request,
+        year=requested_year,
+        mutate_workspace=_apply_update,
+    )
+    workspace_patch = None
+    if workspace is not None:
+        workspace_patch = _build_my_pto_workspace_patch(
+            workspace=workspace,
+            request_ids=[transaction_id],
+            include_balances=employee_id == _normalize_text(workspace.get("currentUserId")),
+        )
+    if workspace is None:
+        workspace = load_my_pto_workspace(request=request, year=requested_year)
+    response = {
         "source": "network",
         "updated": updated,
     }
+    if workspace_patch is not None:
+        response["workspacePatch"] = workspace_patch
+    else:
+        response["workspace"] = workspace
+    return response
 
 
 def cancel_my_pto_request(*, request, transaction_id: str) -> dict:
@@ -620,13 +964,48 @@ def cancel_my_pto_request(*, request, transaction_id: str) -> dict:
         canceled = cancel_pending_pto_transaction(transaction_id=transaction_id)
         if canceled == 0:
             raise ValueError("PTO transaction not found")
-        return {
-            "workspace": load_my_pto_workspace(request=request, year=year),
+        def _apply_cancel(cached_workspace: dict) -> bool:
+            old_row = _find_my_pto_request_row(cached_workspace, transaction_id)
+            new_row = {
+                **(old_row or {}),
+                "status": "canceled",
+            }
+            _upsert_my_pto_request_row(
+                workspace=cached_workspace,
+                request_row=new_row,
+            )
+            _apply_my_pto_request_balance_delta(
+                workspace=cached_workspace,
+                old_row=old_row,
+                new_row=new_row,
+            )
+            return True
+
+        workspace = _apply_my_pto_workspace_mutation_from_cache(
+            request=request,
+            year=year,
+            mutate_workspace=_apply_cancel,
+        )
+        workspace_patch = None
+        if workspace is not None:
+            workspace_patch = _build_my_pto_workspace_patch(
+                workspace=workspace,
+                request_ids=[transaction_id],
+                include_balances=status == "pending" and _normalize_text(transaction.get("employeeId")) == _normalize_text(workspace.get("currentUserId")),
+            )
+        if workspace is None:
+            workspace = load_my_pto_workspace(request=request, year=year)
+        response = {
             "source": "network",
             "id": transaction_id,
             "status": "Canceled",
             "updated": canceled,
         }
+        if workspace_patch is not None:
+            response["workspacePatch"] = workspace_patch
+        else:
+            response["workspace"] = workspace
+        return response
 
     updated = update_pto_transaction(
         transaction_id=transaction_id,
@@ -637,13 +1016,48 @@ def cancel_my_pto_request(*, request, transaction_id: str) -> dict:
     )
     if updated == 0:
         raise ValueError("PTO transaction not found")
-    return {
-        "workspace": load_my_pto_workspace(request=request, year=year),
+    def _apply_cancel_approved(cached_workspace: dict) -> bool:
+        old_row = _find_my_pto_request_row(cached_workspace, transaction_id)
+        new_row = {
+            **(old_row or {}),
+            "status": "canceled",
+        }
+        _upsert_my_pto_request_row(
+            workspace=cached_workspace,
+            request_row=new_row,
+        )
+        _apply_my_pto_request_balance_delta(
+            workspace=cached_workspace,
+            old_row=old_row,
+            new_row=new_row,
+        )
+        return True
+
+    workspace = _apply_my_pto_workspace_mutation_from_cache(
+        request=request,
+        year=year,
+        mutate_workspace=_apply_cancel_approved,
+    )
+    workspace_patch = None
+    if workspace is not None:
+        workspace_patch = _build_my_pto_workspace_patch(
+            workspace=workspace,
+            request_ids=[transaction_id],
+            include_balances=False,
+        )
+    if workspace is None:
+        workspace = load_my_pto_workspace(request=request, year=year)
+    response = {
         "source": "network",
         "id": transaction_id,
         "status": "Canceled",
         "updated": updated,
     }
+    if workspace_patch is not None:
+        response["workspacePatch"] = workspace_patch
+    else:
+        response["workspace"] = workspace
+    return response
 
 
 def review_my_pto_request(*, request, payload: dict) -> dict:
@@ -657,6 +1071,7 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
 
     employee = _resolve_current_employee(request, require_active=True)
     current_employee_id = _normalize_text(employee.get("id"))
+    current_employee_name = _employee_full_name(employee)
     transaction_rows = get_pto_transactions(transaction_id=transaction_id)
     if not transaction_rows:
         raise ValueError("PTO transaction not found")
@@ -676,6 +1091,7 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
         raise ValueError("Only a direct manager can approve or reject this PTO request")
 
     status = _normalize_text(transaction.get("status")).lower()
+    workspace_year = int(transaction.get("year") or date.today().year)
     if action in {"approve", "reject"}:
         if status != "pending":
             raise ValueError("Only Pending PTO transactions can be approved or rejected")
@@ -685,25 +1101,90 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
                 approver_id=current_employee_id if current_employee_id else None,
                 approverNote=_normalize_text(payload.get("approverNote")) or None,
             )
-            return {
-                "workspace": load_my_pto_workspace(request=request, year=int(transaction.get("year") or date.today().year)),
+
+            def _apply_approve(cached_workspace: dict) -> bool:
+                old_row = _find_my_pto_request_row(cached_workspace, transaction_id)
+                new_row = {
+                    **(old_row or {}),
+                    "status": "approved",
+                    "approverNote": _normalize_text(payload.get("approverNote")) or None,
+                    "reviewedAt": date.today().isoformat(),
+                    "reviewerName": _normalize_text(cached_workspace.get("currentUserName")) or current_employee_name,
+                }
+                _upsert_my_pto_request_row(workspace=cached_workspace, request_row=new_row)
+                _apply_my_pto_request_balance_delta(workspace=cached_workspace, old_row=old_row, new_row=new_row)
+                return True
+
+            workspace = _apply_my_pto_workspace_mutation_from_cache(
+                request=request,
+                year=workspace_year,
+                mutate_workspace=_apply_approve,
+            )
+            workspace_patch = None
+            if workspace is not None:
+                workspace_patch = _build_my_pto_workspace_patch(
+                    workspace=workspace,
+                    request_ids=[transaction_id],
+                    include_balances=False,
+                )
+            if workspace is None:
+                workspace = load_my_pto_workspace(request=request, year=workspace_year)
+            response = {
                 "source": "network",
                 "id": transaction_id,
                 "status": "Approved",
                 "updated": updated,
             }
+            if workspace_patch is not None:
+                response["workspacePatch"] = workspace_patch
+            else:
+                response["workspace"] = workspace
+            return response
+
         updated = reject_pending_pto_request(
             transaction_id=transaction_id,
             approver_id=current_employee_id if current_employee_id else None,
             approverNote=_normalize_text(payload.get("approverNote")) or None,
         )
-        return {
-            "workspace": load_my_pto_workspace(request=request, year=int(transaction.get("year") or date.today().year)),
+
+        def _apply_reject(cached_workspace: dict) -> bool:
+            old_row = _find_my_pto_request_row(cached_workspace, transaction_id)
+            new_row = {
+                **(old_row or {}),
+                "status": "rejected",
+                "approverNote": _normalize_text(payload.get("approverNote")) or None,
+                "reviewedAt": date.today().isoformat(),
+                "reviewerName": _normalize_text(cached_workspace.get("currentUserName")) or current_employee_name,
+            }
+            _upsert_my_pto_request_row(workspace=cached_workspace, request_row=new_row)
+            _apply_my_pto_request_balance_delta(workspace=cached_workspace, old_row=old_row, new_row=new_row)
+            return True
+
+        workspace = _apply_my_pto_workspace_mutation_from_cache(
+            request=request,
+            year=workspace_year,
+            mutate_workspace=_apply_reject,
+        )
+        workspace_patch = None
+        if workspace is not None:
+            workspace_patch = _build_my_pto_workspace_patch(
+                workspace=workspace,
+                request_ids=[transaction_id],
+                include_balances=False,
+            )
+        if workspace is None:
+            workspace = load_my_pto_workspace(request=request, year=workspace_year)
+        response = {
             "source": "network",
             "id": transaction_id,
             "status": "Rejected",
             "updated": updated,
         }
+        if workspace_patch is not None:
+            response["workspacePatch"] = workspace_patch
+        else:
+            response["workspace"] = workspace
+        return response
 
     if action == "cancel":
         if status not in {"pending", "approved", "rejected"}:
@@ -720,13 +1201,44 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
                     "approverId": None,
                 },
             )
-        return {
-            "workspace": load_my_pto_workspace(request=request, year=int(transaction.get("year") or date.today().year)),
+
+        def _apply_cancel(cached_workspace: dict) -> bool:
+            old_row = _find_my_pto_request_row(cached_workspace, transaction_id)
+            new_row = {
+                **(old_row or {}),
+                "status": "canceled",
+                "reviewedAt": date.today().isoformat(),
+                "reviewerName": _normalize_text(cached_workspace.get("currentUserName")) or current_employee_name,
+            }
+            _upsert_my_pto_request_row(workspace=cached_workspace, request_row=new_row)
+            _apply_my_pto_request_balance_delta(workspace=cached_workspace, old_row=old_row, new_row=new_row)
+            return True
+
+        workspace = _apply_my_pto_workspace_mutation_from_cache(
+            request=request,
+            year=workspace_year,
+            mutate_workspace=_apply_cancel,
+        )
+        workspace_patch = None
+        if workspace is not None:
+            workspace_patch = _build_my_pto_workspace_patch(
+                workspace=workspace,
+                request_ids=[transaction_id],
+                include_balances=False,
+            )
+        if workspace is None:
+            workspace = load_my_pto_workspace(request=request, year=workspace_year)
+        response = {
             "source": "network",
             "id": transaction_id,
             "status": "Canceled",
             "updated": updated,
         }
+        if workspace_patch is not None:
+            response["workspacePatch"] = workspace_patch
+        else:
+            response["workspace"] = workspace
+        return response
 
     if action == "revert":
         if status not in {"approved", "rejected", "canceled"}:
@@ -740,12 +1252,43 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
                 "approverId": None,
             },
         )
-        return {
-            "workspace": load_my_pto_workspace(request=request, year=int(transaction.get("year") or date.today().year)),
+
+        def _apply_revert(cached_workspace: dict) -> bool:
+            old_row = _find_my_pto_request_row(cached_workspace, transaction_id)
+            new_row = {
+                **(old_row or {}),
+                "status": "pending",
+                "reviewedAt": None,
+                "reviewerName": None,
+            }
+            _upsert_my_pto_request_row(workspace=cached_workspace, request_row=new_row)
+            _apply_my_pto_request_balance_delta(workspace=cached_workspace, old_row=old_row, new_row=new_row)
+            return True
+
+        workspace = _apply_my_pto_workspace_mutation_from_cache(
+            request=request,
+            year=workspace_year,
+            mutate_workspace=_apply_revert,
+        )
+        workspace_patch = None
+        if workspace is not None:
+            workspace_patch = _build_my_pto_workspace_patch(
+                workspace=workspace,
+                request_ids=[transaction_id],
+                include_balances=False,
+            )
+        if workspace is None:
+            workspace = load_my_pto_workspace(request=request, year=workspace_year)
+        response = {
             "source": "network",
             "id": transaction_id,
             "status": "Pending",
             "updated": updated,
         }
+        if workspace_patch is not None:
+            response["workspacePatch"] = workspace_patch
+        else:
+            response["workspace"] = workspace
+        return response
 
     raise ValueError("Unsupported action")

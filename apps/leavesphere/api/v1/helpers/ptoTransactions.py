@@ -153,7 +153,7 @@ def create_adjustment(payload: dict) -> dict:
     _require_pto_action(pto_action_code)
 
     item = {
-        "id": str(uuid4()),
+        "id": str(payload.get("transactionId") or payload.get("id") or "").strip() or str(uuid4()),
         "employeeId": employee_id,
         "ptoTypeCode": pto_type_code,
         "ptoActionCode": pto_action_code,

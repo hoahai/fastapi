@@ -155,7 +155,7 @@ def create_my_pto_request_route(
         {
           "meta": {"timestamp": "2026-05-29T10:00:00+07:00", "duration_ms": 2},
           "data": {
-            "workspace": { "...": "refreshed My PTO workspace payload" },
+            "workspacePatch": { "...": "changed My PTO rows only" },
             "source": "network",
             "createdRequestId": "pto-1",
             "inserted": 1,
@@ -169,6 +169,7 @@ def create_my_pto_request_route(
         - The employee is resolved from the signed-in user's login email
         - `hours` must be greater than zero
         - `ptoTypeCode` is preferred and must match a row from the PTO type table; `type` is accepted as a fallback alias
+        - Mutation responses may return `workspacePatch` instead of a full `workspace` when the server can patch a cached snapshot
     """
     try:
         body = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
@@ -201,7 +202,7 @@ def update_my_pto_request_route(
         {
           "meta": {"timestamp": "2026-05-29T10:00:00+07:00", "duration_ms": 2},
           "data": {
-            "workspace": { "...": "refreshed My PTO workspace payload" },
+            "workspacePatch": { "...": "changed My PTO rows only" },
             "source": "network",
             "updated": 1
           }
@@ -212,6 +213,7 @@ def update_my_pto_request_route(
         - Requires valid API key or bearer token in compat mode
         - Request must still be pending and before its start date
         - The employee is resolved from the signed-in user's login email
+        - Mutation responses may return `workspacePatch` instead of a full `workspace` when the server can patch a cached snapshot
     """
     try:
         body = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
@@ -236,7 +238,7 @@ def cancel_my_pto_request_route(
         {
           "meta": {"timestamp": "2026-05-29T10:00:00+07:00", "duration_ms": 2},
           "data": {
-            "workspace": { "...": "refreshed My PTO workspace payload" },
+            "workspacePatch": { "...": "changed My PTO rows only" },
             "source": "network",
             "id": "pto-1",
             "status": "Canceled",
@@ -249,6 +251,7 @@ def cancel_my_pto_request_route(
         - Requires valid API key or bearer token in compat mode
         - The employee is resolved from the signed-in user's login email
         - Only future PTO requests can be canceled
+        - Mutation responses may return `workspacePatch` instead of a full `workspace` when the server can patch a cached snapshot
     """
     try:
         body = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
@@ -273,7 +276,7 @@ def review_my_pto_request_route(
         {
           "meta": {"timestamp": "2026-05-29T10:00:00+07:00", "duration_ms": 2},
           "data": {
-            "workspace": { "...": "refreshed My PTO workspace payload" },
+            "workspacePatch": { "...": "changed My PTO rows only" },
             "source": "network",
             "id": "pto-1",
             "status": "Approved",
@@ -287,6 +290,7 @@ def review_my_pto_request_route(
         - Requires leavesphere.editor permission or higher
         - The manager is resolved from the signed-in user's login email
         - `requestId` and `transactionId` are both accepted for compatibility
+        - Mutation responses may return `workspacePatch` instead of a full `workspace` when the server can patch a cached snapshot
     """
     try:
         body = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()

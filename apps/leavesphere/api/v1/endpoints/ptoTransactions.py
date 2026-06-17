@@ -13,6 +13,7 @@ from apps.leavesphere.api.v1.helpers.ptoTransactions import (
     list_pto_transactions,
     reject_request,
 )
+from apps.leavesphere.api.v1.helpers.workspaceCache import invalidate_leave_sphere_workspace_caches
 from apps.leavesphere.api.v1.permissions import require_leavesphere_admin, require_leavesphere_editor
 
 router = APIRouter(prefix="/ptoTransactions")
@@ -141,7 +142,9 @@ def create_adjustment_route(
         - Legacy API key compat behavior remains unchanged
     """
     try:
-        return create_adjustment(payload.model_dump() if hasattr(payload, "model_dump") else payload.dict())
+        result = create_adjustment(payload.model_dump() if hasattr(payload, "model_dump") else payload.dict())
+        invalidate_leave_sphere_workspace_caches()
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -182,7 +185,9 @@ def create_request_route(
     """
     try:
         body = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
-        return create_request(body)
+        result = create_request(body)
+        invalidate_leave_sphere_workspace_caches()
+        return result
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 
@@ -212,7 +217,9 @@ def cancel_request_route(
         - Legacy API key compat behavior remains unchanged
     """
     try:
-        return cancel_request(transaction_id=transaction_id)
+        result = cancel_request(transaction_id=transaction_id)
+        invalidate_leave_sphere_workspace_caches()
+        return result
     except ValueError as exc:
         detail = str(exc)
         status_code = 404 if detail == "PTO transaction not found" else 400
@@ -248,7 +255,9 @@ def approve_request_route(
     try:
         payload_obj = payload or PTORequestDecisionRequest()
         body = payload_obj.model_dump() if hasattr(payload_obj, "model_dump") else payload_obj.dict()
-        return approve_request(request=request, transaction_id=transaction_id, approverNote=body.get("approverNote"))
+        result = approve_request(request=request, transaction_id=transaction_id, approverNote=body.get("approverNote"))
+        invalidate_leave_sphere_workspace_caches()
+        return result
     except ValueError as exc:
         detail = str(exc)
         status_code = 404 if detail == "PTO transaction not found" else 400
@@ -286,7 +295,9 @@ def reject_request_route(
     try:
         payload_obj = payload or PTORequestDecisionRequest()
         body = payload_obj.model_dump() if hasattr(payload_obj, "model_dump") else payload_obj.dict()
-        return reject_request(request=request, transaction_id=transaction_id, approverNote=body.get("approverNote"))
+        result = reject_request(request=request, transaction_id=transaction_id, approverNote=body.get("approverNote"))
+        invalidate_leave_sphere_workspace_caches()
+        return result
     except ValueError as exc:
         detail = str(exc)
         status_code = 404 if detail == "PTO transaction not found" else 400

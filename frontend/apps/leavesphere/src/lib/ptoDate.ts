@@ -54,6 +54,14 @@ export function formatMonthYearLabel(monthKey: string, timeZone?: string | null)
   });
 }
 
+export function buildMonthKeyForYear(monthKey: string, year: number): string | null {
+  const match = /^(\d{4})-(\d{2})$/.exec(monthKey);
+  if (!match || !Number.isInteger(year)) {
+    return null;
+  }
+  return `${year}-${match[2]}`;
+}
+
 export type LeaveSpherePtoMonthGroup<T> = {
   monthKey: string;
   monthLabel: string;

@@ -42,6 +42,10 @@ export type LeaveSphereAdminPtoActionConfig = {
 export type LeaveSphereAdminWorkspaceData = {
   currentUserId: string;
   currentUserName: string;
+  currentUserEmail: string;
+  managerId: string | null;
+  currentUserTeamRegion: LeaveSphereTeamRegion;
+  isManager: boolean;
   employees: LeaveSphereAdminEmployee[];
   balanceTransactions: LeaveSphereAdminPtoTransaction[];
   employeeBalances: Array<{
@@ -53,7 +57,11 @@ export type LeaveSphereAdminWorkspaceData = {
   holidays: LeaveSphereHoliday[];
   ptoTypes: LeaveSphereAdminPtoTypeConfig[];
   ptoActions: LeaveSphereAdminPtoActionConfig[];
+  defaultRequestActionCode?: string;
+  defaultCancelActionCode?: string;
 };
+
+export type LeaveSphereAdminWorkspaceDelta = Partial<LeaveSphereAdminWorkspaceData>;
 
 export type LeaveSphereAdminLoadResult = {
   workspace: LeaveSphereAdminWorkspaceData;
@@ -144,6 +152,7 @@ type BaseArgs = {
   workspaceKey: string;
   currentUserId: string;
   currentUserName: string;
+  currentWorkspace?: LeaveSphereAdminWorkspaceData | null;
   timeZone?: string | null;
 };
 
@@ -219,30 +228,127 @@ function cloneWorkspace(workspace: LeaveSphereAdminWorkspaceData): LeaveSphereAd
   };
 }
 
+function cloneBalanceRows(rows: LeaveSpherePtoBalance[]): LeaveSpherePtoBalance[] {
+  return rows.map((item) => ({ ...item }));
+}
+
+function cloneEmployeeBalanceRows(
+  rows: LeaveSphereAdminWorkspaceData["employeeBalances"],
+): LeaveSphereAdminWorkspaceData["employeeBalances"] {
+  return rows.map((item) => ({
+    ...item,
+    balances: cloneBalanceRows(item.balances),
+  }));
+}
+
 function mergeListByKey<T>(
-  baseItems: T[],
-  incomingItems: T[],
+  currentItems: T[],
+  incomingItems: T[] | undefined | null,
   getKey: (item: T) => string,
 ): T[] {
+  if (!Array.isArray(incomingItems)) {
+    return currentItems.map((item) => ({ ...item }));
+  }
+
+  const incomingByKey = new Map<string, T>();
+  const incomingOrder: string[] = [];
+  for (const item of incomingItems) {
+    const key = getKey(item);
+    if (!key || incomingByKey.has(key)) {
+      continue;
+    }
+    incomingByKey.set(key, item);
+    incomingOrder.push(key);
+  }
+
   const merged: T[] = [];
   const seenKeys = new Set<string>();
 
-  for (const item of incomingItems) {
+  for (const item of currentItems) {
     const key = getKey(item);
     if (!key || seenKeys.has(key)) {
       continue;
     }
     seenKeys.add(key);
-    merged.push(item);
+    const incoming = incomingByKey.get(key);
+    merged.push(incoming ? incoming : { ...item });
   }
 
-  for (const item of baseItems) {
-    const key = getKey(item);
-    if (!key || seenKeys.has(key)) {
+  for (const key of incomingOrder) {
+    if (seenKeys.has(key)) {
       continue;
     }
     seenKeys.add(key);
-    merged.push(item);
+    const incoming = incomingByKey.get(key);
+    if (incoming) {
+      merged.push(incoming);
+    }
+  }
+
+  return merged;
+}
+
+function mergeBalanceRows(
+  currentRows: LeaveSpherePtoBalance[],
+  incomingRows: LeaveSpherePtoBalance[] | undefined | null,
+): LeaveSpherePtoBalance[] {
+  if (!Array.isArray(incomingRows)) {
+    return cloneBalanceRows(currentRows);
+  }
+  return mergeListByKey(
+    currentRows,
+    incomingRows,
+    (item) => item.code || item.type || item.label,
+  );
+}
+
+function mergeEmployeeBalanceRows(
+  currentRows: LeaveSphereAdminWorkspaceData["employeeBalances"],
+  incomingRows: LeaveSphereAdminWorkspaceData["employeeBalances"] | undefined | null,
+): LeaveSphereAdminWorkspaceData["employeeBalances"] {
+  if (!Array.isArray(incomingRows)) {
+    return cloneEmployeeBalanceRows(currentRows);
+  }
+
+  const currentByEmployeeId = new Map(currentRows.map((item) => [item.employeeId, item] as const));
+  const incomingByEmployeeId = new Map<string, LeaveSphereAdminWorkspaceData["employeeBalances"][number]>();
+  const incomingOrder: string[] = [];
+  for (const row of incomingRows) {
+    if (!incomingByEmployeeId.has(row.employeeId)) {
+      incomingByEmployeeId.set(row.employeeId, row);
+      incomingOrder.push(row.employeeId);
+    }
+  }
+  const merged: LeaveSphereAdminWorkspaceData["employeeBalances"] = [];
+
+  for (const currentRow of currentRows) {
+    const incomingRow = incomingByEmployeeId.get(currentRow.employeeId);
+    if (!incomingRow) {
+      merged.push({
+        ...currentRow,
+        balances: cloneBalanceRows(currentRow.balances),
+      });
+      continue;
+    }
+    merged.push({
+      ...(currentRow || {}),
+      ...incomingRow,
+      balances: mergeBalanceRows(currentRow?.balances || [], incomingRow.balances),
+    });
+  }
+
+  for (const employeeId of incomingOrder) {
+    if (currentByEmployeeId.has(employeeId)) {
+      continue;
+    }
+    const incomingRow = incomingByEmployeeId.get(employeeId);
+    if (!incomingRow) {
+      continue;
+    }
+    merged.push({
+      ...incomingRow,
+      balances: mergeBalanceRows([], incomingRow.balances),
+    });
   }
 
   return merged;
@@ -250,10 +356,10 @@ function mergeListByKey<T>(
 
 export function mergeLeaveSphereAdminWorkspace(
   current: LeaveSphereAdminWorkspaceData | null,
-  incoming: LeaveSphereAdminWorkspaceData,
+  incoming: LeaveSphereAdminWorkspaceDelta,
 ): LeaveSphereAdminWorkspaceData {
   if (!current) {
-    return cloneWorkspace(incoming);
+    return cloneWorkspace(incoming as LeaveSphereAdminWorkspaceData);
   }
 
   return {
@@ -261,16 +367,17 @@ export function mergeLeaveSphereAdminWorkspace(
     ...incoming,
     currentUserId: incoming.currentUserId || current.currentUserId,
     currentUserName: incoming.currentUserName || current.currentUserName,
-    employees: mergeListByKey(incoming.employees, current.employees, (item) => item.employeeId),
-    balanceTransactions: incoming.balanceTransactions.map((item) => ({ ...item })),
-    employeeBalances: incoming.employeeBalances.map((item) => ({
-      ...item,
-      balances: item.balances.map((balance) => ({ ...balance })),
-    })),
-    requests: mergeListByKey(incoming.requests, current.requests, (item) => item.id),
-    holidays: mergeListByKey(incoming.holidays, current.holidays, (item) => item.id),
-    ptoTypes: mergeListByKey(incoming.ptoTypes, current.ptoTypes, (item) => item.code),
-    ptoActions: mergeListByKey(incoming.ptoActions, current.ptoActions, (item) => item.code),
+    currentUserEmail: incoming.currentUserEmail || current.currentUserEmail,
+    managerId: incoming.managerId === undefined ? current.managerId : incoming.managerId,
+    currentUserTeamRegion: incoming.currentUserTeamRegion || current.currentUserTeamRegion,
+    isManager: incoming.isManager ?? current.isManager,
+    employees: mergeListByKey(current.employees, incoming.employees, (item) => item.employeeId),
+    balanceTransactions: mergeListByKey(current.balanceTransactions, incoming.balanceTransactions, (item) => item.id),
+    employeeBalances: mergeEmployeeBalanceRows(current.employeeBalances, incoming.employeeBalances),
+    requests: mergeListByKey(current.requests, incoming.requests, (item) => item.id),
+    holidays: mergeListByKey(current.holidays, incoming.holidays, (item) => item.id),
+    ptoTypes: mergeListByKey(current.ptoTypes, incoming.ptoTypes, (item) => item.code),
+    ptoActions: mergeListByKey(current.ptoActions, incoming.ptoActions, (item) => item.code),
   };
 }
 
@@ -404,6 +511,10 @@ function normalizeWorkspaceResponse(payload: unknown): LeaveSphereAdminWorkspace
   return {
     currentUserId,
     currentUserName,
+    currentUserEmail: asString(workspaceRaw.currentUserEmail),
+    managerId: workspaceRaw.managerId === undefined ? null : asString(workspaceRaw.managerId) || null,
+    currentUserTeamRegion: normalizeLeaveSphereTeamRegion(workspaceRaw.currentUserTeamRegion),
+    isManager: Boolean(workspaceRaw.isManager),
     employees,
     balanceTransactions,
     employeeBalances,
@@ -411,7 +522,166 @@ function normalizeWorkspaceResponse(payload: unknown): LeaveSphereAdminWorkspace
     holidays,
     ptoTypes,
     ptoActions,
+    defaultRequestActionCode: asString(workspaceRaw.defaultRequestActionCode) || undefined,
+    defaultCancelActionCode: asString(workspaceRaw.defaultCancelActionCode) || undefined,
   };
+}
+
+function normalizeWorkspaceDelta(payload: unknown): LeaveSphereAdminWorkspaceDelta | null {
+  const raw = unwrapEnvelope(payload);
+  const workspaceRaw = isRecord(raw) && isRecord(raw.workspacePatch) ? raw.workspacePatch : null;
+  if (!isRecord(workspaceRaw)) {
+    return null;
+  }
+
+  const patch: LeaveSphereAdminWorkspaceDelta = {};
+  if ("currentUserId" in workspaceRaw) {
+    patch.currentUserId = asString(workspaceRaw.currentUserId);
+  }
+  if ("currentUserName" in workspaceRaw) {
+    patch.currentUserName = asString(workspaceRaw.currentUserName);
+  }
+  if ("currentUserEmail" in workspaceRaw) {
+    patch.currentUserEmail = asString(workspaceRaw.currentUserEmail) || undefined;
+  }
+  if ("managerId" in workspaceRaw) {
+    patch.managerId = workspaceRaw.managerId === undefined ? undefined : asString(workspaceRaw.managerId) || null;
+  }
+  if ("currentUserTeamRegion" in workspaceRaw) {
+    patch.currentUserTeamRegion = normalizeLeaveSphereTeamRegion(workspaceRaw.currentUserTeamRegion);
+  }
+  if ("isManager" in workspaceRaw) {
+    patch.isManager = Boolean(workspaceRaw.isManager);
+  }
+  if ("defaultRequestActionCode" in workspaceRaw) {
+    patch.defaultRequestActionCode = asString(workspaceRaw.defaultRequestActionCode) || undefined;
+  }
+  if ("defaultCancelActionCode" in workspaceRaw) {
+    patch.defaultCancelActionCode = asString(workspaceRaw.defaultCancelActionCode) || undefined;
+  }
+  if (Array.isArray(workspaceRaw.employees)) {
+    patch.employees = workspaceRaw.employees
+      .filter(isRecord)
+      .map((item) => ({
+        employeeId: asString(item.employeeId),
+        employeeName: asString(item.employeeName),
+        pictureUrl: asString(item.pictureUrl) || null,
+        title: asString(item.title),
+        managerId: asString(item.managerId),
+        managerName: asString(item.managerName),
+        teamRegion: normalizeLeaveSphereTeamRegion(item.teamRegion),
+        active: Boolean(item.active),
+      }))
+      .filter((item) => item.employeeId && item.employeeName);
+  }
+  if (Array.isArray(workspaceRaw.balanceTransactions)) {
+    patch.balanceTransactions = workspaceRaw.balanceTransactions
+      .filter(isRecord)
+      .map((item) => ({
+        id: asString(item.id),
+        employeeId: asString(item.employeeId),
+        ptoTypeCode: asString(item.ptoTypeCode),
+        ptoActionCode: asString(item.ptoActionCode).toLowerCase() as LeaveSphereAdminPtoActionCode,
+        hours: asNumber(item.hours),
+        year: Math.trunc(asNumber(item.year)),
+        status: (asString(item.status) as LeaveSphereAdminPtoTransactionStatus) || "Approved",
+        approverNote: asString(item.approverNote) || null,
+        createdAt: asString(item.createdAt),
+        createdByName: asString(item.createdByName) || null,
+      }))
+      .filter((item) => item.id && item.employeeId && item.ptoTypeCode);
+  }
+  if (Array.isArray(workspaceRaw.employeeBalances)) {
+    patch.employeeBalances = workspaceRaw.employeeBalances
+      .filter(isRecord)
+      .map((row) => ({
+        employeeId: asString(row.employeeId),
+        employeeName: asString(row.employeeName),
+        balances: Array.isArray(row.balances)
+          ? row.balances
+              .filter(isRecord)
+              .map((balance) => ({
+                type: asString(balance.type) || asString(balance.code),
+                code: asString(balance.code) || undefined,
+                label: asString(balance.label) || asString(balance.code) || asString(balance.type) || "PTO",
+                totalHours: asNumber(balance.totalHours),
+                usedHours: asNumber(balance.usedHours),
+                scheduledHours: asNumber(balance.scheduledHours),
+                remainingHours: balance.remainingHours === undefined ? undefined : asNumber(balance.remainingHours),
+              }))
+          : [],
+      }))
+      .filter((row) => row.employeeId && row.employeeName);
+  }
+  if (Array.isArray(workspaceRaw.requests)) {
+    patch.requests = workspaceRaw.requests
+      .filter(isRecord)
+      .map((item) => ({
+        id: asString(item.id),
+        employeeId: asString(item.employeeId),
+        managerId: asString(item.managerId),
+        type: asString(item.type) || "vacation",
+        ptoTypeCode: asString(item.ptoTypeCode) || undefined,
+        startDate: asString(item.startDate),
+        endDate: asString(item.endDate),
+        hours: asNumber(item.hours),
+        description: asString(item.description),
+        approverNote: asString(item.approverNote) || null,
+        status: normalizeLeaveSpherePtoStatus(item.status),
+        submittedAt: asString(item.submittedAt),
+        reviewedAt: asString(item.reviewedAt) || null,
+        reviewerName: asString(item.reviewerName) || null,
+      }))
+      .filter((item) => item.id && item.type);
+  }
+  if (Array.isArray(workspaceRaw.holidays)) {
+    patch.holidays = workspaceRaw.holidays
+      .filter(isRecord)
+      .map((item) => ({
+        id: asString(item.id),
+        name: asString(item.name),
+        date: asString(item.date),
+        teamRegion: normalizeLeaveSphereTeamRegion(item.teamRegion),
+      }))
+      .filter((item) => item.id && item.date);
+  }
+  if (Array.isArray(workspaceRaw.ptoTypes)) {
+    patch.ptoTypes = workspaceRaw.ptoTypes
+      .filter(isRecord)
+      .map((item) => ({
+        code: asString(item.code || item.type || item.name),
+        type: asString(item.type) || undefined,
+        label: asString(item.label) || asString(item.name) || asString(item.code) || "PTO",
+        active: Boolean(item.active ?? true),
+      }))
+      .filter((item) => item.code && item.label);
+  }
+  if (Array.isArray(workspaceRaw.ptoActions)) {
+    patch.ptoActions = workspaceRaw.ptoActions
+      .filter(isRecord)
+      .map((item) => ({
+        code: asString(item.code).toUpperCase(),
+        label: asString(item.label) || asString(item.name) || asString(item.code) || "PTO Action",
+        detail: asString(item.detail) || asString(item.color) || "",
+      }))
+      .filter((item) => item.code && item.label);
+  }
+
+  return Object.keys(patch).length > 0 ? patch : null;
+}
+
+function resolveWorkspaceFromMutationResponse(
+  response: unknown,
+  currentWorkspace: LeaveSphereAdminWorkspaceData | null | undefined,
+): LeaveSphereAdminWorkspaceData | null {
+  const workspacePatch = normalizeWorkspaceDelta(response);
+  if (workspacePatch) {
+    if (!currentWorkspace) {
+      return null;
+    }
+    return mergeLeaveSphereAdminWorkspace(currentWorkspace, workspacePatch);
+  }
+  return normalizeWorkspaceResponse(response);
 }
 
 function normalizeCreatedRequestId(payload: unknown): string | null {
@@ -469,7 +739,7 @@ export async function createLeaveSphereAdminPtoRequest(params: CreateRequestArgs
     successToast: false,
     errorToast: false,
   });
-  const workspace = normalizeWorkspaceResponse(response);
+  const workspace = resolveWorkspaceFromMutationResponse(response, params.currentWorkspace);
   if (!workspace) {
     throw new Error("Unable to normalize LeaveSphere admin workspace response.");
   }
@@ -486,7 +756,7 @@ export async function updateLeaveSphereAdminPtoRequest(params: UpdateRequestArgs
     successToast: false,
     errorToast: false,
   });
-  const workspace = normalizeWorkspaceResponse(response);
+  const workspace = resolveWorkspaceFromMutationResponse(response, params.currentWorkspace);
   if (!workspace) {
     throw new Error("Unable to normalize LeaveSphere admin workspace response.");
   }
@@ -507,7 +777,7 @@ export async function reviewLeaveSphereAdminPtoRequest(params: ReviewRequestArgs
     successToast: false,
     errorToast: false,
   });
-  const workspace = normalizeWorkspaceResponse(response);
+  const workspace = resolveWorkspaceFromMutationResponse(response, params.currentWorkspace);
   if (!workspace) {
     throw new Error("Unable to normalize LeaveSphere admin workspace response.");
   }
@@ -523,7 +793,7 @@ export async function adjustLeaveSphereAdminPtoBalance(params: AdjustBalanceArgs
     successToast: false,
     errorToast: false,
   });
-  const workspace = normalizeWorkspaceResponse(response);
+  const workspace = resolveWorkspaceFromMutationResponse(response, params.currentWorkspace);
   if (!workspace) {
     throw new Error("Unable to normalize LeaveSphere admin workspace response.");
   }
@@ -539,7 +809,7 @@ export async function updateLeaveSphereAdminSetupData(params: SetupArgs): Promis
     successToast: false,
     errorToast: false,
   });
-  const workspace = normalizeWorkspaceResponse(response);
+  const workspace = resolveWorkspaceFromMutationResponse(response, params.currentWorkspace);
   if (!workspace) {
     throw new Error("Unable to normalize LeaveSphere admin workspace response.");
   }

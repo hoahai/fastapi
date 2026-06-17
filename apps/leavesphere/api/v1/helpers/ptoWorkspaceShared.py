@@ -3,6 +3,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 from decimal import Decimal
+from functools import lru_cache
 import re
 from typing import Callable
 
@@ -61,6 +62,7 @@ def _split_ui_type_tokens(*values: object | None) -> str | None:
     return None
 
 
+@lru_cache(maxsize=1)
 def build_pto_type_catalog() -> tuple[list[dict], dict[str, dict]]:
     rows = get_pto_types()
     catalog: list[dict] = []
@@ -104,6 +106,7 @@ def build_pto_type_catalog() -> tuple[list[dict], dict[str, dict]]:
     return catalog, by_code
 
 
+@lru_cache(maxsize=1)
 def build_pto_action_catalog() -> tuple[list[dict], dict[str, dict]]:
     rows = get_pto_actions()
     catalog: list[dict] = []
@@ -166,6 +169,11 @@ def load_leave_sphere_pto_workspace_catalogs() -> LeaveSpherePtoWorkspaceCatalog
             fallback_index=0,
         ),
     )
+
+
+def clear_leave_sphere_pto_workspace_catalog_cache() -> None:
+    build_pto_type_catalog.cache_clear()
+    build_pto_action_catalog.cache_clear()
 
 
 def build_leave_sphere_workspace_common_payload(catalogs: LeaveSpherePtoWorkspaceCatalogs) -> dict:

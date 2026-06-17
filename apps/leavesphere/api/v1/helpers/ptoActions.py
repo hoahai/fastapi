@@ -5,6 +5,7 @@ from apps.leavesphere.api.v1.helpers.dbQueries import (
     insert_pto_action,
     update_pto_action,
 )
+from apps.leavesphere.api.v1.helpers.readCache import read_leave_sphere_read_cache, write_leave_sphere_read_cache
 
 
 def _normalize_code(value: object) -> str:
@@ -42,12 +43,24 @@ def _normalize_duplicate_error(exc: Exception) -> str | None:
 
 
 def list_pto_actions() -> list[dict]:
-    return get_pto_actions()
+    cached = read_leave_sphere_read_cache(namespace="pto-actions:list")
+    if isinstance(cached, list):
+        return cached
+    rows = get_pto_actions()
+    write_leave_sphere_read_cache(namespace="pto-actions:list", value=rows)
+    return rows
 
 
 def get_pto_action(code: str) -> dict | None:
-    rows = get_pto_actions(code=code)
-    return rows[0] if rows else None
+    normalized_code = _normalize_code(code)
+    cached = read_leave_sphere_read_cache(namespace="pto-actions:item", params={"code": normalized_code})
+    if isinstance(cached, dict):
+        return cached
+    rows = get_pto_actions(code=normalized_code)
+    item = rows[0] if rows else None
+    if item is not None:
+        write_leave_sphere_read_cache(namespace="pto-actions:item", params={"code": normalized_code}, value=item)
+    return item
 
 
 def create_pto_action(payload: dict) -> dict:
