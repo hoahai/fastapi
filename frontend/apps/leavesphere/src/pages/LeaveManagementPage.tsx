@@ -480,6 +480,22 @@ function filterWorkspaceByYear(workspace: LeaveManagementWorkspaceData, year: nu
   };
 }
 
+function filterWorkspaceByLoadedRequestMonths(
+  workspace: LeaveManagementWorkspaceData,
+  year: number,
+  loadedRequestMonthKeys: Set<string>,
+): LeaveManagementWorkspaceData {
+  const yearScopedWorkspace = filterWorkspaceByYear(workspace, year);
+  if (loadedRequestMonthKeys.size === 0) {
+    return yearScopedWorkspace;
+  }
+
+  return {
+    ...yearScopedWorkspace,
+    requests: yearScopedWorkspace.requests.filter((item) => loadedRequestMonthKeys.has(item.startDate.slice(0, 7))),
+  };
+}
+
 function countUpcomingOutRequests(requests: LeaveSpherePtoRequest[], todayIsoDate: string): number {
   const horizon = shiftIsoDateByDays(todayIsoDate, 14);
   let count = 0;
@@ -1787,7 +1803,12 @@ export default function LeaveManagementPage() {
   const applyWorkspace = useCallback((next: LeaveManagementWorkspaceData) => {
     const effectiveYear = loadedYear ?? (Number.isInteger(selectedYearNumber) ? selectedYearNumber : currentYear);
     const merged = mergeLeaveManagementWorkspace(workspaceRef.current, next);
-    commitWorkspace(merged, "network", effectiveYear);
+    const scopedWorkspace = filterWorkspaceByLoadedRequestMonths(
+      merged,
+      effectiveYear,
+      loadedRequestMonthKeysRef.current,
+    );
+    commitWorkspace(scopedWorkspace, "network", effectiveYear);
   }, [commitWorkspace, currentYear, loadedYear, selectedYearNumber]);
 
   const openLoadHoursModal = useCallback((params?: {

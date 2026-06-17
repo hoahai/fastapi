@@ -336,6 +336,10 @@ function filterWorkspaceByYear(workspace: LeaveSpherePtoWorkspaceData, year: num
   };
 }
 
+function scopeWorkspaceToYear(workspace: LeaveSpherePtoWorkspaceData, year: number): LeaveSpherePtoWorkspaceData {
+  return filterWorkspaceByYear(workspace, year);
+}
+
 function isPtoTypeValue(value: unknown): value is LeaveSpherePtoType {
   return typeof value === "string";
 }
@@ -893,6 +897,15 @@ export default function LeaveSphereMyPtoPage() {
     );
   }, [currentUserId, tenantSlug]);
 
+  const commitScopedWorkspace = useCallback((
+    nextWorkspace: LeaveSpherePtoWorkspaceData,
+    source: "cache" | "network",
+    year: number,
+    fetchedAt = Date.now(),
+  ) => {
+    commitWorkspace(scopeWorkspaceToYear(nextWorkspace, year), source, year, fetchedAt);
+  }, [commitWorkspace]);
+
   const cacheStatusText = useMemo(() => {
     if (isRefreshing) {
       return "Refreshing LeaveSphere PTO workspace...";
@@ -1179,7 +1192,7 @@ export default function LeaveSphereMyPtoPage() {
           year: loadedYearForRequests,
         },
       });
-      commitWorkspace(result.workspace, result.source, loadedYearForRequests);
+      commitScopedWorkspace(result.workspace, result.source, loadedYearForRequests);
       setIsRequestDialogOpen(false);
       toast.success("PTO request submitted", "Your request is now pending manager review.");
     } catch {
@@ -1223,7 +1236,7 @@ export default function LeaveSphereMyPtoPage() {
           approverNote: reviewNote,
         },
       });
-      commitWorkspace(result.workspace, result.source, loadedYearForRequests);
+      commitScopedWorkspace(result.workspace, result.source, loadedYearForRequests);
       setReviewTargetId(null);
       setReviewNote("");
       if (action === "approve") {
@@ -1260,7 +1273,7 @@ export default function LeaveSphereMyPtoPage() {
         transactionId: selectedMyRequest.id,
         currentWorkspace: workspaceRef.current,
       });
-      commitWorkspace(result.workspace, result.source, loadedYearForRequests);
+      commitScopedWorkspace(result.workspace, result.source, loadedYearForRequests);
       setSelectedMyRequestId(null);
       toast.success("Request cancelled", "PTO request status was updated to cancelled.");
     } catch {
@@ -1308,7 +1321,7 @@ export default function LeaveSphereMyPtoPage() {
           year: selectedRequestYear,
         },
       });
-      commitWorkspace(result.workspace, result.source, selectedRequestYear);
+      commitScopedWorkspace(result.workspace, result.source, selectedRequestYear);
       toast.success("Request updated", "PTO request details were updated.");
     } finally {
       setIsSavingRequestDetail(false);
@@ -1349,14 +1362,14 @@ export default function LeaveSphereMyPtoPage() {
       if (!nextWorkspace) {
         return;
       }
-      commitWorkspace(nextWorkspace, "cache", loadedYearForRequests);
+      commitScopedWorkspace(nextWorkspace, "cache", loadedYearForRequests);
       setReviewTargetId(null);
       setReviewNote("");
       toast.success("Request updated", "PTO request details were updated.");
     } finally {
       setIsReviewing(false);
     }
-  }, [commitWorkspace, loadedYearForRequests, reviewNote, toast, workspace]);
+  }, [commitScopedWorkspace, loadedYearForRequests, reviewNote, toast, workspace]);
 
   return (
     <AppPageLayout
