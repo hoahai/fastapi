@@ -1606,6 +1606,12 @@ def adjust_leave_management_balance(*, request, payload: dict) -> dict:
             year=year,
             workspace=workspace,
         )
+        workspace_patch = _build_leave_management_workspace_patch(
+            workspace=workspace,
+            balance_transaction_ids=[transaction_id],
+            employee_ids=[employee_id],
+            include_current_balances=employee_id == _normalize_text(workspace.get("currentUserId")),
+        )
     response = {
         "source": "network",
         "updated": updated,
