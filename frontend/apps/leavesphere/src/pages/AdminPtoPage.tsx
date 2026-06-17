@@ -1398,7 +1398,7 @@ export default function LeaveSphereAdminPtoPage() {
   );
   const canSubmitCreateRequestWithinBalance = useMemo(() => {
     const requestedHours = Number(createForm.hours);
-    if (!Number.isFinite(requestedHours) || requestedHours < 0) {
+    if (!Number.isFinite(requestedHours) || requestedHours <= 0) {
       return false;
     }
     if (createRequestAvailableHours == null) {

@@ -209,7 +209,7 @@ def create_request(payload: dict) -> dict:
         "employeeId": employee_id,
         "ptoTypeCode": pto_type_code,
         "ptoActionCode": pto_action_code,
-        "hours": (requested_hours * Decimal("-1")).quantize(Decimal("0.01")),
+        "hours": requested_hours.quantize(Decimal("0.01")),
         "year": _normalize_year(payload.get("year")),
         "startDate": start_date,
         "endDate": end_date,

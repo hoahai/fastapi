@@ -101,7 +101,7 @@ def get_my_pto_load_route(
                 "ptoTypeCode": "VAC",
                 "startDate": "2026-06-10",
                 "endDate": "2026-06-10",
-                "hours": -8,
+                "hours": 8,
                 "status": "pending"
               }
             ],

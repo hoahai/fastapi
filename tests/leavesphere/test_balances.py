@@ -32,8 +32,8 @@ class LeaveSphereBalancesTests(unittest.TestCase):
 
         query = mock_fetch.call_args[0][0]
         params = mock_fetch.call_args[0][1]
-        self.assertIn("CASE WHEN status = 'Approved' THEN hours ELSE 0 END", query)
-        self.assertIn("CASE WHEN status = 'Pending' AND hours < 0 THEN hours ELSE 0 END", query)
+        self.assertIn("CASE WHEN status = 'Approved' AND UPPER(ptoActionCode) LIKE '%REQ%' THEN -ABS(hours)", query)
+        self.assertIn("CASE WHEN status = 'Pending' AND UPPER(ptoActionCode) LIKE '%REQ%' THEN ABS(hours) ELSE 0 END", query)
         self.assertIn("approvedBalanceHours", query)
         self.assertIn("pendingRequestHours", query)
         self.assertIn("availableBalanceHours", query)
@@ -84,7 +84,7 @@ class LeaveSphereBalancesTests(unittest.TestCase):
                 ptoTransactions.create_adjustment(payload)
         self.assertIn("must not be zero", str(exc.exception))
 
-    def test_request_submit_stores_negative_hours_and_pending_status(self):
+    def test_request_submit_stores_positive_hours_and_pending_status(self):
         payload = {
             "employeeId": "emp-1",
             "ptoTypeCode": "vac",
@@ -106,7 +106,7 @@ class LeaveSphereBalancesTests(unittest.TestCase):
         self.assertEqual(result["status"], "Pending")
         call_kwargs = mock_create.call_args.kwargs
         item = call_kwargs["item"]
-        self.assertEqual(str(item["hours"]), "-8.00")
+        self.assertEqual(str(item["hours"]), "8.00")
         self.assertEqual(item["status"], "Pending")
         self.assertEqual(item["ptoTypeCode"], "VAC")
         self.assertEqual(item["ptoActionCode"], "REQUEST")
@@ -148,7 +148,7 @@ class LeaveSphereBalancesTests(unittest.TestCase):
             "employeeId": "emp-1",
             "ptoTypeCode": "VAC",
             "ptoActionCode": "REQUEST",
-            "hours": Decimal("-8.00"),
+            "hours": Decimal("8.00"),
             "year": 2026,
             "startDate": "2026-06-10",
             "endDate": "2026-06-10",
@@ -282,7 +282,7 @@ class LeaveSphereBalancesTests(unittest.TestCase):
         with patch.object(
             ptoTransactions,
             "get_pto_transactions",
-            return_value=[{"id": "tx-1", "employeeId": "emp-1", "hours": "-8.00", "status": "Pending"}],
+            return_value=[{"id": "tx-1", "employeeId": "emp-1", "hours": "8.00", "status": "Pending"}],
         ), patch.object(
             ptoTransactions,
             "get_employees_by_identity_key",
@@ -312,7 +312,7 @@ class LeaveSphereBalancesTests(unittest.TestCase):
         with patch.object(
             ptoTransactions,
             "get_pto_transactions",
-            return_value=[{"id": "tx-1", "employeeId": "emp-1", "hours": "-8.00", "status": "Pending"}],
+            return_value=[{"id": "tx-1", "employeeId": "emp-1", "hours": "8.00", "status": "Pending"}],
         ), patch.object(
             ptoTransactions,
             "get_employees_by_identity_key",
@@ -342,7 +342,7 @@ class LeaveSphereBalancesTests(unittest.TestCase):
         with patch.object(
             ptoTransactions,
             "get_pto_transactions",
-            return_value=[{"id": "tx-1", "employeeId": "emp-1", "hours": "-8.00", "status": "Pending"}],
+            return_value=[{"id": "tx-1", "employeeId": "emp-1", "hours": "8.00", "status": "Pending"}],
         ), patch.object(
             ptoTransactions,
             "get_employees_by_identity_key",
@@ -368,7 +368,7 @@ class LeaveSphereBalancesTests(unittest.TestCase):
         with patch.object(
             ptoTransactions,
             "get_pto_transactions",
-            return_value=[{"id": "tx-1", "employeeId": "emp-1", "hours": "-8.00", "status": "Pending"}],
+            return_value=[{"id": "tx-1", "employeeId": "emp-1", "hours": "8.00", "status": "Pending"}],
         ), patch.object(
             ptoTransactions,
             "get_employees_by_identity_key",
@@ -399,7 +399,7 @@ class LeaveSphereBalancesTests(unittest.TestCase):
         with patch.object(
             ptoTransactions,
             "get_pto_transactions",
-            return_value=[{"id": "tx-1", "employeeId": "emp-1", "hours": "-8.00", "status": "Pending"}],
+            return_value=[{"id": "tx-1", "employeeId": "emp-1", "hours": "8.00", "status": "Pending"}],
         ), patch.object(
             ptoTransactions,
             "get_employees_by_identity_key",
@@ -415,21 +415,21 @@ class LeaveSphereBalancesTests(unittest.TestCase):
         ), patch.object(
             ptoTransactions,
             "reject_pending_pto_request",
-            side_effect=ValueError("Only debit PTO requests (hours < 0) can be rejected"),
+            side_effect=ValueError("Only PTO requests can be rejected"),
         ):
             with self.assertRaises(ValueError) as exc:
                 ptoTransactions.approve_request(request=request, transaction_id="tx-1")
             self.assertIn("Only Pending", str(exc.exception))
             with self.assertRaises(ValueError) as exc:
                 ptoTransactions.reject_request(request=request, transaction_id="tx-1")
-            self.assertIn("hours < 0", str(exc.exception))
+            self.assertIn("PTO requests", str(exc.exception))
 
     def test_approve_reject_allow_legacy_compat_without_principal_mapping(self):
         request = SimpleNamespace(state=SimpleNamespace(auth_mode="legacy_api_key"))
         with patch.object(
             ptoTransactions,
             "get_pto_transactions",
-            return_value=[{"id": "tx-1", "employeeId": "emp-1", "hours": "-8.00", "status": "Pending"}],
+            return_value=[{"id": "tx-1", "employeeId": "emp-1", "hours": "8.00", "status": "Pending"}],
         ), patch.object(
             ptoTransactions,
             "approve_pending_pto_request",

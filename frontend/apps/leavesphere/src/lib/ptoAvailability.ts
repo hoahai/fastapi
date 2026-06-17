@@ -69,8 +69,8 @@ export function validateLeaveSpherePtoRequestedHours(params: {
   const requestedHours = typeof params.requestedHours === "number"
     ? params.requestedHours
     : Number(params.requestedHours);
-  if (!Number.isFinite(requestedHours) || requestedHours < 0) {
-    return null;
+  if (!Number.isFinite(requestedHours) || requestedHours <= 0) {
+    return "Hours must be greater than zero.";
   }
 
   const availableHours = params.availableHours;

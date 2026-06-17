@@ -31,7 +31,6 @@ from apps.leavesphere.api.v1.helpers.myPto import (
     _normalize_text,
     _normalize_year,
     _resolve_current_employee,
-    _resolve_default_action_code,
     _resolve_primary_manager_id,
     _split_ui_type_tokens,
     _to_date_string,
@@ -40,15 +39,23 @@ from apps.leavesphere.api.v1.helpers.config import (
     resolve_employee_email,
     resolve_employee_email_candidates,
 )
+from apps.leavesphere.api.v1.helpers.ptoAccounting import (
+    action_matches_tokens,
+    ADJUSTMENT_ACTION_TOKENS,
+    is_load_action_row,
+    is_request_action_code,
+    is_request_action_row,
+    LOAD_ACTION_TOKENS,
+    REQUEST_ACTION_TOKENS,
+    REQUEST_CANCEL_ACTION_TOKENS,
+    resolve_action_code,
+    signed_pto_hours,
+)
 from apps.leavesphere.api.v1.helpers.ptoActions import create_pto_action, modify_pto_action
 from apps.leavesphere.api.v1.helpers.ptoTypes import create_pto_type, modify_pto_type
 from apps.leavesphere.api.v1.helpers.ptoTransactions import approve_request, create_adjustment, create_request
 from shared.auth.dependencies import get_auth_principal
 from shared.db import execute_write, run_transaction
-
-_REQUEST_ACTION_TOKENS = ("request", "req")
-_LOAD_ACTION_TOKENS = ("load", "grant", "accrual", "carry")
-_ADJUSTMENT_ACTION_TOKENS = ("adjust", "manual", "correction", "fix")
 
 
 def _normalize_optional_iso_date(value: object | None) -> str:
@@ -161,29 +168,6 @@ def _merge_request_rows(*groups: list[dict]) -> list[dict]:
     return list(requests_by_id.values())
 
 
-def _build_action_haystack(row: dict, action_by_code: dict[str, dict]) -> str:
-    action_code = _normalize_text(row.get("ptoActionCode")).upper()
-    action = action_by_code.get(action_code)
-    name = _normalize_text(action.get("name")) if action else ""
-    return f"{action_code} {name}".strip().lower()
-
-
-def _is_token_match(haystack: str, tokens: tuple[str, ...]) -> bool:
-    return any(token in haystack for token in tokens)
-
-
-def _is_request_action(row: dict, action_by_code: dict[str, dict]) -> bool:
-    return _is_token_match(_build_action_haystack(row, action_by_code), _REQUEST_ACTION_TOKENS)
-
-
-def _is_load_action(row: dict, action_by_code: dict[str, dict]) -> bool:
-    return _is_token_match(_build_action_haystack(row, action_by_code), _LOAD_ACTION_TOKENS)
-
-
-def _is_adjustment_action(row: dict, action_by_code: dict[str, dict]) -> bool:
-    return _is_token_match(_build_action_haystack(row, action_by_code), _ADJUSTMENT_ACTION_TOKENS)
-
-
 def _build_employee_manager_map(manager_rows: list[dict]) -> dict[str, str]:
     manager_map: dict[str, str] = {}
     for row in manager_rows:
@@ -241,21 +225,6 @@ def _resolve_pto_type_code(
         if normalized and normalized in item_label:
             return code
     return normalized.upper()
-
-
-def _resolve_action_code(
-    *,
-    action_catalog: list[dict],
-    include_tokens: tuple[str, ...],
-    fallback_index: int = 0,
-) -> str:
-    for row in action_catalog:
-        haystack = f"{_normalize_text(row.get('code'))} {_normalize_text(row.get('name'))}".lower()
-        if _is_token_match(haystack, include_tokens):
-            return _normalize_text(row.get("code")).upper()
-    if 0 <= fallback_index < len(action_catalog):
-        return _normalize_text(action_catalog[fallback_index].get("code")).upper()
-    return ""
 
 
 def _build_employee_balances(
@@ -329,7 +298,7 @@ def _build_employee_balances(
         status = _normalize_text(row.get("status")).lower()
         if status != "approved":
             continue
-        if _is_load_action(row, pto_action_by_code):
+        if is_load_action_row(row, pto_action_by_code):
             bucket["totalHours"] = float(bucket["totalHours"]) + hours
 
     employee_balances: list[dict] = []
@@ -378,13 +347,16 @@ def _build_balance_transaction_rows(
         status = _normalize_text(row.get("status")).capitalize()
         if status != "Approved":
             continue
-        if not (_is_load_action(row, pto_action_by_code) or _is_adjustment_action(row, pto_action_by_code)):
+        if not (
+            is_load_action_row(row, pto_action_by_code)
+            or action_matches_tokens(row.get("ptoActionCode"), tokens=ADJUSTMENT_ACTION_TOKENS)
+        ):
             continue
         employee_id = _normalize_text(row.get("employeeId"))
         pto_type_code = _normalize_text(row.get("ptoTypeCode")).upper()
         if not employee_id or not pto_type_code:
             continue
-        action_code = "adjustment" if _is_adjustment_action(row, pto_action_by_code) else "load_grant"
+        action_code = "adjustment" if action_matches_tokens(row.get("ptoActionCode"), tokens=ADJUSTMENT_ACTION_TOKENS) else "load_grant"
         approver_id = _normalize_text(row.get("approverId"))
         approver = employee_map.get(approver_id) if approver_id else None
         hours_value = Decimal(str(row.get("hours") or 0)).quantize(Decimal("0.01"))
@@ -562,13 +534,13 @@ def _build_workspace(
         if row["managerId"] == current_employee_id and row["employeeId"] != current_employee_id
     ]
 
-    pto_types, pto_type_by_code = _build_pto_type_catalog()
+    _pto_types, pto_type_by_code = _build_pto_type_catalog()
     pto_actions, pto_action_by_code = _build_pto_action_catalog()
     balance_transaction_rows = get_pto_transactions(year=selected_year)
-    year_request_rows = [row for row in balance_transaction_rows if _is_request_action(row, pto_action_by_code)]
+    year_request_rows = [row for row in balance_transaction_rows if is_request_action_row(row, pto_action_by_code)]
     request_rows: list[dict] = []
     if include_year_requests:
-        request_rows = [row for row in balance_transaction_rows if _is_request_action(row, pto_action_by_code)]
+        request_rows = [row for row in balance_transaction_rows if is_request_action_row(row, pto_action_by_code)]
 
     if include_pending:
         year_start = f"{selected_year}-01-01"
@@ -608,7 +580,7 @@ def _build_workspace(
     employee_balances = _build_employee_balances(
         employees=employees,
         employee_map=employee_map,
-        pto_types=pto_types,
+        pto_types=_pto_types,
         pto_type_by_code=pto_type_by_code,
         pto_action_by_code=pto_action_by_code,
         request_rows=year_request_rows,
@@ -647,15 +619,15 @@ def _build_workspace(
         "managerId": manager_map.get(current_employee_id),
         "currentUserTeamRegion": current_employee_region,
         "isManager": bool(direct_reports),
-        "ptoTypes": pto_types,
+        "ptoTypes": _pto_types,
         "ptoActions": pto_actions,
-        "defaultRequestActionCode": _resolve_default_action_code(
+        "defaultRequestActionCode": resolve_action_code(
             pto_actions,
-            include_tokens=_REQUEST_ACTION_TOKENS,
+            include_tokens=REQUEST_ACTION_TOKENS,
         ),
-        "defaultCancelActionCode": _resolve_default_action_code(
+        "defaultCancelActionCode": resolve_action_code(
             pto_actions,
-            include_tokens=("request", "cancel"),
+            include_tokens=REQUEST_CANCEL_ACTION_TOKENS,
             fallback_index=0,
         ),
         "balances": current_employee_balances,
@@ -722,7 +694,7 @@ def _create_immediate_approved_request(
     def _work(cursor) -> int:
         tables = get_db_tables()
         cursor.execute(
-            "SELECT hours, status "
+            "SELECT ptoActionCode, hours, status "
             f"FROM {tables['PTOTRANSACTIONS']} "
             "WHERE employeeId = %s AND ptoTypeCode = %s AND year = %s "
             "FOR UPDATE",
@@ -730,16 +702,17 @@ def _create_immediate_approved_request(
         )
         rows = cursor.fetchall() or []
         approved = Decimal("0.00")
-        pending_negative = Decimal("0.00")
+        pending = Decimal("0.00")
         for row in rows:
-            hours = Decimal(str(row[0] or 0)).quantize(Decimal("0.01"))
-            status = str(row[1] or "").strip().lower()
+            action_code = str(row[0] or "").strip().upper()
+            hours = Decimal(str(row[1] or 0)).quantize(Decimal("0.01"))
+            status = str(row[2] or "").strip().lower()
             if status == "approved":
-                approved += hours
-            elif status == "pending" and hours < 0:
-                pending_negative += hours
+                approved += signed_pto_hours(action_code, hours)
+            elif status == "pending" and is_request_action_code(action_code):
+                pending += abs(hours)
 
-        available_after_approval = approved + pending_negative - requested_hours
+        available_after_approval = approved - pending - requested_hours
         if available_after_approval < 0:
             raise ValueError("Cannot approve request because available balance is below zero")
 
@@ -753,7 +726,7 @@ def _create_immediate_approved_request(
                 employee_id,
                 pto_type_code,
                 pto_action_code,
-                (requested_hours * Decimal("-1")).quantize(Decimal("0.01")),
+                requested_hours.quantize(Decimal("0.01")),
                 year,
                 start_date,
                 end_date,
@@ -790,9 +763,9 @@ def create_leave_management_request(*, request, payload: dict) -> dict:
     if not pto_type_code:
         raise ValueError("ptoTypeCode is required")
 
-    pto_action_code = _resolve_action_code(
+    pto_action_code = resolve_action_code(
         action_catalog=pto_actions,
-        include_tokens=_REQUEST_ACTION_TOKENS,
+        include_tokens=REQUEST_ACTION_TOKENS,
     )
     if not pto_action_code:
         raise ValueError("ptoActionCode is required")
@@ -872,9 +845,8 @@ def update_leave_management_request(*, request, payload: dict) -> dict:
     if not pto_type_code:
         raise ValueError("ptoTypeCode is required")
 
-    is_request = _is_request_action(transaction, _build_pto_action_catalog()[1])
     hours = _normalize_positive_requested_hours(payload.get("hours"))
-    stored_hours = (hours * Decimal("-1")).quantize(Decimal("0.01")) if is_request or Decimal(str(transaction.get("hours") or 0)) < 0 else hours
+    stored_hours = hours.quantize(Decimal("0.01"))
 
     updates = {
         "ptoTypeCode": pto_type_code,
@@ -943,9 +915,9 @@ def adjust_leave_management_balance(*, request, payload: dict) -> dict:
     pto_actions, _ = _build_pto_action_catalog()
     action_code = _normalize_text(payload.get("ptoActionCode")).lower()
     if action_code == "load_grant":
-        resolved_action_code = _resolve_action_code(action_catalog=pto_actions, include_tokens=_LOAD_ACTION_TOKENS)
+        resolved_action_code = resolve_action_code(action_catalog=pto_actions, include_tokens=LOAD_ACTION_TOKENS)
     elif action_code == "adjustment":
-        resolved_action_code = _resolve_action_code(action_catalog=pto_actions, include_tokens=_ADJUSTMENT_ACTION_TOKENS)
+        resolved_action_code = resolve_action_code(action_catalog=pto_actions, include_tokens=ADJUSTMENT_ACTION_TOKENS)
     else:
         raise ValueError("ptoActionCode is required")
 
@@ -1017,7 +989,7 @@ def _replace_employee_manager_mapping(*, employee_id: str, manager_id: str) -> i
 def _seed_employee_opening_balances(*, employee_id: str, region: str, year: int, current_user_name: str) -> list[dict]:
     pto_types = get_pto_types()
     pto_actions, _ = _build_pto_action_catalog()
-    load_action_code = _resolve_action_code(action_catalog=pto_actions, include_tokens=_LOAD_ACTION_TOKENS)
+    load_action_code = resolve_action_code(action_catalog=pto_actions, include_tokens=LOAD_ACTION_TOKENS)
     if not load_action_code:
         load_action_code = "LOAD"
 

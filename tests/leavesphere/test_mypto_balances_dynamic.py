@@ -7,17 +7,25 @@ class LeaveSphereMyPtoDynamicBalanceTests(unittest.TestCase):
     def test_build_balance_rows_is_transaction_driven_and_type_dynamic(self):
         rows = [
             {"ptoTypeCode": "PTO", "ptoActionCode": "LOAD", "hours": 8, "status": "Approved"},
-            {"ptoTypeCode": "PTO", "ptoActionCode": "REQ", "hours": -2, "status": "Approved"},
-            {"ptoTypeCode": "PTO", "ptoActionCode": "REQ", "hours": -3, "status": "Pending"},
+            {"ptoTypeCode": "PTO", "ptoActionCode": "REQ", "hours": 2, "status": "Approved"},
+            {"ptoTypeCode": "PTO", "ptoActionCode": "REQ", "hours": 3, "status": "Pending"},
             {"ptoTypeCode": "SICK", "ptoActionCode": "LOAD", "hours": 4, "status": "Approved"},
-            {"ptoTypeCode": "SICK", "ptoActionCode": "REQ", "hours": -1, "status": "Rejected"},
+            {"ptoTypeCode": "SICK", "ptoActionCode": "REQ", "hours": 1, "status": "Rejected"},
         ]
         pto_type_by_code = {
             "PTO": {"code": "PTO", "label": "Paid Time Off", "listingOrder": 2},
             "SICK": {"code": "SICK", "label": "Sick", "listingOrder": 1},
         }
+        pto_action_by_code = {
+            "LOAD": {"code": "LOAD", "name": "Load"},
+            "REQ": {"code": "REQ", "name": "Request"},
+        }
 
-        balances = myPto._build_balance_rows(rows=rows, pto_type_by_code=pto_type_by_code)
+        balances = myPto._build_balance_rows(
+            rows=rows,
+            pto_type_by_code=pto_type_by_code,
+            pto_action_by_code=pto_action_by_code,
+        )
 
         self.assertEqual([row["code"] for row in balances], ["SICK", "PTO"])
         sick = balances[0]

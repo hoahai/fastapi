@@ -250,7 +250,7 @@ def update_leave_management_request_route(
     Requirements:
         - Requires leavesphere.admin permission or workspace.super_admin
         - The transaction must already exist
-        - Debit requests remain stored as negative hours
+        - Request hours are stored as positive values
     """
     try:
         body = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()

@@ -118,9 +118,9 @@ function isWithinRange(value: string, minDate?: string, maxDate?: string): boole
   return true;
 }
 
-function isNonNegativeNumber(value: string): boolean {
+function isPositiveNumber(value: string): boolean {
   const parsed = Number(value);
-  return Number.isFinite(parsed) && parsed >= 0;
+  return Number.isFinite(parsed) && parsed > 0;
 }
 
 function normalizeDescription(value: string): string {
@@ -184,6 +184,7 @@ export function LeaveSpherePtoRequestDetailModal({
   const isHydratingFromOpenRef = useRef(false);
   const shouldAutoCalculateOnOpenRef = useRef(true);
   const hasHandledInitialAutoCalculateRef = useRef(false);
+  const hasManualHoursOverrideRef = useRef(false);
   const previousDateRangeRef = useRef<{ startDate: string; endDate: string } | null>(null);
   const lastEmittedFormRef = useRef<LeaveSpherePtoRequestFormState | null>(null);
   const descriptionField = useCommittedTextField<HTMLTextAreaElement>(
@@ -203,6 +204,7 @@ export function LeaveSpherePtoRequestDetailModal({
     setFormError(null);
     shouldAutoCalculateOnOpenRef.current = mode === "create" || !sourceForm.hours.trim();
     hasHandledInitialAutoCalculateRef.current = false;
+    hasManualHoursOverrideRef.current = false;
     previousDateRangeRef.current = {
       startDate: sourceForm.startDate,
       endDate: sourceForm.endDate,
@@ -239,7 +241,7 @@ export function LeaveSpherePtoRequestDetailModal({
       endDate: form.endDate,
     };
 
-    if (!shouldAutoCalculateOnFirstOpen && !hasDateChanged) {
+    if (hasManualHoursOverrideRef.current || (!shouldAutoCalculateOnFirstOpen && !hasDateChanged)) {
       return;
     }
 
@@ -283,7 +285,7 @@ export function LeaveSpherePtoRequestDetailModal({
     isValidDateRange(form.startDate, form.endDate)
     && isWithinRange(form.startDate, allowedDateRange?.minDate, allowedDateRange?.maxDate)
     && isWithinRange(form.endDate, allowedDateRange?.minDate, allowedDateRange?.maxDate)
-    && isNonNegativeNumber(form.hours)
+    && isPositiveNumber(form.hours)
     && normalizeDescription(form.description),
   );
   const canSave = Boolean(
@@ -331,7 +333,10 @@ export function LeaveSpherePtoRequestDetailModal({
             min={0}
             step={0.5}
             value={form.hours}
-            onChange={(event) => setForm((current) => ({ ...current, hours: event.target.value }))}
+            onChange={(event) => {
+              hasManualHoursOverrideRef.current = true;
+              setForm((current) => ({ ...current, hours: event.target.value }));
+            }}
             disabled={saving || readOnly}
             className={isHoursInvalid ? "border-rose-300 text-rose-900 focus-visible:border-rose-400 focus-visible:shadow-[inset_0_0_0_1px_rgba(244,63,94,0.15)]" : undefined}
           />
@@ -437,8 +442,8 @@ export function LeaveSpherePtoRequestDetailModal({
       setFormError("Start and end dates must be within the loaded year.");
       return;
     }
-    if (!isNonNegativeNumber(form.hours)) {
-      setFormError("Hours must be 0 or greater.");
+    if (!isPositiveNumber(form.hours)) {
+      setFormError("Hours must be greater than zero.");
       return;
     }
     if (!normalizeDescription(form.description)) {

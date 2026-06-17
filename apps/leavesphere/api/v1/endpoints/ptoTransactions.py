@@ -85,7 +85,7 @@ def get_pto_balances_route(
               "ptoTypeCode": "VAC",
               "year": 2026,
               "approvedBalanceHours": 48.00,
-              "pendingRequestHours": -8.00,
+              "pendingRequestHours": 8.00,
               "availableBalanceHours": 40.00
             }
           ]
@@ -94,9 +94,9 @@ def get_pto_balances_route(
     Requirements:
         - Requires X-Tenant-Id header
         - Requires valid API key or bearer token in compat mode
-        - approvedBalanceHours uses status = Approved rows
-        - pendingRequestHours uses status = Pending and hours < 0 rows
-        - availableBalanceHours = approvedBalanceHours + pendingRequestHours
+        - approvedBalanceHours subtracts request rows and adds other approved transactions
+        - pendingRequestHours uses pending request rows as positive reservations
+        - availableBalanceHours = approvedBalanceHours - pendingRequestHours
     """
     try:
         return list_pto_balances(
@@ -176,7 +176,7 @@ def create_request_route(
 
     Requirements:
         - Requires leavesphere.editor permission (or higher)
-        - Input hours must be greater than zero; stored value is negative
+        - Input hours must be greater than zero; stored value remains positive
         - Request is rejected when available balance would go below zero
         - Legacy API key compat behavior remains unchanged
     """
@@ -242,7 +242,7 @@ def approve_request_route(
     Requirements:
         - Requires leavesphere.editor permission (or higher)
         - Direct manager is required unless leavesphere.admin/workspace.super_admin override applies
-        - Only Pending debit requests (hours < 0) can be approved
+        - Only Pending request transactions can be approved
         - Legacy API key compat behavior remains unchanged
     """
     try:
@@ -280,7 +280,7 @@ def reject_request_route(
     Requirements:
         - Requires leavesphere.editor permission (or higher)
         - Direct manager is required unless leavesphere.admin/workspace.super_admin override applies
-        - Only Pending debit requests (hours < 0) can be rejected
+        - Only Pending request transactions can be rejected
         - Legacy API key compat behavior remains unchanged
     """
     try:
@@ -320,7 +320,7 @@ def get_pto_transactions_route(
               "employeeId": "13f6b22f-0a86-43b8-946d-cbba67642e8b",
               "ptoTypeCode": "VAC",
               "ptoActionCode": "REQUEST",
-              "hours": -8.00,
+              "hours": 8.00,
               "year": 2026,
               "status": "Pending"
             }
@@ -359,7 +359,7 @@ def get_pto_transaction_route(transaction_id: str):
             "employeeId": "13f6b22f-0a86-43b8-946d-cbba67642e8b",
             "ptoTypeCode": "VAC",
             "ptoActionCode": "REQUEST",
-            "hours": -8.00,
+            "hours": 8.00,
             "status": "Pending"
           }
         }

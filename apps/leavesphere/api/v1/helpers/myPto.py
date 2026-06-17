@@ -21,6 +21,15 @@ from apps.leavesphere.api.v1.helpers.dbQueries import (
     update_pto_transaction,
 )
 from apps.leavesphere.api.v1.helpers.config import resolve_employee_email_candidates
+from apps.leavesphere.api.v1.helpers.ptoAccounting import (
+    is_load_action_row,
+    is_request_action_row,
+    is_request_action_code,
+    REQUEST_ACTION_TOKENS,
+    REQUEST_CANCEL_ACTION_TOKENS,
+    resolve_action_code,
+    signed_pto_hours,
+)
 from shared.auth.dependencies import get_auth_principal, get_tenant_access
 from shared.db import run_transaction
 
@@ -224,21 +233,6 @@ def _build_pto_action_catalog() -> tuple[list[dict], dict[str, dict]]:
     return catalog, by_code
 
 
-def _resolve_default_action_code(
-    action_catalog: list[dict],
-    *,
-    include_tokens: tuple[str, ...],
-    fallback_index: int = 0,
-) -> str:
-    for row in action_catalog:
-        haystack = f"{row['code']} {row['name']}".lower()
-        if any(token in haystack for token in include_tokens):
-            return row["code"]
-    if 0 <= fallback_index < len(action_catalog):
-        return action_catalog[fallback_index]["code"]
-    return ""
-
-
 def _resolve_current_principal_email(request) -> str:
     principal = get_auth_principal(request)
     if principal is not None and principal.email:
@@ -399,6 +393,7 @@ def _build_balance_rows(
     *,
     rows: list[dict],
     pto_type_by_code: dict[str, dict],
+    pto_action_by_code: dict[str, dict],
 ) -> list[dict]:
     totals: dict[str, dict[str, Decimal | str | int]] = OrderedDict()
     for row in rows:
@@ -421,12 +416,9 @@ def _build_balance_rows(
             bucket["label"] = label or pto_type_code
         hours = Decimal(str(row.get("hours") or 0)).quantize(Decimal("0.01"))
         status = _normalize_text(row.get("status")).lower()
-        action_code = _normalize_text(row.get("ptoActionCode")).upper()
-        is_load_action = "LOAD" in action_code or "GRANT" in action_code
-        is_request_action = "REQ" in action_code or "REQUEST" in action_code
-        if status == "approved" and is_load_action:
+        if status == "approved" and is_load_action_row(row, pto_action_by_code):
             bucket["granted"] = Decimal(str(bucket["granted"])) + abs(hours)
-        elif status == "approved" and is_request_action:
+        elif status == "approved" and is_request_action_row(row, pto_action_by_code):
             bucket["used"] = Decimal(str(bucket["used"])) + abs(hours)
         elif status == "pending":
             bucket["scheduled"] = Decimal(str(bucket["scheduled"])) + abs(hours)
@@ -531,7 +523,11 @@ def load_my_pto_workspace(*, request, year: int | None = None) -> dict:
         manager_id_by_employee_id=manager_id_by_employee_id,
     )
 
-    own_balance_rows = _build_balance_rows(rows=own_transactions, pto_type_by_code=pto_type_by_code)
+    own_balance_rows = _build_balance_rows(
+        rows=own_transactions,
+        pto_type_by_code=pto_type_by_code,
+        pto_action_by_code=_action_by_code,
+    )
     holidays = _build_holidays(selected_year, current_employee_region)
 
     return {
@@ -542,15 +538,15 @@ def load_my_pto_workspace(*, request, year: int | None = None) -> dict:
         "currentUserTeamRegion": current_employee_region,
         "isManager": bool(direct_reports),
         "employees": _build_employee_rows([employee, *direct_reports]),
-        "ptoTypes": pto_types,
+        "ptoTypes": _pto_types,
         "ptoActions": pto_actions,
-        "defaultRequestActionCode": _resolve_default_action_code(
+        "defaultRequestActionCode": resolve_action_code(
             pto_actions,
-            include_tokens=("request",),
+            include_tokens=REQUEST_ACTION_TOKENS,
         ),
-        "defaultCancelActionCode": _resolve_default_action_code(
+        "defaultCancelActionCode": resolve_action_code(
             pto_actions,
-            include_tokens=("request", "cancel"),
+            include_tokens=REQUEST_CANCEL_ACTION_TOKENS,
             fallback_index=0,
         ),
         "balances": own_balance_rows,
@@ -601,7 +597,7 @@ def create_my_pto_request(*, request, payload: dict) -> dict:
     if pto_type is None:
         raise ValueError("ptoTypeCode not found")
 
-    request_action_code = _resolve_default_action_code(pto_actions, include_tokens=("request",))
+    request_action_code = resolve_action_code(pto_actions, include_tokens=REQUEST_ACTION_TOKENS)
     if not request_action_code:
         raise ValueError("ptoActionCode not found")
 
@@ -614,7 +610,7 @@ def create_my_pto_request(*, request, payload: dict) -> dict:
         "employeeId": employee_id,
         "ptoTypeCode": pto_type["code"],
         "ptoActionCode": request_action_code,
-        "hours": (requested_hours * Decimal("-1")).quantize(Decimal("0.01")),
+        "hours": requested_hours.quantize(Decimal("0.01")),
         "year": selected_year,
         "startDate": start_date or None,
         "endDate": end_date or None,
@@ -677,14 +673,15 @@ def update_my_pto_request(*, request, payload: dict) -> dict:
     if requested_hours <= 0:
         raise ValueError("hours must be greater than zero")
 
-    request_action_code = _resolve_default_action_code(_build_pto_action_catalog()[0], include_tokens=("request",))
+    pto_actions, _ = _build_pto_action_catalog()
+    request_action_code = resolve_action_code(pto_actions, include_tokens=REQUEST_ACTION_TOKENS)
     if not request_action_code:
         raise ValueError("ptoActionCode not found")
 
     def _work(cursor) -> int:
         tables = get_db_tables()
         cursor.execute(
-            "SELECT employeeId, ptoTypeCode, year, status, hours, startDate "
+            "SELECT employeeId, ptoTypeCode, year, ptoActionCode, status, hours, startDate "
             f"FROM {tables['PTOTRANSACTIONS']} "
             "WHERE id = %s FOR UPDATE",
             (transaction_id,),
@@ -693,7 +690,7 @@ def update_my_pto_request(*, request, payload: dict) -> dict:
         if row is None:
             raise ValueError("PTO transaction not found")
 
-        existing_employee_id, existing_pto_type_code, existing_year, status, existing_hours_raw, existing_start_date = row
+        existing_employee_id, existing_pto_type_code, _existing_year, _existing_action_code, status, _existing_hours_raw, existing_start_date = row
         if _normalize_text(existing_employee_id) != employee_id:
             raise ValueError("PTO transaction not found")
         if _normalize_text(status).lower() != "pending":
@@ -702,7 +699,7 @@ def update_my_pto_request(*, request, payload: dict) -> dict:
             raise ValueError("Only future PTO requests can be updated")
 
         cursor.execute(
-            "SELECT hours, status "
+            "SELECT ptoActionCode, hours, status "
             f"FROM {tables['PTOTRANSACTIONS']} "
             "WHERE employeeId = %s AND ptoTypeCode = %s AND year = %s AND id <> %s "
             "FOR UPDATE",
@@ -712,13 +709,14 @@ def update_my_pto_request(*, request, payload: dict) -> dict:
         approved = Decimal("0.00")
         pending = Decimal("0.00")
         for balance_row in rows:
-            balance_hours = Decimal(str(balance_row[0] or 0)).quantize(Decimal("0.01"))
-            balance_status = _normalize_text(balance_row[1]).lower()
+            balance_action_code = _normalize_text(balance_row[0]).upper()
+            balance_hours = Decimal(str(balance_row[1] or 0)).quantize(Decimal("0.01"))
+            balance_status = _normalize_text(balance_row[2]).lower()
             if balance_status == "approved":
-                approved += balance_hours
-            elif balance_status == "pending" and balance_hours < 0:
-                pending += balance_hours
-        available = approved + pending
+                approved += signed_pto_hours(balance_action_code, balance_hours)
+            elif balance_status == "pending" and is_request_action_code(balance_action_code):
+                pending += abs(balance_hours)
+        available = approved - pending
         if available - requested_hours < 0:
             raise ValueError("Requested hours exceed available balance")
 
@@ -730,7 +728,7 @@ def update_my_pto_request(*, request, payload: dict) -> dict:
             (
                 pto_type["code"],
                 request_action_code,
-                (requested_hours * Decimal("-1")).quantize(Decimal("0.01")),
+                requested_hours.quantize(Decimal("0.01")),
                 requested_year,
                 start_date or None,
                 end_date or None,
@@ -826,8 +824,6 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
     if action in {"approve", "reject"}:
         if status != "pending":
             raise ValueError("Only Pending PTO transactions can be approved or rejected")
-        if Decimal(str(transaction.get("hours") or 0)) >= 0:
-            raise ValueError("Only debit PTO requests (hours < 0) can be approved or rejected")
         if action == "approve":
             updated = approve_pending_pto_request(
                 transaction_id=transaction_id,

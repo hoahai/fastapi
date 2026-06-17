@@ -871,7 +871,7 @@ export default function LeaveSphereMyPtoPage() {
   );
   const canSubmitRequestWithinBalance = useMemo(() => {
     const requestedHours = Number(requestForm.hours);
-    if (!Number.isFinite(requestedHours) || requestedHours < 0) {
+    if (!Number.isFinite(requestedHours) || requestedHours <= 0) {
       return false;
     }
     if (requestAvailableHours == null) {
@@ -1168,6 +1168,10 @@ export default function LeaveSphereMyPtoPage() {
       toast.error("Submit unavailable", "PTO requests are allowed only for a loaded current or future selected year.");
       return;
     }
+    if (!Number.isFinite(params.payload.hours) || params.payload.hours <= 0) {
+      toast.error("Invalid PTO hours", "Hours must be greater than zero.");
+      return;
+    }
     if (!loadedYearDateBounds || !isRangeWithinBounds(params.payload.startDate, params.payload.endDate, loadedYearDateBounds)) {
       toast.error("Invalid PTO dates", "Start and end dates must be within the loaded selected year.");
       return;
@@ -1200,6 +1204,11 @@ export default function LeaveSphereMyPtoPage() {
     loadedYearForRequests,
   ]);
   const validateRequestHours = useCallback((form: LeaveSpherePtoRequestFormState) => {
+    const requestedHours = Number(form.hours);
+    if (!Number.isFinite(requestedHours) || requestedHours <= 0) {
+      return "Hours must be greater than zero.";
+    }
+
     const availableHours = resolveLeaveSpherePtoAvailableHours(balanceRows, form.type);
     return validateLeaveSpherePtoRequestedHours({
       requestedHours: form.hours,

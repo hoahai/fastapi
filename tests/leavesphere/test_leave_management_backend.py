@@ -65,7 +65,7 @@ class LeaveManagementBackendTests(unittest.TestCase):
                 "employeeId": "emp-2",
                 "ptoTypeCode": "VAC",
                 "ptoActionCode": "REQUEST",
-                "hours": -8,
+                "hours": 8,
                 "year": 2026,
                 "status": "Approved",
                 "dateCreated": "2026-01-12T00:00:00",
@@ -78,7 +78,7 @@ class LeaveManagementBackendTests(unittest.TestCase):
                 "employeeId": "emp-2",
                 "ptoTypeCode": "VAC",
                 "ptoActionCode": "REQUEST",
-                "hours": -4,
+                "hours": 4,
                 "year": 2026,
                 "status": "Approved",
                 "dateCreated": "2026-06-01T00:00:00",
@@ -92,7 +92,7 @@ class LeaveManagementBackendTests(unittest.TestCase):
                 "employeeId": "emp-2",
                 "ptoTypeCode": "VAC",
                 "ptoActionCode": "REQUEST",
-                "hours": -4,
+                "hours": 4,
                 "year": 2026,
                 "status": "Pending",
                 "dateCreated": "2026-06-05T00:00:00",
@@ -235,7 +235,7 @@ class LeaveManagementBackendTests(unittest.TestCase):
                     "ptoTypeCode": "VAC",
                     "startDate": "2026-06-10",
                     "endDate": "2026-06-10",
-                    "hours": -8.0,
+                    "hours": 8.0,
                     "description": "Family trip",
                     "approverNote": None,
                     "status": "pending",
@@ -282,6 +282,8 @@ class LeaveManagementBackendTests(unittest.TestCase):
         self.assertEqual(result["status"], "Pending")
         mock_load.assert_called_once_with(request=request, year=2026)
         mock_create.assert_called_once()
+        created_item = mock_create.call_args.args[0]
+        self.assertEqual(str(created_item["hours"]), "8.00")
 
     def test_load_workspace_normalizes_holiday_dates_before_year_filtering(self):
         request = self._build_request()
@@ -357,7 +359,7 @@ class LeaveManagementBackendTests(unittest.TestCase):
             "employeeId": "emp-2",
             "ptoTypeCode": "VAC",
             "ptoActionCode": "REQUEST",
-            "hours": -8,
+            "hours": 8,
             "year": 2026,
             "status": "Approved",
             "dateCreated": "2026-02-01T00:00:00",
@@ -371,7 +373,7 @@ class LeaveManagementBackendTests(unittest.TestCase):
             "employeeId": "emp-2",
             "ptoTypeCode": "VAC",
             "ptoActionCode": "REQUEST",
-            "hours": -4,
+            "hours": 4,
             "year": 2025,
             "status": "Pending",
             "dateCreated": "2025-11-10T00:00:00",
@@ -383,7 +385,7 @@ class LeaveManagementBackendTests(unittest.TestCase):
             "employeeId": "emp-2",
             "ptoTypeCode": "VAC",
             "ptoActionCode": "REQUEST",
-            "hours": -4,
+            "hours": 4,
             "year": 2026,
             "status": "Pending",
             "dateCreated": "2026-05-10T00:00:00",
@@ -397,7 +399,7 @@ class LeaveManagementBackendTests(unittest.TestCase):
             "employeeId": "emp-2",
             "ptoTypeCode": "VAC",
             "ptoActionCode": "REQUEST",
-            "hours": -16,
+            "hours": 16,
             "year": 2025,
             "status": "Approved",
             "dateCreated": "2025-12-20T00:00:00",

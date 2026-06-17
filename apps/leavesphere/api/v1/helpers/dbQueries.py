@@ -4,6 +4,7 @@ from datetime import datetime
 from decimal import Decimal
 
 from apps.leavesphere.api.v1.helpers.config import get_db_tables
+from apps.leavesphere.api.v1.helpers.ptoAccounting import is_request_action_code, request_action_sql, signed_pto_hours
 from shared.db import execute_write, fetch_all, run_transaction
 
 
@@ -414,7 +415,7 @@ def create_pto_request_transaction(*, item: dict, requested_hours: Decimal) -> i
             raise ValueError("employeeId not found")
 
         cursor.execute(
-            "SELECT hours, status "
+            "SELECT ptoActionCode, hours, status "
             f"FROM {tables['PTOTRANSACTIONS']} "
             "WHERE employeeId = %s AND ptoTypeCode = %s AND year = %s "
             "FOR UPDATE",
@@ -425,13 +426,14 @@ def create_pto_request_transaction(*, item: dict, requested_hours: Decimal) -> i
         approved = Decimal("0.00")
         pending = Decimal("0.00")
         for row in rows:
-            hours = Decimal(str(row[0] or 0)).quantize(Decimal("0.01"))
-            status = str(row[1] or "").strip()
+            action_code = row[0]
+            hours = Decimal(str(row[1] or 0)).quantize(Decimal("0.01"))
+            status = str(row[2] or "").strip().capitalize()
             if status == "Approved":
-                approved += hours
-            elif status == "Pending" and hours < 0:
-                pending += hours
-        available = approved + pending
+                approved += signed_pto_hours(action_code, hours)
+            elif status == "Pending" and is_request_action_code(action_code):
+                pending += abs(hours)
+        available = approved - pending
         if available - requested_hours < 0:
             raise ValueError("Requested hours exceed available balance")
 
@@ -498,7 +500,7 @@ def approve_pending_pto_request(
 
     def _work(cursor) -> int:
         cursor.execute(
-            "SELECT employeeId, ptoTypeCode, year, hours, status "
+            "SELECT employeeId, ptoTypeCode, year, ptoActionCode, hours, status "
             f"FROM {tables['PTOTRANSACTIONS']} "
             "WHERE id = %s "
             "LIMIT 1 FOR UPDATE",
@@ -508,16 +510,16 @@ def approve_pending_pto_request(
         if row is None:
             raise ValueError("PTO transaction not found")
 
-        employee_id, pto_type_code, year, hours_raw, status = row
+        employee_id, pto_type_code, year, action_code_raw, hours_raw, status = row
         hours = Decimal(str(hours_raw or 0)).quantize(Decimal("0.01"))
-        status_text = str(status or "").strip()
+        status_text = str(status or "").strip().capitalize()
         if status_text != "Pending":
             raise ValueError("Only Pending PTO transactions can be approved")
-        if hours >= 0:
-            raise ValueError("Only debit PTO requests (hours < 0) can be approved")
+        if not is_request_action_code(action_code_raw):
+            raise ValueError("Only PTO requests can be approved")
 
         cursor.execute(
-            "SELECT hours, status "
+            "SELECT ptoActionCode, hours, status "
             f"FROM {tables['PTOTRANSACTIONS']} "
             "WHERE employeeId = %s AND ptoTypeCode = %s AND year = %s "
             "FOR UPDATE",
@@ -525,15 +527,16 @@ def approve_pending_pto_request(
         )
         balance_rows = cursor.fetchall() or []
         approved = Decimal("0.00")
-        pending_negative = Decimal("0.00")
+        pending = Decimal("0.00")
         for balance_row in balance_rows:
-            balance_hours = Decimal(str(balance_row[0] or 0)).quantize(Decimal("0.01"))
-            balance_status = str(balance_row[1] or "").strip()
+            balance_action_code = balance_row[0]
+            balance_hours = Decimal(str(balance_row[1] or 0)).quantize(Decimal("0.01"))
+            balance_status = str(balance_row[2] or "").strip().capitalize()
             if balance_status == "Approved":
-                approved += balance_hours
-            elif balance_status == "Pending" and balance_hours < 0:
-                pending_negative += balance_hours
-        available = approved + pending_negative
+                approved += signed_pto_hours(balance_action_code, balance_hours)
+            elif balance_status == "Pending" and is_request_action_code(balance_action_code):
+                pending += abs(balance_hours)
+        available = approved - pending
         if available < 0:
             raise ValueError("Cannot approve request because available balance is below zero")
 
@@ -564,7 +567,7 @@ def reject_pending_pto_request(
 
     def _work(cursor) -> int:
         cursor.execute(
-            "SELECT hours, status "
+            "SELECT ptoActionCode, hours, status "
             f"FROM {tables['PTOTRANSACTIONS']} "
             "WHERE id = %s "
             "LIMIT 1 FOR UPDATE",
@@ -574,12 +577,12 @@ def reject_pending_pto_request(
         if row is None:
             raise ValueError("PTO transaction not found")
 
-        hours = Decimal(str(row[0] or 0)).quantize(Decimal("0.01"))
-        status_text = str(row[1] or "").strip()
+        action_code = row[0]
+        status_text = str(row[2] or "").strip().capitalize()
         if status_text != "Pending":
             raise ValueError("Only Pending PTO transactions can be rejected")
-        if hours >= 0:
-            raise ValueError("Only debit PTO requests (hours < 0) can be rejected")
+        if not is_request_action_code(action_code):
+            raise ValueError("Only PTO requests can be rejected")
 
         fields = ["status = %s", "approverId = %s", "dateUpdated = %s"]
         params: list[object] = ["Rejected", approver_id, datetime.utcnow()]
@@ -619,11 +622,13 @@ def get_pto_balances(
         "employeeId, "
         "ptoTypeCode, "
         "year, "
-        "CAST(SUM(CASE WHEN status = 'Approved' THEN hours ELSE 0 END) AS DECIMAL(10,2)) AS approvedBalanceHours, "
-        "CAST(SUM(CASE WHEN status = 'Pending' AND hours < 0 THEN hours ELSE 0 END) AS DECIMAL(10,2)) AS pendingRequestHours, "
+        f"CAST(SUM(CASE WHEN status = 'Approved' AND {request_action_sql()} THEN -ABS(hours) "
+        "WHEN status = 'Approved' THEN hours ELSE 0 END) AS DECIMAL(10,2)) AS approvedBalanceHours, "
+        f"CAST(SUM(CASE WHEN status = 'Pending' AND {request_action_sql()} THEN ABS(hours) ELSE 0 END) AS DECIMAL(10,2)) AS pendingRequestHours, "
         "CAST("
-        "SUM(CASE WHEN status = 'Approved' THEN hours ELSE 0 END) + "
-        "SUM(CASE WHEN status = 'Pending' AND hours < 0 THEN hours ELSE 0 END) "
+        f"SUM(CASE WHEN status = 'Approved' AND {request_action_sql()} THEN -ABS(hours) "
+        "WHEN status = 'Approved' THEN hours ELSE 0 END) - "
+        f"SUM(CASE WHEN status = 'Pending' AND {request_action_sql()} THEN ABS(hours) ELSE 0 END) "
         "AS DECIMAL(10,2)"
         ") AS availableBalanceHours "
         f"FROM {tables['PTOTRANSACTIONS']}{where} "

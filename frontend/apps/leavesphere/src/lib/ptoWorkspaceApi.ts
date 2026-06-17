@@ -320,6 +320,9 @@ export async function loadLeaveSpherePtoWorkspace(params: WorkspaceArgs): Promis
 }
 
 export async function submitLeaveSpherePtoRequest(params: SubmitArgs): Promise<LeaveSpherePtoMutationResult> {
+  if (!Number.isFinite(params.payload.hours) || params.payload.hours <= 0) {
+    throw new Error("Hours must be greater than zero.");
+  }
   const response = await params.requestJson("/api/leavesphere/v1/ui/my-pto/requests", {
     method: "POST",
     body: params.payload,
