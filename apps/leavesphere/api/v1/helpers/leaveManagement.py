@@ -11,6 +11,7 @@ from apps.leavesphere.api.v1.helpers.dbQueries import (
     get_employees_by_ids,
     get_db_tables,
     get_holidays,
+    cancel_pending_pto_transaction,
     get_pto_actions,
     get_pto_transactions,
     get_pto_types,
@@ -26,6 +27,7 @@ from apps.leavesphere.api.v1.helpers.myPto import (
     _normalize_team_region,
     _normalize_text,
     _normalize_year,
+    _is_before_start_date,
     _resolve_current_employee,
     _resolve_primary_manager_id,
     _split_ui_type_tokens,
@@ -55,7 +57,7 @@ from apps.leavesphere.api.v1.helpers.ptoWorkspaceShared import (
 )
 from apps.leavesphere.api.v1.helpers.ptoActions import create_pto_action, modify_pto_action
 from apps.leavesphere.api.v1.helpers.ptoTypes import create_pto_type, modify_pto_type
-from apps.leavesphere.api.v1.helpers.ptoTransactions import approve_request, create_adjustment, create_request
+from apps.leavesphere.api.v1.helpers.ptoTransactions import approve_request, create_adjustment, create_request, reject_request
 from shared.auth.dependencies import get_auth_principal
 from shared.db import execute_write, run_transaction
 
@@ -878,8 +880,37 @@ def review_leave_management_request(*, request, payload: dict) -> dict:
             approverNote=approver_note,
             force_admin_override=True,
         )
+    elif action == "cancel":
+        if _normalize_text(transaction.get("status")).lower() not in {"pending", "approved", "rejected"}:
+            raise ValueError("Only Pending, Approved, or Rejected PTO transactions can be canceled")
+        if not _is_before_start_date(start_date=_to_date_string(transaction.get("startDate"))):
+            raise ValueError("Only future PTO requests can be canceled")
+        if _normalize_text(transaction.get("status")).lower() == "pending":
+            updated = cancel_pending_pto_transaction(transaction_id=transaction_id)
+        else:
+            updated = update_pto_transaction(
+                transaction_id=transaction_id,
+                updates={
+                    "status": "Canceled",
+                    "approverId": None,
+                },
+            )
+        result = {"updated": updated, "status": "Canceled"}
+    elif action == "revert":
+        if _normalize_text(transaction.get("status")).lower() not in {"approved", "rejected", "canceled"}:
+            raise ValueError("Only Approved, Rejected, or Canceled PTO transactions can be reverted")
+        if not _is_before_start_date(start_date=_to_date_string(transaction.get("startDate"))):
+            raise ValueError("Only future PTO requests can be reverted")
+        updated = update_pto_transaction(
+            transaction_id=transaction_id,
+            updates={
+                "status": "Pending",
+                "approverId": None,
+            },
+        )
+        result = {"updated": updated, "status": "Pending"}
     else:
-        raise ValueError("action must be approve or reject")
+        raise ValueError("action must be approve, reject, cancel, or revert")
 
     return {
         "workspace": _build_workspace(request=request, year=_resolve_workspace_year_from_transaction(transaction)),

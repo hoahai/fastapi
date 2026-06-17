@@ -273,6 +273,10 @@ def review_leave_management_request_route(
         POST /api/leavesphere/v1/admin/pto/review
         {"requestId": "pto-1", "action": "approve", "approverNote": "Approved"}
 
+    Example request (cancel/revert):
+        POST /api/leavesphere/v1/admin/pto/review
+        {"requestId": "pto-1", "action": "cancel", "approverNote": "Canceling"}
+
     Example response:
         {
           "meta": {"timestamp": "2026-05-29T10:00:00+07:00", "duration_ms": 2},
@@ -286,7 +290,7 @@ def review_leave_management_request_route(
 
     Requirements:
         - Requires leavesphere.admin permission or workspace.super_admin
-        - `action` must be `approve` or `reject`
+        - `action` must be `approve`, `reject`, `cancel`, or `revert`
         - The transaction must already exist
         - Admin review bypasses direct-manager validation
     """

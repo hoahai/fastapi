@@ -56,7 +56,8 @@ class MyPtoRequestActionRequest(_LeaveSphereModel):
 
 
 class MyPtoReviewRequest(_LeaveSphereModel):
-    transactionId: str
+    transactionId: str | None = None
+    requestId: str | None = None
     action: str
     approverNote: str | None = None
 
@@ -266,7 +267,7 @@ def review_my_pto_request_route(
 
     Example request:
         POST /api/leavesphere/v1/ui/my-pto/review
-        {"transactionId": "pto-1", "action": "approve", "approverNote": "Approved for travel"}
+        {"requestId": "pto-1", "transactionId": "pto-1", "action": "approve", "approverNote": "Approved for travel"}
 
     Example response:
         {
@@ -285,6 +286,7 @@ def review_my_pto_request_route(
         - Requires valid API key or bearer token in compat mode
         - Requires leavesphere.editor permission or higher
         - The manager is resolved from the signed-in user's login email
+        - `requestId` and `transactionId` are both accepted for compatibility
     """
     try:
         body = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()

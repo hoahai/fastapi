@@ -469,6 +469,55 @@ class LeaveManagementBackendTests(unittest.TestCase):
         self.assertNotIn("txn-pending-2025", request_ids)
         self.assertIn("txn-cross-year", request_ids)
 
+    def test_review_workspace_supports_cancel_and_revert_actions(self):
+        request = self._build_request()
+        transaction = {
+            "id": "txn-1",
+            "employeeId": "emp-2",
+            "ptoTypeCode": "VAC",
+            "ptoActionCode": "REQUEST",
+            "hours": 8,
+            "year": 2026,
+            "status": "Approved",
+            "startDate": "2026-07-10",
+            "endDate": "2026-07-10",
+            "dateCreated": "2026-07-01T00:00:00",
+            "dateUpdated": "2026-07-02T00:00:00",
+            "description": "Trip",
+        }
+
+        with patch.object(leaveManagement, "get_pto_transactions", return_value=[transaction]), patch.object(
+            leaveManagement, "_build_workspace", return_value={"workspace": True}
+        ), patch.object(
+            leaveManagement, "update_pto_transaction", return_value=1
+        ) as mock_update:
+            cancel_result = leaveManagement.review_leave_management_request(
+                request=request,
+                payload={"requestId": "txn-1", "action": "cancel", "approverNote": "Cancelled"},
+            )
+
+        self.assertEqual(cancel_result["status"], "Canceled")
+        self.assertEqual(cancel_result["updated"], 1)
+        mock_update.assert_called_once()
+
+        reverted_transaction = {
+            **transaction,
+            "status": "Canceled",
+        }
+        with patch.object(leaveManagement, "get_pto_transactions", return_value=[reverted_transaction]), patch.object(
+            leaveManagement, "_build_workspace", return_value={"workspace": True}
+        ), patch.object(
+            leaveManagement, "update_pto_transaction", return_value=1
+        ) as mock_update:
+            revert_result = leaveManagement.review_leave_management_request(
+                request=request,
+                payload={"requestId": "txn-1", "action": "revert", "approverNote": "Revert"},
+            )
+
+        self.assertEqual(revert_result["status"], "Pending")
+        self.assertEqual(revert_result["updated"], 1)
+        mock_update.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

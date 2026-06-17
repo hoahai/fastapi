@@ -77,7 +77,8 @@ export type LeaveSphereAdminCreateRequestInput = {
 
 export type LeaveSphereAdminReviewRequestInput = {
   requestId: string;
-  approve: boolean;
+  approve?: boolean;
+  action?: "approve" | "reject" | "cancel" | "revert";
   approverNote: string;
 };
 
@@ -495,11 +496,12 @@ export async function updateLeaveSphereAdminPtoRequest(params: UpdateRequestArgs
 }
 
 export async function reviewLeaveSphereAdminPtoRequest(params: ReviewRequestArgs): Promise<LeaveSphereAdminMutationResult> {
+  const action = params.payload.action || (params.payload.approve ? "approve" : "reject");
   const response = await params.requestJson("/api/leavesphere/v1/admin/pto/review", {
     method: "POST",
     body: {
       requestId: params.payload.requestId,
-      action: params.payload.approve ? "approve" : "reject",
+      action,
       approverNote: params.payload.approverNote,
     },
     successToast: false,

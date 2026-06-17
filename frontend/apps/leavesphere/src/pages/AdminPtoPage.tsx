@@ -1883,43 +1883,12 @@ export default function LeaveSphereAdminPtoPage() {
     workspaceKey,
   ]);
 
-  const handleReviewRequest = useCallback(async (approve: boolean) => {
+  const handleReviewRequest = useCallback(async (action: LeaveSphereReviewAction) => {
     if (!selectedRequest) {
       return;
     }
     setIsMutating(true);
     try {
-      if (selectedRequest.status !== "pending") {
-        const reviewedAt = todayIsoDate;
-        const nextStatus: LeaveSpherePtoStatus = approve ? "approved" : "rejected";
-        setWorkspace((current) => {
-          if (!current) {
-            return current;
-          }
-          return {
-            ...current,
-            requests: current.requests.map((item) => (
-              item.id === selectedRequest.id
-                ? {
-                    ...item,
-                    status: nextStatus,
-                    reviewedAt,
-                    reviewerName: currentUserName,
-                    approverNote: normalizeOptionalNote(reviewNote) || null,
-                  }
-                : item
-            )),
-          };
-        });
-        setSelectedRequestId(null);
-        setReviewNote("");
-        toast.success(
-          approve ? "Request approved" : "Request rejected",
-          approve ? "Employee request status was updated to approved." : "Employee request status was updated to rejected.",
-        );
-        return;
-      }
-
       const result = await reviewLeaveSphereAdminPtoRequest({
         requestJson,
         workspaceKey,
@@ -1927,17 +1896,22 @@ export default function LeaveSphereAdminPtoPage() {
         currentUserName,
         payload: {
           requestId: selectedRequest.id,
-          approve,
+          action,
           approverNote: reviewNote,
         },
       });
       applyWorkspace(result.workspace);
       setSelectedRequestId(null);
       setReviewNote("");
-      toast.success(
-        approve ? "Request approved" : "Request rejected",
-        approve ? "Employee request status was updated to approved." : "Employee request status was updated to rejected.",
-      );
+      if (action === "approve") {
+        toast.success("Request approved", "Employee request status was updated to approved.");
+      } else if (action === "reject") {
+        toast.success("Request rejected", "Employee request status was updated to rejected.");
+      } else if (action === "cancel") {
+        toast.success("Request cancelled", "Employee request status was updated to cancelled.");
+      } else {
+        toast.success("Decision reverted", "Request status was changed back to pending.");
+      }
     } catch {
       toast.error("Decision failed", "Unable to update request decision right now.");
     } finally {
@@ -1950,76 +1924,9 @@ export default function LeaveSphereAdminPtoPage() {
     requestJson,
     reviewNote,
     selectedRequest,
-    todayIsoDate,
     toast,
     workspaceKey,
   ]);
-
-  const handleCancelReviewRequest = useCallback(async () => {
-    if (!selectedRequest) {
-      return;
-    }
-    setIsMutating(true);
-    try {
-      const reviewedAt = todayIsoDate;
-      setWorkspace((current) => {
-        if (!current) {
-          return current;
-        }
-        return {
-          ...current,
-          requests: current.requests.map((item) => (
-            item.id === selectedRequest.id
-              ? {
-                  ...item,
-                  status: "cancelled",
-                  reviewedAt,
-                  reviewerName: currentUserName,
-                  approverNote: normalizeOptionalNote(reviewNote) || null,
-                }
-              : item
-          )),
-        };
-      });
-      setSelectedRequestId(null);
-      setReviewNote("");
-      toast.success("Request cancelled", "Employee request status was updated to cancelled.");
-    } finally {
-      setIsMutating(false);
-    }
-  }, [currentUserName, reviewNote, selectedRequest, todayIsoDate, toast]);
-
-  const handleRevertReviewDecision = useCallback(async () => {
-    if (!selectedRequest) {
-      return;
-    }
-    setIsMutating(true);
-    try {
-      setWorkspace((current) => {
-        if (!current) {
-          return current;
-        }
-        return {
-          ...current,
-          requests: current.requests.map((item) => (
-            item.id === selectedRequest.id
-              ? {
-                  ...item,
-                  status: "pending",
-                  reviewedAt: null,
-                  reviewerName: null,
-                  approverNote: normalizeOptionalNote(reviewNote) || null,
-                }
-              : item
-          )),
-        };
-      });
-      setReviewNote("");
-      toast.success("Decision reverted", "Request status was changed back to pending.");
-    } finally {
-      setIsMutating(false);
-    }
-  }, [reviewNote, selectedRequest, toast]);
 
   const handleConfirmReviewAction = useCallback(async () => {
     if (!pendingReviewAction) {
@@ -2027,20 +1934,8 @@ export default function LeaveSphereAdminPtoPage() {
     }
     const action = pendingReviewAction;
     setPendingReviewAction(null);
-    if (action === "approve") {
-      await handleReviewRequest(true);
-      return;
-    }
-    if (action === "reject") {
-      await handleReviewRequest(false);
-      return;
-    }
-    if (action === "cancel") {
-      await handleCancelReviewRequest();
-      return;
-    }
-    await handleRevertReviewDecision();
-  }, [handleCancelReviewRequest, handleReviewRequest, handleRevertReviewDecision, pendingReviewAction]);
+    await handleReviewRequest(action);
+  }, [handleReviewRequest, pendingReviewAction]);
 
   const closeAdjustModal = useCallback((discardChanges = false) => {
     if (discardChanges) {

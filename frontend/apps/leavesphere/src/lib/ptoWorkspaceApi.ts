@@ -385,7 +385,12 @@ export async function cancelLeaveSpherePtoRequest(params: {
 export async function reviewLeaveSpherePtoRequest(params: ReviewArgs): Promise<LeaveSpherePtoMutationResult> {
   const response = await params.requestJson("/api/leavesphere/v1/ui/my-pto/review", {
     method: "POST",
-    body: params.payload,
+    body: {
+      requestId: params.payload.requestId,
+      transactionId: params.payload.requestId,
+      action: params.payload.action,
+      approverNote: params.payload.approverNote,
+    },
     successToast: false,
     errorToast: false,
   });
