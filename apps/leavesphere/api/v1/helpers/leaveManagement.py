@@ -72,7 +72,7 @@ from shared.auth.dependencies import get_auth_principal
 from shared.db import execute_write, run_transaction
 
 LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE = "leave-management"
-LEAVESPHERE_LEAVE_MANAGEMENT_LEGACY_PAGE_CODE = "admin-pto"
+LEAVESPHERE_LEAVE_MANAGEMENT_LEGACY_CACHE_PAGE_CODE = "admin-pto"
 
 
 def _normalize_optional_iso_date(value: object | None) -> str:
@@ -667,7 +667,7 @@ def _workspace_page_code_candidates(page_code: str) -> tuple[str, ...]:
     if normalized_page_code == LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE:
         return (
             LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE,
-            LEAVESPHERE_LEAVE_MANAGEMENT_LEGACY_PAGE_CODE,
+            LEAVESPHERE_LEAVE_MANAGEMENT_LEGACY_CACHE_PAGE_CODE,
         )
     return (normalized_page_code or LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE,)
 
@@ -1721,7 +1721,7 @@ def update_leave_management_setup_data(*, request, payload: dict) -> dict:
     clear_leave_sphere_pto_workspace_catalog_cache()
     clear_leave_sphere_read_cache()
     clear_leave_sphere_workspace_cache_by_page(page_code=LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE)
-    clear_leave_sphere_workspace_cache_by_page(page_code=LEAVESPHERE_LEAVE_MANAGEMENT_LEGACY_PAGE_CODE)
+    clear_leave_sphere_workspace_cache_by_page(page_code=LEAVESPHERE_LEAVE_MANAGEMENT_LEGACY_CACHE_PAGE_CODE)
     clear_leave_sphere_workspace_cache_by_page(page_code="my-pto")
 
     workspace = _build_workspace(request=request, year=current_year)

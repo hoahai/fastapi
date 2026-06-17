@@ -107,7 +107,7 @@ import { formatLeaveSpherePtoStatusLabel, getLeaveSpherePtoRequestSurfaceClassNa
 import {
   readLeaveSpherePtoWorkspaceCacheSnapshot,
   syncLeaveSpherePtoWorkspaceCache,
-  LEAVESPHERE_LEAVE_MANAGEMENT_LEGACY_PAGE_CODE,
+  LEAVESPHERE_LEAVE_MANAGEMENT_LEGACY_CACHE_PAGE_CODE,
   LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE,
 } from "@leavesphere/lib/ptoWorkspaceCache";
 
@@ -655,7 +655,7 @@ export default function LeaveManagementPage() {
       userKey: pageStateUserKey,
       tenantSlug,
       appCode: LEAVESPHERE_APP_CODE,
-      pageCode: LEAVESPHERE_LEAVE_MANAGEMENT_LEGACY_PAGE_CODE,
+      pageCode: LEAVESPHERE_LEAVE_MANAGEMENT_LEGACY_CACHE_PAGE_CODE,
     };
   }, [canRestorePageState, pageStateUserKey, tenantSlug]);
   const pageStateStorageKey = useMemo(() => {
@@ -820,7 +820,7 @@ export default function LeaveManagementPage() {
           year: restoredYear,
         });
         const legacyCacheSnapshot = currentCacheSnapshot ? null : readLeaveSpherePtoWorkspaceCacheSnapshot<LeaveManagementWorkspaceData>({
-          pageCode: LEAVESPHERE_LEAVE_MANAGEMENT_LEGACY_PAGE_CODE,
+          pageCode: LEAVESPHERE_LEAVE_MANAGEMENT_LEGACY_CACHE_PAGE_CODE,
           tenantSlug,
           userId: currentUserId,
           year: restoredYear,
