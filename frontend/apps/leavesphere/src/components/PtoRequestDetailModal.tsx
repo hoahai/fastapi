@@ -89,11 +89,9 @@ const EMPTY_FORM: LeaveSpherePtoRequestFormState = {
 };
 
 function createFormState(request: LeaveSpherePtoRequest | null): LeaveSpherePtoRequestFormState {
-  const requestType = request?.type ?? "vacation";
+  const requestType = request?.ptoTypeCode ?? request?.type ?? "vacation";
   return {
-    type: requestType === "vacation" || requestType === "sick" || requestType === "personal" || requestType === "floating"
-      ? requestType
-      : "vacation",
+    type: requestType,
     startDate: request?.startDate ?? "",
     endDate: request?.endDate ?? "",
     hours: request ? String(request.hours) : "",

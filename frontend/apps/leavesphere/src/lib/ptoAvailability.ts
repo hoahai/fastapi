@@ -5,7 +5,9 @@ type LeaveSphereBalanceLike = Pick<
   "type" | "code" | "label" | "remainingHours" | "totalHours" | "usedHours" | "scheduledHours"
 >;
 
-type LeaveSpherePtoTypeLike = Pick<LeaveSpherePtoTypeConfig, "code" | "type" | "label">;
+type LeaveSpherePtoTypeLike = Pick<LeaveSpherePtoTypeConfig, "code" | "label"> & {
+  type?: string;
+};
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";

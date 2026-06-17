@@ -86,6 +86,7 @@ import { calculateLeaveSpherePtoHours } from "@leavesphere/lib/ptoHours";
 import { buildLeaveSphereHolidayDateSet } from "@leavesphere/lib/ptoHolidayScopes";
 import {
   buildLeaveSpherePtoTypeOptionsFromBalances,
+  buildLeaveSpherePtoTypeOptionsFromCatalog,
   resolveLeaveSpherePtoAvailableHours,
   validateLeaveSpherePtoRequestedHours,
 } from "@leavesphere/lib/ptoAvailability";
@@ -1449,8 +1450,8 @@ export default function LeaveManagementPage() {
     [selectedRequest?.employeeId, workspaceForYear?.employeeBalances],
   );
   const selectedRequestPtoTypeOptions = useMemo(
-    () => buildLeaveSpherePtoTypeOptionsFromBalances(selectedRequestEmployeeBalanceRow?.balances),
-    [selectedRequestEmployeeBalanceRow?.balances],
+    () => buildLeaveSpherePtoTypeOptionsFromCatalog(workspaceForYear?.ptoTypes, selectedRequestEmployeeBalanceRow?.balances),
+    [selectedRequestEmployeeBalanceRow?.balances, workspaceForYear?.ptoTypes],
   );
   const overview = useMemo(() => {
     return {
