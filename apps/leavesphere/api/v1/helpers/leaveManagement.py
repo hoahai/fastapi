@@ -1359,14 +1359,14 @@ def review_leave_management_request(*, request, payload: dict) -> dict:
             request=request,
             transaction_id=transaction_id,
             approverNote=approver_note,
-            force_leave_management_override=True,
+            force_admin_override=True,
         )
     elif action == "reject":
         result = reject_request(
             request=request,
             transaction_id=transaction_id,
             approverNote=approver_note,
-            force_leave_management_override=True,
+            force_admin_override=True,
         )
     elif action == "cancel":
         if _normalize_text(transaction.get("status")).lower() not in {"pending", "approved", "rejected"}:
