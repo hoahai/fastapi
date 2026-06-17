@@ -141,7 +141,8 @@ def create_my_pto_request_route(
     Example request:
         POST /api/leavesphere/v1/ui/my-pto/requests
         {
-          "type": "vacation",
+          "type": "pto",
+          "ptoTypeCode": "PTO",
           "startDate": "2026-06-10",
           "endDate": "2026-06-10",
           "hours": 8,
@@ -166,6 +167,7 @@ def create_my_pto_request_route(
         - Requires valid API key or bearer token in compat mode
         - The employee is resolved from the signed-in user's login email
         - `hours` must be greater than zero
+        - `ptoTypeCode` is preferred and must match a row from the PTO type table; `type` is accepted as a fallback alias
     """
     try:
         body = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()

@@ -78,10 +78,14 @@ import type {
 } from "@leavesphere/lib/ptoTypes";
 import { calculateLeaveSpherePtoHours } from "@leavesphere/lib/ptoHours";
 import {
-  buildLeaveSpherePtoTypeOptionsFromBalances,
+  buildLeaveSpherePtoTypeOptionsFromCatalog,
   resolveLeaveSpherePtoAvailableHours,
   validateLeaveSpherePtoRequestedHours,
 } from "@leavesphere/lib/ptoAvailability";
+import {
+  buildLeaveSpherePtoTypeMetaLookup,
+  resolveLeaveSpherePtoTypeLabel,
+} from "@leavesphere/lib/ptoTypeLookup";
 import { buildLeaveSphereHolidayDateSet } from "@leavesphere/lib/ptoHolidayScopes";
 import {
   buildLeaveSpherePtoCalendarRequestChipLabel,
@@ -131,14 +135,8 @@ type PersistedLeaveSphereMyPtoPageState = {
   scrollY: number;
 };
 
-const DEFAULT_PTO_TYPE_LABELS: Record<LeaveSpherePtoType, string> = {
-  vacation: "Vacation",
-  sick: "Sick",
-  personal: "Personal",
-};
-
 const EMPTY_FORM: RequestFormState = {
-  type: "vacation",
+  type: "",
   startDate: "",
   endDate: "",
   hours: "",
@@ -175,18 +173,6 @@ function pickPtoBalanceTone(key: string): (typeof PTO_BALANCE_CARD_TONES)[number
   const normalized = asString(key).toLowerCase();
   if (!normalized) {
     return PTO_BALANCE_CARD_TONES[0];
-  }
-  if (normalized.includes("vac")) {
-    return PTO_BALANCE_CARD_TONES[0];
-  }
-  if (normalized.includes("sick")) {
-    return PTO_BALANCE_CARD_TONES[1];
-  }
-  if (normalized.includes("person")) {
-    return PTO_BALANCE_CARD_TONES[2];
-  }
-  if (normalized.includes("float")) {
-    return PTO_BALANCE_CARD_TONES[3];
   }
   let hash = 0;
   for (let index = 0; index < normalized.length; index += 1) {
@@ -255,15 +241,18 @@ function normalizeOptionalNote(value: string | null | undefined): string {
   return asString(value);
 }
 
-function requestTypeLabel(type: string): string {
-  const normalized = asString(type).toLowerCase();
-  if (!normalized) {
+function requestTypeLabel(type: string, lookup: Map<string, { code: string; label: string; order: number }> | null | undefined): string {
+  if (lookup) {
+    const resolved = resolveLeaveSpherePtoTypeLabel(type, lookup);
+    if (resolved) {
+      return resolved;
+    }
+  }
+  const fallback = asString(type);
+  if (!fallback) {
     return "PTO";
   }
-  if (normalized in DEFAULT_PTO_TYPE_LABELS) {
-    return DEFAULT_PTO_TYPE_LABELS[normalized as LeaveSpherePtoType] || type;
-  }
-  return asString(type).toUpperCase() || "PTO";
+  return fallback.toUpperCase();
 }
 
 function buildYearDateBounds(year: number): { minDate: string; maxDate: string } {
@@ -327,13 +316,18 @@ function buildDateSearchTokens(isoDate: string): string[] {
   ];
 }
 
-function managerRequestMatchesSearch(request: LeaveSpherePtoRequest, keyword: string, employeeName: string): boolean {
+function managerRequestMatchesSearch(
+  request: LeaveSpherePtoRequest,
+  keyword: string,
+  employeeName: string,
+  lookup: Map<string, { code: string; label: string; order: number }> | null | undefined,
+): boolean {
   if (!keyword) {
     return true;
   }
   const tokens = [
     employeeName,
-    requestTypeLabel(request.type),
+    requestTypeLabel(request.ptoTypeCode ?? request.type, lookup),
     statusLabel(request.status),
     request.description,
     request.approverNote ?? "",
@@ -361,7 +355,7 @@ function filterWorkspaceByYear(workspace: LeaveSpherePtoWorkspaceData, year: num
 }
 
 function isPtoTypeValue(value: unknown): value is LeaveSpherePtoType {
-  return value === "vacation" || value === "sick" || value === "personal";
+  return typeof value === "string";
 }
 
 function isRequestFormState(value: unknown): value is RequestFormState {
@@ -660,6 +654,10 @@ export default function LeaveSphereMyPtoPage() {
     (request: LeaveSpherePtoRequest) => resolveLeaveSpherePtoEmployeeDisplay(employeeLookupById, request.employeeId),
     [employeeLookupById],
   );
+  const ptoTypeMetaLookup = useMemo(
+    () => buildLeaveSpherePtoTypeMetaLookup(workspaceForYear?.ptoTypes),
+    [workspaceForYear?.ptoTypes],
+  );
 
   useEffect(() => {
     if (!tenantSlug || !workspaceForYear) {
@@ -705,8 +703,13 @@ export default function LeaveSphereMyPtoPage() {
     [appliedManagerSearch],
   );
   const filteredDirectReportRequests = useMemo(
-    () => directReportRequests.filter((item) => managerRequestMatchesSearch(item, normalizedAppliedManagerSearch, resolveRequestEmployee(item).employeeName)),
-    [directReportRequests, normalizedAppliedManagerSearch, resolveRequestEmployee],
+    () => directReportRequests.filter((item) => managerRequestMatchesSearch(
+      item,
+      normalizedAppliedManagerSearch,
+      resolveRequestEmployee(item).employeeName,
+      ptoTypeMetaLookup,
+    )),
+    [directReportRequests, normalizedAppliedManagerSearch, ptoTypeMetaLookup, resolveRequestEmployee],
   );
 
   const pendingDirectReportRequests = useMemo(
@@ -808,7 +811,7 @@ export default function LeaveSphereMyPtoPage() {
     }
     for (const request of myRequests) {
       const employee = resolveRequestEmployee(request);
-      const requestType = requestTypeLabel(request.type);
+      const requestType = requestTypeLabel(request.ptoTypeCode ?? request.type, ptoTypeMetaLookup);
       const hoursLabel = formatHoursLabel(request.hours);
       const chipLabel = buildLeaveSpherePtoCalendarRequestChipLabel(
         employee.employeeName,
@@ -828,7 +831,7 @@ export default function LeaveSphereMyPtoPage() {
     if (isManager) {
       for (const request of directReportRequests) {
         const employee = resolveRequestEmployee(request);
-        const requestType = requestTypeLabel(request.type);
+        const requestType = requestTypeLabel(request.ptoTypeCode ?? request.type, ptoTypeMetaLookup);
         const hoursLabel = formatHoursLabel(request.hours);
         const chipLabel = buildLeaveSpherePtoCalendarRequestChipLabel(
           employee.employeeName,
@@ -852,15 +855,15 @@ export default function LeaveSphereMyPtoPage() {
       }
     }
     return events;
-  }, [directReportRequests, isManager, myRequests, workspaceForYear?.holidays]);
+  }, [directReportRequests, isManager, myRequests, ptoTypeMetaLookup, workspaceForYear?.holidays]);
   const holidayDates = useMemo(
     () => buildLeaveSphereHolidayDateSet(workspaceForYear?.holidays, workspaceForYear?.currentUserTeamRegion),
     [workspaceForYear?.currentUserTeamRegion, workspaceForYear?.holidays],
   );
   const balanceRows = workspaceForYear?.balances ?? [];
   const ptoTypeOptionsWithAvailability = useMemo(
-    () => buildLeaveSpherePtoTypeOptionsFromBalances(balanceRows),
-    [balanceRows],
+    () => buildLeaveSpherePtoTypeOptionsFromCatalog(workspaceForYear?.ptoTypes, balanceRows),
+    [balanceRows, workspaceForYear?.ptoTypes],
   );
   const requestAvailableHours = useMemo(
     () => resolveLeaveSpherePtoAvailableHours(balanceRows, requestForm.type),
@@ -1176,6 +1179,7 @@ export default function LeaveSphereMyPtoPage() {
         requestJson,
         payload: {
           ...params.payload,
+          ptoTypeCode: params.payload.type,
           year: loadedYearForRequests,
         },
       });
@@ -1503,7 +1507,7 @@ export default function LeaveSphereMyPtoPage() {
                         dateLabel={formatPtoRequestDateRangeLabel(request.startDate, request.endDate, tenantTimeZone)}
                         detailLabel={request.description}
                         hoursLabel={formatHoursLabel(request.hours)}
-                        typeChip={<LeaveSpherePtoTypeChip type={request.type} label={requestTypeLabel(request.type)} />}
+                        typeChip={<LeaveSpherePtoTypeChip type={request.ptoTypeCode ?? request.type} label={requestTypeLabel(request.ptoTypeCode ?? request.type, ptoTypeMetaLookup)} />}
                         statusChip={<LeaveSpherePtoStatusChip status={request.status} label={statusLabel(request.status)} />}
                       />
                     ))}
@@ -1615,7 +1619,7 @@ export default function LeaveSphereMyPtoPage() {
               ? "No direct employee requests yet."
               : "No manager requests match your keyword filter."}
             resolveEmployee={resolveRequestEmployee}
-            requestTypeLabel={requestTypeLabel}
+            requestTypeLabel={(type) => requestTypeLabel(type, ptoTypeMetaLookup)}
             statusLabel={statusLabel}
             formatSubmittedLabel={(request) => `Submitted ${formatDateInTimeZone(request.submittedAt, tenantTimeZone, {
               month: "numeric",

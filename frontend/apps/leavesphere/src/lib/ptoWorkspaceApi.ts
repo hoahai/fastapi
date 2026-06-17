@@ -66,23 +66,7 @@ function unwrapEnvelope(payload: unknown): unknown {
 
 function normalizePtoType(value: unknown): LeaveSpherePtoType | null {
   const text = asString(value);
-  if (!text) {
-    return null;
-  }
-  const normalized = text.toLowerCase();
-  if (normalized.includes("vac")) {
-    return "vacation";
-  }
-  if (normalized.includes("sick")) {
-    return "sick";
-  }
-  if (normalized.includes("person")) {
-    return "personal";
-  }
-  if (normalized.includes("float")) {
-    return "floating";
-  }
-  return text;
+  return text || null;
 }
 
 function normalizePtoStatus(value: unknown): LeaveSpherePtoStatus {

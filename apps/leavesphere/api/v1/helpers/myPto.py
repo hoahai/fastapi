@@ -3,6 +3,7 @@ from __future__ import annotations
 from collections import OrderedDict
 from datetime import date, datetime
 from decimal import Decimal
+import re
 
 from apps.leavesphere.api.v1.helpers.dbQueries import (
     approve_pending_pto_request,
@@ -44,6 +45,10 @@ def _normalize_year(value: object | None) -> int:
 
 def _normalize_text(value: object | None) -> str:
     return str(value or "").strip()
+
+
+def _normalize_lookup_key(value: object | None) -> str:
+    return re.sub(r"[^a-z0-9]+", "", _normalize_text(value).lower())
 
 
 def _normalize_email(value: object | None) -> str:
@@ -167,21 +172,37 @@ def _build_pto_type_catalog() -> tuple[list[dict], dict[str, dict]]:
     catalog.sort(key=lambda item: (item["listingOrder"], item["label"].lower(), item["code"]))
     if not catalog:
         for ui_type in _UI_PTO_TYPE_ORDER:
-            catalog.append(
-                {
-                    "code": ui_type.upper(),
-                    "type": ui_type,
-                    "label": ui_type.title(),
-                    "active": True,
-                    "listingOrder": 0,
-                    "rolloverable": False,
-                    "payoutable": False,
-                    "usaDefaultHour": 0,
-                    "phlDefaultHour": 0,
-                }
-            )
-            by_code[ui_type.upper()] = catalog[-1]
+            item = {
+                "code": ui_type.upper(),
+                "type": ui_type,
+                "label": ui_type.title(),
+                "active": True,
+                "listingOrder": 0,
+                "rolloverable": False,
+                "payoutable": False,
+                "usaDefaultHour": 0,
+                "phlDefaultHour": 0,
+            }
+            catalog.append(item)
+            by_code[item["code"]] = item
     return catalog, by_code
+
+
+def _resolve_pto_type_code_from_catalog(*, value: object | None, pto_type_by_code: dict[str, dict]) -> str:
+    normalized = _normalize_lookup_key(value)
+    if not normalized:
+        return ""
+
+    for code, item in pto_type_by_code.items():
+        candidates = (
+            _normalize_lookup_key(code),
+            _normalize_lookup_key(item.get("type")),
+            _normalize_lookup_key(item.get("label")),
+        )
+        if normalized in candidates:
+            return code
+
+    return _normalize_text(value).upper()
 
 
 def _build_pto_action_catalog() -> tuple[list[dict], dict[str, dict]]:
@@ -340,8 +361,8 @@ def _build_request_rows(
             continue
         pto_type_code = _normalize_text(row.get("ptoTypeCode")).upper()
         pto_type = pto_type_by_code.get(pto_type_code)
-        ui_type = pto_type["type"] if pto_type else _split_ui_type_tokens(pto_type_code, pto_type_code)
-        if ui_type is None:
+        ui_type = _normalize_text(pto_type.get("type")) if pto_type else pto_type_code.lower()
+        if not ui_type:
             continue
 
         status = _normalize_text(row.get("status")).lower()
@@ -471,8 +492,8 @@ def load_my_pto_workspace(*, request, year: int | None = None) -> dict:
     employee_id = _normalize_text(employee.get("id"))
     current_employee_name = _employee_full_name(employee)
     current_employee_region = _normalize_team_region(employee.get("region"))
-    pto_types, pto_type_by_code = _build_pto_type_catalog()
-    pto_actions, action_by_code = _build_pto_action_catalog()
+    _pto_types, pto_type_by_code = _build_pto_type_catalog()
+    pto_actions, _action_by_code = _build_pto_action_catalog()
 
     direct_reports = _resolve_direct_reports(employee_id)
     direct_report_ids = [row["employeeId"] for row in direct_reports]
@@ -567,13 +588,16 @@ def create_my_pto_request(*, request, payload: dict) -> dict:
     if not payload.get("hours"):
         raise ValueError("hours must be greater than zero")
 
-    pto_types, pto_type_by_code = _build_pto_type_catalog()
+    _pto_types, pto_type_by_code = _build_pto_type_catalog()
     pto_actions, action_by_code = _build_pto_action_catalog()
-    requested_type = _split_ui_type_tokens(payload.get("type"), payload.get("ptoTypeCode"))
-    if requested_type is None:
+    requested_pto_type_code = _resolve_pto_type_code_from_catalog(
+        value=payload.get("ptoTypeCode") or payload.get("type"),
+        pto_type_by_code=pto_type_by_code,
+    )
+    if not requested_pto_type_code:
         raise ValueError("ptoTypeCode is required")
 
-    pto_type = next((row for row in pto_types if row["type"] == requested_type), None)
+    pto_type = pto_type_by_code.get(requested_pto_type_code)
     if pto_type is None:
         raise ValueError("ptoTypeCode not found")
 
@@ -633,10 +657,13 @@ def update_my_pto_request(*, request, payload: dict) -> dict:
         raise ValueError("Only future PTO requests can be updated")
 
     pto_types, pto_type_by_code = _build_pto_type_catalog()
-    requested_type = _split_ui_type_tokens(payload.get("type"), payload.get("ptoTypeCode"))
-    if requested_type is None:
+    requested_pto_type_code = _resolve_pto_type_code_from_catalog(
+        value=payload.get("ptoTypeCode") or payload.get("type"),
+        pto_type_by_code=pto_type_by_code,
+    )
+    if not requested_pto_type_code:
         raise ValueError("ptoTypeCode is required")
-    pto_type = next((row for row in pto_types if row["type"] == requested_type), None)
+    pto_type = pto_type_by_code.get(requested_pto_type_code)
     if pto_type is None:
         raise ValueError("ptoTypeCode not found")
 

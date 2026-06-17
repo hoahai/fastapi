@@ -101,6 +101,7 @@ export type LeaveSpherePtoLoadResult = {
 
 export type LeaveSpherePtoSubmitInput = {
   type: LeaveSpherePtoType;
+  ptoTypeCode?: string;
   startDate: string;
   endDate: string;
   hours: number;

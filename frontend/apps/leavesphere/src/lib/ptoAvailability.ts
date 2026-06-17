@@ -1,9 +1,11 @@
-import type { LeaveSpherePtoBalance } from "@leavesphere/lib/ptoTypes";
+import type { LeaveSpherePtoBalance, LeaveSpherePtoTypeConfig } from "@leavesphere/lib/ptoTypes";
 
 type LeaveSphereBalanceLike = Pick<
   LeaveSpherePtoBalance,
   "type" | "code" | "label" | "remainingHours" | "totalHours" | "usedHours" | "scheduledHours"
 >;
+
+type LeaveSpherePtoTypeLike = Pick<LeaveSpherePtoTypeConfig, "code" | "type" | "label">;
 
 function asString(value: unknown): string {
   return typeof value === "string" ? value.trim() : "";
@@ -86,8 +88,53 @@ export function validateLeaveSpherePtoRequestedHours(params: {
 export function buildLeaveSpherePtoTypeOptionsFromBalances(
   balances: Iterable<LeaveSphereBalanceLike> | null | undefined,
 ): Array<{ value: string; label: string }> {
+  return buildLeaveSpherePtoTypeOptionsFromCatalog(null, balances);
+}
+
+export function buildLeaveSpherePtoTypeOptionsFromCatalog(
+  ptoTypes: Iterable<LeaveSpherePtoTypeLike> | null | undefined,
+  balances: Iterable<LeaveSphereBalanceLike> | null | undefined,
+): Array<{ value: string; label: string }> {
+  const availabilityByKey = new Map<string, number>();
+  for (const balance of balances ?? []) {
+    const availableHours = resolveRemainingHours(balance) ?? 0;
+    const balanceCode = asString(balance.code).toLowerCase();
+    const balanceType = asString(balance.type).toLowerCase();
+    if (balanceCode && !availabilityByKey.has(balanceCode)) {
+      availabilityByKey.set(balanceCode, availableHours);
+    }
+    if (balanceType && !availabilityByKey.has(balanceType)) {
+      availabilityByKey.set(balanceType, availableHours);
+    }
+  }
+
   const seen = new Set<string>();
   const options: Array<{ value: string; label: string }> = [];
+
+  for (const ptoType of ptoTypes ?? []) {
+    const value = asString(ptoType.code) || asString(ptoType.type);
+    if (!value) {
+      continue;
+    }
+    const normalizedValue = value.toLowerCase();
+    if (seen.has(normalizedValue)) {
+      continue;
+    }
+    seen.add(normalizedValue);
+
+    const availableHours = availabilityByKey.get(asString(ptoType.code).toLowerCase())
+      ?? availabilityByKey.get(asString(ptoType.type).toLowerCase())
+      ?? 0;
+    const baseLabel = asString(ptoType.label) || asString(ptoType.type) || value;
+    options.push({
+      value,
+      label: `${baseLabel} (${formatHours(availableHours)})`,
+    });
+  }
+
+  if (options.length > 0) {
+    return options;
+  }
 
   for (const balance of balances ?? []) {
     const value = asString(balance.type);
