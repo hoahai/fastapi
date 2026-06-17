@@ -7583,7 +7583,7 @@ export default function TrafficPage() {
       const cachedData = isRecord(cacheSnapshot?.data) ? cacheSnapshot.data : null;
       const cachedContactsSnapshot = isRecord(cachedData?.contactsSnapshot) ? cachedData.contactsSnapshot : null;
       const hasCachedContactsSnapshot =
-        Boolean(cachedData)
+        cachedData !== null
         && Object.prototype.hasOwnProperty.call(cachedData, "contactsSnapshot")
         && (cachedData.contactsSnapshot === null || isRecord(cachedData.contactsSnapshot));
       const forceNetworkFetch = stationLookupRefreshToken > 0;

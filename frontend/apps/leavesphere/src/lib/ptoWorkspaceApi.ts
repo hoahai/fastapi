@@ -383,11 +383,12 @@ function normalizeWorkspaceDelta(payload: unknown): LeaveSpherePtoWorkspaceDelta
   if (Array.isArray(workspace.ptoTypes)) {
     patch.ptoTypes = workspace.ptoTypes
       .filter(isRecord)
-      .map((item) => ({
+      .map((item, index) => ({
         code: asString(item.code || item.type || item.name),
-        type: asString(item.type) || undefined,
+        type: asString(item.type || item.code || item.name || "PTO"),
         label: asString(item.label) || asString(item.name) || asString(item.code) || "PTO",
         active: Boolean(item.active ?? true),
+        listingOrder: asNumber(item.listingOrder ?? index + 1),
       }))
       .filter((item) => item.code && item.label);
   }
