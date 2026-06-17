@@ -50,6 +50,7 @@ export function LeaveSpherePtoRequestList({
             <div className="space-y-1.5">
               {group.requests.map((request) => {
                 const employee = resolveEmployee(request);
+                const typeLabel = getTypeLabel(request);
                 return (
                   <LeaveSpherePtoRequestCard
                     key={request.id}
@@ -63,7 +64,7 @@ export function LeaveSpherePtoRequestList({
                     employeeName={employee.employeeName}
                     title={employee.employeeName}
                     pictureUrl={employee.pictureUrl}
-                    typeChip={<LeaveSpherePtoTypeChip type={request.ptoTypeCode ?? request.type} label={getTypeLabel(request)} />}
+                    typeChip={<LeaveSpherePtoTypeChip type={typeLabel} label={typeLabel} />}
                     statusChip={<LeaveSpherePtoStatusChip status={request.status} label={formatLeaveSpherePtoStatusLabel(request.status)} />}
                     dateLabel={formatPtoRequestDateRangeLabel(request.startDate, request.endDate, timeZone)}
                     detailLabel={request.description}

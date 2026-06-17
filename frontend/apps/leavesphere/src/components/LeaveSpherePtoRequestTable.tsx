@@ -109,6 +109,7 @@ export function LeaveSpherePtoRequestTable({
               </tr>
             ) : visibleRequests.map((request) => {
               const employee = resolveEmployee(request);
+              const typeLabel = requestTypeLabel(request.ptoTypeCode ?? request.type);
               const rowTone = getLeaveSpherePtoRequestTimelineTone({
                 status: request.status,
                 startDate: request.startDate,
@@ -131,7 +132,7 @@ export function LeaveSpherePtoRequestTable({
                     />
                   </td>
                   <td className="px-3 py-2.5 text-center">
-                    <LeaveSpherePtoTypeChip type={request.type} label={requestTypeLabel(request.type)} />
+                    <LeaveSpherePtoTypeChip type={typeLabel} label={typeLabel} />
                   </td>
                   <td className={`${dateRangeColumnClassName ?? "px-3 py-2.5 whitespace-nowrap"}`}>{formatDateRangeLabel(request)}</td>
                   {showDescription ? (

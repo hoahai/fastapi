@@ -324,7 +324,13 @@ function adjustFormsEqual(left: AdjustBalanceForm, right: AdjustBalanceForm): bo
   );
 }
 
-function requestTypeLabel(type: string): string {
+function requestTypeLabel(type: string, lookup: Map<string, PtoTypeMeta> | null | undefined): string {
+  if (lookup) {
+    const resolved = resolvePtoTypeMeta(type, lookup);
+    if (resolved) {
+      return resolved.label;
+    }
+  }
   const normalized = asString(type).toLowerCase();
   const matched = PTO_TYPE_OPTIONS.find((item) => item.value === normalized);
   if (matched) {
@@ -356,7 +362,7 @@ function buildPtoTypeMetaLookup(ptoTypes: Array<{ code?: string | null; type?: s
     }
     const meta: PtoTypeMeta = {
       code,
-      label: asString(item.label) || requestTypeLabel(code),
+      label: asString(item.label) || asString(item.type) || code,
       order: index,
     };
     const keys = [
@@ -1101,7 +1107,7 @@ export default function LeaveManagementPage() {
       const employee = resolveRequestEmployee(request);
         const tokens = [
           employee.employeeName,
-          requestTypeLabel(request.type),
+          requestTypeLabel(request.ptoTypeCode ?? request.type, ptoTypeMetaLookup),
           formatLeaveSpherePtoStatusLabel(request.status),
           formatDateLabel(request.startDate, tenantTimeZone),
           formatDateLabel(request.endDate, tenantTimeZone),
@@ -1170,7 +1176,7 @@ export default function LeaveManagementPage() {
     const normalized = normalizePtoTypeLookupKey(rawValue);
     return {
       code: normalized,
-      label: requestTypeLabel(rawValue),
+      label: requestTypeLabel(rawValue, ptoTypeMetaLookup),
       order: Number.MAX_SAFE_INTEGER,
     };
   }, [ptoTypeMetaLookup]);
@@ -2346,7 +2352,7 @@ export default function LeaveManagementPage() {
             timeZone={tenantTimeZone}
             todayIsoDate={todayIsoDate}
             resolveEmployee={resolveRequestEmployee}
-            getTypeLabel={(request) => requestTypeLabel(request.type)}
+            getTypeLabel={(request) => requestTypeLabel(request.ptoTypeCode ?? request.type, ptoTypeMetaLookup)}
             getHoursLabel={(request) => formatHoursLabel(request.hours)}
             onRequestClick={(request) => {
               setSelectedRequestId(request.id);
@@ -2372,7 +2378,7 @@ export default function LeaveManagementPage() {
     }
     for (const request of requests) {
       const employee = resolveRequestEmployee(request);
-      const requestType = requestTypeLabel(request.type);
+      const requestType = requestTypeLabel(request.ptoTypeCode ?? request.type, ptoTypeMetaLookup);
       const hoursLabel = formatHoursLabel(request.hours);
       const chipLabel = buildLeaveSpherePtoCalendarRequestChipLabel(
         employee.employeeName,
@@ -2513,7 +2519,7 @@ export default function LeaveManagementPage() {
                             });
                           }}
                           className="group flex w-full flex-col items-center rounded-lg border border-transparent px-2 py-1.5 text-center transition hover:border-blue-200 hover:bg-blue-50/55 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
-                          aria-label={`Edit ${requestTypeLabel(normalizedType)} hours for ${row.employeeName}`}
+                          aria-label={`Edit ${requestTypeLabel(normalizedType, ptoTypeMetaLookup)} hours for ${row.employeeName}`}
                         >
                           <span className="text-sm font-semibold text-slate-900 transition group-hover:text-blue-700">
                             {formatHoursLabel(usedHours)}
@@ -2895,7 +2901,7 @@ export default function LeaveManagementPage() {
                 timeZone={tenantTimeZone}
                 todayIsoDate={todayIsoDate}
                 resolveEmployee={resolveRequestEmployee}
-                getTypeLabel={(request) => requestTypeLabel(request.type)}
+                getTypeLabel={(request) => requestTypeLabel(request.ptoTypeCode ?? request.type, ptoTypeMetaLookup)}
                 getHoursLabel={(request) => formatHoursLabel(request.hours)}
                 onRequestClick={(request) => {
                   setSelectedRequestId(request.id);
