@@ -20,10 +20,6 @@ from apps.leavesphere.api.v1.helpers.dbQueries import (
 )
 from apps.leavesphere.api.v1.helpers.employees import create_employee
 from apps.leavesphere.api.v1.helpers.myPto import (
-    _build_employee_map,
-    _build_pto_action_catalog,
-    _build_pto_type_catalog,
-    _build_request_rows,
     _employee_full_name,
     _extract_email_from_auth_payload,
     _normalize_email,
@@ -47,9 +43,15 @@ from apps.leavesphere.api.v1.helpers.ptoAccounting import (
     is_request_action_row,
     LOAD_ACTION_TOKENS,
     REQUEST_ACTION_TOKENS,
-    REQUEST_CANCEL_ACTION_TOKENS,
     resolve_action_code,
     signed_pto_hours,
+)
+from apps.leavesphere.api.v1.helpers.ptoWorkspaceShared import (
+    build_leave_sphere_workspace_common_payload,
+    build_pto_employee_map,
+    build_pto_request_rows,
+    load_leave_sphere_pto_workspace_catalogs,
+    resolve_pto_type_code_from_catalog,
 )
 from apps.leavesphere.api.v1.helpers.ptoActions import create_pto_action, modify_pto_action
 from apps.leavesphere.api.v1.helpers.ptoTypes import create_pto_type, modify_pto_type
@@ -213,18 +215,7 @@ def _resolve_pto_type_code(
     value: object | None,
     pto_type_by_code: dict[str, dict],
 ) -> str:
-    normalized = _normalize_text(value).lower()
-    if not normalized:
-        return ""
-    for code, item in pto_type_by_code.items():
-        item_code = _normalize_text(code).lower()
-        item_type = _normalize_text(item.get("type")).lower()
-        item_label = _normalize_text(item.get("label")).lower()
-        if normalized in {item_code, item_type}:
-            return code
-        if normalized and normalized in item_label:
-            return code
-    return normalized.upper()
+    return resolve_pto_type_code_from_catalog(value=value, pto_type_by_code=pto_type_by_code)
 
 
 def _build_employee_balances(
@@ -511,7 +502,7 @@ def _build_workspace(
     current_employee_email = _normalize_email(current_employee.get("email"))
     current_employee_region = _normalize_team_region(current_employee.get("region"))
 
-    employee_map = _build_employee_map(employees)
+    employee_map = build_pto_employee_map(employees)
     employee_map.setdefault(current_employee_id, current_employee)
 
     manager_rows = get_employee_managers()
@@ -534,8 +525,10 @@ def _build_workspace(
         if row["managerId"] == current_employee_id and row["employeeId"] != current_employee_id
     ]
 
-    _pto_types, pto_type_by_code = _build_pto_type_catalog()
-    pto_actions, pto_action_by_code = _build_pto_action_catalog()
+    catalogs = load_leave_sphere_pto_workspace_catalogs()
+    pto_type_by_code = catalogs.pto_type_by_code
+    pto_actions = catalogs.pto_actions
+    pto_action_by_code = catalogs.pto_action_by_code
     balance_transaction_rows = get_pto_transactions(year=selected_year)
     year_request_rows = [row for row in balance_transaction_rows if is_request_action_row(row, pto_action_by_code)]
     request_rows: list[dict] = []
@@ -570,17 +563,18 @@ def _build_workspace(
         )
         request_rows = _merge_request_rows(request_rows, overlap_rows)
 
-    requests = _build_request_rows(
+    requests = build_pto_request_rows(
         rows=request_rows,
         employee_map=employee_map,
         pto_type_by_code=pto_type_by_code,
         current_employee_id=current_employee_id,
         manager_id_by_employee_id=manager_map,
+        employee_full_name_fn=_employee_full_name,
     )
     employee_balances = _build_employee_balances(
         employees=employees,
         employee_map=employee_map,
-        pto_types=_pto_types,
+        pto_types=catalogs.pto_types,
         pto_type_by_code=pto_type_by_code,
         pto_action_by_code=pto_action_by_code,
         request_rows=year_request_rows,
@@ -619,17 +613,7 @@ def _build_workspace(
         "managerId": manager_map.get(current_employee_id),
         "currentUserTeamRegion": current_employee_region,
         "isManager": bool(direct_reports),
-        "ptoTypes": _pto_types,
-        "ptoActions": pto_actions,
-        "defaultRequestActionCode": resolve_action_code(
-            pto_actions,
-            include_tokens=REQUEST_ACTION_TOKENS,
-        ),
-        "defaultCancelActionCode": resolve_action_code(
-            pto_actions,
-            include_tokens=REQUEST_CANCEL_ACTION_TOKENS,
-            fallback_index=0,
-        ),
+        **build_leave_sphere_workspace_common_payload(catalogs),
         "balances": current_employee_balances,
         "employeeBalances": employee_balances,
         "balanceTransactions": balance_transactions,
@@ -749,8 +733,9 @@ def create_leave_management_request(*, request, payload: dict) -> dict:
 
     current_employee = _resolve_current_employee_record(request)
     current_employee_id = _normalize_text(current_employee.get("id"))
-    pto_types, pto_type_by_code = _build_pto_type_catalog()
-    pto_actions, _ = _build_pto_action_catalog()
+    catalogs = load_leave_sphere_pto_workspace_catalogs()
+    pto_type_by_code = catalogs.pto_type_by_code
+    pto_actions = catalogs.pto_actions
 
     employee_id = _normalize_text(payload.get("employeeId"))
     if not employee_id:
@@ -837,7 +822,8 @@ def update_leave_management_request(*, request, payload: dict) -> dict:
         raise ValueError("PTO transaction not found")
     transaction = transaction_rows[0]
 
-    pto_types, pto_type_by_code = _build_pto_type_catalog()
+    catalogs = load_leave_sphere_pto_workspace_catalogs()
+    pto_type_by_code = catalogs.pto_type_by_code
     pto_type_code = _resolve_pto_type_code(
         value=payload.get("ptoTypeCode") or payload.get("type") or transaction.get("ptoTypeCode"),
         pto_type_by_code=pto_type_by_code,
@@ -911,8 +897,9 @@ def adjust_leave_management_balance(*, request, payload: dict) -> dict:
     if not employee_id:
         raise ValueError("employeeId is required")
 
-    pto_types, pto_type_by_code = _build_pto_type_catalog()
-    pto_actions, _ = _build_pto_action_catalog()
+    catalogs = load_leave_sphere_pto_workspace_catalogs()
+    pto_type_by_code = catalogs.pto_type_by_code
+    pto_actions = catalogs.pto_actions
     action_code = _normalize_text(payload.get("ptoActionCode")).lower()
     if action_code == "load_grant":
         resolved_action_code = resolve_action_code(action_catalog=pto_actions, include_tokens=LOAD_ACTION_TOKENS)
@@ -988,7 +975,8 @@ def _replace_employee_manager_mapping(*, employee_id: str, manager_id: str) -> i
 
 def _seed_employee_opening_balances(*, employee_id: str, region: str, year: int, current_user_name: str) -> list[dict]:
     pto_types = get_pto_types()
-    pto_actions, _ = _build_pto_action_catalog()
+    catalogs = load_leave_sphere_pto_workspace_catalogs()
+    pto_actions = catalogs.pto_actions
     load_action_code = resolve_action_code(action_catalog=pto_actions, include_tokens=LOAD_ACTION_TOKENS)
     if not load_action_code:
         load_action_code = "LOAD"

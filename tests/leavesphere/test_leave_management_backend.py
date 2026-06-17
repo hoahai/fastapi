@@ -6,6 +6,7 @@ from unittest.mock import patch
 from apps.leavesphere.api.v1.helpers import leaveManagement
 from apps.leavesphere.api.v1.helpers import myPto
 from apps.leavesphere.api.v1.helpers import ptoTransactions
+from apps.leavesphere.api.v1.helpers import ptoWorkspaceShared
 from apps.leavesphere.api.v1.helpers import config
 from shared.auth.types import AuthPrincipal, TenantAccessProfile
 
@@ -131,9 +132,13 @@ class LeaveManagementBackendTests(unittest.TestCase):
         ), patch.object(leaveManagement, "get_pto_transactions", side_effect=_transactions_side_effect), patch.object(
             leaveManagement, "get_holidays", return_value=[{"id": "2026-us-new-year", "name": "New Year's Day", "date": "2026-01-01", "region": "US"}]
         ), patch.object(
-            myPto, "get_pto_types", return_value=[{"code": "VAC", "name": "Vacation", "listingOrder": 1, "usaDefaultHour": 120, "phlDefaultHour": 0}]
+            ptoWorkspaceShared,
+            "get_pto_types",
+            return_value=[{"code": "VAC", "name": "Vacation", "listingOrder": 1, "usaDefaultHour": 120, "phlDefaultHour": 0}],
         ), patch.object(
-            myPto, "get_pto_actions", return_value=[{"code": "LOAD", "name": "Load"}, {"code": "REQUEST", "name": "Request"}]
+            ptoWorkspaceShared,
+            "get_pto_actions",
+            return_value=[{"code": "LOAD", "name": "Load"}, {"code": "REQUEST", "name": "Request"}],
         ):
             workspace = leaveManagement.load_leave_management_workspace(
                 request=request,
@@ -183,9 +188,13 @@ class LeaveManagementBackendTests(unittest.TestCase):
         ), patch.object(
             leaveManagement, "get_holidays", return_value=[]
         ), patch.object(
-            myPto, "get_pto_types", return_value=[{"code": "VAC", "name": "Vacation", "listingOrder": 1, "usaDefaultHour": 120, "phlDefaultHour": 0}]
+            ptoWorkspaceShared,
+            "get_pto_types",
+            return_value=[{"code": "VAC", "name": "Vacation", "listingOrder": 1, "usaDefaultHour": 120, "phlDefaultHour": 0}],
         ), patch.object(
-            myPto, "get_pto_actions", return_value=[{"code": "LOAD", "name": "Load"}, {"code": "REQUEST", "name": "Request"}]
+            ptoWorkspaceShared,
+            "get_pto_actions",
+            return_value=[{"code": "LOAD", "name": "Load"}, {"code": "REQUEST", "name": "Request"}],
         ):
             workspace = leaveManagement.load_leave_management_workspace(request=request, year=2026)
 
@@ -255,9 +264,13 @@ class LeaveManagementBackendTests(unittest.TestCase):
         ), patch.object(
             myPto, "get_holidays", return_value=[]
         ), patch.object(
-            myPto, "get_pto_types", return_value=[{"code": "VAC", "name": "Vacation", "listingOrder": 1, "usaDefaultHour": 120, "phlDefaultHour": 0}]
+            ptoWorkspaceShared,
+            "get_pto_types",
+            return_value=[{"code": "VAC", "name": "Vacation", "listingOrder": 1, "usaDefaultHour": 120, "phlDefaultHour": 0}],
         ), patch.object(
-            myPto, "get_pto_actions", return_value=[{"code": "REQUEST", "name": "Request"}]
+            ptoWorkspaceShared,
+            "get_pto_actions",
+            return_value=[{"code": "REQUEST", "name": "Request"}],
         ), patch.object(
             myPto, "load_my_pto_workspace", return_value=fresh_workspace
         ) as mock_load, patch.object(
@@ -319,9 +332,13 @@ class LeaveManagementBackendTests(unittest.TestCase):
                 {"id": "2026-us-dec", "name": "December Holiday", "date": "2026-12-31 00:00:00", "region": "US"},
             ],
         ), patch.object(
-            myPto, "get_pto_types", return_value=[{"code": "VAC", "name": "Vacation", "listingOrder": 1, "usaDefaultHour": 120, "phlDefaultHour": 0}]
+            ptoWorkspaceShared,
+            "get_pto_types",
+            return_value=[{"code": "VAC", "name": "Vacation", "listingOrder": 1, "usaDefaultHour": 120, "phlDefaultHour": 0}],
         ), patch.object(
-            myPto, "get_pto_actions", return_value=[{"code": "LOAD", "name": "Load"}, {"code": "REQUEST", "name": "Request"}]
+            ptoWorkspaceShared,
+            "get_pto_actions",
+            return_value=[{"code": "LOAD", "name": "Load"}, {"code": "REQUEST", "name": "Request"}],
         ):
             workspace = leaveManagement.load_leave_management_workspace(request=request, year=2026)
 
@@ -429,9 +446,13 @@ class LeaveManagementBackendTests(unittest.TestCase):
         ), patch.object(leaveManagement, "get_pto_transactions", side_effect=_transactions_side_effect), patch.object(
             leaveManagement, "get_holidays", return_value=[]
         ), patch.object(
-            myPto, "get_pto_types", return_value=[{"code": "VAC", "name": "Vacation", "listingOrder": 1, "usaDefaultHour": 120, "phlDefaultHour": 0}]
+            ptoWorkspaceShared,
+            "get_pto_types",
+            return_value=[{"code": "VAC", "name": "Vacation", "listingOrder": 1, "usaDefaultHour": 120, "phlDefaultHour": 0}],
         ), patch.object(
-            myPto, "get_pto_actions", return_value=[{"code": "LOAD", "name": "Load"}, {"code": "REQUEST", "name": "Request"}]
+            ptoWorkspaceShared,
+            "get_pto_actions",
+            return_value=[{"code": "LOAD", "name": "Load"}, {"code": "REQUEST", "name": "Request"}],
         ):
             workspace = leaveManagement.load_leave_management_workspace(
                 request=request,

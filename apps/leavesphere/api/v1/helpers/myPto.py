@@ -14,9 +14,7 @@ from apps.leavesphere.api.v1.helpers.dbQueries import (
     get_employees_by_identity_key,
     get_employees_by_ids,
     get_holidays,
-    get_pto_actions,
     get_pto_transactions,
-    get_pto_types,
     reject_pending_pto_request,
     update_pto_transaction,
 )
@@ -25,10 +23,14 @@ from apps.leavesphere.api.v1.helpers.ptoAccounting import (
     is_load_action_row,
     is_request_action_row,
     is_request_action_code,
-    REQUEST_ACTION_TOKENS,
-    REQUEST_CANCEL_ACTION_TOKENS,
-    resolve_action_code,
     signed_pto_hours,
+)
+from apps.leavesphere.api.v1.helpers.ptoWorkspaceShared import (
+    build_leave_sphere_workspace_common_payload,
+    build_pto_employee_map,
+    build_pto_request_rows,
+    load_leave_sphere_pto_workspace_catalogs,
+    resolve_pto_type_code_from_catalog,
 )
 from shared.auth.dependencies import get_auth_principal, get_tenant_access
 from shared.db import run_transaction
@@ -154,85 +156,6 @@ def _split_ui_type_tokens(*values: object | None) -> str | None:
     return None
 
 
-def _build_pto_type_catalog() -> tuple[list[dict], dict[str, dict]]:
-    rows = get_pto_types()
-    catalog: list[dict] = []
-    by_code: dict[str, dict] = {}
-    for row in rows:
-        code = _normalize_text(row.get("code")).upper()
-        if not code:
-            continue
-        label = _normalize_text(row.get("name")) or code
-        ui_type = _split_ui_type_tokens(code, label) or code.lower()
-        item = {
-            "code": code,
-            "type": ui_type,
-            "label": label,
-            "active": True,
-            "listingOrder": int(row.get("listingOrder") or 0),
-            "rolloverable": bool(int(row.get("rolloverable") or 0)),
-            "payoutable": bool(int(row.get("payoutable") or 0)),
-            "usaDefaultHour": int(row.get("usaDefaultHour") or 0),
-            "phlDefaultHour": int(row.get("phlDefaultHour") or 0),
-        }
-        catalog.append(item)
-        by_code[code] = item
-
-    catalog.sort(key=lambda item: (item["listingOrder"], item["label"].lower(), item["code"]))
-    if not catalog:
-        for ui_type in _UI_PTO_TYPE_ORDER:
-            item = {
-                "code": ui_type.upper(),
-                "type": ui_type,
-                "label": ui_type.title(),
-                "active": True,
-                "listingOrder": 0,
-                "rolloverable": False,
-                "payoutable": False,
-                "usaDefaultHour": 0,
-                "phlDefaultHour": 0,
-            }
-            catalog.append(item)
-            by_code[item["code"]] = item
-    return catalog, by_code
-
-
-def _resolve_pto_type_code_from_catalog(*, value: object | None, pto_type_by_code: dict[str, dict]) -> str:
-    normalized = _normalize_lookup_key(value)
-    if not normalized:
-        return ""
-
-    for code, item in pto_type_by_code.items():
-        candidates = (
-            _normalize_lookup_key(code),
-            _normalize_lookup_key(item.get("type")),
-            _normalize_lookup_key(item.get("label")),
-        )
-        if normalized in candidates:
-            return code
-
-    return _normalize_text(value).upper()
-
-
-def _build_pto_action_catalog() -> tuple[list[dict], dict[str, dict]]:
-    rows = get_pto_actions()
-    catalog: list[dict] = []
-    by_code: dict[str, dict] = {}
-    for row in rows:
-        code = _normalize_text(row.get("code")).upper()
-        if not code:
-            continue
-        item = {
-            "code": code,
-            "name": _normalize_text(row.get("name")) or code,
-            "color": _normalize_text(row.get("color")) or None,
-        }
-        catalog.append(item)
-        by_code[code] = item
-    catalog.sort(key=lambda item: (item["code"], item["name"].lower()))
-    return catalog, by_code
-
-
 def _resolve_current_principal_email(request) -> str:
     principal = get_auth_principal(request)
     if principal is not None and principal.email:
@@ -339,56 +262,6 @@ def _build_holidays(year: int, _region: str) -> list[dict]:
     return holidays
 
 
-def _build_request_rows(
-    *,
-    rows: list[dict],
-    employee_map: dict[str, dict],
-    pto_type_by_code: dict[str, dict],
-    current_employee_id: str,
-    manager_id_by_employee_id: dict[str, str | None],
-) -> list[dict]:
-    requests: list[dict] = []
-    for row in rows:
-        employee_id = _normalize_text(row.get("employeeId"))
-        employee = employee_map.get(employee_id)
-        if employee is None:
-            continue
-        pto_type_code = _normalize_text(row.get("ptoTypeCode")).upper()
-        pto_type = pto_type_by_code.get(pto_type_code)
-        ui_type = _normalize_text(pto_type.get("type")) if pto_type else pto_type_code.lower()
-        if not ui_type:
-            continue
-
-        status = _normalize_text(row.get("status")).lower()
-        hours_raw = Decimal(str(row.get("hours") or 0))
-        hours = abs(hours_raw)
-        approver_id = _normalize_text(row.get("approverId"))
-        approver = employee_map.get(approver_id) if approver_id else None
-        submitted_at = _to_date_string(row.get("dateCreated"))
-        reviewed_at = _to_date_string(row.get("dateUpdated")) if status != "pending" else ""
-        description = _normalize_text(row.get("description"))
-        request = {
-            "id": _normalize_text(row.get("id")),
-            "employeeId": employee_id,
-            "managerId": manager_id_by_employee_id.get(employee_id) or current_employee_id,
-            "type": ui_type,
-            "ptoTypeCode": pto_type_code,
-            "startDate": _to_date_string(row.get("startDate")),
-            "endDate": _to_date_string(row.get("endDate")),
-            "hours": float(hours.quantize(Decimal("0.01"))),
-            "description": description,
-            "status": status,
-            "submittedAt": submitted_at,
-            "reviewedAt": reviewed_at or None,
-            "reviewerName": _employee_full_name(approver) if approver else None,
-            "approverNote": _normalize_text(row.get("approverNote")) or None,
-        }
-        requests.append(request)
-
-    requests.sort(key=lambda item: (item["submittedAt"] or "", item["id"]), reverse=True)
-    return requests
-
-
 def _build_balance_rows(
     *,
     rows: list[dict],
@@ -451,14 +324,6 @@ def _build_balance_rows(
     return balances
 
 
-def _build_employee_map(employees: list[dict]) -> dict[str, dict]:
-    return {
-        _normalize_text(employee.get("id")): employee
-        for employee in employees
-        if _normalize_text(employee.get("id"))
-    }
-
-
 def _build_employee_rows(employees: list[dict]) -> list[dict]:
     rows: list[dict] = []
     for employee in employees:
@@ -484,8 +349,9 @@ def load_my_pto_workspace(*, request, year: int | None = None) -> dict:
     employee_id = _normalize_text(employee.get("id"))
     current_employee_name = _employee_full_name(employee)
     current_employee_region = _normalize_team_region(employee.get("region"))
-    _pto_types, pto_type_by_code = _build_pto_type_catalog()
-    pto_actions, _action_by_code = _build_pto_action_catalog()
+    catalogs = load_leave_sphere_pto_workspace_catalogs()
+    pto_type_by_code = catalogs.pto_type_by_code
+    pto_action_by_code = catalogs.pto_action_by_code
 
     direct_reports = _resolve_direct_reports(employee_id)
     direct_report_ids = [row["employeeId"] for row in direct_reports]
@@ -510,23 +376,24 @@ def load_my_pto_workspace(*, request, year: int | None = None) -> dict:
 
     employee_ids = [employee_id, *direct_report_ids, *approver_ids]
     employees = get_employees_by_ids(employee_ids=list(dict.fromkeys([item for item in employee_ids if item])))
-    employee_map = _build_employee_map(employees)
+    employee_map = build_pto_employee_map(employees)
     employee_map.setdefault(employee_id, employee)
 
     own_transactions = get_pto_transactions(employee_id=employee_id, year=selected_year)
     team_transactions = get_pto_transactions(employee_ids=direct_report_ids, year=selected_year) if direct_report_ids else []
-    all_requests = _build_request_rows(
+    all_requests = build_pto_request_rows(
         rows=[*own_transactions, *team_transactions],
         employee_map=employee_map,
         pto_type_by_code=pto_type_by_code,
         current_employee_id=employee_id,
         manager_id_by_employee_id=manager_id_by_employee_id,
+        employee_full_name_fn=_employee_full_name,
     )
 
     own_balance_rows = _build_balance_rows(
         rows=own_transactions,
         pto_type_by_code=pto_type_by_code,
-        pto_action_by_code=_action_by_code,
+        pto_action_by_code=pto_action_by_code,
     )
     holidays = _build_holidays(selected_year, current_employee_region)
 
@@ -538,17 +405,7 @@ def load_my_pto_workspace(*, request, year: int | None = None) -> dict:
         "currentUserTeamRegion": current_employee_region,
         "isManager": bool(direct_reports),
         "employees": _build_employee_rows([employee, *direct_reports]),
-        "ptoTypes": _pto_types,
-        "ptoActions": pto_actions,
-        "defaultRequestActionCode": resolve_action_code(
-            pto_actions,
-            include_tokens=REQUEST_ACTION_TOKENS,
-        ),
-        "defaultCancelActionCode": resolve_action_code(
-            pto_actions,
-            include_tokens=REQUEST_CANCEL_ACTION_TOKENS,
-            fallback_index=0,
-        ),
+        **build_leave_sphere_workspace_common_payload(catalogs),
         "balances": own_balance_rows,
         "requests": all_requests,
         "holidays": holidays,
@@ -584,20 +441,19 @@ def create_my_pto_request(*, request, payload: dict) -> dict:
     if not payload.get("hours"):
         raise ValueError("hours must be greater than zero")
 
-    _pto_types, pto_type_by_code = _build_pto_type_catalog()
-    pto_actions, action_by_code = _build_pto_action_catalog()
-    requested_pto_type_code = _resolve_pto_type_code_from_catalog(
+    catalogs = load_leave_sphere_pto_workspace_catalogs()
+    requested_pto_type_code = resolve_pto_type_code_from_catalog(
         value=payload.get("ptoTypeCode") or payload.get("type"),
-        pto_type_by_code=pto_type_by_code,
+        pto_type_by_code=catalogs.pto_type_by_code,
     )
     if not requested_pto_type_code:
         raise ValueError("ptoTypeCode is required")
 
-    pto_type = pto_type_by_code.get(requested_pto_type_code)
+    pto_type = catalogs.pto_type_by_code.get(requested_pto_type_code)
     if pto_type is None:
         raise ValueError("ptoTypeCode not found")
 
-    request_action_code = resolve_action_code(pto_actions, include_tokens=REQUEST_ACTION_TOKENS)
+    request_action_code = catalogs.default_request_action_code
     if not request_action_code:
         raise ValueError("ptoActionCode not found")
 
@@ -652,14 +508,14 @@ def update_my_pto_request(*, request, payload: dict) -> dict:
     if not _is_before_start_date(start_date=_to_date_string(transaction.get("startDate"))):
         raise ValueError("Only future PTO requests can be updated")
 
-    pto_types, pto_type_by_code = _build_pto_type_catalog()
-    requested_pto_type_code = _resolve_pto_type_code_from_catalog(
+    catalogs = load_leave_sphere_pto_workspace_catalogs()
+    requested_pto_type_code = resolve_pto_type_code_from_catalog(
         value=payload.get("ptoTypeCode") or payload.get("type"),
-        pto_type_by_code=pto_type_by_code,
+        pto_type_by_code=catalogs.pto_type_by_code,
     )
     if not requested_pto_type_code:
         raise ValueError("ptoTypeCode is required")
-    pto_type = pto_type_by_code.get(requested_pto_type_code)
+    pto_type = catalogs.pto_type_by_code.get(requested_pto_type_code)
     if pto_type is None:
         raise ValueError("ptoTypeCode not found")
 
@@ -673,8 +529,7 @@ def update_my_pto_request(*, request, payload: dict) -> dict:
     if requested_hours <= 0:
         raise ValueError("hours must be greater than zero")
 
-    pto_actions, _ = _build_pto_action_catalog()
-    request_action_code = resolve_action_code(pto_actions, include_tokens=REQUEST_ACTION_TOKENS)
+    request_action_code = catalogs.default_request_action_code
     if not request_action_code:
         raise ValueError("ptoActionCode not found")
 
