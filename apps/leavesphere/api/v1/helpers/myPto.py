@@ -782,6 +782,11 @@ def create_my_pto_request(*, request, payload: dict) -> dict:
         )
     if workspace is None:
         workspace = load_my_pto_workspace(request=request, year=selected_year)
+        workspace_patch = _build_my_pto_workspace_patch(
+            workspace=workspace,
+            request_ids=[item["id"]],
+            include_balances=employee_id == _normalize_text(workspace.get("currentUserId")),
+        )
     response = {
         "source": "network",
         "createdRequestId": item["id"],
@@ -936,6 +941,11 @@ def update_my_pto_request(*, request, payload: dict) -> dict:
         )
     if workspace is None:
         workspace = load_my_pto_workspace(request=request, year=requested_year)
+        workspace_patch = _build_my_pto_workspace_patch(
+            workspace=workspace,
+            request_ids=[transaction_id],
+            include_balances=employee_id == _normalize_text(workspace.get("currentUserId")),
+        )
     response = {
         "source": "network",
         "updated": updated,
@@ -996,6 +1006,11 @@ def cancel_my_pto_request(*, request, transaction_id: str) -> dict:
             )
         if workspace is None:
             workspace = load_my_pto_workspace(request=request, year=year)
+            workspace_patch = _build_my_pto_workspace_patch(
+                workspace=workspace,
+                request_ids=[transaction_id],
+                include_balances=status == "pending" and _normalize_text(transaction.get("employeeId")) == _normalize_text(workspace.get("currentUserId")),
+            )
         response = {
             "source": "network",
             "id": transaction_id,
@@ -1046,8 +1061,13 @@ def cancel_my_pto_request(*, request, transaction_id: str) -> dict:
             request_ids=[transaction_id],
             include_balances=False,
         )
-    if workspace is None:
-        workspace = load_my_pto_workspace(request=request, year=year)
+        if workspace is None:
+            workspace = load_my_pto_workspace(request=request, year=year)
+            workspace_patch = _build_my_pto_workspace_patch(
+                workspace=workspace,
+                request_ids=[transaction_id],
+                include_balances=False,
+            )
     response = {
         "source": "network",
         "id": transaction_id,
@@ -1175,6 +1195,11 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
             )
         if workspace is None:
             workspace = load_my_pto_workspace(request=request, year=workspace_year)
+            workspace_patch = _build_my_pto_workspace_patch(
+                workspace=workspace,
+                request_ids=[transaction_id],
+                include_balances=False,
+            )
         response = {
             "source": "network",
             "id": transaction_id,
@@ -1229,6 +1254,11 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
             )
         if workspace is None:
             workspace = load_my_pto_workspace(request=request, year=workspace_year)
+            workspace_patch = _build_my_pto_workspace_patch(
+                workspace=workspace,
+                request_ids=[transaction_id],
+                include_balances=False,
+            )
         response = {
             "source": "network",
             "id": transaction_id,

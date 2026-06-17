@@ -1277,6 +1277,12 @@ def create_leave_management_request(*, request, payload: dict) -> dict:
             year=year,
             workspace=workspace,
         )
+        workspace_patch = _build_leave_management_workspace_patch(
+            workspace=workspace,
+            request_ids=[created_request_id],
+            employee_ids=[employee_id],
+            include_current_balances=_normalize_text(employee_id) == _normalize_text(workspace.get("currentUserId")),
+        )
     response = {
         "source": "network",
         "createdRequestId": created_request_id,
@@ -1370,6 +1376,12 @@ def update_leave_management_request(*, request, payload: dict) -> dict:
             page_code=LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE,
             year=year_key,
             workspace=workspace,
+        )
+        workspace_patch = _build_leave_management_workspace_patch(
+            workspace=workspace,
+            request_ids=[transaction_id],
+            employee_ids=[_normalize_text(transaction.get("employeeId"))],
+            include_current_balances=_normalize_text(transaction.get("employeeId")) == _normalize_text(workspace.get("currentUserId")),
         )
     response = {
         "source": "network",
@@ -1481,6 +1493,12 @@ def review_leave_management_request(*, request, payload: dict) -> dict:
             page_code=LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE,
             year=_resolve_workspace_year_from_transaction(transaction),
             workspace=workspace,
+        )
+        workspace_patch = _build_leave_management_workspace_patch(
+            workspace=workspace,
+            request_ids=[transaction_id],
+            employee_ids=[_normalize_text(transaction.get("employeeId"))],
+            include_current_balances=_normalize_text(transaction.get("employeeId")) == _normalize_text(workspace.get("currentUserId")),
         )
     response = {
         "source": "network",
@@ -1605,6 +1623,12 @@ def adjust_leave_management_balance(*, request, payload: dict) -> dict:
             page_code=LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE,
             year=year,
             workspace=workspace,
+        )
+        workspace_patch = _build_leave_management_workspace_patch(
+            workspace=workspace,
+            balance_transaction_ids=[transaction_id],
+            employee_ids=[employee_id],
+            include_current_balances=employee_id == _normalize_text(workspace.get("currentUserId")),
         )
         workspace_patch = _build_leave_management_workspace_patch(
             workspace=workspace,
