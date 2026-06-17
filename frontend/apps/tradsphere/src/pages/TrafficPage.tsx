@@ -7581,8 +7581,16 @@ export default function TrafficPage() {
       const cacheKey = buildStationLookupCacheKey(lookupCode);
       const cacheSnapshot = readBrowserCacheSnapshot<unknown>(cacheKey);
       const cachedData = isRecord(cacheSnapshot?.data) ? cacheSnapshot.data : null;
+      const cachedContactsSnapshot = isRecord(cachedData?.contactsSnapshot) ? cachedData.contactsSnapshot : null;
+      const hasCachedContactsSnapshot =
+        Boolean(cachedData)
+        && Object.prototype.hasOwnProperty.call(cachedData, "contactsSnapshot")
+        && (cachedData.contactsSnapshot === null || isRecord(cachedData.contactsSnapshot));
       const forceNetworkFetch = stationLookupRefreshToken > 0;
-      const shouldFetchFromNetwork = forceNetworkFetch || shouldFetchNetwork("cache-first", cacheSnapshot);
+      const shouldFetchFromNetwork =
+        forceNetworkFetch ||
+        !hasCachedContactsSnapshot ||
+        shouldFetchNetwork("cache-first", cacheSnapshot);
       if (cachedData) {
         const cachedMeta = normalizeStationLookupMeta(cachedData, lookupCode);
         if (cachedMeta) {
@@ -7595,7 +7603,7 @@ export default function TrafficPage() {
           stationCode: lookupCode,
           stationName: asNullableString(cachedData.name),
           deliveryMethodName: asString(cachedData.deliveryMethod),
-          contactsSnapshot: isRecord(cachedData.contactsSnapshot) ? cachedData.contactsSnapshot : null,
+          contactsSnapshot: cachedContactsSnapshot,
         });
         setStationLookupCacheStatus({
           source: "cache",
@@ -7777,14 +7785,17 @@ export default function TrafficPage() {
             continue;
           }
           nextMeta[normalizedMeta.code] = normalizedMeta;
+          const cacheSnapshot = readBrowserCacheSnapshot<unknown>(buildStationLookupCacheKey(normalizedMeta.code));
+          const cachedData = isRecord(cacheSnapshot?.data) ? cacheSnapshot.data : null;
           writeBrowserCache(
             buildStationLookupCacheKey(normalizedMeta.code),
             {
+              ...(cachedData ?? {}),
               code: normalizedMeta.code,
               name: normalizedMeta.name,
               mediaType: normalizedMeta.mediaType,
               language: normalizedMeta.language,
-              deliveryMethod: normalizedMeta.deliveryMethod?.name || "",
+              deliveryMethod: normalizedMeta.deliveryMethod?.name || asString(cachedData?.deliveryMethod),
             },
             STATION_LOOKUP_CACHE_TTL_MS,
             {

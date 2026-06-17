@@ -1338,4 +1338,12 @@ End with:
 
 
 Before edits, please create a real git safety checkpoint commit on a WIP branch for all changes so I can restore my code back to current code.
+
+My current code is good. Please create one new base safety checkpoint commit on a WIP branch so I can restore to this exact current state later, then clean up old local checkpoint/WIP branches and checkpoint tags that are no longer needed.
+
+Before changing anything, inspect and report current branch, HEAD, `git status --short`, stash list, and existing checkpoint/WIP branches/tags. Create the new checkpoint commit first, then only delete older checkpoint branches/tags after confirming the new checkpoint exists and points to the current code. Do not delete `main`, the current active branch, or the new checkpoint branch. Do not run `git clean -fdx`, do not delete ignored/local files, and preserve `.env`, `etc/.env`, `etc/secrets/`, `.venv/`, `node_modules/`, and local config files. Do not modify Render config, do not expose secrets/tokens, and do not push. At the end, report the new branch, new commit hash, what old checkpoints were removed, current branch, HEAD, and final `git status --short`.
+
+
+
+Please restore my code back to checkpoint commit cd92178 on branch wip/leavesphere-safety-checkpoint-20260617-193052. Before changing anything, inspect current branch, HEAD, status, and stash list; preserve .env, etc/secrets, .venv, and node_modules; do not run git clean -fdx; and report the final branch, HEAD, and status.
 -->
