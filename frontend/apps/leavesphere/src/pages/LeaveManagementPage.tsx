@@ -630,7 +630,7 @@ export default function LeaveManagementPage() {
   const canAdmin = hasAppAdminAccess(auth.accessProfile, "leavesphere");
   const pageStateUserKey = asString(auth.user?.id || auth.user?.email);
 
-  const workspaceKey = useMemo(() => {
+  const leaveManagementWorkspaceKey = useMemo(() => {
     const tenant = asString(auth.tenantSlug) || "default";
     return `leavesphere:leave-management:${tenant}:${currentUserId}`;
   }, [auth.tenantSlug, currentUserId]);
@@ -1620,7 +1620,7 @@ export default function LeaveManagementPage() {
     try {
       const result = await loadLeaveManagementWorkspace({
         requestJson,
-        workspaceKey,
+        workspaceKey: leaveManagementWorkspaceKey,
         currentUserId,
         currentUserName,
         timeZone: tenantTimeZone,
@@ -1666,7 +1666,7 @@ export default function LeaveManagementPage() {
     tenantTimeZone,
     recordLoadedRequestMonths,
     workspaceForYear,
-    workspaceKey,
+    leaveManagementWorkspaceKey,
   ]);
 
   const handleLoadByYear = useCallback(async () => {
@@ -1861,7 +1861,7 @@ export default function LeaveManagementPage() {
     try {
       const createdResult = await createLeaveManagementRequest({
         requestJson,
-        workspaceKey,
+        workspaceKey: leaveManagementWorkspaceKey,
         currentUserId,
         currentUserName,
         currentWorkspace: workspaceRef.current,
@@ -1899,7 +1899,7 @@ export default function LeaveManagementPage() {
     pendingCreateRequest,
     requestJson,
     toast,
-    workspaceKey,
+    leaveManagementWorkspaceKey,
   ]);
 
   const handleReviewRequest = useCallback(async (action: LeaveSphereReviewAction) => {
@@ -1910,7 +1910,7 @@ export default function LeaveManagementPage() {
     try {
       const result = await reviewLeaveManagementRequest({
         requestJson,
-        workspaceKey,
+        workspaceKey: leaveManagementWorkspaceKey,
         currentUserId,
         currentUserName,
         currentWorkspace: workspaceRef.current,
@@ -1945,7 +1945,7 @@ export default function LeaveManagementPage() {
     reviewNote,
     selectedRequest,
     toast,
-    workspaceKey,
+    leaveManagementWorkspaceKey,
   ]);
 
   const handleConfirmReviewAction = useCallback(async () => {
@@ -2021,7 +2021,7 @@ export default function LeaveManagementPage() {
     try {
       const result = await adjustLeaveManagementBalance({
         requestJson,
-        workspaceKey,
+        workspaceKey: leaveManagementWorkspaceKey,
         currentUserId,
         currentUserName,
         currentWorkspace: workspaceRef.current,
@@ -2059,7 +2059,7 @@ export default function LeaveManagementPage() {
     isAdjustEditMode,
     adjustSaveNote,
     toast,
-    workspaceKey,
+    leaveManagementWorkspaceKey,
   ]);
 
   const handlePromptAdjustSave = useCallback(() => {
@@ -2080,7 +2080,7 @@ export default function LeaveManagementPage() {
     try {
       const result = await adjustLeaveManagementBalance({
         requestJson,
-        workspaceKey,
+        workspaceKey: leaveManagementWorkspaceKey,
         currentUserId,
         currentUserName,
         currentWorkspace: workspaceRef.current,
@@ -2114,7 +2114,7 @@ export default function LeaveManagementPage() {
     requestJson,
     selectedAdjustRequest,
     toast,
-    workspaceKey,
+    leaveManagementWorkspaceKey,
   ]);
 
   const handleConfirmAdjustAction = useCallback(async () => {
@@ -2197,7 +2197,7 @@ export default function LeaveManagementPage() {
     try {
       const result = await updateLeaveManagementSetupData({
         requestJson,
-        workspaceKey,
+        workspaceKey: leaveManagementWorkspaceKey,
         currentUserId,
         currentUserName,
         currentWorkspace: workspaceRef.current,
@@ -2231,7 +2231,7 @@ export default function LeaveManagementPage() {
     setupForm.title,
     toast,
     workspaceForYear?.currentUserId,
-    workspaceKey,
+    leaveManagementWorkspaceKey,
   ]);
 
   const handleSaveRequestDetail = useCallback(async (params: {
@@ -2251,7 +2251,7 @@ export default function LeaveManagementPage() {
     try {
       const result = await updateLeaveManagementRequest({
         requestJson,
-        workspaceKey,
+        workspaceKey: leaveManagementWorkspaceKey,
         currentUserId,
         currentUserName,
         currentWorkspace: workspaceRef.current,
@@ -2272,7 +2272,7 @@ export default function LeaveManagementPage() {
     } finally {
       setIsMutating(false);
     }
-  }, [applyWorkspace, currentUserId, currentUserName, loadedYear, requestJson, toast, workspaceKey]);
+  }, [applyWorkspace, currentUserId, currentUserName, loadedYear, requestJson, toast, leaveManagementWorkspaceKey]);
   const renderRequestsSection = () => {
     return (
       <SectionCard
