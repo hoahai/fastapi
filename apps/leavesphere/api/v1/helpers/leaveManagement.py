@@ -995,6 +995,7 @@ def load_leave_management_workspace(
     history_start_date: str | None = None,
     history_end_date: str | None = None,
     overlap_month: str | None = None,
+    force_refresh: bool = False,
 ) -> dict:
     selected_year = _normalize_year(year)
     cache_params = {
@@ -1003,14 +1004,15 @@ def load_leave_management_workspace(
         "history_end_date": history_end_date,
         "overlap_month": overlap_month,
     }
-    cached_workspace = _load_cached_workspace_snapshot(
-        request=request,
-        page_code="admin-pto",
-        year=selected_year,
-        params=cache_params,
-    )
-    if isinstance(cached_workspace, dict):
-        return cached_workspace
+    if not force_refresh:
+        cached_workspace = _load_cached_workspace_snapshot(
+            request=request,
+            page_code="admin-pto",
+            year=selected_year,
+            params=cache_params,
+        )
+        if isinstance(cached_workspace, dict):
+            return cached_workspace
 
     workspace = _build_workspace(
         request=request,

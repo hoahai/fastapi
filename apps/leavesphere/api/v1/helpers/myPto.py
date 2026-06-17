@@ -590,11 +590,12 @@ def _build_my_pto_workspace_patch(
     return patch
 
 
-def load_my_pto_workspace(*, request, year: int | None = None) -> dict:
+def load_my_pto_workspace(*, request, year: int | None = None, force_refresh: bool = False) -> dict:
     selected_year = _normalize_year(year)
-    cached_workspace = _load_cached_workspace_snapshot(request=request, year=selected_year)
-    if isinstance(cached_workspace, dict):
-        return cached_workspace
+    if not force_refresh:
+        cached_workspace = _load_cached_workspace_snapshot(request=request, year=selected_year)
+        if isinstance(cached_workspace, dict):
+            return cached_workspace
 
     employee = _resolve_current_employee(request, require_active=False)
     employee_id = _normalize_text(employee.get("id"))

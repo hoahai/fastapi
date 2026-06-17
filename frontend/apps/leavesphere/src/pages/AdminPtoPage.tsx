@@ -1525,6 +1525,7 @@ export default function LeaveSphereAdminPtoPage() {
     year: number,
     policy: CachePolicy = "stale-while-revalidate",
     options: WorkspaceLoadOptions = {},
+    freshData = false,
   ): Promise<boolean> => {
     const requestToken = ++workspaceLoadRequestTokenRef.current;
     const cacheSnapshot = readLeaveSpherePtoWorkspaceCacheSnapshot<LeaveSphereAdminWorkspaceData>({
@@ -1582,7 +1583,7 @@ export default function LeaveSphereAdminPtoPage() {
         currentUserId,
         currentUserName,
         timeZone: tenantTimeZone,
-        freshData: policy !== "network-only",
+        freshData,
         includePending,
         calendarMonth: options.overlapMonth ?? null,
         historyStartDate: options.historyStartDate ?? null,
@@ -1634,10 +1635,12 @@ export default function LeaveSphereAdminPtoPage() {
     }
     const requestedMonthKey = buildMonthKeyForYear(currentMonthKey, parsedYear) || `${parsedYear}-01`;
     setCalendarMonth(requestedMonthKey);
+    const shouldHardRefresh = loadedYear === parsedYear;
     const didLoad = await loadWorkspace(
       parsedYear,
-      loadedYear === parsedYear ? "network-only" : "cache-first",
+      shouldHardRefresh ? "network-only" : "cache-first",
       buildInitialRequestLoadWindow(requestedMonthKey, parsedYear),
+      shouldHardRefresh,
     );
     if (didLoad) {
       applyRecentHistorySearchKeyword("");
@@ -2626,6 +2629,7 @@ export default function LeaveSphereAdminPtoPage() {
                   loadYear,
                   "network-only",
                   buildInitialRequestLoadWindow(requestedMonthKey, loadYear),
+                  true,
                 );
               } finally {
                 setIsChipRefreshOverlayVisible(false);
@@ -2634,8 +2638,8 @@ export default function LeaveSphereAdminPtoPage() {
           }}
           disabled={isInitializing || isRefreshing || isMutating || !isOnline}
           refreshing={isRefreshing || isChipRefreshOverlayVisible}
-          refreshLabel="Refresh Leave Management workspace"
-          tooltipText={isOnline ? "Click to refresh requests, balances, and setup data" : "Offline. Reconnect to refresh Leave Management workspace."}
+          refreshLabel="Hard refresh Leave Management workspace"
+          tooltipText={isOnline ? "Click to hard refresh requests, balances, and setup data" : "Offline. Reconnect to hard refresh Leave Management workspace."}
           containerClassName="w-full"
         />
       ) : null}

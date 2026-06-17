@@ -66,12 +66,16 @@ class MyPtoReviewRequest(_LeaveSphereModel):
 def get_my_pto_load_route(
     request: Request,
     year: int | None = Query(None, ge=1901, le=2155),
+    fresh_data: bool = Query(False, alias="fresh_data"),
 ):
     """
     Load the signed-in user's PTO workspace for the My PTO page.
 
     Example request:
         GET /api/leavesphere/v1/ui/my-pto/load?year=2026
+
+    Example request (hard refresh):
+        GET /api/leavesphere/v1/ui/my-pto/load?year=2026&fresh_data=true
 
     Example response:
         {
@@ -124,9 +128,10 @@ def get_my_pto_load_route(
         - Requires valid API key or bearer token in compat mode
         - Resolves the employee from the signed-in user's login email
         - Returns one year of dashboard data for the My PTO page
+        - `fresh_data=true` bypasses the backend workspace cache and rebuilds the workspace from source data
     """
     try:
-        return load_my_pto_workspace(request=request, year=year)
+        return load_my_pto_workspace(request=request, year=year, force_refresh=fresh_data)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -713,6 +713,9 @@ export async function loadLeaveSphereAdminPtoWorkspace(params: LoadArgs): Promis
   if (params.includePending !== undefined) {
     query.set("include_pending", String(params.includePending));
   }
+  if (params.freshData) {
+    query.set("fresh_data", "true");
+  }
 
   const endpoint = query.toString()
     ? `/api/leavesphere/v1/admin/pto/workspace?${query.toString()}`

@@ -24,6 +24,7 @@ type WorkspaceArgs = {
   requestJson: RequestJson;
   year?: number;
   timeZone?: string | null;
+  freshData?: boolean;
 };
 
 type SubmitArgs = {
@@ -487,8 +488,9 @@ function buildWorkspacePayload(response: unknown): LeaveSpherePtoWorkspaceData |
 
 export async function loadLeaveSpherePtoWorkspace(params: WorkspaceArgs): Promise<LeaveSpherePtoLoadResult> {
   const timeZone = params.timeZone || DEFAULT_TIME_ZONE;
+  const freshDataQuery = params.freshData ? "&fresh_data=true" : "";
   const response = await params.requestJson(
-    `/api/leavesphere/v1/ui/my-pto/load?year=${encodeURIComponent(String(params.year ?? getCurrentYearInTimeZone(timeZone)))}`,
+    `/api/leavesphere/v1/ui/my-pto/load?year=${encodeURIComponent(String(params.year ?? getCurrentYearInTimeZone(timeZone)))}${freshDataQuery}`,
     {
       method: "GET",
       successToast: false,

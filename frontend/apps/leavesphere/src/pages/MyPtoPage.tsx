@@ -1003,7 +1003,11 @@ export default function LeaveSphereMyPtoPage() {
     },
   );
 
-  const loadWorkspace = useCallback(async (year: number, policy: CachePolicy = "stale-while-revalidate"): Promise<boolean> => {
+  const loadWorkspace = useCallback(async (
+    year: number,
+    policy: CachePolicy = "stale-while-revalidate",
+    freshData = false,
+  ): Promise<boolean> => {
     const requestToken = ++workspaceLoadRequestTokenRef.current;
     const cacheSnapshot = readLeaveSpherePtoWorkspaceCacheSnapshot<LeaveSpherePtoWorkspaceData>({
       pageCode: "my-pto",
@@ -1055,6 +1059,7 @@ export default function LeaveSphereMyPtoPage() {
         requestJson,
         year,
         timeZone: tenantTimeZone,
+        freshData,
       });
       if (requestToken !== workspaceLoadRequestTokenRef.current) {
         return false;
@@ -1097,7 +1102,12 @@ export default function LeaveSphereMyPtoPage() {
     }
     const requestedMonthKey = buildMonthKeyForYear(currentMonthKey, parsedYear) || `${parsedYear}-01`;
     setCalendarMonth(requestedMonthKey);
-    const didLoad = await loadWorkspace(parsedYear, loadedYear === parsedYear ? "network-only" : "cache-first");
+    const shouldHardRefresh = loadedYear === parsedYear;
+    const didLoad = await loadWorkspace(
+      parsedYear,
+      shouldHardRefresh ? "network-only" : "cache-first",
+      shouldHardRefresh,
+    );
     if (!didLoad) {
       return;
     }
@@ -1375,14 +1385,14 @@ export default function LeaveSphereMyPtoPage() {
             setIsChipRefreshOverlayVisible(true);
             const requestedMonthKey = buildMonthKeyForYear(currentMonthKey, loadedYearForRequests) || `${loadedYearForRequests}-01`;
             setCalendarMonth(requestedMonthKey);
-            void loadWorkspace(loadedYearForRequests, "network-only").finally(() => {
+            void loadWorkspace(loadedYearForRequests, "network-only", true).finally(() => {
               setIsChipRefreshOverlayVisible(false);
             });
           }}
           disabled={isInitializing || isRefreshing || isSubmitting || isReviewing || !isOnline}
           refreshing={isRefreshing || isChipRefreshOverlayVisible}
-          refreshLabel="Refresh PTO workspace"
-          tooltipText={isOnline ? "Click to refresh PTO balances, requests, and calendar data" : "Offline. Reconnect to refresh PTO workspace."}
+          refreshLabel="Hard refresh PTO workspace"
+          tooltipText={isOnline ? "Click to hard refresh PTO balances, requests, and calendar data" : "Offline. Reconnect to hard refresh PTO workspace."}
           containerClassName="w-full"
         />
       ) : null}
