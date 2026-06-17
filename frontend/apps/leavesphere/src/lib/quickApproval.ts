@@ -7,6 +7,7 @@ export type LeaveSphereQuickApprovalRequestStatus = "pending" | "approved" | "re
 export type LeaveSphereQuickApprovalPreview = {
   requestId: string | null;
   employeeName: string;
+  ptoTypeCode: string | null;
   ptoTypeLabel: string;
   startDate: string;
   endDate: string;
@@ -79,6 +80,34 @@ function asRecord(value: unknown): Record<string, unknown> | null {
     return null;
   }
   return value as Record<string, unknown>;
+}
+
+function normalizeLookupKey(value: string): string {
+  return asString(value).toLowerCase().replace(/[^a-z0-9]+/g, "");
+}
+
+const QUICK_APPROVAL_PTO_TYPE_LABELS: Record<string, string> = {
+  person: "Personal/Birthday",
+  personal: "Personal/Birthday",
+  pto: "Paid Time Off",
+  vacation: "Vacation",
+  sick: "Sick",
+  floating: "Floating Holiday",
+};
+
+function resolveQuickApprovalPtoTypeLabel(rawCode: unknown, rawLabel: unknown): string {
+  const codeKey = normalizeLookupKey(asString(rawCode));
+  if (codeKey && QUICK_APPROVAL_PTO_TYPE_LABELS[codeKey]) {
+    return QUICK_APPROVAL_PTO_TYPE_LABELS[codeKey];
+  }
+
+  const label = asString(rawLabel);
+  const labelKey = normalizeLookupKey(label);
+  if (labelKey && QUICK_APPROVAL_PTO_TYPE_LABELS[labelKey]) {
+    return QUICK_APPROVAL_PTO_TYPE_LABELS[labelKey];
+  }
+
+  return label || asString(rawCode) || "PTO";
 }
 
 function unwrapEnvelope(payload: unknown): Record<string, unknown> | null {
@@ -161,7 +190,8 @@ function parsePreview(candidate: Record<string, unknown> | null): LeaveSphereQui
     return null;
   }
   const employeeName = asString(request.employeeName) || asString(request.employee) || "Employee";
-  const ptoTypeLabel = asString(request.ptoTypeLabel) || asString(request.ptoType) || "PTO";
+  const ptoTypeCode = asString(request.ptoTypeCode) || asString(request.ptoType) || null;
+  const ptoTypeLabel = resolveQuickApprovalPtoTypeLabel(ptoTypeCode, request.ptoTypeLabel);
   const startDate = asString(request.startDate);
   const endDate = asString(request.endDate);
   if (!startDate || !endDate) {
@@ -170,6 +200,7 @@ function parsePreview(candidate: Record<string, unknown> | null): LeaveSphereQui
   return {
     requestId: asString(request.requestId) || asString(request.id) || null,
     employeeName,
+    ptoTypeCode,
     ptoTypeLabel,
     startDate,
     endDate,
@@ -284,7 +315,8 @@ function buildMockPreview(): LeaveSphereQuickApprovalPreview {
   return {
     requestId: "demo-pto-request-1",
     employeeName: "Jordan Rivera",
-    ptoTypeLabel: "Vacation",
+    ptoTypeCode: "PTO",
+    ptoTypeLabel: "Paid Time Off",
     startDate: "2026-06-18",
     endDate: "2026-06-20",
     hoursRequested: 24,

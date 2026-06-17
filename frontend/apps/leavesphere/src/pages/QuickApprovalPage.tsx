@@ -253,7 +253,7 @@ export default function LeaveSphereQuickApprovalPage({ token }: LeaveSphereQuick
               <div className="rounded-xl border border-blue-100/90 bg-blue-50/55 p-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-blue-700/85">PTO type</p>
                 <div className="mt-2">
-                  <LeaveSpherePtoTypeChip type={preview.ptoTypeLabel} label={preview.ptoTypeLabel} />
+                  <LeaveSpherePtoTypeChip type={preview.ptoTypeCode ?? preview.ptoTypeLabel} label={preview.ptoTypeLabel} />
                 </div>
               </div>
               <div className="rounded-xl border border-blue-100/90 bg-blue-50/55 p-4 sm:col-span-2">
