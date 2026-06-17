@@ -10,12 +10,12 @@ import type {
 import { normalizeLeaveSphereTeamRegion } from "@leavesphere/lib/ptoTypes";
 import { normalizeLeaveSpherePtoStatus } from "@leavesphere/lib/ptoStatus";
 import type {
-  LeaveSphereAdminPtoActionCode,
-  LeaveSphereAdminPtoTransaction,
-  LeaveSphereAdminPtoTransactionStatus,
-} from "@leavesphere/lib/adminPtoBalanceLedger";
+  LeaveManagementActionCode,
+  LeaveManagementTransaction,
+  LeaveManagementTransactionStatus,
+} from "@leavesphere/lib/leaveManagementBalanceLedger";
 
-export type LeaveSphereAdminEmployee = {
+export type LeaveManagementEmployee = {
   employeeId: string;
   employeeName: string;
   pictureUrl?: string | null;
@@ -26,28 +26,28 @@ export type LeaveSphereAdminEmployee = {
   active: boolean;
 };
 
-export type LeaveSphereAdminPtoTypeConfig = {
+export type LeaveManagementTypeConfig = {
   code: string;
   type?: string;
   label: string;
   active: boolean;
 };
 
-export type LeaveSphereAdminPtoActionConfig = {
+export type LeaveManagementActionConfig = {
   code: string;
   label: string;
   detail: string;
 };
 
-export type LeaveSphereAdminWorkspaceData = {
+export type LeaveManagementWorkspaceData = {
   currentUserId: string;
   currentUserName: string;
   currentUserEmail: string;
   managerId: string | null;
   currentUserTeamRegion: LeaveSphereTeamRegion;
   isManager: boolean;
-  employees: LeaveSphereAdminEmployee[];
-  balanceTransactions: LeaveSphereAdminPtoTransaction[];
+  employees: LeaveManagementEmployee[];
+  balanceTransactions: LeaveManagementTransaction[];
   employeeBalances: Array<{
     employeeId: string;
     employeeName: string;
@@ -55,25 +55,25 @@ export type LeaveSphereAdminWorkspaceData = {
   }>;
   requests: LeaveSpherePtoRequest[];
   holidays: LeaveSphereHoliday[];
-  ptoTypes: LeaveSphereAdminPtoTypeConfig[];
-  ptoActions: LeaveSphereAdminPtoActionConfig[];
+  ptoTypes: LeaveManagementTypeConfig[];
+  ptoActions: LeaveManagementActionConfig[];
   defaultRequestActionCode?: string;
   defaultCancelActionCode?: string;
 };
 
-export type LeaveSphereAdminWorkspaceDelta = Partial<LeaveSphereAdminWorkspaceData>;
+export type LeaveManagementWorkspaceDelta = Partial<LeaveManagementWorkspaceData>;
 
-export type LeaveSphereAdminLoadResult = {
-  workspace: LeaveSphereAdminWorkspaceData;
+export type LeaveManagementLoadResult = {
+  workspace: LeaveManagementWorkspaceData;
   refreshMessage: string | null;
 };
 
-export type LeaveSphereAdminMutationResult = {
-  workspace: LeaveSphereAdminWorkspaceData;
+export type LeaveManagementMutationResult = {
+  workspace: LeaveManagementWorkspaceData;
   createdRequestId?: string | null;
 };
 
-export type LeaveSphereAdminCreateRequestInput = {
+export type LeaveManagementCreateRequestInput = {
   employeeId: string;
   type: LeaveSpherePtoType;
   startDate: string;
@@ -83,14 +83,14 @@ export type LeaveSphereAdminCreateRequestInput = {
   approveImmediately?: boolean;
 };
 
-export type LeaveSphereAdminReviewRequestInput = {
+export type LeaveManagementReviewRequestInput = {
   requestId: string;
   approve?: boolean;
   action?: "approve" | "reject" | "cancel" | "revert";
   approverNote: string;
 };
 
-export type LeaveSphereAdminUpdateRequestInput = {
+export type LeaveManagementUpdateRequestInput = {
   transactionId: string;
   type: string;
   startDate: string;
@@ -102,18 +102,18 @@ export type LeaveSphereAdminUpdateRequestInput = {
   calendarId?: string | null;
 };
 
-export type LeaveSphereAdminAdjustBalanceInput = {
+export type LeaveManagementAdjustBalanceInput = {
   employeeId: string;
   ptoTypeCode: string;
-  ptoActionCode: LeaveSphereAdminPtoActionCode;
+  ptoActionCode: LeaveManagementActionCode;
   transactionId?: string | null;
   hours: number;
   year: number;
-  status: LeaveSphereAdminPtoTransactionStatus;
+  status: LeaveManagementTransactionStatus;
   approverNote: string;
 };
 
-export type LeaveSphereAdminSetupInput =
+export type LeaveManagementSetupInput =
   | {
       kind: "pto_type";
       code: string;
@@ -152,7 +152,7 @@ type BaseArgs = {
   workspaceKey: string;
   currentUserId: string;
   currentUserName: string;
-  currentWorkspace?: LeaveSphereAdminWorkspaceData | null;
+  currentWorkspace?: LeaveManagementWorkspaceData | null;
   timeZone?: string | null;
 };
 
@@ -165,23 +165,23 @@ type LoadArgs = BaseArgs & {
 };
 
 type CreateRequestArgs = BaseArgs & {
-  payload: LeaveSphereAdminCreateRequestInput;
+  payload: LeaveManagementCreateRequestInput;
 };
 
 type ReviewRequestArgs = BaseArgs & {
-  payload: LeaveSphereAdminReviewRequestInput;
+  payload: LeaveManagementReviewRequestInput;
 };
 
 type UpdateRequestArgs = BaseArgs & {
-  payload: LeaveSphereAdminUpdateRequestInput;
+  payload: LeaveManagementUpdateRequestInput;
 };
 
 type AdjustBalanceArgs = BaseArgs & {
-  payload: LeaveSphereAdminAdjustBalanceInput;
+  payload: LeaveManagementAdjustBalanceInput;
 };
 
 type SetupArgs = BaseArgs & {
-  payload: LeaveSphereAdminSetupInput;
+  payload: LeaveManagementSetupInput;
 };
 
 function asString(value: unknown): string {
@@ -212,7 +212,7 @@ function unwrapEnvelope(payload: unknown): unknown {
   return payload;
 }
 
-function cloneWorkspace(workspace: LeaveSphereAdminWorkspaceData): LeaveSphereAdminWorkspaceData {
+function cloneWorkspace(workspace: LeaveManagementWorkspaceData): LeaveManagementWorkspaceData {
   return {
     ...workspace,
     employees: workspace.employees.map((item) => ({ ...item })),
@@ -233,8 +233,8 @@ function cloneBalanceRows(rows: LeaveSpherePtoBalance[]): LeaveSpherePtoBalance[
 }
 
 function cloneEmployeeBalanceRows(
-  rows: LeaveSphereAdminWorkspaceData["employeeBalances"],
-): LeaveSphereAdminWorkspaceData["employeeBalances"] {
+  rows: LeaveManagementWorkspaceData["employeeBalances"],
+): LeaveManagementWorkspaceData["employeeBalances"] {
   return rows.map((item) => ({
     ...item,
     balances: cloneBalanceRows(item.balances),
@@ -303,15 +303,15 @@ function mergeBalanceRows(
 }
 
 function mergeEmployeeBalanceRows(
-  currentRows: LeaveSphereAdminWorkspaceData["employeeBalances"],
-  incomingRows: LeaveSphereAdminWorkspaceData["employeeBalances"] | undefined | null,
-): LeaveSphereAdminWorkspaceData["employeeBalances"] {
+  currentRows: LeaveManagementWorkspaceData["employeeBalances"],
+  incomingRows: LeaveManagementWorkspaceData["employeeBalances"] | undefined | null,
+): LeaveManagementWorkspaceData["employeeBalances"] {
   if (!Array.isArray(incomingRows)) {
     return cloneEmployeeBalanceRows(currentRows);
   }
 
   const currentByEmployeeId = new Map(currentRows.map((item) => [item.employeeId, item] as const));
-  const incomingByEmployeeId = new Map<string, LeaveSphereAdminWorkspaceData["employeeBalances"][number]>();
+  const incomingByEmployeeId = new Map<string, LeaveManagementWorkspaceData["employeeBalances"][number]>();
   const incomingOrder: string[] = [];
   for (const row of incomingRows) {
     if (!incomingByEmployeeId.has(row.employeeId)) {
@@ -319,7 +319,7 @@ function mergeEmployeeBalanceRows(
       incomingOrder.push(row.employeeId);
     }
   }
-  const merged: LeaveSphereAdminWorkspaceData["employeeBalances"] = [];
+  const merged: LeaveManagementWorkspaceData["employeeBalances"] = [];
 
   for (const currentRow of currentRows) {
     const incomingRow = incomingByEmployeeId.get(currentRow.employeeId);
@@ -354,12 +354,12 @@ function mergeEmployeeBalanceRows(
   return merged;
 }
 
-export function mergeLeaveSphereAdminWorkspace(
-  current: LeaveSphereAdminWorkspaceData | null,
-  incoming: LeaveSphereAdminWorkspaceDelta,
-): LeaveSphereAdminWorkspaceData {
+export function mergeLeaveManagementWorkspace(
+  current: LeaveManagementWorkspaceData | null,
+  incoming: LeaveManagementWorkspaceDelta,
+): LeaveManagementWorkspaceData {
   if (!current) {
-    return cloneWorkspace(incoming as LeaveSphereAdminWorkspaceData);
+    return cloneWorkspace(incoming as LeaveManagementWorkspaceData);
   }
 
   return {
@@ -381,7 +381,7 @@ export function mergeLeaveSphereAdminWorkspace(
   };
 }
 
-function normalizeWorkspaceResponse(payload: unknown): LeaveSphereAdminWorkspaceData | null {
+function normalizeWorkspaceResponse(payload: unknown): LeaveManagementWorkspaceData | null {
   const raw = unwrapEnvelope(payload);
   const workspaceRaw = isRecord(raw) && isRecord(raw.workspace) ? raw.workspace : raw;
   if (!isRecord(workspaceRaw)) {
@@ -417,10 +417,10 @@ function normalizeWorkspaceResponse(payload: unknown): LeaveSphereAdminWorkspace
           id: asString(item.id),
           employeeId: asString(item.employeeId),
           ptoTypeCode: asString(item.ptoTypeCode),
-          ptoActionCode: asString(item.ptoActionCode).toLowerCase() as LeaveSphereAdminPtoActionCode,
+          ptoActionCode: asString(item.ptoActionCode).toLowerCase() as LeaveManagementActionCode,
           hours: asNumber(item.hours),
           year: Math.trunc(asNumber(item.year)),
-          status: (asString(item.status) as LeaveSphereAdminPtoTransactionStatus) || "Approved",
+          status: (asString(item.status) as LeaveManagementTransactionStatus) || "Approved",
           approverNote: asString(item.approverNote) || null,
           createdAt: asString(item.createdAt),
           createdByName: asString(item.createdByName) || null,
@@ -527,14 +527,14 @@ function normalizeWorkspaceResponse(payload: unknown): LeaveSphereAdminWorkspace
   };
 }
 
-function normalizeWorkspaceDelta(payload: unknown): LeaveSphereAdminWorkspaceDelta | null {
+function normalizeWorkspaceDelta(payload: unknown): LeaveManagementWorkspaceDelta | null {
   const raw = unwrapEnvelope(payload);
   const workspaceRaw = isRecord(raw) && isRecord(raw.workspacePatch) ? raw.workspacePatch : null;
   if (!isRecord(workspaceRaw)) {
     return null;
   }
 
-  const patch: LeaveSphereAdminWorkspaceDelta = {};
+  const patch: LeaveManagementWorkspaceDelta = {};
   if ("currentUserId" in workspaceRaw) {
     patch.currentUserId = asString(workspaceRaw.currentUserId);
   }
@@ -581,10 +581,10 @@ function normalizeWorkspaceDelta(payload: unknown): LeaveSphereAdminWorkspaceDel
         id: asString(item.id),
         employeeId: asString(item.employeeId),
         ptoTypeCode: asString(item.ptoTypeCode),
-        ptoActionCode: asString(item.ptoActionCode).toLowerCase() as LeaveSphereAdminPtoActionCode,
+        ptoActionCode: asString(item.ptoActionCode).toLowerCase() as LeaveManagementActionCode,
         hours: asNumber(item.hours),
         year: Math.trunc(asNumber(item.year)),
-        status: (asString(item.status) as LeaveSphereAdminPtoTransactionStatus) || "Approved",
+        status: (asString(item.status) as LeaveManagementTransactionStatus) || "Approved",
         approverNote: asString(item.approverNote) || null,
         createdAt: asString(item.createdAt),
         createdByName: asString(item.createdByName) || null,
@@ -672,14 +672,14 @@ function normalizeWorkspaceDelta(payload: unknown): LeaveSphereAdminWorkspaceDel
 
 function resolveWorkspaceFromMutationResponse(
   response: unknown,
-  currentWorkspace: LeaveSphereAdminWorkspaceData | null | undefined,
-): LeaveSphereAdminWorkspaceData | null {
+  currentWorkspace: LeaveManagementWorkspaceData | null | undefined,
+): LeaveManagementWorkspaceData | null {
   const workspacePatch = normalizeWorkspaceDelta(response);
   if (workspacePatch) {
     if (!currentWorkspace) {
       return null;
     }
-    return mergeLeaveSphereAdminWorkspace(currentWorkspace, workspacePatch);
+    return mergeLeaveManagementWorkspace(currentWorkspace, workspacePatch);
   }
   return normalizeWorkspaceResponse(response);
 }
@@ -699,7 +699,7 @@ function normalizeCreatedRequestId(payload: unknown): string | null {
   return null;
 }
 
-export async function loadLeaveSphereAdminPtoWorkspace(params: LoadArgs): Promise<LeaveSphereAdminLoadResult> {
+export async function loadLeaveManagementWorkspace(params: LoadArgs): Promise<LeaveManagementLoadResult> {
   const query = new URLSearchParams();
   if (params.calendarMonth) {
     query.set("overlap_month", params.calendarMonth);
@@ -735,7 +735,7 @@ export async function loadLeaveSphereAdminPtoWorkspace(params: LoadArgs): Promis
   };
 }
 
-export async function createLeaveSphereAdminPtoRequest(params: CreateRequestArgs): Promise<LeaveSphereAdminMutationResult> {
+export async function createLeaveManagementRequest(params: CreateRequestArgs): Promise<LeaveManagementMutationResult> {
   const response = await params.requestJson("/api/leavesphere/v1/admin/pto/requests", {
     method: "POST",
     body: params.payload,
@@ -752,7 +752,7 @@ export async function createLeaveSphereAdminPtoRequest(params: CreateRequestArgs
   };
 }
 
-export async function updateLeaveSphereAdminPtoRequest(params: UpdateRequestArgs): Promise<LeaveSphereAdminMutationResult> {
+export async function updateLeaveManagementRequest(params: UpdateRequestArgs): Promise<LeaveManagementMutationResult> {
   const response = await params.requestJson("/api/leavesphere/v1/admin/pto/requests", {
     method: "PUT",
     body: params.payload,
@@ -768,7 +768,7 @@ export async function updateLeaveSphereAdminPtoRequest(params: UpdateRequestArgs
   };
 }
 
-export async function reviewLeaveSphereAdminPtoRequest(params: ReviewRequestArgs): Promise<LeaveSphereAdminMutationResult> {
+export async function reviewLeaveManagementRequest(params: ReviewRequestArgs): Promise<LeaveManagementMutationResult> {
   const action = params.payload.action || (params.payload.approve ? "approve" : "reject");
   const response = await params.requestJson("/api/leavesphere/v1/admin/pto/review", {
     method: "POST",
@@ -789,7 +789,7 @@ export async function reviewLeaveSphereAdminPtoRequest(params: ReviewRequestArgs
   };
 }
 
-export async function adjustLeaveSphereAdminPtoBalance(params: AdjustBalanceArgs): Promise<LeaveSphereAdminMutationResult> {
+export async function adjustLeaveManagementBalance(params: AdjustBalanceArgs): Promise<LeaveManagementMutationResult> {
   const response = await params.requestJson("/api/leavesphere/v1/admin/pto/balances/adjust", {
     method: "POST",
     body: params.payload,
@@ -805,7 +805,7 @@ export async function adjustLeaveSphereAdminPtoBalance(params: AdjustBalanceArgs
   };
 }
 
-export async function updateLeaveSphereAdminSetupData(params: SetupArgs): Promise<LeaveSphereAdminMutationResult> {
+export async function updateLeaveManagementSetupData(params: SetupArgs): Promise<LeaveManagementMutationResult> {
   const response = await params.requestJson("/api/leavesphere/v1/admin/pto/setup", {
     method: "POST",
     body: params.payload,

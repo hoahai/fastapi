@@ -1,31 +1,31 @@
 import type { LeaveSpherePtoBalance } from "@leavesphere/lib/ptoTypes";
 
-export type LeaveSphereAdminPtoActionCode = "load_grant" | "adjustment";
-export type LeaveSphereAdminPtoTransactionStatus = "Pending" | "Approved" | "Rejected" | "Canceled";
-export type LeaveSphereAdminAdjustmentDirection = "increase" | "decrease";
+export type LeaveManagementActionCode = "load_grant" | "adjustment";
+export type LeaveManagementTransactionStatus = "Pending" | "Approved" | "Rejected" | "Canceled";
+export type LeaveManagementAdjustmentDirection = "increase" | "decrease";
 
-export type LeaveSphereAdminPtoTransaction = {
+export type LeaveManagementTransaction = {
   id: string;
   employeeId: string;
   ptoTypeCode: string;
-  ptoActionCode: LeaveSphereAdminPtoActionCode;
+  ptoActionCode: LeaveManagementActionCode;
   hours: number;
   year: number;
-  status: LeaveSphereAdminPtoTransactionStatus;
+  status: LeaveManagementTransactionStatus;
   approverNote: string | null;
   createdAt: string;
   createdByName: string | null;
 };
 
-export type LeaveSphereAdminLoadRequest = LeaveSphereAdminPtoTransaction;
+export type LeaveManagementLoadRequest = LeaveManagementTransaction;
 
-export type LeaveSphereAdminEmployeeBalance = {
+export type LeaveManagementEmployeeBalance = {
   employeeId: string;
   employeeName: string;
   balances: LeaveSpherePtoBalance[];
 };
 
-export type LeaveSphereAdminEmployeeBalanceUsageItem = {
+export type LeaveManagementEmployeeBalanceUsageItem = {
   type: string;
   label: string;
   totalHours: number;
@@ -34,10 +34,10 @@ export type LeaveSphereAdminEmployeeBalanceUsageItem = {
   remainingHours?: number;
 };
 
-export type LeaveSphereAdminEmployeeBalanceUsageRow = {
+export type LeaveManagementEmployeeBalanceUsageRow = {
   employeeId: string;
   employeeName: string;
-  balances: LeaveSphereAdminEmployeeBalanceUsageItem[];
+  balances: LeaveManagementEmployeeBalanceUsageItem[];
 };
 
 const PTO_TYPE_LABELS: Record<string, string> = {
@@ -55,9 +55,9 @@ function asFiniteNumber(value: unknown): number {
   return typeof value === "number" && Number.isFinite(value) ? value : 0;
 }
 
-export function buildLeaveSphereAdminBalanceUsageRows(
-  employeeBalances: LeaveSphereAdminEmployeeBalance[],
-): LeaveSphereAdminEmployeeBalanceUsageRow[] {
+export function buildLeaveManagementBalanceUsageRows(
+  employeeBalances: LeaveManagementEmployeeBalance[],
+): LeaveManagementEmployeeBalanceUsageRow[] {
   return employeeBalances.map((row) => ({
     employeeId: row.employeeId,
     employeeName: row.employeeName,
@@ -74,13 +74,13 @@ export function buildLeaveSphereAdminBalanceUsageRows(
   }));
 }
 
-export function seedLeaveSphereAdminBalanceTransactions(params: {
-  employeeBalances: LeaveSphereAdminEmployeeBalance[];
+export function seedLeaveManagementBalanceTransactions(params: {
+  employeeBalances: LeaveManagementEmployeeBalance[];
   years: number[];
   createdAt: string;
   createdByName: string | null;
-}): LeaveSphereAdminPtoTransaction[] {
-  const transactions: LeaveSphereAdminPtoTransaction[] = [];
+}): LeaveManagementTransaction[] {
+  const transactions: LeaveManagementTransaction[] = [];
 
   for (const year of params.years) {
     for (const row of params.employeeBalances) {
@@ -108,11 +108,11 @@ export function seedLeaveSphereAdminBalanceTransactions(params: {
   return transactions;
 }
 
-export function deriveLeaveSphereAdminEmployeeBalances(params: {
-  usageRows: LeaveSphereAdminEmployeeBalanceUsageRow[];
-  transactions: LeaveSphereAdminPtoTransaction[];
+export function deriveLeaveManagementEmployeeBalances(params: {
+  usageRows: LeaveManagementEmployeeBalanceUsageRow[];
+  transactions: LeaveManagementTransaction[];
   year: number;
-}): LeaveSphereAdminEmployeeBalance[] {
+}): LeaveManagementEmployeeBalance[] {
   const grantedHoursByKey = new Map<string, number>();
 
   for (const transaction of params.transactions) {
@@ -171,10 +171,10 @@ export function deriveLeaveSphereAdminEmployeeBalances(params: {
   });
 }
 
-export function resolveLeaveSphereAdminTransactionHours(params: {
-  ptoActionCode: LeaveSphereAdminPtoActionCode;
+export function resolveLeaveManagementTransactionHours(params: {
+  ptoActionCode: LeaveManagementActionCode;
   hours: number;
-  direction?: LeaveSphereAdminAdjustmentDirection;
+  direction?: LeaveManagementAdjustmentDirection;
 }): number {
   const absoluteHours = Math.abs(asFiniteNumber(params.hours));
   if (params.ptoActionCode === "adjustment" && params.direction === "decrease") {
@@ -183,12 +183,12 @@ export function resolveLeaveSphereAdminTransactionHours(params: {
   return absoluteHours;
 }
 
-export function getLeaveSphereAdminLoadRequests(params: {
-  transactions: LeaveSphereAdminPtoTransaction[];
+export function getLeaveManagementLoadRequests(params: {
+  transactions: LeaveManagementTransaction[];
   employeeId: string;
   ptoTypeCode: string;
   year: number;
-}): LeaveSphereAdminLoadRequest[] {
+}): LeaveManagementLoadRequest[] {
   return params.transactions
     .filter((transaction) => (
       transaction.employeeId === params.employeeId

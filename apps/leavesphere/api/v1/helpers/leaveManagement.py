@@ -71,6 +71,9 @@ from apps.leavesphere.api.v1.helpers.workspaceCache import (
 from shared.auth.dependencies import get_auth_principal
 from shared.db import execute_write, run_transaction
 
+LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE = "leave-management"
+LEAVESPHERE_LEAVE_MANAGEMENT_LEGACY_PAGE_CODE = "admin-pto"
+
 
 def _normalize_optional_iso_date(value: object | None) -> str:
     text = _normalize_text(value)
@@ -659,6 +662,16 @@ def _resolve_workspace_cache_user_key(request) -> str:
     return "unknown"
 
 
+def _workspace_page_code_candidates(page_code: str) -> tuple[str, ...]:
+    normalized_page_code = _normalize_text(page_code)
+    if normalized_page_code == LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE:
+        return (
+            LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE,
+            LEAVESPHERE_LEAVE_MANAGEMENT_LEGACY_PAGE_CODE,
+        )
+    return (normalized_page_code or LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE,)
+
+
 def _load_cached_workspace_snapshot(
     *,
     request,
@@ -667,16 +680,17 @@ def _load_cached_workspace_snapshot(
     params: dict[str, object] | None = None,
 ) -> dict | None:
     user_key = _resolve_workspace_cache_user_key(request)
-    snapshot = read_leave_sphere_workspace_cache(
-        page_code=page_code,
-        user_key=user_key,
-        year=year,
-        params=params,
-    )
-    if snapshot and int(snapshot.get("year") or 0) == int(year):
-        workspace = snapshot.get("workspace")
-        if isinstance(workspace, dict):
-            return workspace
+    for candidate_page_code in _workspace_page_code_candidates(page_code):
+        snapshot = read_leave_sphere_workspace_cache(
+            page_code=candidate_page_code,
+            user_key=user_key,
+            year=year,
+            params=params,
+        )
+        if snapshot and int(snapshot.get("year") or 0) == int(year):
+            workspace = snapshot.get("workspace")
+            if isinstance(workspace, dict):
+                return workspace
     return None
 
 
@@ -698,7 +712,7 @@ def _store_cached_workspace_snapshot(
     )
 
 
-def _sort_admin_request_rows(request_rows: list[dict]) -> list[dict]:
+def _sort_leave_management_request_rows(request_rows: list[dict]) -> list[dict]:
     return sorted(
         request_rows,
         key=lambda item: (
@@ -709,7 +723,7 @@ def _sort_admin_request_rows(request_rows: list[dict]) -> list[dict]:
     )
 
 
-def _sort_admin_balance_transaction_rows(transaction_rows: list[dict]) -> list[dict]:
+def _sort_leave_management_balance_transaction_rows(transaction_rows: list[dict]) -> list[dict]:
     return sorted(
         transaction_rows,
         key=lambda item: (
@@ -720,7 +734,7 @@ def _sort_admin_balance_transaction_rows(transaction_rows: list[dict]) -> list[d
     )
 
 
-def _build_admin_pto_type_by_code(workspace: dict) -> dict[str, dict]:
+def _build_leave_management_pto_type_by_code(workspace: dict) -> dict[str, dict]:
     pto_types = workspace.get("ptoTypes") if isinstance(workspace.get("ptoTypes"), list) else []
     return {
         _normalize_text(row.get("code")).upper(): row
@@ -729,7 +743,7 @@ def _build_admin_pto_type_by_code(workspace: dict) -> dict[str, dict]:
     }
 
 
-def _rebuild_admin_workspace_employee_balances(workspace: dict) -> None:
+def _rebuild_leave_management_workspace_employee_balances(workspace: dict) -> None:
     employees = workspace.get("employees") if isinstance(workspace.get("employees"), list) else []
     pto_types = workspace.get("ptoTypes") if isinstance(workspace.get("ptoTypes"), list) else []
     pto_actions = workspace.get("ptoActions") if isinstance(workspace.get("ptoActions"), list) else []
@@ -766,7 +780,7 @@ def _rebuild_admin_workspace_employee_balances(workspace: dict) -> None:
     workspace["balances"] = current_user_balances if isinstance(current_user_balances, list) else []
 
 
-def _upsert_admin_request_row(
+def _upsert_leave_management_request_row(
     *,
     workspace: dict,
     request_row: dict,
@@ -782,10 +796,10 @@ def _upsert_admin_request_row(
         break
     if not updated:
         requests.append(request_row)
-    workspace["requests"] = _sort_admin_request_rows(requests)
+    workspace["requests"] = _sort_leave_management_request_rows(requests)
 
 
-def _replace_admin_request_row(
+def _replace_leave_management_request_row(
     *,
     workspace: dict,
     transaction_id: str,
@@ -797,12 +811,12 @@ def _replace_admin_request_row(
             continue
         next_row = {**row, **updates}
         requests[index] = next_row
-        workspace["requests"] = _sort_admin_request_rows(requests)
+        workspace["requests"] = _sort_leave_management_request_rows(requests)
         return True
     return False
 
 
-def _upsert_admin_balance_transaction_row(
+def _upsert_leave_management_balance_transaction_row(
     *,
     workspace: dict,
     transaction_row: dict,
@@ -818,10 +832,10 @@ def _upsert_admin_balance_transaction_row(
         break
     if not updated:
         rows.append(transaction_row)
-    workspace["balanceTransactions"] = _sort_admin_balance_transaction_rows(rows)
+    workspace["balanceTransactions"] = _sort_leave_management_balance_transaction_rows(rows)
 
 
-def _build_admin_request_row_from_payload(
+def _build_leave_management_request_row_from_payload(
     *,
     workspace: dict,
     request_id: str,
@@ -868,14 +882,19 @@ def _build_admin_request_row_from_payload(
     }
 
 
-def _apply_admin_workspace_mutation_from_cache(
+def _apply_leave_management_workspace_mutation_from_cache(
     *,
     request,
     year: int,
     mutate_workspace,
 ) -> dict | None:
     user_key = _resolve_workspace_cache_user_key(request)
-    latest = read_leave_sphere_workspace_latest_cache(page_code="admin-pto", user_key=user_key)
+    latest = None
+    for candidate_page_code in _workspace_page_code_candidates(LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE):
+        latest = read_leave_sphere_workspace_latest_cache(page_code=candidate_page_code, user_key=user_key)
+        if isinstance(latest, dict) and int(latest.get("year") or 0) == int(year):
+            break
+        latest = None
     if not isinstance(latest, dict) or int(latest.get("year") or 0) != int(year):
         return None
     cached_workspace = latest.get("workspace")
@@ -890,10 +909,10 @@ def _apply_admin_workspace_mutation_from_cache(
     if not mutated:
         return None
 
-    _rebuild_admin_workspace_employee_balances(workspace)
+    _rebuild_leave_management_workspace_employee_balances(workspace)
     write_leave_sphere_workspace_cache_value(
         cache_key=cache_key,
-        page_code="admin-pto",
+        page_code=LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE,
         user_key=user_key,
         year=year,
         workspace=workspace,
@@ -905,7 +924,7 @@ def _copy_workspace_row(row: dict) -> dict:
     return deepcopy(row)
 
 
-def _build_admin_workspace_patch(
+def _build_leave_management_workspace_patch(
     *,
     workspace: dict,
     request_ids: list[str] | None = None,
@@ -1007,7 +1026,7 @@ def load_leave_management_workspace(
     if not force_refresh:
         cached_workspace = _load_cached_workspace_snapshot(
             request=request,
-            page_code="admin-pto",
+            page_code=LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE,
             year=selected_year,
             params=cache_params,
         )
@@ -1025,7 +1044,7 @@ def load_leave_management_workspace(
     )
     _store_cached_workspace_snapshot(
         request=request,
-        page_code="admin-pto",
+        page_code=LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE,
         year=selected_year,
         workspace=workspace,
         params=cache_params,
@@ -1190,13 +1209,13 @@ def create_leave_management_request(*, request, payload: dict) -> dict:
         if not created_request_id:
             raise ValueError("Failed to create PTO request")
 
-    workspace = _apply_admin_workspace_mutation_from_cache(
+    workspace = _apply_leave_management_workspace_mutation_from_cache(
         request=request,
         year=year,
         mutate_workspace=lambda cached_workspace: (
-            _upsert_admin_request_row(
+            _upsert_leave_management_request_row(
                 workspace=cached_workspace,
-                request_row=_build_admin_request_row_from_payload(
+                request_row=_build_leave_management_request_row_from_payload(
                     workspace=cached_workspace,
                     request_id=created_request_id,
                     payload=payload,
@@ -1209,7 +1228,7 @@ def create_leave_management_request(*, request, payload: dict) -> dict:
     )
     workspace_patch = None
     if workspace is not None:
-        workspace_patch = _build_admin_workspace_patch(
+        workspace_patch = _build_leave_management_workspace_patch(
             workspace=workspace,
             request_ids=[created_request_id],
             employee_ids=[employee_id],
@@ -1219,7 +1238,7 @@ def create_leave_management_request(*, request, payload: dict) -> dict:
         workspace = _build_workspace(request=request, year=year)
         _store_cached_workspace_snapshot(
             request=request,
-            page_code="admin-pto",
+            page_code=LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE,
             year=year,
             workspace=workspace,
         )
@@ -1272,16 +1291,16 @@ def update_leave_management_request(*, request, payload: dict) -> dict:
     updated = update_pto_transaction(transaction_id=transaction_id, updates=updates)
     requested_status = _normalize_text(transaction.get("status")).lower()
     year_key = _resolve_workspace_year_from_transaction(transaction)
-    workspace = _apply_admin_workspace_mutation_from_cache(
+    workspace = _apply_leave_management_workspace_mutation_from_cache(
         request=request,
         year=year_key,
         mutate_workspace=lambda cached_workspace: (
-            _replace_admin_request_row(
+            _replace_leave_management_request_row(
                 workspace=cached_workspace,
                 transaction_id=transaction_id,
                 updates={
                     "ptoTypeCode": pto_type_code,
-                    "type": _normalize_text(_build_admin_pto_type_by_code(cached_workspace).get(pto_type_code, {}).get("type"))
+                    "type": _normalize_text(_build_leave_management_pto_type_by_code(cached_workspace).get(pto_type_code, {}).get("type"))
                     or _normalize_text(payload.get("type"))
                     or "vacation",
                     "hours": float(stored_hours),
@@ -1296,7 +1315,7 @@ def update_leave_management_request(*, request, payload: dict) -> dict:
     )
     workspace_patch = None
     if workspace is not None:
-        workspace_patch = _build_admin_workspace_patch(
+        workspace_patch = _build_leave_management_workspace_patch(
             workspace=workspace,
             request_ids=[transaction_id],
             employee_ids=[_normalize_text(transaction.get("employeeId"))],
@@ -1306,7 +1325,7 @@ def update_leave_management_request(*, request, payload: dict) -> dict:
         workspace = _build_workspace(request=request, year=year_key)
         _store_cached_workspace_snapshot(
             request=request,
-            page_code="admin-pto",
+            page_code=LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE,
             year=year_key,
             workspace=workspace,
         )
@@ -1340,14 +1359,14 @@ def review_leave_management_request(*, request, payload: dict) -> dict:
             request=request,
             transaction_id=transaction_id,
             approverNote=approver_note,
-            force_admin_override=True,
+            force_leave_management_override=True,
         )
     elif action == "reject":
         result = reject_request(
             request=request,
             transaction_id=transaction_id,
             approverNote=approver_note,
-            force_admin_override=True,
+            force_leave_management_override=True,
         )
     elif action == "cancel":
         if _normalize_text(transaction.get("status")).lower() not in {"pending", "approved", "rejected"}:
@@ -1381,11 +1400,11 @@ def review_leave_management_request(*, request, payload: dict) -> dict:
     else:
         raise ValueError("action must be approve, reject, cancel, or revert")
 
-    workspace = _apply_admin_workspace_mutation_from_cache(
+    workspace = _apply_leave_management_workspace_mutation_from_cache(
         request=request,
         year=_resolve_workspace_year_from_transaction(transaction),
         mutate_workspace=lambda cached_workspace: (
-            _replace_admin_request_row(
+            _replace_leave_management_request_row(
                 workspace=cached_workspace,
                 transaction_id=transaction_id,
                 updates={
@@ -1400,7 +1419,7 @@ def review_leave_management_request(*, request, payload: dict) -> dict:
     )
     workspace_patch = None
     if workspace is not None:
-        workspace_patch = _build_admin_workspace_patch(
+        workspace_patch = _build_leave_management_workspace_patch(
             workspace=workspace,
             request_ids=[transaction_id],
             employee_ids=[_normalize_text(transaction.get("employeeId"))],
@@ -1410,7 +1429,7 @@ def review_leave_management_request(*, request, payload: dict) -> dict:
         workspace = _build_workspace(request=request, year=_resolve_workspace_year_from_transaction(transaction))
         _store_cached_workspace_snapshot(
             request=request,
-            page_code="admin-pto",
+            page_code=LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE,
             year=_resolve_workspace_year_from_transaction(transaction),
             workspace=workspace,
         )
@@ -1493,11 +1512,11 @@ def adjust_leave_management_balance(*, request, payload: dict) -> dict:
         updated = created_adjustment.get("inserted")
         transaction_id = str(created_adjustment.get("id") or generated_transaction_id or transaction_id or "").strip()
 
-    workspace = _apply_admin_workspace_mutation_from_cache(
+    workspace = _apply_leave_management_workspace_mutation_from_cache(
         request=request,
         year=year,
         mutate_workspace=lambda cached_workspace: (
-            _upsert_admin_balance_transaction_row(
+            _upsert_leave_management_balance_transaction_row(
                 workspace=cached_workspace,
                 transaction_row={
                     "id": transaction_id or f"adjustment-{year}-{employee_id}-{pto_type_code}-{hours}",
@@ -1517,7 +1536,7 @@ def adjust_leave_management_balance(*, request, payload: dict) -> dict:
     )
     workspace_patch = None
     if workspace is not None:
-        workspace_patch = _build_admin_workspace_patch(
+        workspace_patch = _build_leave_management_workspace_patch(
             workspace=workspace,
             balance_transaction_ids=[transaction_id],
             employee_ids=[employee_id],
@@ -1527,7 +1546,7 @@ def adjust_leave_management_balance(*, request, payload: dict) -> dict:
         workspace = _build_workspace(request=request, year=year)
         _store_cached_workspace_snapshot(
             request=request,
-            page_code="admin-pto",
+            page_code=LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE,
             year=year,
             workspace=workspace,
         )
@@ -1701,13 +1720,14 @@ def update_leave_management_setup_data(*, request, payload: dict) -> dict:
 
     clear_leave_sphere_pto_workspace_catalog_cache()
     clear_leave_sphere_read_cache()
-    clear_leave_sphere_workspace_cache_by_page(page_code="admin-pto")
+    clear_leave_sphere_workspace_cache_by_page(page_code=LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE)
+    clear_leave_sphere_workspace_cache_by_page(page_code=LEAVESPHERE_LEAVE_MANAGEMENT_LEGACY_PAGE_CODE)
     clear_leave_sphere_workspace_cache_by_page(page_code="my-pto")
 
     workspace = _build_workspace(request=request, year=current_year)
     _store_cached_workspace_snapshot(
         request=request,
-        page_code="admin-pto",
+        page_code=LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE,
         year=current_year,
         workspace=workspace,
     )
@@ -1715,7 +1735,7 @@ def update_leave_management_setup_data(*, request, payload: dict) -> dict:
         "source": "network",
     }
     if workspace_patch_kwargs:
-        response["workspacePatch"] = _build_admin_workspace_patch(workspace=workspace, **workspace_patch_kwargs)
+        response["workspacePatch"] = _build_leave_management_workspace_patch(workspace=workspace, **workspace_patch_kwargs)
     else:
         response["workspace"] = workspace
     return response

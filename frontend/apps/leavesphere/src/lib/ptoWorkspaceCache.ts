@@ -4,9 +4,14 @@ import { readBrowserCacheSnapshot, removeBrowserCache, writeBrowserCache } from 
 
 export const LEAVESPHERE_PTO_WORKSPACE_CACHE_TTL_MS = CACHE_TIME.WEEK;
 const LEAVESPHERE_PTO_WORKSPACE_CACHE_VERSION = "v2";
+export const LEAVESPHERE_MY_PTO_PAGE_CODE = "my-pto";
+export const LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE = "leave-management";
+export const LEAVESPHERE_LEAVE_MANAGEMENT_LEGACY_PAGE_CODE = "admin-pto";
 
 export type LeaveSpherePtoWorkspaceCacheContext = {
-  pageCode: "my-pto" | "admin-pto";
+  pageCode: typeof LEAVESPHERE_MY_PTO_PAGE_CODE
+    | typeof LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE
+    | typeof LEAVESPHERE_LEAVE_MANAGEMENT_LEGACY_PAGE_CODE;
   tenantSlug: string;
   userId: string;
   year: number;
