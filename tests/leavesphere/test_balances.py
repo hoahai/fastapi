@@ -66,6 +66,7 @@ class LeaveSphereBalancesTests(unittest.TestCase):
         self.assertEqual(inserted_item["status"], "Approved")
         self.assertEqual(inserted_item["ptoTypeCode"], "VAC")
         self.assertEqual(inserted_item["ptoActionCode"], "LOAD")
+        self.assertEqual(inserted_item["description"], "manual correction")
 
     def test_adjustment_rejects_zero_hours(self):
         payload = {
@@ -110,6 +111,7 @@ class LeaveSphereBalancesTests(unittest.TestCase):
         self.assertEqual(item["status"], "Pending")
         self.assertEqual(item["ptoTypeCode"], "VAC")
         self.assertEqual(item["ptoActionCode"], "REQUEST")
+        self.assertIsNone(item["description"])
         self.assertEqual(str(call_kwargs["requested_hours"]), "8.00")
 
     def test_request_transaction_insert_uses_matching_placeholders(self):
@@ -135,7 +137,7 @@ class LeaveSphereBalancesTests(unittest.TestCase):
 
             def fetchall(self):
                 if "FROM" in self._last_query and "pto_transactions" in self._last_query:
-                    return [("8.00", "Approved")]
+                    return [("LOAD", "8.00", "Approved")]
                 return []
 
         fake_cursor = FakeCursor()
@@ -165,6 +167,67 @@ class LeaveSphereBalancesTests(unittest.TestCase):
             side_effect=_run_transaction,
         ):
             inserted = dbQueries.create_pto_request_transaction(item=item, requested_hours=Decimal("8.00"))
+
+        self.assertEqual(inserted, 1)
+        insert_query, insert_params = fake_cursor.executions[-1]
+        self.assertEqual(insert_query.count("%s"), len(insert_params))
+        self.assertEqual(len(insert_params), 13)
+
+    def test_adjustment_transaction_insert_uses_matching_placeholders(self):
+        class FakeCursor:
+            def __init__(self):
+                self.executions = []
+                self.rowcount = 0
+
+            def execute(self, query, params=()):
+                if query.count("%s") != len(params):
+                    raise AssertionError(
+                        f"placeholder mismatch: query has {query.count('%s')} placeholders but {len(params)} params"
+                    )
+                self.executions.append((query, params))
+                self.rowcount = 1
+                return None
+
+            def fetchone(self):
+                return ("emp-1",)
+
+            def fetchall(self):
+                return [("LOAD", Decimal("8.00"), "Approved")]
+
+        fake_cursor = FakeCursor()
+
+        def _run_transaction(work):
+            return work(fake_cursor)
+
+        item = {
+            "id": "pto-1",
+            "employeeId": "emp-1",
+            "ptoTypeCode": "VAC",
+            "ptoActionCode": "LOAD",
+            "hours": Decimal("-4.50"),
+            "year": 2026,
+            "startDate": None,
+            "endDate": None,
+            "status": "Approved",
+            "description": "manual correction",
+            "approverNote": None,
+            "approverId": None,
+            "calendarId": None,
+        }
+
+        def _execute_write(query, params=None):
+            def _work(cursor):
+                cursor.execute(query, params)
+                return cursor.rowcount
+
+            return _run_transaction(_work)
+
+        with patch.object(dbQueries, "get_db_tables", return_value={"EMPLOYEES": "employees", "PTOTRANSACTIONS": "pto_transactions"}), patch.object(
+            dbQueries,
+            "execute_write",
+            side_effect=_execute_write,
+        ):
+            inserted = dbQueries.insert_pto_transaction(item)
 
         self.assertEqual(inserted, 1)
         insert_query, insert_params = fake_cursor.executions[-1]

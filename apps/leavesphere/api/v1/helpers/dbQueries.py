@@ -352,7 +352,7 @@ def insert_pto_transaction(item: dict) -> int:
         f"INSERT INTO {tables['PTOTRANSACTIONS']} ("
         "id, employeeId, ptoTypeCode, ptoActionCode, hours, year, startDate, endDate, "
         "status, description, approverNote, approverId, calendarId"
-        ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+        ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
     )
     params = (
         item["id"],

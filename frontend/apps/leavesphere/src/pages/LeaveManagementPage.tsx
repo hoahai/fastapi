@@ -22,8 +22,6 @@ import { AppDropdown } from "@tradsphere/components/ui/app-dropdown";
 import { Input } from "@tradsphere/components/ui/input";
 import { Textarea } from "@tradsphere/components/ui/textarea";
 import { ConfirmDialog } from "@tradsphere/components/ui/confirm-dialog";
-import { canModalClose, shouldBlockOutsideClose } from "@tradsphere/components/ui/modal-close-guard";
-import { UnsavedChangesDialog } from "@tradsphere/components/ui/unsaved-changes-dialog";
 import { useToast } from "@shell/components/ui/toast";
 import { hasAppAdminAccess } from "@shared/auth/permissions";
 import { useAuth } from "@shared/auth/useAuth";
@@ -51,6 +49,11 @@ import { LeaveSpherePtoEmployeeHeader } from "@leavesphere/components/LeaveSpher
 import { LeaveSpherePtoRequestList } from "@leavesphere/components/LeaveSpherePtoRequestList";
 import { LeaveSphereMonthCalendar, type LeaveSphereMonthCalendarEvent } from "@leavesphere/components/MonthCalendar";
 import { LeaveSpherePtoRequestDetailModal, type LeaveSpherePtoRequestFormState } from "@leavesphere/components/PtoRequestDetailModal";
+import {
+  LeaveSpherePtoLoadHoursModal,
+  type LeaveSpherePtoLoadHoursFormState,
+  type LeaveSpherePtoLoadHoursSubmitParams,
+} from "@leavesphere/components/PtoLoadHoursModal";
 import {
   buildLeaveSpherePtoEmployeeLookup,
   resolveLeaveSpherePtoEmployeeDisplay,
@@ -80,7 +83,6 @@ import {
 } from "@leavesphere/lib/leaveManagementApi";
 import {
   type LeaveManagementLoadRequest,
-  type LeaveManagementActionCode,
 } from "@leavesphere/lib/leaveManagementBalanceLedger";
 import { calculateLeaveSpherePtoHours } from "@leavesphere/lib/ptoHours";
 import { buildLeaveSphereHolidayDateSet } from "@leavesphere/lib/ptoHolidayScopes";
@@ -146,15 +148,6 @@ type PendingCreateRequest = {
   };
 };
 
-type AdjustBalanceForm = {
-  employeeId: string;
-  ptoTypeCode: LeaveSpherePtoType;
-  ptoActionCode: LeaveManagementActionCode;
-  transactionId: string;
-  hours: string;
-  approverNote: string;
-};
-
 type LegacyAdjustBalanceForm = {
   employeeId: string;
   type: LeaveSpherePtoType;
@@ -196,7 +189,7 @@ type PersistedLeaveManagementPageState = {
   isCreateModalOpen: boolean;
   createForm: CreateRequestForm;
   isAdjustModalOpen: boolean;
-  adjustForm: AdjustBalanceForm;
+  adjustForm: LeaveSpherePtoLoadHoursFormState;
   isSetupModalOpen: boolean;
   setupForm: SetupForm;
   recentHistorySearch?: string;
@@ -226,13 +219,13 @@ const EMPTY_CREATE_FORM: CreateRequestForm = {
   description: "",
 };
 
-const EMPTY_ADJUST_FORM: AdjustBalanceForm = {
+const EMPTY_ADJUST_FORM: LeaveSpherePtoLoadHoursFormState = {
   employeeId: "",
   ptoTypeCode: "vacation",
   ptoActionCode: "load_grant",
   transactionId: "",
   hours: "",
-  approverNote: "",
+  description: "",
 };
 
 const EMPTY_SETUP_FORM: SetupForm = {
@@ -307,21 +300,6 @@ function formatHoursLabel(hours: number): string {
     return "0h";
   }
   return Number.isInteger(hours) ? `${hours}h` : `${hours.toFixed(1)}h`;
-}
-
-function normalizeOptionalNote(value: string | null | undefined): string {
-  return asString(value);
-}
-
-function adjustFormsEqual(left: AdjustBalanceForm, right: AdjustBalanceForm): boolean {
-  return (
-    left.employeeId === right.employeeId
-    && left.ptoTypeCode === right.ptoTypeCode
-    && left.ptoActionCode === right.ptoActionCode
-    && left.transactionId === right.transactionId
-    && Number(left.hours) === Number(right.hours)
-    && normalizeOptionalNote(left.approverNote) === normalizeOptionalNote(right.approverNote)
-  );
 }
 
 function requestTypeLabel(type: string, lookup: Map<string, PtoTypeMeta> | null | undefined): string {
@@ -541,7 +519,7 @@ function isCreateRequestForm(value: unknown): value is CreateRequestForm {
   );
 }
 
-function isAdjustBalanceForm(value: unknown): value is AdjustBalanceForm {
+function isAdjustBalanceForm(value: unknown): value is LeaveSpherePtoLoadHoursFormState {
   if (!value || typeof value !== "object") {
     return false;
   }
@@ -552,7 +530,7 @@ function isAdjustBalanceForm(value: unknown): value is AdjustBalanceForm {
     && (record.ptoActionCode === "load_grant" || record.ptoActionCode === "adjustment")
     && (typeof record.transactionId === "string" || record.transactionId === undefined)
     && typeof record.hours === "string"
-    && typeof record.approverNote === "string"
+    && (typeof record.description === "string" || record.description === undefined)
   );
 }
 
@@ -570,9 +548,12 @@ function isLegacyAdjustBalanceForm(value: unknown): value is LegacyAdjustBalance
   );
 }
 
-function normalizePersistedAdjustBalanceForm(value: unknown): AdjustBalanceForm {
+function normalizePersistedAdjustBalanceForm(value: unknown): LeaveSpherePtoLoadHoursFormState {
   if (isAdjustBalanceForm(value)) {
-    return value;
+    return {
+      ...value,
+      description: asString(value.description),
+    };
   }
   if (isLegacyAdjustBalanceForm(value)) {
     return {
@@ -581,10 +562,10 @@ function normalizePersistedAdjustBalanceForm(value: unknown): AdjustBalanceForm 
       ptoActionCode: value.mode === "set" ? "load_grant" : "adjustment",
       transactionId: "",
       hours: value.hours,
-      approverNote: value.approverNote,
+      description: "",
     };
   }
-  return EMPTY_ADJUST_FORM;
+  return { ...EMPTY_ADJUST_FORM };
 }
 
 function isSetupForm(value: unknown): value is SetupForm {
@@ -722,20 +703,15 @@ export default function LeaveManagementPage() {
   const [pendingReviewAction, setPendingReviewAction] = useState<LeaveSphereReviewAction | null>(null);
 
   const [isAdjustModalOpen, setIsAdjustModalOpen] = useState(false);
-  const [adjustForm, setAdjustForm] = useState<AdjustBalanceForm>(EMPTY_ADJUST_FORM);
-  const [adjustError, setAdjustError] = useState<string | null>(null);
-  const [adjustBaselineForm, setAdjustBaselineForm] = useState<AdjustBalanceForm>(EMPTY_ADJUST_FORM);
-  const [isAdjustSaveDialogOpen, setIsAdjustSaveDialogOpen] = useState(false);
-  const [adjustSaveNote, setAdjustSaveNote] = useState("");
+  const [adjustForm, setAdjustForm] = useState<LeaveSpherePtoLoadHoursFormState>(EMPTY_ADJUST_FORM);
+  const [adjustModalRequest, setAdjustModalRequest] = useState<LeaveManagementLoadRequest | null>(null);
   const [adjustCancelNote, setAdjustCancelNote] = useState("");
-  const [isAdjustEditMode, setIsAdjustEditMode] = useState(false);
   const [isAdjustRequestPickerOpen, setIsAdjustRequestPickerOpen] = useState(false);
   const [adjustRequestPickerTarget, setAdjustRequestPickerTarget] = useState<{
     employeeId: string;
     ptoTypeCode: LeaveSpherePtoType;
   } | null>(null);
   const [pendingAdjustAction, setPendingAdjustAction] = useState<"cancel" | null>(null);
-  const [isAdjustDiscardDialogOpen, setIsAdjustDiscardDialogOpen] = useState(false);
 
   const [isSetupModalOpen, setIsSetupModalOpen] = useState(false);
   const [setupForm, setSetupForm] = useState<SetupForm>(EMPTY_SETUP_FORM);
@@ -750,7 +726,6 @@ export default function LeaveManagementPage() {
   const hydratedPageStateScopeRef = useRef<string | null>(null);
   const restoredScrollScopeRef = useRef<string | null>(null);
   const restoredWorkspaceScopeRef = useRef<string | null>(null);
-  const adjustWasOpenRef = useRef(false);
   const workspaceLoadRequestTokenRef = useRef(0);
   const workspaceRef = useRef<LeaveManagementWorkspaceData | null>(null);
   const loadedYearRef = useRef<number | null>(null);
@@ -816,7 +791,8 @@ export default function LeaveManagementPage() {
       setIsCreateModalOpen(persisted.isCreateModalOpen);
       setCreateForm(persisted.createForm);
       setIsAdjustModalOpen(persisted.isAdjustModalOpen);
-      setAdjustForm(normalizePersistedAdjustBalanceForm(persisted.adjustForm));
+      const restoredAdjustForm = normalizePersistedAdjustBalanceForm(persisted.adjustForm);
+      setAdjustForm(restoredAdjustForm);
       setIsSetupModalOpen(persisted.isSetupModalOpen);
       setSetupForm({
         ...persisted.setupForm,
@@ -856,6 +832,11 @@ export default function LeaveManagementPage() {
             source: cacheSnapshot.source,
             fetchedAt: cacheSnapshot.fetchedAt ?? Date.now(),
           });
+          setAdjustModalRequest(
+            persisted.isAdjustModalOpen && restoredAdjustForm.transactionId
+              ? (cacheSnapshot.data.balanceTransactions.find((item) => item.id === restoredAdjustForm.transactionId) || null)
+              : null,
+          );
           if (!currentCacheSnapshot && legacyCacheSnapshot?.data) {
             syncLeaveSpherePtoWorkspaceCache(
               {
@@ -875,11 +856,13 @@ export default function LeaveManagementPage() {
           setLoadedYear(null);
           setWorkspace(null);
           setCacheStatus(null);
+          setAdjustModalRequest(null);
         }
       } else {
         setLoadedYear(null);
         setWorkspace(null);
         setCacheStatus(null);
+        setAdjustModalRequest(null);
       }
     }
     setHasHydratedPageState(true);
@@ -1311,98 +1294,34 @@ export default function LeaveManagementPage() {
     }
     return loadRequestsByBalanceKey.get(`${employeeId}::${ptoTypeCode}`) || [];
   }, [loadRequestsByBalanceKey]);
-  const openAdjustRequestEditor = useCallback((request: { id: string; employeeId: string; ptoTypeCode: LeaveSpherePtoType; hours: number; approverNote?: string | null }) => {
+  const openAdjustRequestEditor = useCallback((request: LeaveManagementLoadRequest) => {
     setAdjustRequestPickerTarget(null);
     setIsAdjustRequestPickerOpen(false);
-    setAdjustError(null);
     setPendingAdjustAction(null);
-    setIsAdjustSaveDialogOpen(false);
-    setIsAdjustEditMode(true);
-    const resolvedPtoTypeMeta = resolveBalanceTypeMeta(asString(request.ptoTypeCode));
-    const nextForm = {
+    setAdjustModalRequest(request);
+    setAdjustForm({
       ...EMPTY_ADJUST_FORM,
       employeeId: request.employeeId,
-      ptoTypeCode: resolvedPtoTypeMeta.code || asString(request.ptoTypeCode),
+      ptoTypeCode: request.ptoTypeCode as LeaveSpherePtoType,
+      ptoActionCode: request.ptoActionCode,
       transactionId: request.id,
       hours: String(request.hours),
-      approverNote: asString(request.approverNote),
-    };
-    setAdjustForm(nextForm);
-    setAdjustBaselineForm(nextForm);
-    setAdjustSaveNote(asString(request.approverNote));
+      description: asString(request.description),
+    });
     setIsAdjustModalOpen(true);
   }, []);
   const openAdjustRequestPicker = useCallback((employeeId: string, ptoTypeCode: LeaveSpherePtoType) => {
-    setAdjustError(null);
     setPendingAdjustAction(null);
-    setIsAdjustSaveDialogOpen(false);
     setAdjustRequestPickerTarget({ employeeId, ptoTypeCode });
-    setIsAdjustEditMode(true);
     setIsAdjustModalOpen(false);
     setIsAdjustRequestPickerOpen(true);
   }, []);
-  const selectedAdjustRequestList = useMemo(() => {
-    return resolveAdjustLoadRequests(adjustForm.employeeId, adjustForm.ptoTypeCode);
-  }, [adjustForm.employeeId, adjustForm.ptoTypeCode, resolveAdjustLoadRequests]);
-  const selectedAdjustRequest = useMemo(() => {
-    if (!isAdjustEditMode) {
-      return null;
-    }
-    return selectedAdjustRequestList.find((item) => item.id === adjustForm.transactionId) || selectedAdjustRequestList[0] || null;
-  }, [adjustForm.transactionId, isAdjustEditMode, selectedAdjustRequestList]);
   const adjustRequestPickerRequests = useMemo(() => {
     if (!adjustRequestPickerTarget) {
       return [];
     }
     return resolveAdjustLoadRequests(adjustRequestPickerTarget.employeeId, adjustRequestPickerTarget.ptoTypeCode);
   }, [adjustRequestPickerTarget, resolveAdjustLoadRequests]);
-  const hasAdjustFormChanges = useMemo(
-    () => !adjustFormsEqual(adjustForm, adjustBaselineForm),
-    [adjustBaselineForm, adjustForm],
-  );
-  const isAdjustFormValid = useMemo(
-    () => {
-      const hoursText = asString(adjustForm.hours);
-      const hoursValue = hoursText === "" ? null : Number(hoursText);
-      return Boolean(
-        Number.isInteger(loadedYear)
-        && asString(adjustForm.employeeId)
-        && hoursValue !== null
-        && Number.isFinite(hoursValue)
-        && hoursValue >= 0
-        && (!isAdjustEditMode || Boolean(adjustForm.transactionId))
-      );
-    },
-    [adjustForm.employeeId, adjustForm.hours, adjustForm.transactionId, isAdjustEditMode, loadedYear],
-  );
-  const canSubmitAdjustForm = useMemo(
-    () => hasAdjustFormChanges && isAdjustFormValid,
-    [hasAdjustFormChanges, isAdjustFormValid],
-  );
-  const shouldShowAdjustSubmitButton = useMemo(
-    () => Boolean(canSubmitAdjustForm || isMutating),
-    [canSubmitAdjustForm, isMutating],
-  );
-  const shouldShowAdjustCancelButton = useMemo(
-    () => Boolean(isAdjustEditMode && selectedAdjustRequest),
-    [isAdjustEditMode, selectedAdjustRequest],
-  );
-  const adjustDialogTitle = useMemo(
-    () => (isAdjustEditMode ? "Loaded PTO Hours Detail" : "Load PTO Hours"),
-    [isAdjustEditMode],
-  );
-  const adjustSubmitLabel = useMemo(
-    () => (isAdjustEditMode ? "Save changes" : "Load Hours"),
-    [isAdjustEditMode],
-  );
-  const adjustSaveConfirmCopy = useMemo(() => ({
-    title: isAdjustEditMode ? "Save PTO Hours?" : "Load PTO Hours?",
-    description: isAdjustEditMode
-      ? "This will update the approved PTO load request and apply the note or reason below."
-      : "This will create the approved PTO load request and apply the note or reason below.",
-    confirmLabel: isAdjustEditMode ? "Save changes" : "Load Hours",
-    noteHelpText: "Optional. Add a note or reason for this PTO hour change.",
-  }), [isAdjustEditMode]);
   const adjustCancelConfirmCopy = useMemo(() => ({
     title: "Cancel Load Request?",
     description: "This will cancel the selected approved PTO load request and remove it from the balance.",
@@ -1779,34 +1698,6 @@ export default function LeaveManagementPage() {
     }));
   }, [employeeOptions, getEmployeePtoTypeOptions, isCreateModalOpen]);
 
-  useEffect(() => {
-    if (!isAdjustModalOpen || isAdjustEditMode) {
-      return;
-    }
-    setAdjustForm((current) => ({
-      ...current,
-      employeeId: current.employeeId || employeeOptions[0]?.value || "",
-      ptoTypeCode: (() => {
-        const nextEmployeeId = current.employeeId || employeeOptions[0]?.value || "";
-        const nextTypeOptions = getEmployeePtoTypeOptions(nextEmployeeId);
-        return nextTypeOptions.some((item) => item.value === current.ptoTypeCode)
-          ? current.ptoTypeCode
-          : (nextTypeOptions[0]?.value || "");
-      })(),
-    }));
-  }, [employeeOptions, getEmployeePtoTypeOptions, isAdjustEditMode, isAdjustModalOpen]);
-
-  useEffect(() => {
-    const didJustOpen = isAdjustModalOpen && !adjustWasOpenRef.current;
-    adjustWasOpenRef.current = isAdjustModalOpen;
-    if (!didJustOpen) {
-      return;
-    }
-    setAdjustError(null);
-    setIsAdjustDiscardDialogOpen(false);
-    setAdjustBaselineForm({ ...adjustForm });
-  }, [adjustForm, isAdjustModalOpen]);
-
   const applyWorkspace = useCallback((next: LeaveManagementWorkspaceData) => {
     const effectiveYear = loadedYear ?? (Number.isInteger(selectedYearNumber) ? selectedYearNumber : currentYear);
     const merged = mergeLeaveManagementWorkspace(workspaceRef.current, next);
@@ -1839,16 +1730,13 @@ export default function LeaveManagementPage() {
       ptoTypeCode,
       transactionId: nextTransactionId,
       hours: nextHours === undefined ? "" : String(nextHours),
+      description: isEditMode ? asString(selectedRequest?.description) : "",
     };
 
-    setAdjustError(null);
     setPendingAdjustAction(null);
-    setIsAdjustSaveDialogOpen(false);
-    setIsAdjustEditMode(isEditMode);
     setAdjustRequestPickerTarget(null);
+    setAdjustModalRequest(isEditMode ? (selectedRequest || null) : null);
     setAdjustForm(nextForm);
-    setAdjustBaselineForm(nextForm);
-    setAdjustSaveNote("");
     setIsAdjustModalOpen(true);
   }, [employeeOptions, getEmployeePtoTypeOptions, resolveAdjustLoadRequests]);
 
@@ -1985,66 +1873,27 @@ export default function LeaveManagementPage() {
     await handleReviewRequest(action);
   }, [handleReviewRequest, pendingReviewAction]);
 
-  const closeAdjustModal = useCallback((discardChanges = false) => {
-    if (discardChanges) {
-      setAdjustForm(adjustBaselineForm);
-    }
-    setAdjustError(null);
+  const closeAdjustModal = useCallback(() => {
     setPendingAdjustAction(null);
-    setIsAdjustSaveDialogOpen(false);
-    setAdjustSaveNote("");
     setAdjustCancelNote("");
-    setIsAdjustEditMode(false);
     setIsAdjustRequestPickerOpen(false);
     setAdjustRequestPickerTarget(null);
+    setAdjustModalRequest(null);
+    setAdjustForm(EMPTY_ADJUST_FORM);
     setIsAdjustModalOpen(false);
-  }, [adjustBaselineForm]);
+  }, []);
 
   const handleAdjustModalOpenChange = useCallback((nextOpen: boolean) => {
-    const allowClose = canModalClose({
-      nextOpen,
-      isBusy: isMutating,
-      hasUnsavedChanges: hasAdjustFormChanges,
-    });
-    if (!allowClose) {
-      if (!nextOpen && hasAdjustFormChanges && !isMutating) {
-        setIsAdjustDiscardDialogOpen(true);
-      }
-      return;
-    }
-    if (!nextOpen) {
-      closeAdjustModal(false);
-      return;
-    }
-    setIsAdjustModalOpen(true);
-  }, [closeAdjustModal, hasAdjustFormChanges, isMutating]);
+    setIsAdjustModalOpen(nextOpen);
+  }, []);
 
-  const handleAdjustBalance = useCallback(async () => {
-    if (!asString(adjustForm.employeeId)) {
-      setAdjustError("Employee is required.");
-      return;
-    }
-    const hoursText = asString(adjustForm.hours);
-    if (hoursText === "") {
-      setAdjustError("Hours are required.");
-      return;
-    }
-    const hoursValue = Number(hoursText);
-    if (!Number.isFinite(hoursValue) || hoursValue < 0) {
-      setAdjustError("Hours must be zero or greater.");
-      return;
-    }
-    if (isAdjustEditMode && !selectedAdjustRequest) {
-      setAdjustError("Select a load request to adjust.");
-      return;
-    }
+  const handleAdjustBalance = useCallback(async ({
+    requestId,
+    payload,
+  }: LeaveSpherePtoLoadHoursSubmitParams) => {
     if (!Number.isInteger(loadedYear)) {
-      setAdjustError("Load a year before recording PTO hours.");
-      return;
+      return false;
     }
-
-    const transactionYear = Number(loadedYear);
-    setAdjustError(null);
     setIsMutating(true);
     try {
       const result = await adjustLeaveManagementBalance({
@@ -2054,56 +1903,33 @@ export default function LeaveManagementPage() {
         currentUserName,
         currentWorkspace: workspaceRef.current,
         payload: {
-          employeeId: adjustForm.employeeId,
-          ptoTypeCode: adjustForm.ptoTypeCode,
-          ptoActionCode: adjustForm.ptoActionCode,
-          transactionId: selectedAdjustRequest?.id || null,
-          hours: hoursValue,
-          year: transactionYear,
-          status: "Approved",
-          approverNote: asString(adjustSaveNote),
+          ...payload,
+          transactionId: requestId || payload.transactionId,
         },
       });
       applyWorkspace(result.workspace);
-      setIsAdjustModalOpen(false);
-      setAdjustForm(EMPTY_ADJUST_FORM);
-      setAdjustSaveNote("");
       toast.success("PTO hours updated", "Loaded PTO hours were updated for the selected employee.");
+      return true;
     } catch {
       toast.error("Update failed", "Unable to update PTO balance hours right now.");
+      return false;
     } finally {
       setIsMutating(false);
     }
   }, [
-    adjustForm.employeeId,
-    adjustForm.hours,
-    adjustForm.ptoActionCode,
-    adjustForm.ptoTypeCode,
     applyWorkspace,
     currentUserId,
     currentUserName,
     loadedYear,
     requestJson,
-    isAdjustEditMode,
-    adjustSaveNote,
     toast,
     leaveManagementWorkspaceKey,
   ]);
 
-  const handlePromptAdjustSave = useCallback(() => {
-    if (!canSubmitAdjustForm) {
-      return;
-    }
-    setAdjustError(null);
-    setAdjustSaveNote(isAdjustEditMode ? asString(adjustForm.approverNote) : "");
-    setIsAdjustSaveDialogOpen(true);
-  }, [adjustForm.approverNote, canSubmitAdjustForm, isAdjustEditMode]);
-
   const handleCancelAdjustRequest = useCallback(async (note: string) => {
-    if (!selectedAdjustRequest || !Number.isInteger(loadedYear)) {
+    if (!adjustModalRequest || !Number.isInteger(loadedYear)) {
       return;
     }
-    setAdjustError(null);
     setIsMutating(true);
     try {
       const result = await adjustLeaveManagementBalance({
@@ -2113,19 +1939,19 @@ export default function LeaveManagementPage() {
         currentUserName,
         currentWorkspace: workspaceRef.current,
         payload: {
-          employeeId: selectedAdjustRequest.employeeId,
-          ptoTypeCode: selectedAdjustRequest.ptoTypeCode,
+          employeeId: adjustModalRequest.employeeId,
+          ptoTypeCode: adjustModalRequest.ptoTypeCode,
           ptoActionCode: "load_grant",
-          transactionId: selectedAdjustRequest.id,
-          hours: selectedAdjustRequest.hours,
+          transactionId: adjustModalRequest.id,
+          hours: adjustModalRequest.hours,
           year: Number(loadedYear),
           status: "Canceled",
+          description: asString(adjustModalRequest.description),
           approverNote: asString(note),
         },
       });
       applyWorkspace(result.workspace);
-      closeAdjustModal(false);
-      setAdjustForm(EMPTY_ADJUST_FORM);
+      closeAdjustModal();
       toast.success("Load request canceled", "Approved PTO load request was canceled.");
     } catch {
       toast.error("Cancel failed", "Unable to cancel PTO load request right now.");
@@ -2140,8 +1966,8 @@ export default function LeaveManagementPage() {
     currentUserName,
     loadedYear,
     requestJson,
-    selectedAdjustRequest,
     toast,
+    adjustModalRequest,
     leaveManagementWorkspaceKey,
   ]);
 
@@ -3129,163 +2955,36 @@ export default function LeaveManagementPage() {
         </DialogContent>
       </Dialog>
 
-      <Dialog open={isAdjustModalOpen} onOpenChange={handleAdjustModalOpenChange}>
-        <DialogContent
-          className="flex max-h-[90vh] max-w-xl flex-col overflow-hidden rounded-xl bg-white p-6"
-          onInteractOutside={(event) => {
-            if (shouldBlockOutsideClose({ isBusy: isMutating, hasUnsavedChanges: hasAdjustFormChanges })) {
-              event.preventDefault();
-            }
-          }}
-        >
-          <ModalShell busy={isMutating} busyMessage="Saving PTO hours..." className="min-h-0 flex-1">
-            <DialogClose asChild aria-label="Close load PTO hours modal">
-              <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
-            </DialogClose>
-            <DialogHeader className="pr-8">
-              <DialogTitle>{adjustDialogTitle}</DialogTitle>
-              <DialogDescription>
-                {isAdjustEditMode
-                  ? "Update the selected approved PTO load request."
-                  : "Create a new approved PTO load request."}
-              </DialogDescription>
-            </DialogHeader>
-
-            {adjustError ? (
-              <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{adjustError}</div>
-            ) : null}
-
-            <div className="mt-3 grid gap-3">
-              <label className="space-y-1 text-sm">
-                <span className="text-slate-600">Employee</span>
-                <AppDropdown
-                  value={adjustForm.employeeId}
-                  onValueChange={(value) => {
-                    const nextRequests = resolveAdjustLoadRequests(value, adjustForm.ptoTypeCode);
-                    const nextRequest = nextRequests[0] || null;
-                    setAdjustForm((current) => ({
-                      ...current,
-                      employeeId: value,
-                      transactionId: isAdjustEditMode ? (nextRequest?.id || "") : current.transactionId,
-                      hours: isAdjustEditMode ? (nextRequest ? String(nextRequest.hours) : "") : current.hours,
-                    }));
-                  }}
-                  options={employeeOptions}
-                  searchable
-                  disabled={isMutating || isAdjustEditMode}
-                />
-              </label>
-              <div className="grid gap-3 sm:grid-cols-2">
-                <label className="space-y-1 text-sm">
-                  <span className="text-slate-600">PTO type</span>
-                  <AppDropdown
-                    value={adjustForm.ptoTypeCode}
-                    onValueChange={(value) => {
-                      const nextType = value as LeaveSpherePtoType;
-                      const nextRequests = resolveAdjustLoadRequests(adjustForm.employeeId, nextType);
-                      const nextRequest = nextRequests[0] || null;
-                      setAdjustForm((current) => ({
-                        ...current,
-                        ptoTypeCode: nextType,
-                        transactionId: isAdjustEditMode ? (nextRequest?.id || "") : current.transactionId,
-                        hours: isAdjustEditMode ? (nextRequest ? String(nextRequest.hours) : "") : current.hours,
-                      }));
-                    }}
-                    options={getEmployeePtoTypeOptions(adjustForm.employeeId)}
-                    searchable={false}
-                    disabled={isMutating || isAdjustEditMode}
-                  />
-                </label>
-                <label className="space-y-1 text-sm">
-                  <span className="text-slate-600">Hours</span>
-                  <Input
-                    type="number"
-                    min={0}
-                    step={0.5}
-                    value={adjustForm.hours}
-                    onChange={(event) => setAdjustForm((current) => ({
-                      ...current,
-                      hours: event.target.value,
-                    }))}
-                    disabled={isMutating}
-                  />
-                </label>
-              </div>
-            </div>
-
-            <div className={isAdjustEditMode ? "mt-4 border-t border-slate-200 pt-4" : "mt-3"}>
-              {isAdjustEditMode ? (
-                <div className="text-sm text-slate-700">
-                  <p className="text-xs font-medium uppercase tracking-wide text-slate-500">Admin note</p>
-                  {asString(adjustForm.approverNote) ? (
-                    <p className="mt-1 whitespace-pre-wrap text-slate-800">
-                      {adjustForm.approverNote}
-                    </p>
-                  ) : (
-                    <p className="mt-1 whitespace-pre-wrap italic text-slate-400">
-                      No admin note.
-                    </p>
-                  )}
-                </div>
-              ) : (
-                <label className="block space-y-1 text-sm">
-                  <span className="text-slate-600">Admin note <span className="text-slate-400">(optional)</span></span>
-                  <Textarea
-                    value={adjustForm.approverNote}
-                    onChange={(event) => setAdjustForm((current) => ({ ...current, approverNote: event.target.value }))}
-                    className="min-h-[96px]"
-                    disabled={isMutating}
-                    placeholder="Optional. Add a note or reason for this PTO hour change"
-                  />
-                  <p className="text-xs text-slate-500">Leave this blank if no admin note is needed.</p>
-                </label>
-              )}
-            </div>
-            {(hasAdjustFormChanges || shouldShowAdjustCancelButton || shouldShowAdjustSubmitButton) ? (
-              <DialogFooter className="gap-2">
-                {shouldShowAdjustCancelButton ? (
-                  <Button
-                    variant="outline"
-                    className="border-rose-200 text-rose-700 hover:bg-rose-50"
-                    onClick={() => {
-                      setAdjustCancelNote(asString(adjustForm.approverNote));
-                      setPendingAdjustAction("cancel");
-                    }}
-                    disabled={isMutating}
-                  >
-                    Cancel
-                  </Button>
-                ) : null}
-                {shouldShowAdjustSubmitButton ? (
-                  <Button onClick={() => handlePromptAdjustSave()} disabled={isMutating || !canSubmitAdjustForm}>
-                    {isMutating ? "Saving..." : adjustSubmitLabel}
-                  </Button>
-                ) : null}
-              </DialogFooter>
-            ) : null}
-          </ModalShell>
-        </DialogContent>
-      </Dialog>
-
-      <ConfirmDialog
-        open={isAdjustSaveDialogOpen}
-        title={adjustSaveConfirmCopy.title}
-        description={adjustSaveConfirmCopy.description}
-        confirmLabel={adjustSaveConfirmCopy.confirmLabel}
-        cancelLabel="Go back"
-        onCancel={() => setIsAdjustSaveDialogOpen(false)}
-        onConfirm={() => {
-          setIsAdjustSaveDialogOpen(false);
-          void handleAdjustBalance();
-        }}
-        note={isAdjustEditMode ? {
-          label: "Admin note / reason",
-          value: adjustSaveNote,
-          onChange: setAdjustSaveNote,
-          placeholder: "Add a note or reason for this PTO hour change",
-          disabled: isMutating,
-          helpText: adjustSaveConfirmCopy.noteHelpText,
-        } : undefined}
+      <LeaveSpherePtoLoadHoursModal
+        mode={adjustModalRequest ? "edit" : "create"}
+        open={isAdjustModalOpen}
+        request={adjustModalRequest}
+        initialForm={adjustForm}
+        title={adjustModalRequest ? "Loaded PTO Hours Detail" : "Load PTO Hours"}
+        description={adjustModalRequest
+          ? "Update the selected approved PTO load request."
+          : "Create a new approved PTO load request."}
+        employeeOptions={employeeOptions}
+        getPtoTypeOptions={getEmployeePtoTypeOptions}
+        onOpenChange={handleAdjustModalOpenChange}
+        onClose={closeAdjustModal}
+        onFormChange={setAdjustForm}
+        onSubmit={handleAdjustBalance}
+        year={loadedYear}
+        saving={isMutating}
+        footerActions={adjustModalRequest ? (
+          <Button
+            variant="outline"
+            className="border-rose-200 text-rose-700 hover:bg-rose-50"
+            onClick={() => {
+              setAdjustCancelNote(asString(adjustModalRequest.approverNote));
+              setPendingAdjustAction("cancel");
+            }}
+            disabled={isMutating}
+          >
+            Cancel
+          </Button>
+        ) : null}
       />
 
       {pendingAdjustActionCopy ? (
@@ -3312,17 +3011,6 @@ export default function LeaveManagementPage() {
           } : undefined}
         />
       ) : null}
-
-      <UnsavedChangesDialog
-        open={isAdjustDiscardDialogOpen}
-        onKeepEditing={() => {
-          setIsAdjustDiscardDialogOpen(false);
-        }}
-        onDiscardChanges={() => {
-          setIsAdjustDiscardDialogOpen(false);
-          closeAdjustModal(true);
-        }}
-      />
 
       <Dialog open={isSetupModalOpen} onOpenChange={setIsSetupModalOpen}>
         <DialogContent className="flex max-h-[90vh] max-w-2xl flex-col overflow-hidden rounded-xl bg-white p-6">

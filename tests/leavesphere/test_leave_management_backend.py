@@ -272,6 +272,10 @@ class LeaveManagementBackendTests(unittest.TestCase):
             "get_pto_actions",
             return_value=[{"code": "REQUEST", "name": "Request"}],
         ), patch.object(
+            myPto,
+            "_apply_my_pto_workspace_mutation_from_cache",
+            return_value=None,
+        ), patch.object(
             myPto, "load_my_pto_workspace", return_value=fresh_workspace
         ) as mock_load, patch.object(
             ptoTransactions, "create_request", return_value={"inserted": 1, "status": "Pending"}
@@ -289,7 +293,8 @@ class LeaveManagementBackendTests(unittest.TestCase):
                 },
             )
 
-        self.assertEqual(result["workspace"], fresh_workspace)
+        self.assertIn("workspacePatch", result)
+        self.assertEqual(result["workspacePatch"]["currentUserId"], "emp-1")
         self.assertEqual(result["createdRequestId"], "pto-1")
         self.assertEqual(result["inserted"], 1)
         self.assertEqual(result["status"], "Pending")
@@ -517,6 +522,86 @@ class LeaveManagementBackendTests(unittest.TestCase):
         self.assertEqual(revert_result["status"], "Pending")
         self.assertEqual(revert_result["updated"], 1)
         mock_update.assert_called_once()
+
+    def test_adjust_workspace_stamps_current_admin_as_approver(self):
+        request = self._build_request()
+        workspace = {
+            "currentUserId": "emp-admin",
+            "currentUserName": "Admin User",
+            "currentUserEmail": "admin@example.com",
+            "managerId": None,
+            "currentUserTeamRegion": "US",
+            "isManager": False,
+            "balanceTransactions": [],
+            "employees": [],
+            "employeeBalances": [],
+            "requests": [],
+            "holidays": [],
+            "ptoTypes": [],
+            "ptoActions": [],
+        }
+
+        def _patch_workspace(*, workspace, balance_transaction_ids=None, employee_ids=None, **kwargs):
+            rows = [row for row in workspace.get("balanceTransactions", []) if isinstance(row, dict)]
+            return {"balanceTransactions": [dict(row) for row in rows]}
+
+        def _mutate_workspace(request, year, mutate_workspace):
+            mutate_workspace(workspace)
+            return workspace
+
+        with patch.object(
+            leaveManagement,
+            "_resolve_current_employee_record",
+            return_value={"id": "emp-admin", "firstName": "Admin", "lastName": "User", "email": "admin@example.com"},
+        ), patch.object(
+            leaveManagement,
+            "load_leave_sphere_pto_workspace_catalogs",
+            return_value=SimpleNamespace(
+                pto_type_by_code={"VAC": {"code": "VAC"}},
+                pto_actions=[{"code": "LOAD"}],
+            ),
+        ), patch.object(
+            leaveManagement,
+            "_resolve_pto_type_code",
+            return_value="VAC",
+        ), patch.object(
+            leaveManagement,
+            "resolve_action_code",
+            return_value="LOAD",
+        ), patch.object(
+            leaveManagement,
+            "create_adjustment",
+            return_value={"id": "tx-1", "inserted": 1, "status": "Approved"},
+        ) as mock_create, patch.object(
+            leaveManagement,
+            "_apply_leave_management_workspace_mutation_from_cache",
+            side_effect=_mutate_workspace,
+        ), patch.object(
+            leaveManagement,
+            "_build_leave_management_workspace_patch",
+            side_effect=_patch_workspace,
+        ):
+            result = leaveManagement.adjust_leave_management_balance(
+                request=request,
+                payload={
+                    "employeeId": "emp-2",
+                    "ptoTypeCode": "VAC",
+                    "ptoActionCode": "load_grant",
+                    "hours": 8,
+                    "year": 2026,
+                    "status": "Approved",
+                    "description": "Opening balance load",
+                    "approverNote": "Opening balance",
+                },
+            )
+
+        self.assertEqual(result["status"], "Approved")
+        self.assertEqual(result["updated"], 1)
+        inserted_payload = mock_create.call_args.args[0]
+        self.assertEqual(inserted_payload["approverId"], "emp-admin")
+        self.assertEqual(inserted_payload["description"], "Opening balance load")
+        self.assertEqual(result["workspacePatch"]["balanceTransactions"][0]["approverId"], "emp-admin")
+        self.assertEqual(result["workspacePatch"]["balanceTransactions"][0]["description"], "Opening balance load")
 
 
 if __name__ == "__main__":

@@ -12,6 +12,7 @@ export type LeaveManagementTransaction = {
   hours: number;
   year: number;
   status: LeaveManagementTransactionStatus;
+  description: string;
   approverNote: string | null;
   createdAt: string;
   createdByName: string | null;
@@ -97,6 +98,7 @@ export function seedLeaveManagementBalanceTransactions(params: {
           hours: totalHours,
           year,
           status: "Approved",
+          description: "Opening PTO balance load",
           approverNote: "Opening PTO balance load",
           createdAt: params.createdAt,
           createdByName: params.createdByName,

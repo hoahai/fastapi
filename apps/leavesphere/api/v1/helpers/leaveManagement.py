@@ -375,6 +375,7 @@ def _build_balance_transaction_rows(
                 "hours": float(abs(hours_value)) if action_code == "load_grant" else float(hours_value),
                 "year": int(row.get("year") or date.today().year),
                 "status": "Approved",
+                "description": _normalize_text(row.get("description")) or None,
                 "approverNote": _normalize_text(row.get("approverNote")) or None,
                 "createdAt": _to_date_string(row.get("dateCreated")) or _to_date_string(row.get("dateUpdated")) or date.today().isoformat(),
                 "createdByName": _employee_full_name(approver) if approver else None,
@@ -1523,6 +1524,11 @@ def adjust_leave_management_balance(*, request, payload: dict) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("Payload must be an object")
 
+    current_employee = _resolve_current_employee_record(request)
+    current_employee_id = _normalize_text(current_employee.get("id"))
+    if not current_employee_id:
+        raise ValueError("Authenticated user is not mapped to a LeaveSphere employee")
+
     employee_id = _normalize_text(payload.get("employeeId"))
     if not employee_id:
         raise ValueError("employeeId is required")
@@ -1551,12 +1557,14 @@ def adjust_leave_management_balance(*, request, payload: dict) -> dict:
     if status != "Approved":
         raise ValueError("status must be Approved")
 
+    description = _normalize_optional_text(payload.get("description"))
     approver_note = _normalize_optional_text(payload.get("approverNote"))
     transaction_id = _normalize_text(payload.get("transactionId"))
     if transaction_id:
         existing = get_pto_transactions(transaction_id=transaction_id)
         if not existing:
             raise ValueError("PTO transaction not found")
+        existing_row = existing[0]
         updated = update_pto_transaction(
             transaction_id=transaction_id,
             updates={
@@ -1566,7 +1574,9 @@ def adjust_leave_management_balance(*, request, payload: dict) -> dict:
                 "hours": hours,
                 "year": year,
                 "status": "Approved",
+                "description": description if description is not None else _normalize_optional_text(existing_row.get("description")),
                 "approverNote": approver_note,
+                "approverId": current_employee_id,
             },
         )
     else:
@@ -1579,7 +1589,9 @@ def adjust_leave_management_balance(*, request, payload: dict) -> dict:
                 "ptoActionCode": resolved_action_code,
                 "hours": hours,
                 "year": year,
+                "description": description,
                 "approverNote": approver_note,
+                "approverId": current_employee_id,
                 "status": "Approved",
             }
         )
@@ -1600,7 +1612,9 @@ def adjust_leave_management_balance(*, request, payload: dict) -> dict:
                     "hours": float(hours),
                     "year": year,
                     "status": "Approved",
+                    "description": description,
                     "approverNote": approver_note,
+                    "approverId": current_employee_id,
                     "createdAt": date.today().isoformat(),
                     "createdByName": _normalize_text(cached_workspace.get("currentUserName")),
                 },
@@ -1623,12 +1637,6 @@ def adjust_leave_management_balance(*, request, payload: dict) -> dict:
             page_code=LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE,
             year=year,
             workspace=workspace,
-        )
-        workspace_patch = _build_leave_management_workspace_patch(
-            workspace=workspace,
-            balance_transaction_ids=[transaction_id],
-            employee_ids=[employee_id],
-            include_current_balances=employee_id == _normalize_text(workspace.get("currentUserId")),
         )
         workspace_patch = _build_leave_management_workspace_patch(
             workspace=workspace,

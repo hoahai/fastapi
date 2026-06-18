@@ -110,6 +110,7 @@ export type LeaveManagementAdjustBalanceInput = {
   hours: number;
   year: number;
   status: LeaveManagementTransactionStatus;
+  description: string;
   approverNote: string;
 };
 
@@ -421,6 +422,7 @@ function normalizeWorkspaceResponse(payload: unknown): LeaveManagementWorkspaceD
           hours: asNumber(item.hours),
           year: Math.trunc(asNumber(item.year)),
           status: (asString(item.status) as LeaveManagementTransactionStatus) || "Approved",
+          description: asString(item.description),
           approverNote: asString(item.approverNote) || null,
           createdAt: asString(item.createdAt),
           createdByName: asString(item.createdByName) || null,
@@ -585,6 +587,7 @@ function normalizeWorkspaceDelta(payload: unknown): LeaveManagementWorkspaceDelt
         hours: asNumber(item.hours),
         year: Math.trunc(asNumber(item.year)),
         status: (asString(item.status) as LeaveManagementTransactionStatus) || "Approved",
+        description: asString(item.description),
         approverNote: asString(item.approverNote) || null,
         createdAt: asString(item.createdAt),
         createdByName: asString(item.createdByName) || null,

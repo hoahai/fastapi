@@ -71,6 +71,7 @@ class LeaveManagementAdjustRequest(_LeaveSphereModel):
     hours: float | int | str
     year: int | str
     status: str
+    description: str | None = None
     approverNote: str | None = None
 
 
@@ -331,6 +332,7 @@ def adjust_leave_management_balance_route(
           "hours": 8,
           "year": 2026,
           "status": "Approved",
+          "description": "Opening balance load",
           "approverNote": "Opening balance"
         }
 
@@ -349,6 +351,9 @@ def adjust_leave_management_balance_route(
         - Requires leavesphere.admin permission or workspace.super_admin
         - `hours` must be zero or greater
         - `status` must be `Approved`
+        - `description` is stored with the load transaction
+        - `approverNote` is stored in the `approverNote` database column
+        - `approverId` is set from the authenticated admin employee
         - Mutation responses may return `workspacePatch` instead of a full `workspace` when the server can patch a cached snapshot
     """
     try:

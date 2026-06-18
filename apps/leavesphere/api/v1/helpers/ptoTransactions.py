@@ -164,7 +164,7 @@ def create_adjustment(payload: dict) -> dict:
         "status": "Approved",
         "description": (str(payload.get("description") or "").strip() or None),
         "approverNote": (str(payload.get("approverNote") or "").strip() or None),
-        "approverId": None,
+        "approverId": (str(payload.get("approverId") or "").strip() or None),
         "calendarId": (str(payload.get("calendarId") or "").strip() or None),
     }
     if item["year"] is None:

@@ -15,6 +15,7 @@ from apps.leavesphere.api.v1.helpers.ptoTransactions import (
 )
 from apps.leavesphere.api.v1.helpers.workspaceCache import invalidate_leave_sphere_workspace_caches
 from apps.leavesphere.api.v1.permissions import require_leavesphere_admin, require_leavesphere_editor
+from shared.auth.dependencies import get_auth_principal
 
 router = APIRouter(prefix="/ptoTransactions")
 
@@ -126,7 +127,8 @@ def create_adjustment_route(
           "ptoActionCode": "LOAD",
           "hours": 8,
           "year": 2026,
-          "description": "Annual top-up"
+          "description": "Annual top-up",
+          "approverNote": "Approved by payroll"
         }
 
     Example response:
@@ -139,10 +141,18 @@ def create_adjustment_route(
         - Requires leavesphere.admin permission (or workspace.super_admin)
         - status is always Approved
         - hours must be non-zero and can be positive or negative
+        - `description` is stored on the adjustment transaction
+        - `approverNote` is stored on the adjustment transaction
+        - `approverId` is set from the authenticated admin user
         - Legacy API key compat behavior remains unchanged
     """
     try:
-        result = create_adjustment(payload.model_dump() if hasattr(payload, "model_dump") else payload.dict())
+        body = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
+        principal = get_auth_principal(request)
+        approver_id = getattr(principal, "user_id", None) if principal is not None else None
+        if approver_id:
+            body["approverId"] = approver_id
+        result = create_adjustment(body)
         invalidate_leave_sphere_workspace_caches()
         return result
     except ValueError as exc:

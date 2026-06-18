@@ -27,12 +27,13 @@ import { PageLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { ModalShell } from "@shared/components";
 import { DEFAULT_TIME_ZONE, formatDateInTimeZone } from "@shared/utils/time";
 import { LeaveSpherePtoTypeChip } from "@leavesphere/components/PtoTypeChip";
+import { LeaveSpherePtoStatusChip } from "@leavesphere/components/PtoStatusChip";
+import { formatLeaveSpherePtoStatusLabel } from "@leavesphere/lib/ptoStatus";
 import {
   loadLeaveSphereQuickApproval,
   submitLeaveSphereQuickApprovalDecision,
   type LeaveSphereQuickApprovalDecision,
   type LeaveSphereQuickApprovalPreview,
-  type LeaveSphereQuickApprovalRequestStatus,
 } from "@leavesphere/lib/quickApproval";
 
 type LeaveSphereQuickApprovalPageProps = {
@@ -53,34 +54,8 @@ function formatDateLabel(value: string): string {
   });
 }
 
-function statusChipClass(status: LeaveSphereQuickApprovalRequestStatus): string {
-  if (status === "approved") {
-    return "border-emerald-200 bg-emerald-50 text-emerald-700";
-  }
-  if (status === "rejected") {
-    return "border-rose-200 bg-rose-50 text-rose-700";
-  }
-  if (status === "cancelled") {
-    return "border-slate-300 bg-slate-100 text-slate-700";
-  }
-  return "border-amber-200 bg-amber-50 text-amber-700";
-}
-
-function statusLabel(status: LeaveSphereQuickApprovalRequestStatus): string {
-  if (status === "approved") {
-    return "Approved";
-  }
-  if (status === "rejected") {
-    return "Rejected";
-  }
-  if (status === "cancelled") {
-    return "Cancelled";
-  }
-  return "Pending review";
-}
-
 function decisionLabel(decision: LeaveSphereQuickApprovalDecision): string {
-  return decision === "approved" ? "approved" : "rejected";
+  return decision === "approved" ? "Approved" : "Rejected";
 }
 
 function formatHours(value: number | null): string {
@@ -273,9 +248,12 @@ export default function LeaveSphereQuickApprovalPage({ token }: LeaveSphereQuick
               </div>
               <div className="rounded-xl border border-blue-100/90 bg-blue-50/55 p-4">
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-blue-700/85">Current status</p>
-                <span className={`mt-2 inline-flex rounded-full border px-2.5 py-1 text-xs font-semibold ${statusChipClass(preview.currentStatus)}`}>
-                  {statusLabel(preview.currentStatus)}
-                </span>
+                <div className="mt-2">
+                  <LeaveSpherePtoStatusChip
+                    status={preview.currentStatus}
+                    label={formatLeaveSpherePtoStatusLabel(preview.currentStatus)}
+                  />
+                </div>
               </div>
               <div className="rounded-xl border border-blue-100/90 bg-blue-50/55 p-4 sm:col-span-2">
                 <p className="text-xs font-semibold uppercase tracking-[0.14em] text-blue-700/85">Reason or note</p>
