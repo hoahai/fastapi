@@ -49,3 +49,13 @@ body::before {
     radial-gradient(circle at 52% 10%, rgba(129, 140, 248, 0.12), transparent 38%),
     linear-gradient(148deg, #f7faff 0%, #ecf2ff 46%, #f3f6ff 100%);
 }
+
+@keyframes shimmer {
+  0% {
+    background-position: 200% 0;
+  }
+
+  100% {
+    background-position: -200% 0;
+  }
+}

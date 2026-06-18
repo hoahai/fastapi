@@ -2663,7 +2663,7 @@ export default function LeaveManagementPage() {
                       : 0;
                     const loadRequests = resolveAdjustLoadRequests(row.employeeId, normalizedType as LeaveSpherePtoType);
                     return (
-                      <TooltipTarget text="click to edit hours">
+                      <TooltipTarget text="Click to edit hours">
                         <button
                           type="button"
                           onClick={() => {
@@ -2694,9 +2694,16 @@ export default function LeaveManagementPage() {
                           </span>
                           <span className="mt-1.5 h-1.5 w-full overflow-hidden rounded-full bg-blue-100">
                             <span
-                              className="block h-full rounded-full bg-blue-500 transition-[width] duration-300 ease-out"
+                              className="relative block h-full overflow-hidden rounded-full bg-gradient-to-r from-blue-800 via-blue-600 to-sky-500 shadow-[0_0_8px_rgba(37,99,235,0.18)] transition-[width] duration-300 ease-out"
                               style={{ width: `${usedRatio * 100}%` }}
-                            />
+                            >
+                              <span className="pointer-events-none absolute inset-0 bg-[linear-gradient(180deg,rgba(255,255,255,0.28)_0%,rgba(255,255,255,0.10)_42%,rgba(255,255,255,0)_76%)]" />
+                              <span className="pointer-events-none absolute inset-x-0 top-0 h-px bg-white/30" />
+                              <span
+                                aria-hidden="true"
+                                className="pointer-events-none absolute inset-0 bg-[linear-gradient(110deg,transparent_0%,rgba(255,255,255,0.08)_28%,rgba(255,255,255,0.42)_50%,rgba(255,255,255,0.10)_72%,transparent_100%)] bg-[length:200%_100%] opacity-0 transition-opacity duration-150 group-hover:opacity-100 motion-safe:group-hover:animate-[shimmer_2.6s_linear_infinite]"
+                              />
+                            </span>
                           </span>
                         </button>
                       </TooltipTarget>
