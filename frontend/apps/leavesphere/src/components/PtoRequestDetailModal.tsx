@@ -9,17 +9,15 @@ import {
   DialogClose,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@tradsphere/components/ui/dialog";
 import { Input } from "@tradsphere/components/ui/input";
-import { canModalClose, shouldBlockOutsideClose } from "@tradsphere/components/ui/modal-close-guard";
 import { Textarea } from "@tradsphere/components/ui/textarea";
 import { UnsavedChangesDialog } from "@tradsphere/components/ui/unsaved-changes-dialog";
 import { LeaveSpherePtoStatusChip } from "@leavesphere/components/PtoStatusChip";
-import { ModalCloseButton, ModalHeaderRow, ModalShell } from "@shared/components";
-import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
+import { ModalActionFooter, ModalCloseButton, ModalHeaderRow, ModalShell } from "@shared/components";
+import { useCommittedTextField, useGuardedModalDialog, useModalDraftState } from "@shared/hooks";
 import { formatLeaveSpherePtoStatusLabel } from "@leavesphere/lib/ptoStatus";
 
 import type { LeaveSpherePtoRequest, LeaveSpherePtoType } from "@leavesphere/lib/ptoTypes";
@@ -89,9 +87,8 @@ const EMPTY_FORM: LeaveSpherePtoRequestFormState = {
 };
 
 function createFormState(request: LeaveSpherePtoRequest | null): LeaveSpherePtoRequestFormState {
-  const requestType = request?.ptoTypeCode ?? request?.type ?? "vacation";
   return {
-    type: requestType,
+    type: request?.ptoTypeCode ?? request?.type ?? "vacation",
     startDate: request?.startDate ?? "",
     endDate: request?.endDate ?? "",
     hours: request ? String(request.hours) : "",
@@ -172,42 +169,55 @@ export function LeaveSpherePtoRequestDetailModal({
     return { ...EMPTY_FORM };
   }, [initialForm, mode, request]);
 
-  const [form, setForm] = useState<LeaveSpherePtoRequestFormState>(sourceForm);
-  const [baselineForm, setBaselineForm] = useState<LeaveSpherePtoRequestFormState>(sourceForm);
+  const {
+    draft: form,
+    setDraft: setForm,
+    hasChanges: hasFormChanges,
+    resetDraft: revertDraft,
+    commitDraft,
+  } = useModalDraftState({
+    open,
+    sourceValue: sourceForm,
+    isEqual: formsEqual,
+    onOpen: (nextSourceForm) => {
+      isHydratingFromOpenRef.current = true;
+      setFormError(null);
+      shouldAutoCalculateOnOpenRef.current = mode === "create" || !nextSourceForm.hours.trim();
+      hasHandledInitialAutoCalculateRef.current = false;
+      hasManualHoursOverrideRef.current = false;
+      previousDateRangeRef.current = {
+        startDate: nextSourceForm.startDate,
+        endDate: nextSourceForm.endDate,
+      };
+    },
+    onChange: onFormChange,
+  });
+  const hasUnsavedChanges = hasFormChanges || externalDirty;
   const [formError, setFormError] = useState<string | null>(null);
   const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false);
   const [openEndDatePickerSignal, setOpenEndDatePickerSignal] = useState(0);
-  const wasOpenRef = useRef(false);
   const isHydratingFromOpenRef = useRef(false);
   const shouldAutoCalculateOnOpenRef = useRef(true);
   const hasHandledInitialAutoCalculateRef = useRef(false);
   const hasManualHoursOverrideRef = useRef(false);
   const previousDateRangeRef = useRef<{ startDate: string; endDate: string } | null>(null);
-  const lastEmittedFormRef = useRef<LeaveSpherePtoRequestFormState | null>(null);
-  const descriptionField = useCommittedTextField<HTMLTextAreaElement>(
+  const descriptionInput = useCommittedTextField<HTMLTextAreaElement>(
     form.description,
     (value) => setForm((current) => ({ ...current, description: value })),
   );
-
-  useEffect(() => {
-    const didJustOpen = open && !wasOpenRef.current;
-    wasOpenRef.current = open;
-    if (!didJustOpen) {
-      return;
-    }
-    isHydratingFromOpenRef.current = true;
-    setForm(sourceForm);
-    setBaselineForm(sourceForm);
-    setFormError(null);
-    shouldAutoCalculateOnOpenRef.current = mode === "create" || !sourceForm.hours.trim();
-    hasHandledInitialAutoCalculateRef.current = false;
-    hasManualHoursOverrideRef.current = false;
-    previousDateRangeRef.current = {
-      startDate: sourceForm.startDate,
-      endDate: sourceForm.endDate,
-    };
-    lastEmittedFormRef.current = { ...sourceForm };
-  }, [mode, open, sourceForm]);
+  const {
+    closeModal,
+    handleDialogOpenChange,
+    handleInteractOutside,
+  } = useGuardedModalDialog({
+    isBusy: saving,
+    hasUnsavedChanges,
+    onOpenChange,
+    onClose,
+    onDiscardAttempt: () => {
+      setIsDiscardDialogOpen(true);
+    },
+  });
 
   useEffect(() => {
     if (!calculateHours || !open) {
@@ -254,27 +264,6 @@ export function LeaveSpherePtoRequestDetailModal({
     });
   }, [calculateHours, form, open, sourceForm]);
 
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    if (lastEmittedFormRef.current && formsEqual(lastEmittedFormRef.current, form)) {
-      return;
-    }
-    lastEmittedFormRef.current = { ...form };
-    onFormChange?.(form);
-  }, [form, onFormChange, open]);
-
-  const hasFormChanges = useMemo(
-    () => !formsEqual(form, baselineForm),
-    [baselineForm, form],
-  );
-
-  const hasUnsavedChanges = useMemo(
-    () => hasFormChanges || externalDirty,
-    [externalDirty, hasFormChanges],
-  );
-
   const submitHandler = onSubmit ?? onSave;
   const submitValidationError = validateSubmit?.(form) ?? null;
   const isHoursInvalid = Boolean(submitValidationError);
@@ -298,6 +287,13 @@ export function LeaveSpherePtoRequestDetailModal({
     ? (form.startDate > allowedDateRange.minDate ? form.startDate : allowedDateRange.minDate)
     : (form.startDate || allowedDateRange?.minDate);
   const descriptionMinHeightClassName = isMyPtoDetailLayout ? "min-h-[110px]" : "min-h-[100px]";
+  const requestStatusChip = request ? (
+    <LeaveSpherePtoStatusChip
+      status={request.status}
+      label={formatLeaveSpherePtoStatusLabel(request.status)}
+      className={isMyPtoDetailLayout ? "px-2.5 py-1 text-xs" : "font-semibold"}
+    />
+  ) : null;
 
   useEffect(() => {
     if (!formError) {
@@ -309,120 +305,143 @@ export function LeaveSpherePtoRequestDetailModal({
     setFormError(null);
   }, [formError, hasValidCoreFields, submitValidationError]);
 
-  const formFields = (
-    <>
-      <div className="grid gap-3 sm:grid-cols-2">
-        <label className="space-y-1 text-sm">
-          <span className="text-slate-600">PTO type</span>
-          <AppDropdown
-            value={form.type}
-            onValueChange={(value) => setForm((current) => ({ ...current, type: value as LeaveSpherePtoType }))}
-            options={ptoTypeOptions}
-            searchable={false}
-            disabled={saving || readOnly}
-          />
-        </label>
-
-        <label className="space-y-1 text-sm">
-          <span className="text-slate-600">Hours</span>
-          <Input
-            type="number"
-            min={0}
-            step={0.5}
-            value={form.hours}
-            onChange={(event) => {
-              hasManualHoursOverrideRef.current = true;
-              setForm((current) => ({ ...current, hours: event.target.value }));
-            }}
-            disabled={saving || readOnly}
-            className={isHoursInvalid ? "border-rose-300 text-rose-900 focus-visible:border-rose-400 focus-visible:shadow-[inset_0_0_0_1px_rgba(244,63,94,0.15)]" : undefined}
-          />
-          {submitValidationError ? (
-            <p className="text-[11px] font-medium text-rose-600">{submitValidationError}</p>
-          ) : null}
-        </label>
-
-        <label className="space-y-1 text-sm">
-          <span className="text-slate-600">Start date</span>
-          <DateInputField
-            id="pto-detail-start-date"
-            value={form.startDate}
-            label="Start date"
-            onChange={(value) => {
-              if (!isWithinRange(value, allowedDateRange?.minDate, allowedDateRange?.maxDate)) {
-                return;
-              }
-              setForm((current) => ({
-                ...current,
-                startDate: value,
-                endDate: current.endDate && value > current.endDate ? value : current.endDate,
-              }));
-              setOpenEndDatePickerSignal((current) => current + 1);
-            }}
-            disabled={saving || readOnly}
-            minDate={allowedDateRange?.minDate}
-            maxDate={allowedDateRange?.maxDate}
-            restrictMonthNavigation={Boolean(allowedDateRange)}
-          />
-        </label>
-
-        <label className="space-y-1 text-sm">
-          <span className="text-slate-600">End date</span>
-          <DateInputField
-            id="pto-detail-end-date"
-            value={form.endDate}
-            label="End date"
-            onChange={(value) => {
-              if (!isWithinRange(value, allowedDateRange?.minDate, allowedDateRange?.maxDate)) {
-                return;
-              }
-              setForm((current) => ({ ...current, endDate: value }));
-            }}
-            disabled={saving || readOnly}
-            minDate={endDateMin}
-            maxDate={allowedDateRange?.maxDate}
-            openCalendarSignal={openEndDatePickerSignal}
-            restrictMonthNavigation={Boolean(allowedDateRange)}
-          />
-        </label>
-      </div>
-
-      <label className={isMyPtoDetailLayout ? "block space-y-1 text-sm" : "space-y-1 text-sm"}>
-        <span className="text-slate-600">Description</span>
-        <Textarea
-          value={descriptionField.value}
-          onChange={descriptionField.onChange}
-          onBlur={descriptionField.onBlur}
-          className={descriptionMinHeightClassName}
+  const topFields = (
+    <div className="grid gap-4 sm:grid-cols-2">
+      <label className="space-y-1 text-sm">
+        <span className="text-slate-600">PTO type</span>
+        <AppDropdown
+          value={form.type}
+          onValueChange={(value) => setForm((current) => ({ ...current, type: value as LeaveSpherePtoType }))}
+          options={ptoTypeOptions}
+          searchable={false}
           disabled={saving || readOnly}
         />
       </label>
-    </>
+
+      <label className="space-y-1 text-sm">
+        <span className="text-slate-600">Hours</span>
+        <Input
+          type="number"
+          min={0}
+          step={0.5}
+          value={form.hours}
+          onChange={(event) => {
+            hasManualHoursOverrideRef.current = true;
+            setForm((current) => ({ ...current, hours: event.target.value }));
+          }}
+          disabled={saving || readOnly}
+          className={isHoursInvalid ? "border-rose-300 text-rose-900 focus-visible:border-rose-400 focus-visible:shadow-[inset_0_0_0_1px_rgba(244,63,94,0.15)]" : undefined}
+        />
+        {submitValidationError ? (
+          <p className="text-[11px] font-medium text-rose-600">{submitValidationError}</p>
+        ) : null}
+      </label>
+
+      <label className="space-y-1 text-sm">
+        <span className="text-slate-600">Start date</span>
+        <DateInputField
+          id="pto-detail-start-date"
+          value={form.startDate}
+          label="Start date"
+          onChange={(value) => {
+            if (!isWithinRange(value, allowedDateRange?.minDate, allowedDateRange?.maxDate)) {
+              return;
+            }
+            setForm((current) => ({
+              ...current,
+              startDate: value,
+              endDate: current.endDate && value > current.endDate ? value : current.endDate,
+            }));
+            setOpenEndDatePickerSignal((current) => current + 1);
+          }}
+          disabled={saving || readOnly}
+          minDate={allowedDateRange?.minDate}
+          maxDate={allowedDateRange?.maxDate}
+          restrictMonthNavigation={Boolean(allowedDateRange)}
+        />
+      </label>
+
+      <label className="space-y-1 text-sm">
+        <span className="text-slate-600">End date</span>
+        <DateInputField
+          id="pto-detail-end-date"
+          value={form.endDate}
+          label="End date"
+          onChange={(value) => {
+            if (!isWithinRange(value, allowedDateRange?.minDate, allowedDateRange?.maxDate)) {
+              return;
+            }
+            setForm((current) => ({ ...current, endDate: value }));
+          }}
+          disabled={saving || readOnly}
+          minDate={endDateMin}
+          maxDate={allowedDateRange?.maxDate}
+          openCalendarSignal={openEndDatePickerSignal}
+          restrictMonthNavigation={Boolean(allowedDateRange)}
+        />
+      </label>
+    </div>
   );
+  const descriptionField = (
+    <label className={`${isMyPtoDetailLayout ? "block" : ""} space-y-1 text-sm`}>
+      <span className="text-slate-600">Description</span>
+      <Textarea
+        value={descriptionInput.value}
+        onChange={descriptionInput.onChange}
+        onBlur={descriptionInput.onBlur}
+        className={descriptionMinHeightClassName}
+        disabled={saving || readOnly}
+      />
+    </label>
+  );
+  const detailsBlock = isMyPtoDetailLayout ? (
+    <div className="space-y-4">
+      {(details || request) ? (
+        <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3">
+          <div className="flex flex-wrap items-start justify-between gap-3">
+            <div className="min-w-0 flex-1">
+              {details}
+            </div>
+            {requestStatusChip}
+          </div>
+        </div>
+      ) : null}
 
-  function closeModal() {
-    onOpenChange(false);
-    onClose();
-  }
+      <div className="space-y-4">
+        {topFields}
+        <div className="mt-6">
+          {descriptionField}
+        </div>
+      </div>
 
-  function handleDialogOpenChange(nextOpen: boolean) {
-    const allowClose = canModalClose({
-      nextOpen,
-      isBusy: saving,
-      hasUnsavedChanges,
-    });
-    if (!allowClose) {
-      if (!nextOpen && hasUnsavedChanges && !saving) {
-        setIsDiscardDialogOpen(true);
-      }
-      return;
-    }
-    if (!nextOpen) {
-      closeModal();
-      return;
-    }
-    onOpenChange(true);
-  }
+      {extraContent ? (
+        <div className="border-t border-slate-200 pt-3">
+          {extraContent}
+        </div>
+      ) : null}
+    </div>
+  ) : (
+    <div className="space-y-4">
+      {details}
+      <div className="space-y-4">
+        {topFields}
+      </div>
+
+      <div className="mt-6">
+        {descriptionField}
+      </div>
+
+      {request ? (
+        <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs text-slate-600">
+          Status:
+          {" "}
+          {requestStatusChip}
+        </div>
+      ) : null}
+
+      {extraContent}
+    </div>
+  );
 
   async function handleSave() {
     if (!submitHandler) {
@@ -474,8 +493,7 @@ export function LeaveSpherePtoRequestDetailModal({
     if (didSave === false) {
       return;
     }
-    setForm(submittedForm);
-    setBaselineForm(submittedForm);
+    commitDraft(submittedForm);
     closeModal();
   }
 
@@ -483,20 +501,16 @@ export function LeaveSpherePtoRequestDetailModal({
     if (!hasUnsavedChanges || saving || readOnly) {
       return;
     }
-    setForm(baselineForm);
+    revertDraft();
     setFormError(null);
   }
 
   return (
-    <Dialog open={open} onOpenChange={handleDialogOpenChange}>
-      <DialogContent
-        className={`${isMyPtoDetailLayout ? "max-w-3xl" : "max-w-2xl"} flex max-h-[90vh] flex-col overflow-visible rounded-xl bg-white p-6`}
-        onInteractOutside={(event) => {
-          if (shouldBlockOutsideClose({ isBusy: saving, hasUnsavedChanges })) {
-            event.preventDefault();
-          }
-        }}
-      >
+      <Dialog open={open} onOpenChange={handleDialogOpenChange}>
+        <DialogContent
+          className={`${isMyPtoDetailLayout ? "max-w-3xl" : "max-w-2xl"} flex max-h-[90vh] flex-col overflow-visible rounded-xl bg-white p-6`}
+          onInteractOutside={handleInteractOutside}
+        >
         <ModalShell
           busy={saving}
           busyMessage="Saving PTO request..."
@@ -518,51 +532,9 @@ export function LeaveSpherePtoRequestDetailModal({
             </DialogHeader>
           </ModalHeaderRow>
 
-          {isMyPtoDetailLayout ? (
-            <div className="mt-4 space-y-4">
-              {(details || request) ? (
-                <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-4 py-3">
-                  <div className="flex flex-wrap items-start justify-between gap-3">
-                    <div className="min-w-0 flex-1">
-                      {details}
-                    </div>
-                    {request ? (
-                      <LeaveSpherePtoStatusChip
-                        status={request.status}
-                        label={formatLeaveSpherePtoStatusLabel(request.status)}
-                        className="px-2.5 py-1 text-xs"
-                      />
-                    ) : null}
-                  </div>
-                </div>
-              ) : null}
-
-              <div className="space-y-3">
-                {formFields}
-              </div>
-
-              {extraContent ? (
-                <div className="border-t border-slate-200 pt-3">
-                  {extraContent}
-                </div>
-              ) : null}
-            </div>
-          ) : (
-            <div className="mt-4 space-y-4">
-              {details}
-              <div className="space-y-3">{formFields}</div>
-
-              {request ? (
-                <div className="rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2 text-xs text-slate-600">
-                  Status:
-                  {" "}
-                  <LeaveSpherePtoStatusChip status={request.status} label={formatLeaveSpherePtoStatusLabel(request.status)} className="font-semibold" />
-                </div>
-              ) : null}
-
-              {extraContent}
-            </div>
-          )}
+          <div className="mt-4">
+            {detailsBlock}
+          </div>
 
           {formError ? (
             <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">
@@ -570,7 +542,7 @@ export function LeaveSpherePtoRequestDetailModal({
             </div>
           ) : null}
 
-          <DialogFooter className="gap-2">
+          <ModalActionFooter className="mt-6 gap-2">
             {footerActions}
             <div className="flex items-center gap-2">
               {mode !== "create" && hasUnsavedChanges ? (
@@ -584,7 +556,7 @@ export function LeaveSpherePtoRequestDetailModal({
                 </Button>
               ) : null}
             </div>
-          </DialogFooter>
+          </ModalActionFooter>
         </ModalShell>
       </DialogContent>
 

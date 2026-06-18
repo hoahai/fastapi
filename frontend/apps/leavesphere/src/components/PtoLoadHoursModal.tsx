@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { X } from "lucide-react";
 
 import { AppDropdown } from "@tradsphere/components/ui/app-dropdown";
@@ -8,16 +8,15 @@ import {
   DialogClose,
   DialogContent,
   DialogDescription,
-  DialogFooter,
   DialogHeader,
   DialogTitle,
 } from "@tradsphere/components/ui/dialog";
 import { Input } from "@tradsphere/components/ui/input";
 import { ConfirmDialog } from "@tradsphere/components/ui/confirm-dialog";
-import { canModalClose, shouldBlockOutsideClose } from "@tradsphere/components/ui/modal-close-guard";
 import { Textarea } from "@tradsphere/components/ui/textarea";
 import { UnsavedChangesDialog } from "@tradsphere/components/ui/unsaved-changes-dialog";
-import { ModalCloseButton, ModalHeaderRow, ModalShell } from "@shared/components";
+import { ModalActionFooter, ModalCloseButton, ModalHeaderRow, ModalShell } from "@shared/components";
+import { useGuardedModalDialog, useModalDraftState } from "@shared/hooks";
 
 import type { LeaveSpherePtoType } from "@leavesphere/lib/ptoTypes";
 import type {
@@ -112,6 +111,15 @@ function formsEqual(
   );
 }
 
+function resolvePtoTypeCode(
+  currentPtoTypeCode: LeaveSpherePtoType,
+  options: PtoTypeOption[],
+): LeaveSpherePtoType {
+  return options.some((item) => item.value === currentPtoTypeCode)
+    ? currentPtoTypeCode
+    : (options[0]?.value || "vacation");
+}
+
 function buildFormState(params: {
   mode: "create" | "edit";
   request: LeaveManagementLoadRequest | null;
@@ -171,29 +179,41 @@ export function LeaveSpherePtoLoadHoursModal({
     getPtoTypeOptions,
   }), [employeeOptions, getPtoTypeOptions, initialForm, mode, request]);
 
-  const [form, setForm] = useState<LeaveSpherePtoLoadHoursFormState>(sourceForm);
-  const [baselineForm, setBaselineForm] = useState<LeaveSpherePtoLoadHoursFormState>(sourceForm);
+  const {
+    draft: form,
+    setDraft: setForm,
+    hasChanges: hasFormChanges,
+    resetDraft: revertDraft,
+    commitDraft,
+  } = useModalDraftState({
+    open,
+    sourceValue: sourceForm,
+    isEqual: formsEqual,
+    onOpen: () => {
+      setFormError(null);
+      setIsDiscardDialogOpen(false);
+      setIsSaveDialogOpen(false);
+      setSaveNote(asString(request?.approverNote));
+    },
+    onChange: onFormChange,
+  });
   const [formError, setFormError] = useState<string | null>(null);
   const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false);
   const [isSaveDialogOpen, setIsSaveDialogOpen] = useState(false);
   const [saveNote, setSaveNote] = useState("");
-  const wasOpenRef = useRef(false);
-  const lastEmittedFormRef = useRef<LeaveSpherePtoLoadHoursFormState | null>(null);
-
-  useEffect(() => {
-    const didJustOpen = open && !wasOpenRef.current;
-    wasOpenRef.current = open;
-    if (!didJustOpen) {
-      return;
-    }
-    setForm(sourceForm);
-    setBaselineForm(sourceForm);
-    setFormError(null);
-    setIsDiscardDialogOpen(false);
-    setIsSaveDialogOpen(false);
-    setSaveNote(asString(request?.approverNote));
-    lastEmittedFormRef.current = sourceForm;
-  }, [open, request?.approverNote, sourceForm]);
+  const {
+    closeModal,
+    handleDialogOpenChange,
+    handleInteractOutside,
+  } = useGuardedModalDialog({
+    isBusy: saving,
+    hasUnsavedChanges: hasFormChanges,
+    onOpenChange,
+    onClose,
+    onDiscardAttempt: () => {
+      setIsDiscardDialogOpen(true);
+    },
+  });
 
   useEffect(() => {
     if (!open) {
@@ -205,9 +225,7 @@ export function LeaveSpherePtoLoadHoursModal({
     setForm((current) => {
       const nextEmployeeId = current.employeeId || employeeOptions[0]?.value || "";
       const employeeTypeOptions = getPtoTypeOptions(nextEmployeeId);
-      const nextPtoTypeCode = employeeTypeOptions.some((item) => item.value === current.ptoTypeCode)
-        ? current.ptoTypeCode
-        : (employeeTypeOptions[0]?.value || "vacation");
+      const nextPtoTypeCode = resolvePtoTypeCode(current.ptoTypeCode, employeeTypeOptions);
       if (current.employeeId === nextEmployeeId && current.ptoTypeCode === nextPtoTypeCode) {
         return current;
       }
@@ -219,21 +237,8 @@ export function LeaveSpherePtoLoadHoursModal({
     });
   }, [employeeOptions, getPtoTypeOptions, mode, open]);
 
-  const hasFormChanges = useMemo(
-    () => !formsEqual(form, baselineForm),
-    [baselineForm, form],
-  );
-
-  useEffect(() => {
-    if (!open) {
-      return;
-    }
-    if (lastEmittedFormRef.current && formsEqual(lastEmittedFormRef.current, form)) {
-      return;
-    }
-    lastEmittedFormRef.current = { ...form };
-    onFormChange?.(form);
-  }, [form, onFormChange, open]);
+  const normalizedDescription = normalizeOptionalValue(form.description);
+  const normalizedSaveNote = normalizeOptionalValue(saveNote);
 
   const submitValidationError = useMemo(() => {
     if (!form.employeeId) {
@@ -242,7 +247,7 @@ export function LeaveSpherePtoLoadHoursModal({
     if (!isPositiveOrZeroNumber(form.hours)) {
       return "Hours must be zero or greater.";
     }
-    if (!normalizeOptionalValue(form.description)) {
+    if (!normalizedDescription) {
       return "Description is required.";
     }
     if (!Number.isInteger(year ?? NaN)) {
@@ -252,13 +257,13 @@ export function LeaveSpherePtoLoadHoursModal({
       return "Select a load request to adjust.";
     }
     return null;
-  }, [form.description, form.employeeId, form.hours, form.transactionId, mode, year]);
+  }, [form.employeeId, form.hours, form.transactionId, mode, normalizedDescription, year]);
 
   const canSave = Boolean(onSubmit && !submitValidationError && hasFormChanges);
   const shouldShowSubmitButton = Boolean(canSave || saving);
   const isEditMode = mode === "edit";
   const submitButtonLabel = saveLabel ?? (isEditMode ? "Save changes" : "Load Hours");
-  const saveConfirmCopy = useMemo(() => ({
+  const saveConfirmCopy = {
     title: isEditMode ? "Save PTO Hours?" : "Load PTO Hours?",
     description: isEditMode
       ? "This will update the approved PTO load request and save the note below."
@@ -268,7 +273,7 @@ export function LeaveSpherePtoLoadHoursModal({
     placeholder: isEditMode
       ? "Add a note or reason for this PTO hour change"
       : "Optional. Add a note or reason for this PTO hour change",
-  }), [isEditMode]);
+  };
   const descriptionMinHeightClassName = "min-h-[88px]";
 
   useEffect(() => {
@@ -280,31 +285,7 @@ export function LeaveSpherePtoLoadHoursModal({
     }
   }, [formError, submitValidationError]);
 
-  function closeModal() {
-    onOpenChange(false);
-    onClose();
-  }
-
-  function handleDialogOpenChange(nextOpen: boolean) {
-    const allowClose = canModalClose({
-      nextOpen,
-      isBusy: saving,
-      hasUnsavedChanges: hasFormChanges,
-    });
-    if (!allowClose) {
-      if (!nextOpen && hasFormChanges && !saving) {
-        setIsDiscardDialogOpen(true);
-      }
-      return;
-    }
-    if (!nextOpen) {
-      closeModal();
-      return;
-    }
-    onOpenChange(true);
-  }
-
-  async function handleSave() {
+  function handleSave() {
     if (!onSubmit) {
       return;
     }
@@ -334,8 +315,8 @@ export function LeaveSpherePtoLoadHoursModal({
       hours: Number(form.hours),
       year: Number(year),
       status: "Approved" as const,
-      description: normalizeOptionalValue(form.description),
-      approverNote: normalizeOptionalValue(saveNote),
+      description: normalizedDescription,
+      approverNote: normalizedSaveNote,
     };
 
     setFormError(null);
@@ -358,10 +339,9 @@ export function LeaveSpherePtoLoadHoursModal({
       ptoActionCode: form.ptoActionCode,
       transactionId: form.transactionId,
       hours: String(Number(form.hours)),
-      description: normalizeOptionalValue(form.description),
+      description: normalizedDescription,
     };
-    setForm(committedForm);
-    setBaselineForm(committedForm);
+    commitDraft(committedForm);
     closeModal();
   }
 
@@ -369,11 +349,10 @@ export function LeaveSpherePtoLoadHoursModal({
     if (!hasFormChanges || saving) {
       return;
     }
-    setForm(baselineForm);
+    revertDraft();
     setFormError(null);
   }
 
-  const employeeFieldOptions = employeeOptions;
   const ptoTypeFieldOptions = getPtoTypeOptions(form.employeeId);
 
   return (
@@ -381,11 +360,7 @@ export function LeaveSpherePtoLoadHoursModal({
       <Dialog open={open} onOpenChange={handleDialogOpenChange}>
         <DialogContent
           className="flex max-h-[90vh] max-w-xl flex-col overflow-hidden rounded-xl bg-white p-6"
-          onInteractOutside={(event) => {
-            if (shouldBlockOutsideClose({ isBusy: saving, hasUnsavedChanges: hasFormChanges })) {
-              event.preventDefault();
-            }
-          }}
+          onInteractOutside={handleInteractOutside}
         >
           <ModalShell busy={saving} busyMessage="Saving PTO hours..." className="min-h-0 flex-1">
             <ModalHeaderRow
@@ -412,16 +387,14 @@ export function LeaveSpherePtoLoadHoursModal({
                   value={form.employeeId}
                   onValueChange={(value) => {
                     const nextTypeOptions = getPtoTypeOptions(value);
-                    const nextTypeCode = nextTypeOptions.some((item) => item.value === form.ptoTypeCode)
-                      ? form.ptoTypeCode
-                      : (nextTypeOptions[0]?.value || "vacation");
+                    const nextTypeCode = resolvePtoTypeCode(form.ptoTypeCode, nextTypeOptions);
                     setForm((current) => ({
                       ...current,
                       employeeId: value,
                       ptoTypeCode: nextTypeCode,
                     }));
                   }}
-                  options={employeeFieldOptions}
+                  options={employeeOptions}
                   searchable
                   disabled={saving || isEditMode}
                 />
@@ -471,7 +444,7 @@ export function LeaveSpherePtoLoadHoursModal({
 
             <div className="mt-3" />
             {(footerActions || hasFormChanges || shouldShowSubmitButton) ? (
-              <DialogFooter className="gap-2">
+              <ModalActionFooter className="gap-2">
                 {footerActions}
                 {isEditMode && hasFormChanges ? (
                   <Button
@@ -487,7 +460,7 @@ export function LeaveSpherePtoLoadHoursModal({
                     {saving ? "Saving..." : submitButtonLabel}
                   </Button>
                 ) : null}
-              </DialogFooter>
+              </ModalActionFooter>
             ) : null}
           </ModalShell>
         </DialogContent>

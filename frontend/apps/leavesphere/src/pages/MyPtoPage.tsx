@@ -9,6 +9,7 @@ import { Button } from "@tradsphere/components/ui/button";
 import { ActionIconButton } from "@tradsphere/components/dashboard/ActionIconButton";
 import {
   Dialog,
+  DialogClose,
   DialogContent,
   DialogDescription,
   DialogFooter,
@@ -34,6 +35,7 @@ import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
 import { LoadActionArea } from "@shared/components/layout/LoadActionArea";
 import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { SectionCard } from "@shared/components/layout/SectionCard";
+import { ModalCloseButton, ModalHeaderRow } from "@shared/components";
 import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
@@ -1763,15 +1765,23 @@ export default function LeaveSphereMyPtoPage() {
         }
       }}>
         <DialogContent className="max-w-xl">
-          <DialogHeader>
-            <DialogTitle>Holiday Detail</DialogTitle>
-            <DialogDescription>
-              LeaveSphere holiday information for the selected date.
-            </DialogDescription>
-          </DialogHeader>
+          <ModalHeaderRow
+            actions={(
+              <DialogClose asChild aria-label="Close holiday detail modal">
+                <ModalCloseButton icon={<X className="size-4" />} />
+              </DialogClose>
+            )}
+          >
+            <DialogHeader>
+              <DialogTitle>Holiday Detail</DialogTitle>
+              <DialogDescription>
+                LeaveSphere holiday information for the selected date.
+              </DialogDescription>
+            </DialogHeader>
+          </ModalHeaderRow>
 
           {selectedHoliday ? (
-            <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-3 text-sm text-slate-700">
+            <div className="mt-4 rounded-xl border border-indigo-100 bg-indigo-50/40 p-3 text-sm text-slate-700">
               <p><span className="font-semibold text-slate-900">Holiday:</span> {selectedHoliday.name}</p>
               <p><span className="font-semibold text-slate-900">Team region:</span> {selectedHoliday.teamRegion}</p>
               <p><span className="font-semibold text-slate-900">Date:</span> {formatDateLabel(selectedHoliday.date, tenantTimeZone)}</p>

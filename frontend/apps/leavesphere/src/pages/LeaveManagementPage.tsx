@@ -3264,15 +3264,23 @@ export default function LeaveManagementPage() {
         }
       }}>
         <DialogContent className="max-w-xl">
-          <DialogHeader>
-            <DialogTitle>Holiday Detail</DialogTitle>
-            <DialogDescription>
-              Team holiday information for the selected date.
-            </DialogDescription>
-          </DialogHeader>
+          <ModalHeaderRow
+            actions={(
+              <DialogClose asChild aria-label="Close holiday detail modal">
+                <ModalCloseButton icon={<X className="size-4" />} />
+              </DialogClose>
+            )}
+          >
+            <DialogHeader>
+              <DialogTitle>Holiday Detail</DialogTitle>
+              <DialogDescription>
+                Team holiday information for the selected date.
+              </DialogDescription>
+            </DialogHeader>
+          </ModalHeaderRow>
 
           {selectedHoliday ? (
-            <div className="rounded-xl border border-indigo-100 bg-indigo-50/40 p-3 text-sm text-slate-700">
+            <div className="mt-4 rounded-xl border border-indigo-100 bg-indigo-50/40 p-3 text-sm text-slate-700">
               <p><span className="font-semibold text-slate-900">Holiday:</span> {selectedHoliday.name}</p>
               <p><span className="font-semibold text-slate-900">Team region:</span> {selectedHoliday.teamRegion}</p>
               <p><span className="font-semibold text-slate-900">Date:</span> {formatDateLabel(selectedHoliday.date, tenantTimeZone)}</p>

@@ -1,7 +1,8 @@
-import { AlertTriangle } from "lucide-react";
+import { AlertTriangle, X } from "lucide-react";
 
 import { Button } from "@/components/ui/button";
 import {
+  DialogClose,
   Dialog,
   DialogContent,
   DialogDescription,
@@ -9,6 +10,7 @@ import {
   DialogHeader,
   DialogTitle,
 } from "@/components/ui/dialog";
+import { ModalCloseButton, ModalHeaderRow } from "@shared/components";
 
 interface UnsavedChangesDialogProps {
   open: boolean;
@@ -40,15 +42,23 @@ export function UnsavedChangesDialog({
           event.preventDefault();
         }}
       >
-        <DialogHeader className="space-y-3">
-          <div className="inline-flex size-10 items-center justify-center rounded-full border border-amber-200 bg-amber-100 text-amber-700">
-            <AlertTriangle className="size-5" aria-hidden="true" />
-          </div>
-          <DialogTitle className="text-slate-900">Discard unsaved changes?</DialogTitle>
-          <DialogDescription className="text-slate-600">
-            You have unsaved changes in this form. If you close now, your changes will be lost.
-          </DialogDescription>
-        </DialogHeader>
+        <ModalHeaderRow
+          actions={(
+            <DialogClose asChild aria-label="Close unsaved changes dialog">
+              <ModalCloseButton icon={<X className="size-4" />} />
+            </DialogClose>
+          )}
+        >
+          <DialogHeader className="space-y-3">
+            <div className="inline-flex size-10 items-center justify-center rounded-full border border-amber-200 bg-amber-100 text-amber-700">
+              <AlertTriangle className="size-5" aria-hidden="true" />
+            </div>
+            <DialogTitle className="text-slate-900">Discard unsaved changes?</DialogTitle>
+            <DialogDescription className="text-slate-600">
+              You have unsaved changes in this form. If you close now, your changes will be lost.
+            </DialogDescription>
+          </DialogHeader>
+        </ModalHeaderRow>
 
         <DialogFooter className="mt-7">
           <Button
