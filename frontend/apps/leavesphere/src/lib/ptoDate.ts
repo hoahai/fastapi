@@ -54,6 +54,72 @@ export function formatMonthYearLabel(monthKey: string, timeZone?: string | null)
   });
 }
 
+type SubmissionDeadline = {
+  month: number;
+  day: number;
+};
+
+function parseSubmissionDeadline(value: string | null | undefined): SubmissionDeadline | null {
+  const text = typeof value === "string" ? value.trim().replace(/\//g, "-") : "";
+  if (!text) {
+    return null;
+  }
+  const match = /^(0?[1-9]|1[0-2])-(0?[1-9]|[12]\d|3[01])$/.exec(text);
+  if (!match) {
+    return null;
+  }
+  const month = Number(match[1]);
+  const day = Number(match[2]);
+  const maxDay = new Date(Date.UTC(2000, month, 0)).getUTCDate();
+  if (day > maxDay) {
+    return null;
+  }
+  return { month, day };
+}
+
+export function formatLeaveSphereSubmissionDeadlineLabel(value: string | null | undefined): string | null {
+  const parsed = parseSubmissionDeadline(value);
+  if (!parsed) {
+    return null;
+  }
+  return `${String(parsed.month).padStart(2, "0")}/${String(parsed.day).padStart(2, "0")}`;
+}
+
+export function isLeaveSphereSubmissionBlockedForYear(params: {
+  lastSubmissionDate?: string | null;
+  selectedYear: number;
+  todayIsoDate: string;
+}): boolean {
+  const parsedDeadline = parseSubmissionDeadline(params.lastSubmissionDate);
+  if (!parsedDeadline) {
+    return false;
+  }
+  const todayYear = Number.parseInt(params.todayIsoDate.slice(0, 4), 10);
+  if (!Number.isInteger(todayYear) || todayYear !== params.selectedYear) {
+    return false;
+  }
+  const todayMonth = Number.parseInt(params.todayIsoDate.slice(5, 7), 10);
+  const todayDay = Number.parseInt(params.todayIsoDate.slice(8, 10), 10);
+  if (!Number.isInteger(todayMonth) || !Number.isInteger(todayDay)) {
+    return false;
+  }
+  const todayMonthDay = `${String(todayMonth).padStart(2, "0")}-${String(todayDay).padStart(2, "0")}`;
+  const deadlineMonthDay = `${String(parsedDeadline.month).padStart(2, "0")}-${String(parsedDeadline.day).padStart(2, "0")}`;
+  return todayMonthDay > deadlineMonthDay;
+}
+
+export function getLeaveSphereSubmissionDeadlineError(params: {
+  lastSubmissionDate?: string | null;
+  selectedYear: number;
+  todayIsoDate: string;
+}): string | null {
+  if (!isLeaveSphereSubmissionBlockedForYear(params)) {
+    return null;
+  }
+  const deadlineLabel = formatLeaveSphereSubmissionDeadlineLabel(params.lastSubmissionDate) || "this date";
+  return `New PTO requests for ${params.selectedYear} are closed after ${deadlineLabel}. Submit a request for ${params.selectedYear + 1} or later.`;
+}
+
 export function buildMonthKeyForYear(monthKey: string, year: number): string | null {
   const match = /^(\d{4})-(\d{2})$/.exec(monthKey);
   if (!match || !Number.isInteger(year)) {

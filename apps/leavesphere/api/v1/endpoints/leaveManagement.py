@@ -121,6 +121,7 @@ def get_leave_management_workspace_route(
             "managerId": "mgr-9",
             "currentUserTeamRegion": "US",
             "isManager": true,
+            "lastSubmissionDate": "10-30",
             "ptoTypes": [],
             "ptoActions": [],
             "employeeBalances": [],

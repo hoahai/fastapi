@@ -44,6 +44,20 @@ class LeaveSphereConfigTests(unittest.TestCase):
         ):
             config.validate_tenant_config()
 
+    def test_validate_tenant_config_accepts_last_submission_date(self):
+        with patch.object(config, "get_tenant_id", return_value="taaa"), patch.object(
+            config, "_has_leavesphere_config", return_value=True
+        ), patch.object(config, "get_db_tables", return_value=dict(config._DEFAULT_DB_TABLES)), patch.object(
+            config,
+            "get_employee_email_map",
+            return_value={},
+        ), patch.object(
+            config,
+            "get_last_submission_date",
+            return_value="10-30",
+        ):
+            config.validate_tenant_config()
+
     def test_get_employee_email_map_parses_and_normalizes_aliases(self):
         with patch.object(
             config,
@@ -67,6 +81,15 @@ class LeaveSphereConfigTests(unittest.TestCase):
                 config.validate_tenant_config()
 
         self.assertIn("leavesphere.EMPLOYEE_EMAIL_MAP.Login@Example.com", exc.exception.invalid)
+
+    def test_get_last_submission_date_normalizes_alias_format(self):
+        with patch.object(config, "get_app_scoped_env", return_value="10/30"):
+            self.assertEqual(config.get_last_submission_date(), "10-30")
+
+    def test_is_submission_cutoff_passed_uses_current_year_only(self):
+        with patch.object(config, "get_last_submission_date", return_value="10-30"):
+            self.assertTrue(config.is_submission_cutoff_passed(year=2026, today=config.date(2026, 11, 1)))
+            self.assertFalse(config.is_submission_cutoff_passed(year=2027, today=config.date(2026, 11, 1)))
 
 
 if __name__ == "__main__":

@@ -89,7 +89,10 @@ import {
 } from "@leavesphere/lib/ptoCalendar";
 import {
   buildMonthKeyForYear,
+  formatLeaveSphereSubmissionDeadlineLabel,
   formatMonthDayYearLabel,
+  getLeaveSphereSubmissionDeadlineError,
+  isLeaveSphereSubmissionBlockedForYear,
 } from "@leavesphere/lib/ptoDate";
 import { formatLeaveSpherePtoStatusLabel, getLeaveSpherePtoRequestSurfaceClassName } from "@leavesphere/lib/ptoStatus";
 import { getPtoRequestActionConfig } from "@leavesphere/lib/ptoRequestActionConfig";
@@ -779,11 +782,48 @@ export default function LeaveSphereMyPtoPage() {
     () => (pendingReviewAction ? getLeaveSphereReviewActionConfirmCopy(pendingReviewAction, "manager") : null),
     [pendingReviewAction],
   );
-  const canRequestPto = Boolean(
+  const submissionDeadline = workspaceForYear?.lastSubmissionDate ?? workspace?.lastSubmissionDate ?? null;
+  const submissionDeadlineError = useMemo(
+    () => getLeaveSphereSubmissionDeadlineError({
+      lastSubmissionDate: submissionDeadline,
+      selectedYear: loadedYearForRequests,
+      todayIsoDate,
+    }),
+    [loadedYearForRequests, submissionDeadline, todayIsoDate],
+  );
+  const submissionDeadlineLabel = useMemo(
+    () => formatLeaveSphereSubmissionDeadlineLabel(submissionDeadline),
+    [submissionDeadline],
+  );
+  const isSubmissionDeadlineBlocked = useMemo(
+    () => isLeaveSphereSubmissionBlockedForYear({
+      lastSubmissionDate: submissionDeadline,
+      selectedYear: loadedYearForRequests,
+      todayIsoDate,
+    }),
+    [loadedYearForRequests, submissionDeadline, todayIsoDate],
+  );
+  const shouldShowSubmitRequestAction = Boolean(
     Number.isInteger(selectedYearNumber)
     && selectedYearNumber >= currentYear
     && loadedYear === selectedYearNumber,
   );
+  const canRequestPto = Boolean(shouldShowSubmitRequestAction && !isSubmissionDeadlineBlocked);
+  const pageBannerDescription = useMemo(() => {
+    const baseDescription = isManager
+      ? "Track your PTO, submit requests, and review direct employee requests in one workspace."
+      : "Track your PTO balance, submit requests, and monitor approvals in one workspace.";
+    if (shouldShowSubmitRequestAction && !canRequestPto && submissionDeadlineLabel) {
+      return `${baseDescription} New requests for ${loadedYearForRequests} close after ${submissionDeadlineLabel}.`;
+    }
+    return baseDescription;
+  }, [
+    canRequestPto,
+    isManager,
+    loadedYearForRequests,
+    shouldShowSubmitRequestAction,
+    submissionDeadlineLabel,
+  ]);
   const calendarEvents = useMemo(() => {
     const events: LeaveSphereMonthCalendarEvent[] = [];
     for (const holiday of workspaceForYear?.holidays ?? []) {
@@ -1128,6 +1168,9 @@ export default function LeaveSphereMyPtoPage() {
 
   const openSubmitDialog = useCallback(() => {
     if (!canRequestPto || !loadedYearDateBounds) {
+      if (isSubmissionDeadlineBlocked && submissionDeadlineError) {
+        toast.error("Submit unavailable", submissionDeadlineError);
+      }
       return;
     }
     const defaultIsoDate = isDateWithinBounds(todayIsoDate, loadedYearDateBounds)
@@ -1142,7 +1185,7 @@ export default function LeaveSphereMyPtoPage() {
       description: "",
     });
     setIsRequestDialogOpen(true);
-  }, [canRequestPto, holidayDates, loadedYearDateBounds, ptoTypeOptionsWithAvailability, todayIsoDate]);
+  }, [canRequestPto, holidayDates, isSubmissionDeadlineBlocked, loadedYearDateBounds, ptoTypeOptionsWithAvailability, submissionDeadlineError, toast, todayIsoDate]);
 
   const openSubmitDialogForDate = useCallback((isoDate: string) => {
     if (!canRequestPto || !loadedYearDateBounds || !isDateWithinBounds(isoDate, loadedYearDateBounds)) {
@@ -1159,6 +1202,24 @@ export default function LeaveSphereMyPtoPage() {
     setIsRequestDialogOpen(true);
   }, [canRequestPto, holidayDates, loadedYearDateBounds, ptoTypeOptionsWithAvailability]);
 
+  const submitRequestAction = shouldShowSubmitRequestAction ? (
+    canRequestPto ? (
+      <Button onClick={openSubmitDialog} disabled={isSubmitting || isReviewing}>
+        <Plus className="size-4" />
+        Submit PTO Request
+      </Button>
+    ) : (
+      <TooltipTarget text={submissionDeadlineError}>
+        <span className="inline-flex">
+          <Button disabled={isSubmitting || isReviewing || isSubmissionDeadlineBlocked}>
+            <Plus className="size-4" />
+            Submit PTO Request
+          </Button>
+        </span>
+      </TooltipTarget>
+    )
+  ) : null;
+
   const handleSubmitRequest = useCallback(async (params: {
       payload: {
         type: LeaveSpherePtoType;
@@ -1169,7 +1230,12 @@ export default function LeaveSphereMyPtoPage() {
       };
   }) => {
     if (!canRequestPto) {
-      toast.error("Submit unavailable", "PTO requests are allowed only for a loaded current or future selected year.");
+      toast.error(
+        "Submit unavailable",
+        submissionDeadlineError
+          ? submissionDeadlineError
+          : "PTO requests are allowed only for a loaded current or future selected year.",
+      );
       return;
     }
     if (!Number.isFinite(params.payload.hours) || params.payload.hours <= 0) {
@@ -1201,14 +1267,18 @@ export default function LeaveSphereMyPtoPage() {
       setIsSubmitting(false);
     }
   }, [
-    commitWorkspace,
-    requestJson,
-    toast,
+    commitScopedWorkspace,
     canRequestPto,
     loadedYearDateBounds,
     loadedYearForRequests,
+    requestJson,
+    submissionDeadlineError,
+    toast,
   ]);
   const validateRequestHours = useCallback((form: LeaveSpherePtoRequestFormState) => {
+    if (submissionDeadlineError) {
+      return submissionDeadlineError;
+    }
     const requestedHours = Number(form.hours);
     if (!Number.isFinite(requestedHours) || requestedHours <= 0) {
       return "Hours must be greater than zero.";
@@ -1219,7 +1289,7 @@ export default function LeaveSphereMyPtoPage() {
       requestedHours: form.hours,
       availableHours,
     });
-  }, [balanceRows]);
+  }, [balanceRows, submissionDeadlineError]);
 
   const handleReviewRequest = useCallback(async (action: LeaveSphereReviewAction) => {
     if (!selectedReviewRequest) {
@@ -1379,15 +1449,8 @@ export default function LeaveSphereMyPtoPage() {
         <PageBanner
           eyebrow="LeaveSphere"
           title="My PTO"
-          description={isManager
-            ? "Track your PTO, submit requests, and review direct employee requests in one workspace."
-            : "Track your PTO balance, submit requests, and monitor approvals in one workspace."}
-          action={canRequestPto ? (
-            <Button onClick={openSubmitDialog} disabled={isSubmitting || isReviewing}>
-              <Plus className="size-4" />
-              Submit PTO Request
-            </Button>
-          ) : null}
+          description={pageBannerDescription}
+          action={submitRequestAction}
           gradientVariant="workspace"
         />
       )}
@@ -1476,16 +1539,31 @@ export default function LeaveSphereMyPtoPage() {
 
       <div className="relative grid items-stretch gap-4 xl:grid-cols-[minmax(19rem,25rem)_minmax(0,1fr)]">
         <SectionCard
-          title="My Requests"
-          description={`${myRequests.length} request${myRequests.length === 1 ? "" : "s"} total`}
-          actions={canRequestPto ? (
-            <ActionIconButton
-              aria-label="Submit PTO request"
-              tooltip="Submit PTO request"
-              onClick={openSubmitDialog}
-              icon={<Plus className="size-4" />}
-              className="h-9 w-9"
-            />
+        title="My Requests"
+        description={`${myRequests.length} request${myRequests.length === 1 ? "" : "s"} total`}
+          actions={submitRequestAction ? (
+            canRequestPto ? (
+              <ActionIconButton
+                aria-label="Submit PTO request"
+                tooltip="Submit PTO request"
+                onClick={openSubmitDialog}
+                icon={<Plus className="size-4" />}
+                className="h-9 w-9"
+              />
+            ) : (
+              <TooltipTarget text={submissionDeadlineError}>
+                <span className="inline-flex">
+                  <ActionIconButton
+                    aria-label="Submit PTO request"
+                    tooltip="Submit PTO request"
+                    onClick={openSubmitDialog}
+                    icon={<Plus className="size-4" />}
+                    className="h-9 w-9"
+                    disabled
+                  />
+                </span>
+              </TooltipTarget>
+            )
           ) : null}
           style={calendarSectionHeight > 0 ? { height: `${calendarSectionHeight}px` } : undefined}
           contentClassName="flex min-h-0 flex-1 flex-col gap-3"
@@ -1654,7 +1732,7 @@ export default function LeaveSphereMyPtoPage() {
         saving={isSubmitting}
         calculateHours={(startDate, endDate) => calculateLeaveSpherePtoHours(startDate, endDate, holidayDates)}
         validateSubmit={validateRequestHours}
-        canSubmitOverride={canSubmitRequestWithinBalance}
+        canSubmitOverride={canSubmitRequestWithinBalance && !isSubmissionDeadlineBlocked}
         saveLabel="Submit request"
         onOpenChange={setIsRequestDialogOpen}
         onClose={() => setIsRequestDialogOpen(false)}

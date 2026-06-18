@@ -35,6 +35,7 @@ from apps.leavesphere.api.v1.helpers.myPto import (
     _to_date_string,
 )
 from apps.leavesphere.api.v1.helpers.config import (
+    get_last_submission_date,
     resolve_employee_email,
     resolve_employee_email_candidates,
 )
@@ -629,7 +630,10 @@ def _build_workspace(
         "managerId": manager_map.get(current_employee_id),
         "currentUserTeamRegion": current_employee_region,
         "isManager": bool(direct_reports),
-        **build_leave_sphere_workspace_common_payload(catalogs),
+        **build_leave_sphere_workspace_common_payload(
+            catalogs,
+            last_submission_date=get_last_submission_date(),
+        ),
         "balances": current_employee_balances,
         "employeeBalances": employee_balances,
         "balanceTransactions": balance_transactions,
@@ -943,6 +947,7 @@ def _build_leave_management_workspace_patch(
         "managerId": workspace.get("managerId"),
         "currentUserTeamRegion": workspace.get("currentUserTeamRegion"),
         "isManager": workspace.get("isManager"),
+        "lastSubmissionDate": workspace.get("lastSubmissionDate"),
     }
     if request_ids:
         request_id_set = {_normalize_text(item) for item in request_ids if _normalize_text(item)}

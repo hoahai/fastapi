@@ -201,6 +201,43 @@ class LeaveManagementBackendTests(unittest.TestCase):
         self.assertEqual(workspace["currentUserEmail"], "employee@example.com")
         self.assertEqual(workspace["currentUserName"], "Hai Truong")
 
+    def test_my_pto_workspace_exposes_last_submission_date(self):
+        request = self._build_request(email="hai@theautoadagency.com")
+        employee = {
+            "id": "emp-1",
+            "firstName": "Hai",
+            "lastName": "Truong",
+            "email": "hai@theautoadagency.com",
+            "title": "Director",
+            "region": "US",
+            "active": 1,
+        }
+
+        with patch.object(myPto, "get_employees_by_email", return_value=[employee]), patch.object(
+            leaveManagement, "get_employees", return_value=[employee]
+        ), patch.object(
+            leaveManagement, "get_employee_managers", return_value=[]
+        ), patch.object(
+            leaveManagement, "get_pto_transactions", return_value=[]
+        ), patch.object(
+            leaveManagement, "get_holidays", return_value=[]
+        ), patch.object(
+            ptoWorkspaceShared,
+            "get_pto_types",
+            return_value=[{"code": "VAC", "name": "Vacation", "listingOrder": 1, "usaDefaultHour": 120, "phlDefaultHour": 0}],
+        ), patch.object(
+            ptoWorkspaceShared,
+            "get_pto_actions",
+            return_value=[{"code": "LOAD", "name": "Load"}, {"code": "REQUEST", "name": "Request"}],
+        ), patch.object(
+            leaveManagement,
+            "get_last_submission_date",
+            return_value="10-30",
+        ):
+            workspace = leaveManagement.load_leave_management_workspace(request=request, year=2026)
+
+        self.assertEqual(workspace["lastSubmissionDate"], "10-30")
+
     def test_create_request_returns_fresh_workspace_payload(self):
         request = self._build_request(email="hai@theautoadagency.com")
         employee = {
@@ -302,6 +339,60 @@ class LeaveManagementBackendTests(unittest.TestCase):
         mock_create.assert_called_once()
         created_item = mock_create.call_args.args[0]
         self.assertEqual(str(created_item["hours"]), "8.00")
+
+    def test_create_my_pto_request_blocks_current_year_after_submission_deadline(self):
+        request = self._build_request(email="hai@theautoadagency.com")
+        employee = {
+            "id": "emp-1",
+            "firstName": "Hai",
+            "lastName": "Truong",
+            "email": "hai@theautoadagency.com",
+            "title": "Director",
+            "region": "US",
+            "active": 1,
+        }
+
+        with patch.object(myPto, "get_employees_by_email", return_value=[employee]), patch.object(
+            myPto, "get_employee_managers", return_value=[]
+        ), patch.object(
+            myPto, "get_pto_transactions", return_value=[]
+        ), patch.object(
+            myPto, "get_holidays", return_value=[]
+        ), patch.object(
+            ptoWorkspaceShared,
+            "get_pto_types",
+            return_value=[{"code": "VAC", "name": "Vacation", "listingOrder": 1, "usaDefaultHour": 120, "phlDefaultHour": 0}],
+        ), patch.object(
+            ptoWorkspaceShared,
+            "get_pto_actions",
+            return_value=[{"code": "REQUEST", "name": "Request"}],
+        ), patch.object(
+            myPto,
+            "get_last_submission_date",
+            return_value="10-30",
+        ), patch.object(
+            myPto,
+            "is_submission_cutoff_passed",
+            return_value=True,
+        ), patch.object(
+            ptoTransactions,
+            "create_request",
+        ) as mock_create:
+            with self.assertRaises(ValueError) as exc:
+                myPto.create_my_pto_request(
+                    request=request,
+                    payload={
+                        "type": "vacation",
+                        "startDate": "2026-11-01",
+                        "endDate": "2026-11-01",
+                        "hours": 8,
+                        "description": "Family trip",
+                        "year": 2026,
+                    },
+                )
+
+        self.assertIn("closed after 10/30", str(exc.exception))
+        mock_create.assert_not_called()
 
     def test_load_workspace_normalizes_holiday_dates_before_year_filtering(self):
         request = self._build_request()

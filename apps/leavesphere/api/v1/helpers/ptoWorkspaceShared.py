@@ -176,12 +176,17 @@ def clear_leave_sphere_pto_workspace_catalog_cache() -> None:
     build_pto_action_catalog.cache_clear()
 
 
-def build_leave_sphere_workspace_common_payload(catalogs: LeaveSpherePtoWorkspaceCatalogs) -> dict:
+def build_leave_sphere_workspace_common_payload(
+    catalogs: LeaveSpherePtoWorkspaceCatalogs,
+    *,
+    last_submission_date: str | None = None,
+) -> dict:
     return {
         "ptoTypes": catalogs.pto_types,
         "ptoActions": catalogs.pto_actions,
         "defaultRequestActionCode": catalogs.default_request_action_code,
         "defaultCancelActionCode": catalogs.default_cancel_action_code,
+        "lastSubmissionDate": last_submission_date,
     }
 
 

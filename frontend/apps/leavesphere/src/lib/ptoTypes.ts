@@ -87,6 +87,7 @@ export type LeaveSpherePtoWorkspaceData = {
   ptoActions: LeaveSpherePtoActionConfig[];
   defaultRequestActionCode?: string;
   defaultCancelActionCode?: string;
+  lastSubmissionDate?: string | null;
   balances: LeaveSpherePtoBalance[];
   requests: LeaveSpherePtoRequest[];
   holidays: LeaveSphereHoliday[];

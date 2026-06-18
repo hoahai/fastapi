@@ -19,7 +19,12 @@ from apps.leavesphere.api.v1.helpers.dbQueries import (
     reject_pending_pto_request,
     update_pto_transaction,
 )
-from apps.leavesphere.api.v1.helpers.config import resolve_employee_email_candidates
+from apps.leavesphere.api.v1.helpers.config import (
+    format_last_submission_date,
+    get_last_submission_date,
+    is_submission_cutoff_passed,
+    resolve_employee_email_candidates,
+)
 from apps.leavesphere.api.v1.helpers.ptoAccounting import (
     is_load_action_row,
     is_request_action_row,
@@ -573,6 +578,7 @@ def _build_my_pto_workspace_patch(
         "isManager": workspace.get("isManager"),
         "defaultRequestActionCode": workspace.get("defaultRequestActionCode"),
         "defaultCancelActionCode": workspace.get("defaultCancelActionCode"),
+        "lastSubmissionDate": workspace.get("lastSubmissionDate"),
     }
     if request_ids:
         request_id_set = {_normalize_text(item) for item in request_ids if _normalize_text(item)}
@@ -657,7 +663,10 @@ def load_my_pto_workspace(*, request, year: int | None = None, force_refresh: bo
         "currentUserTeamRegion": current_employee_region,
         "isManager": bool(direct_reports),
         "employees": _build_employee_rows([employee, *direct_reports]),
-        **build_leave_sphere_workspace_common_payload(catalogs),
+        **build_leave_sphere_workspace_common_payload(
+            catalogs,
+            last_submission_date=get_last_submission_date(),
+        ),
         "balances": own_balance_rows,
         "requests": all_requests,
         "holidays": holidays,
@@ -688,6 +697,12 @@ def create_my_pto_request(*, request, payload: dict) -> dict:
     employee = _resolve_current_employee(request, require_active=True)
     employee_id = _normalize_text(employee.get("id"))
     selected_year = _normalize_year(payload.get("year"))
+    submission_deadline = get_last_submission_date()
+    if submission_deadline and is_submission_cutoff_passed(year=selected_year):
+        deadline_label = format_last_submission_date(submission_deadline) or submission_deadline
+        raise ValueError(
+            f"New PTO requests for {selected_year} are closed after {deadline_label}"
+        )
     start_date = _normalize_iso_date(payload.get("startDate"))
     end_date = _normalize_iso_date(payload.get("endDate"))
     if start_date and end_date and start_date > end_date:

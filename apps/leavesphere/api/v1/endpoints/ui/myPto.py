@@ -87,6 +87,7 @@ def get_my_pto_load_route(
             "managerId": "mgr-9",
             "currentUserTeamRegion": "US",
             "isManager": true,
+            "lastSubmissionDate": "10-30",
             "ptoTypes": [
               {"code": "VAC", "type": "vacation", "label": "Vacation", "listingOrder": 1}
             ],
@@ -128,6 +129,7 @@ def get_my_pto_load_route(
         - Requires valid API key or bearer token in compat mode
         - Resolves the employee from the signed-in user's login email
         - Returns one year of dashboard data for the My PTO page
+        - When `lastSubmissionDate` is configured, it is returned as `MM-DD` in the workspace payload
         - `fresh_data=true` bypasses the backend workspace cache and rebuilds the workspace from source data
     """
     try:
@@ -174,6 +176,8 @@ def create_my_pto_request_route(
         - The employee is resolved from the signed-in user's login email
         - `hours` must be greater than zero
         - `ptoTypeCode` is preferred and must match a row from the PTO type table; `type` is accepted as a fallback alias
+        - When `lastSubmissionDate` is configured, new requests for the current year are rejected after that MM-DD cutoff
+        - Future-year requests remain allowed even after the current-year cutoff has passed
         - Mutation responses may return `workspacePatch` instead of a full `workspace` when the server can patch a cached snapshot
     """
     try:

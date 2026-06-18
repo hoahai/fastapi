@@ -59,6 +59,7 @@ export type LeaveManagementWorkspaceData = {
   ptoActions: LeaveManagementActionConfig[];
   defaultRequestActionCode?: string;
   defaultCancelActionCode?: string;
+  lastSubmissionDate?: string | null;
 };
 
 export type LeaveManagementWorkspaceDelta = Partial<LeaveManagementWorkspaceData>;
@@ -526,6 +527,7 @@ function normalizeWorkspaceResponse(payload: unknown): LeaveManagementWorkspaceD
     ptoActions,
     defaultRequestActionCode: asString(workspaceRaw.defaultRequestActionCode) || undefined,
     defaultCancelActionCode: asString(workspaceRaw.defaultCancelActionCode) || undefined,
+    lastSubmissionDate: asString(workspaceRaw.lastSubmissionDate) || null,
   };
 }
 
@@ -560,6 +562,9 @@ function normalizeWorkspaceDelta(payload: unknown): LeaveManagementWorkspaceDelt
   }
   if ("defaultCancelActionCode" in workspaceRaw) {
     patch.defaultCancelActionCode = asString(workspaceRaw.defaultCancelActionCode) || undefined;
+  }
+  if ("lastSubmissionDate" in workspaceRaw) {
+    patch.lastSubmissionDate = asString(workspaceRaw.lastSubmissionDate) || null;
   }
   if (Array.isArray(workspaceRaw.employees)) {
     patch.employees = workspaceRaw.employees

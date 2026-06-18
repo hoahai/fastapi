@@ -331,6 +331,7 @@ function normalizeWorkspace(payload: unknown): LeaveSpherePtoWorkspaceData | nul
     ptoActions,
     defaultRequestActionCode: asString(workspace.defaultRequestActionCode) || undefined,
     defaultCancelActionCode: asString(workspace.defaultCancelActionCode) || undefined,
+    lastSubmissionDate: asString(workspace.lastSubmissionDate) || null,
     balances,
     requests,
     holidays,
@@ -369,6 +370,9 @@ function normalizeWorkspaceDelta(payload: unknown): LeaveSpherePtoWorkspaceDelta
   }
   if ("defaultCancelActionCode" in workspace) {
     patch.defaultCancelActionCode = asString(workspace.defaultCancelActionCode) || undefined;
+  }
+  if ("lastSubmissionDate" in workspace) {
+    patch.lastSubmissionDate = asString(workspace.lastSubmissionDate) || null;
   }
   if (Array.isArray(workspace.employees)) {
     patch.employees = workspace.employees
