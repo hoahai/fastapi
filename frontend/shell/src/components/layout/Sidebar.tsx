@@ -9,7 +9,8 @@ import {
   ShieldCheck,
   UserRound,
 } from "lucide-react";
-import { useEffect, useMemo, useState, type ComponentType, type FocusEvent, type MouseEvent as ReactMouseEvent } from "react";
+import { AnimatePresence, motion } from "framer-motion";
+import { useEffect, useMemo, useRef, useState, type ComponentType, type FocusEvent, type MouseEvent as ReactMouseEvent } from "react";
 
 import { Button } from "@tradsphere/components/ui/button";
 import {
@@ -60,6 +61,9 @@ type AppNavGroup = {
   tenantAssignments: NormalizedAccessAssignment[];
 };
 
+const APP_GROUP_HOVER_OPEN_DELAY_MS = 90;
+const APP_GROUP_HOVER_CLOSE_DELAY_MS = 140;
+
 function handleSidebarAnchorClick(
   event: ReactMouseEvent<HTMLAnchorElement>,
   onActivate: () => void,
@@ -87,7 +91,10 @@ export function Sidebar({
 }: SidebarProps) {
   const auth = useAuth();
   const [expandedById, setExpandedById] = useState<Record<string, boolean>>(() => ({}));
+  const [hoverExpandedById, setHoverExpandedById] = useState<Record<string, boolean>>(() => ({}));
   const [accountMenuOpen, setAccountMenuOpen] = useState(false);
+  const hoverTimersRef = useRef<Record<string, { open?: ReturnType<typeof window.setTimeout>; close?: ReturnType<typeof window.setTimeout> }>>({});
+  const hoverSuppressedByIdRef = useRef<Record<string, boolean>>({});
   const isCompact = !visuallyExpanded;
   const isSignedIn = auth.status === "authenticated" && Boolean(auth.user);
   const protectionEnabled = shouldProtectFrontendAuth();
@@ -181,18 +188,83 @@ export function Sidebar({
     setAccountMenuOpen(false);
   }, [currentPath, mobileOpen, isCompact]);
 
-  function toggleExpanded(itemId: string) {
-    setExpandedById((current) => ({
-      ...current,
-      [itemId]: !current[itemId],
-    }));
-  }
+  useEffect(() => {
+    if (visuallyExpanded) {
+      return;
+    }
+    setHoverExpandedById({});
+    hoverSuppressedByIdRef.current = {};
+  }, [visuallyExpanded]);
+
+  useEffect(() => {
+    return () => {
+      for (const timers of Object.values(hoverTimersRef.current)) {
+        if (timers.open) {
+          window.clearTimeout(timers.open);
+        }
+        if (timers.close) {
+          window.clearTimeout(timers.close);
+        }
+      }
+      hoverTimersRef.current = {};
+    };
+  }, []);
 
   function setExpanded(itemId: string, value: boolean) {
     setExpandedById((current) => ({
       ...current,
       [itemId]: value,
     }));
+  }
+
+  function setHoverExpanded(itemId: string, value: boolean) {
+    setHoverExpandedById((current) => ({
+      ...current,
+      [itemId]: value,
+    }));
+  }
+
+  function setHoverSuppressed(itemId: string, suppressed: boolean) {
+    if (suppressed) {
+      hoverSuppressedByIdRef.current[itemId] = true;
+      return;
+    }
+    delete hoverSuppressedByIdRef.current[itemId];
+  }
+
+  function isHoverSuppressed(itemId: string): boolean {
+    return Boolean(hoverSuppressedByIdRef.current[itemId]);
+  }
+
+  function clearHoverTimers(itemId: string) {
+    const timers = hoverTimersRef.current[itemId];
+    if (!timers) {
+      return;
+    }
+    if (timers.open) {
+      window.clearTimeout(timers.open);
+    }
+    if (timers.close) {
+      window.clearTimeout(timers.close);
+    }
+    delete hoverTimersRef.current[itemId];
+  }
+
+  function scheduleHoverExpanded(itemId: string, value: boolean, delayMs: number) {
+    if (value && isHoverSuppressed(itemId)) {
+      return;
+    }
+    clearHoverTimers(itemId);
+    hoverTimersRef.current[itemId] = {
+      [value ? "open" : "close"]: window.setTimeout(() => {
+        if (value && isHoverSuppressed(itemId)) {
+          clearHoverTimers(itemId);
+          return;
+        }
+        setHoverExpanded(itemId, value);
+        clearHoverTimers(itemId);
+      }, delayMs),
+    };
   }
 
   function handleSidebarMouseEnter() {
@@ -252,7 +324,7 @@ export function Sidebar({
 
   return (
     <>
-      <header className="sticky top-0 z-30 rounded-2xl border border-blue-100/90 bg-white/95 p-3 shadow-soft backdrop-blur lg:hidden">
+      <header className="sticky top-0 z-20 rounded-2xl border border-blue-100/90 bg-white/95 p-3 shadow-soft backdrop-blur lg:hidden">
         <div className="flex items-center justify-between gap-3">
           <Button
             variant="outline"
@@ -269,12 +341,12 @@ export function Sidebar({
       </header>
 
       {mobileOpen ? (
-        <div className="fixed inset-0 z-40 bg-slate-950/36 backdrop-blur-[1.5px] lg:hidden" onClick={onCloseMobile} />
+        <div className="fixed inset-0 z-20 bg-slate-950/36 backdrop-blur-[1.5px] lg:hidden" onClick={onCloseMobile} />
       ) : null}
 
       <aside
         className={cn(
-          "fixed left-0 top-0 z-50 flex h-screen w-72 flex-col overflow-y-auto border-r border-blue-100/95 bg-[rgba(238,246,255,0.84)] p-4 shadow-[0_16px_34px_-24px_rgba(59,130,246,0.5)] backdrop-blur-sm transition-[width,transform] duration-200 lg:left-4 lg:top-4 lg:bottom-4 lg:h-auto lg:w-[270px] lg:rounded-[1.9rem] lg:border lg:border-blue-100/95 lg:shadow-[0_22px_44px_-26px_rgba(59,130,246,0.52)] lg:backdrop-blur-sm lg:translate-x-0",
+          "fixed left-0 top-0 z-20 flex h-screen w-72 flex-col overflow-y-auto border-r border-blue-100/95 bg-[rgba(238,246,255,0.84)] p-4 shadow-[0_16px_34px_-24px_rgba(59,130,246,0.5)] backdrop-blur-sm transition-[width,transform] duration-200 lg:left-4 lg:top-4 lg:bottom-4 lg:h-auto lg:w-[270px] lg:rounded-[1.9rem] lg:border lg:border-blue-100/95 lg:shadow-[0_22px_44px_-26px_rgba(59,130,246,0.52)] lg:backdrop-blur-sm lg:translate-x-0",
           mobileOpen ? "translate-x-0" : "-translate-x-full lg:translate-x-0",
           isCompact ? "lg:w-[76px]" : "lg:w-[270px]",
         )}
@@ -310,172 +382,219 @@ export function Sidebar({
           </div>
         </div>
 
-        {!isCompact ? (
-          <div className="relative z-10 mt-4 flex items-center gap-2 px-1">
-            <span className="h-px flex-1 bg-gradient-to-r from-blue-300/85 to-transparent" />
-            <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-slate-500">Apps</p>
-            <span className="h-px flex-1 bg-gradient-to-l from-blue-300/85 to-transparent" />
-          </div>
-        ) : null}
-
-        <nav className="relative z-10 mt-3.5 flex-1 space-y-2.5">
-          <SidebarItem
-            icon={LayoutDashboard}
-            label="Portal / Workspace Home"
-            route="/"
-            collapsed={isCompact}
-            active={currentPath === "/"}
-            available
-            onNavigate={onNavigate}
-            onCloseMobile={onCloseMobile}
-          />
-          {hasAdminPermission ? (
+        <nav className="relative z-10 mt-3.5 flex-1 space-y-3">
+          <div className="space-y-2.5">
             <SidebarItem
-              icon={ShieldCheck}
-              label="Admin / Users"
-              route="/admin/users"
+              icon={LayoutDashboard}
+              label="Portal / Workspace Home"
+              route="/"
               collapsed={isCompact}
-              active={currentPath === "/admin/users"}
+              active={currentPath === "/"}
               available
               onNavigate={onNavigate}
               onCloseMobile={onCloseMobile}
             />
-          ) : null}
-          {navGroups.map((group) => {
-            const topLevel = group.item;
-            const tenantAssignments = group.tenantAssignments;
-            const appCode = String(topLevel.id || "").trim().toLowerCase();
-            const canAccessScopedAdmin = topLevel.available && isSignedIn && (isSuperAdmin || hasAppAdminAccess(auth.accessProfile, appCode));
-            const adminChild = canAccessScopedAdmin
-              ? [{
-                id: `${appCode}-admin`,
-                label: "Admin",
-                route: `/${appCode}/admin`,
-                available: true,
-              } satisfies AppNavChildItem]
-              : [];
-            const visibleChildren = [...(topLevel.children || []), ...adminChild]
-              .filter((child, index, list) => list.findIndex((candidate) => candidate.route === child.route) === index);
-            const visibleMainChildren = visibleChildren.filter((child) => !child.route.endsWith("/admin"));
-            const visibleAdminChildren = visibleChildren.filter((child) => child.route.endsWith("/admin"));
-            const hasChildren = !isCompact && visibleChildren.length > 0;
-            const expanded = Boolean(expandedById[topLevel.id]);
-            const parentActive = isTopLevelActive(topLevel, currentPath);
-            const hasMultipleTenants = hasChildren && tenantAssignments.length > 1;
-            const hasActiveTenantForApp = tenantAssignments.some((item) => item.tenantSlug === auth.tenantSlug);
-            const defaultTenantSlug = hasActiveTenantForApp
-              ? auth.tenantSlug
-              : tenantAssignments[0]?.tenantSlug || auth.tenantSlug || null;
+            {hasAdminPermission ? (
+              <SidebarItem
+                icon={ShieldCheck}
+                label="Admin / Users"
+                route="/admin/users"
+                collapsed={isCompact}
+                active={currentPath === "/admin/users"}
+                available
+                onNavigate={onNavigate}
+                onCloseMobile={onCloseMobile}
+              />
+            ) : null}
+          </div>
 
-            return (
-              <div
-                key={topLevel.id}
-                className={cn("space-y-1 rounded-2xl p-1", hasChildren && expanded && "border border-blue-100/85 bg-white/55 backdrop-blur-sm")}
-              >
-                <SidebarParentItem
-                  icon={topLevel.icon}
-                  label={topLevel.label}
-                  route={topLevel.route}
-                  collapsed={isCompact}
-                  available={topLevel.available}
-                  active={parentActive}
-                  expanded={expanded}
-                  hasChildren={hasChildren}
-                  onNavigate={() => handleSelectTenantRoute(defaultTenantSlug, topLevel.route)}
-                  onToggleExpand={() => toggleExpanded(topLevel.id)}
-                  onExpand={() => setExpanded(topLevel.id, true)}
-                />
-                {hasChildren && expanded ? (
-                  hasMultipleTenants ? (
-                    <div className="space-y-2 border-l border-blue-200/75 pl-4">
-                      {tenantAssignments.map((tenantAssignment) => (
-                        <div
-                          key={`${topLevel.id}::${tenantAssignment.tenantSlug}`}
-                          className={cn(
-                            "rounded-xl border border-blue-100/85 bg-white/60 p-2 backdrop-blur-sm",
-                            auth.tenantSlug === tenantAssignment.tenantSlug && "border-blue-200 bg-blue-50/65 shadow-[0_14px_28px_-24px_rgba(59,130,246,0.48)]",
-                          )}
-                        >
-                          <button
-                            type="button"
-                            onClick={() => handleSelectTenantRoute(tenantAssignment.tenantSlug, topLevel.route)}
-                            className="flex w-full items-center justify-between gap-2 rounded-lg px-1.5 py-1.5 text-left transition hover:bg-blue-50/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1"
-                            aria-current={auth.tenantSlug === tenantAssignment.tenantSlug && parentActive ? "page" : undefined}
-                          >
-                            <span
-                              className={`inline-flex max-w-[72%] items-center truncate rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] ${tenantChipClass(tenantAssignment.tenantSlug)}`}
-                            >
-                              {tenantAssignment.tenantName || tenantAssignment.tenantSlug}
-                            </span>
-                            <span
-                              className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${roleChipClass(tenantAssignment.role)}`}
-                            >
-                              {roleLabel(tenantAssignment.role)}
-                            </span>
-                          </button>
-                          <div className="mt-1 space-y-1">
+          {!isCompact ? (
+            <div className="relative z-10 mt-1 flex items-center gap-2 px-1">
+              <span className="h-px flex-1 bg-gradient-to-r from-blue-300/85 to-transparent" />
+              <p className="text-[10px] font-semibold uppercase tracking-[0.28em] text-slate-500">Apps</p>
+              <span className="h-px flex-1 bg-gradient-to-l from-blue-300/85 to-transparent" />
+            </div>
+          ) : null}
+
+          <div className="space-y-2.5">
+            {navGroups.map((group) => {
+              const topLevel = group.item;
+              const tenantAssignments = group.tenantAssignments;
+              const appCode = String(topLevel.id || "").trim().toLowerCase();
+              const canAccessScopedAdmin = topLevel.available && isSignedIn && (isSuperAdmin || hasAppAdminAccess(auth.accessProfile, appCode));
+              const adminChild = canAccessScopedAdmin
+                ? [{
+                  id: `${appCode}-admin`,
+                  label: "Admin",
+                  route: `/${appCode}/admin`,
+                  available: true,
+                } satisfies AppNavChildItem]
+                : [];
+              const visibleChildren = [...(topLevel.children || []), ...adminChild]
+                .filter((child, index, list) => list.findIndex((candidate) => candidate.route === child.route) === index);
+              const visibleMainChildren = visibleChildren.filter((child) => !child.route.endsWith("/admin"));
+              const visibleAdminChildren = visibleChildren.filter((child) => child.route.endsWith("/admin"));
+              const hasChildren = !isCompact && visibleChildren.length > 0;
+              const expanded = Boolean(expandedById[topLevel.id] || hoverExpandedById[topLevel.id]);
+              const parentActive = isTopLevelActive(topLevel, currentPath);
+              const hasMultipleTenants = hasChildren && tenantAssignments.length > 1;
+              const hasActiveTenantForApp = tenantAssignments.some((item) => item.tenantSlug === auth.tenantSlug);
+              const defaultTenantSlug = hasActiveTenantForApp
+                ? auth.tenantSlug
+                : tenantAssignments[0]?.tenantSlug || auth.tenantSlug || null;
+
+              return (
+                <div
+                  key={topLevel.id}
+                  className={cn(
+                    "space-y-1 rounded-2xl p-1 transition-[background-color,border-color,box-shadow] duration-200",
+                    hasChildren && expanded && "border border-blue-100/85 bg-white/55 shadow-[0_14px_30px_-26px_rgba(59,130,246,0.28)] backdrop-blur-sm",
+                  )}
+                  onMouseEnter={() => {
+                    if (!hasChildren || expandedById[topLevel.id]) {
+                      return;
+                    }
+                    scheduleHoverExpanded(topLevel.id, true, APP_GROUP_HOVER_OPEN_DELAY_MS);
+                  }}
+                  onMouseLeave={() => {
+                    if (!hasChildren || expandedById[topLevel.id]) {
+                      setHoverSuppressed(topLevel.id, false);
+                      return;
+                    }
+                    setHoverSuppressed(topLevel.id, false);
+                    scheduleHoverExpanded(topLevel.id, false, APP_GROUP_HOVER_CLOSE_DELAY_MS);
+                  }}
+                  >
+                    <SidebarParentItem
+                    icon={topLevel.icon}
+                    label={topLevel.label}
+                    route={topLevel.route}
+                    collapsed={isCompact}
+                    available={topLevel.available}
+                    active={parentActive}
+                    expanded={expanded}
+                    hasChildren={hasChildren}
+                    onNavigate={() => handleSelectTenantRoute(defaultTenantSlug, topLevel.route)}
+                    onToggleExpand={() => {
+                      clearHoverTimers(topLevel.id);
+                      if (expanded) {
+                        setHoverExpanded(topLevel.id, false);
+                        setHoverSuppressed(topLevel.id, true);
+                        setExpanded(topLevel.id, false);
+                        return;
+                      }
+                      setHoverSuppressed(topLevel.id, false);
+                      setExpanded(topLevel.id, true);
+                    }}
+                      onExpand={() => {
+                        clearHoverTimers(topLevel.id);
+                        setHoverSuppressed(topLevel.id, false);
+                        setExpanded(topLevel.id, true);
+                      }}
+                    />
+                  <AnimatePresence initial={false}>
+                    {hasChildren && expanded ? (
+                      <motion.div
+                        key={`${topLevel.id}::submenu`}
+                        initial={{ opacity: 0, y: -6, height: 0 }}
+                        animate={{ opacity: 1, y: 0, height: "auto" }}
+                        exit={{ opacity: 0, y: -6, height: 0 }}
+                        transition={{ duration: 0.18, ease: "easeOut" }}
+                        className="overflow-hidden will-change-[height,opacity,transform]"
+                      >
+                        {hasMultipleTenants ? (
+                          <div className="space-y-2 border-l border-blue-200/75 pl-4">
+                            {tenantAssignments.map((tenantAssignment) => (
+                              <div
+                                key={`${topLevel.id}::${tenantAssignment.tenantSlug}`}
+                                className={cn(
+                                  "rounded-xl border border-blue-100/85 bg-white/60 p-2 backdrop-blur-sm",
+                                  auth.tenantSlug === tenantAssignment.tenantSlug && "border-blue-200 bg-blue-50/65 shadow-[0_14px_28px_-24px_rgba(59,130,246,0.48)]",
+                                )}
+                              >
+                                <button
+                                  type="button"
+                                  onClick={() => handleSelectTenantRoute(tenantAssignment.tenantSlug, topLevel.route)}
+                                  className="flex w-full items-center justify-between gap-2 rounded-lg px-1.5 py-1.5 text-left transition hover:bg-blue-50/85 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1"
+                                  aria-current={auth.tenantSlug === tenantAssignment.tenantSlug && parentActive ? "page" : undefined}
+                                >
+                                  <span
+                                    className={`inline-flex max-w-[72%] items-center truncate rounded-full border px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.1em] ${tenantChipClass(tenantAssignment.tenantSlug)}`}
+                                  >
+                                    {tenantAssignment.tenantName || tenantAssignment.tenantSlug}
+                                  </span>
+                                  <span
+                                    className={`inline-flex shrink-0 items-center rounded-full border px-2 py-0.5 text-[10px] font-medium ${roleChipClass(tenantAssignment.role)}`}
+                                  >
+                                    {roleLabel(tenantAssignment.role)}
+                                  </span>
+                                </button>
+                                <div className="mt-1 space-y-1">
+                                  {visibleMainChildren.map((child) => (
+                                    <SidebarChildItem
+                                      key={`${child.id}::${tenantAssignment.tenantSlug}`}
+                                      child={child}
+                                      currentPath={currentPath}
+                                      tenantSlug={tenantAssignment.tenantSlug}
+                                      activeTenantSlug={auth.tenantSlug}
+                                      accessProfile={auth.accessProfile}
+                                      onNavigate={handleSelectTenantRoute}
+                                    />
+                                  ))}
+                                  {visibleMainChildren.length > 0 && visibleAdminChildren.length > 0 ? (
+                                    <div className="mx-2 my-1 h-px rounded-full bg-blue-200/80" />
+                                  ) : null}
+                                  {visibleAdminChildren.map((child) => (
+                                    <SidebarChildItem
+                                      key={`${child.id}::${tenantAssignment.tenantSlug}`}
+                                      child={child}
+                                      currentPath={currentPath}
+                                      tenantSlug={tenantAssignment.tenantSlug}
+                                      activeTenantSlug={auth.tenantSlug}
+                                      accessProfile={auth.accessProfile}
+                                      onNavigate={handleSelectTenantRoute}
+                                    />
+                                  ))}
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        ) : (
+                          <div className="space-y-1 border-l border-blue-200/75 pl-4">
                             {visibleMainChildren.map((child) => (
                               <SidebarChildItem
-                                key={`${child.id}::${tenantAssignment.tenantSlug}`}
+                                key={child.id}
                                 child={child}
                                 currentPath={currentPath}
-                                tenantSlug={tenantAssignment.tenantSlug}
+                                tenantSlug={defaultTenantSlug}
                                 activeTenantSlug={auth.tenantSlug}
                                 accessProfile={auth.accessProfile}
                                 onNavigate={handleSelectTenantRoute}
                               />
                             ))}
                             {visibleMainChildren.length > 0 && visibleAdminChildren.length > 0 ? (
-                              <div className="mx-2 my-1 h-px rounded-full bg-blue-200/80" />
+                              <div className="mx-2 my-1 h-px rounded-full bg-blue-200/90" />
                             ) : null}
                             {visibleAdminChildren.map((child) => (
                               <SidebarChildItem
-                                key={`${child.id}::${tenantAssignment.tenantSlug}`}
+                                key={child.id}
                                 child={child}
                                 currentPath={currentPath}
-                                tenantSlug={tenantAssignment.tenantSlug}
+                                tenantSlug={defaultTenantSlug}
                                 activeTenantSlug={auth.tenantSlug}
                                 accessProfile={auth.accessProfile}
                                 onNavigate={handleSelectTenantRoute}
                               />
                             ))}
                           </div>
-                        </div>
-                      ))}
-                    </div>
-                  ) : (
-                    <div className="space-y-1 border-l border-blue-200/75 pl-4">
-                      {visibleMainChildren.map((child) => (
-                        <SidebarChildItem
-                          key={child.id}
-                          child={child}
-                          currentPath={currentPath}
-                          tenantSlug={defaultTenantSlug}
-                          activeTenantSlug={auth.tenantSlug}
-                          accessProfile={auth.accessProfile}
-                          onNavigate={handleSelectTenantRoute}
-                        />
-                      ))}
-                      {visibleMainChildren.length > 0 && visibleAdminChildren.length > 0 ? (
-                        <div className="mx-2 my-1 h-px rounded-full bg-blue-200/90" />
-                      ) : null}
-                      {visibleAdminChildren.map((child) => (
-                        <SidebarChildItem
-                          key={child.id}
-                          child={child}
-                          currentPath={currentPath}
-                          tenantSlug={defaultTenantSlug}
-                          activeTenantSlug={auth.tenantSlug}
-                          accessProfile={auth.accessProfile}
-                          onNavigate={handleSelectTenantRoute}
-                        />
-                      ))}
-                    </div>
-                  )
-                ) : null}
-              </div>
-            );
-          })}
+                        )}
+                      </motion.div>
+                    ) : null}
+                  </AnimatePresence>
+                </div>
+              );
+            })}
+          </div>
         </nav>
 
         <div
@@ -484,102 +603,102 @@ export function Sidebar({
             isCompact ? "border-blue-100/90 bg-white/56" : "border-blue-100/95 bg-white/62",
           )}
         >
-          <div className="pt-3">
-          {isSignedIn ? (
-            <div
-              className="relative"
-              onMouseEnter={() => setAccountMenuOpen(true)}
-              onMouseLeave={() => setAccountMenuOpen(false)}
-              onFocusCapture={() => setAccountMenuOpen(true)}
-              onBlurCapture={(event) => {
-                const nextFocusedElement = event.relatedTarget;
-                if (nextFocusedElement instanceof Node && event.currentTarget.contains(nextFocusedElement)) {
-                  return;
-                }
-                setAccountMenuOpen(false);
-              }}
-            >
-              <TooltipTarget text={isCompact ? "Account" : null}>
+          <div className="flex min-h-[4.75rem] items-center">
+            {isSignedIn ? (
+              <div
+                className="relative w-full"
+                onMouseEnter={() => setAccountMenuOpen(true)}
+                onMouseLeave={() => setAccountMenuOpen(false)}
+                onFocusCapture={() => setAccountMenuOpen(true)}
+                onBlurCapture={(event) => {
+                  const nextFocusedElement = event.relatedTarget;
+                  if (nextFocusedElement instanceof Node && event.currentTarget.contains(nextFocusedElement)) {
+                    return;
+                  }
+                  setAccountMenuOpen(false);
+                }}
+              >
+                <TooltipTarget text={isCompact ? "Account" : null}>
+                  <button
+                    type="button"
+                    aria-expanded={accountMenuOpen}
+                    aria-label="Account menu"
+                    className={cn(
+                      "group flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
+                      "text-slate-700 hover:bg-white/80 hover:text-slate-900",
+                      isCompact && "lg:justify-center",
+                    )}
+                  >
+                    <UserRound className="size-4 shrink-0 text-blue-700 transition-colors group-hover:text-blue-800" />
+                    {!isCompact ? (
+                      <div className="min-w-0 flex-1">
+                        <p className="truncate text-sm font-semibold tracking-[-0.01em] text-slate-800">{accountDisplayName}</p>
+                        <p className="truncate text-xs text-slate-500">{auth.user?.email || "-"}</p>
+                      </div>
+                    ) : null}
+                  </button>
+                </TooltipTarget>
+
+                {accountMenuOpen ? (
+                  <>
+                    <div
+                      aria-hidden="true"
+                      className={cn(
+                        "absolute",
+                        isCompact ? "left-full top-0 bottom-0 w-2" : "bottom-full left-0 right-0 h-2",
+                      )}
+                    />
+                    <div
+                      className={cn(
+                        "absolute z-20 rounded-xl border border-blue-100/90 bg-white/95 p-1.5 shadow-soft backdrop-blur",
+                        isCompact ? "bottom-0 left-full ml-2 w-48" : "bottom-full left-0 right-0 mb-2",
+                      )}
+                    >
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAccountMenuOpen(false);
+                          onNavigate("/profile");
+                          onCloseMobile();
+                        }}
+                        className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-blue-50/85 hover:text-blue-800"
+                      >
+                        <UserRound className="size-4" />
+                        <span>My profile</span>
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setAccountMenuOpen(false);
+                          handleSignOut();
+                        }}
+                        className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm font-medium text-rose-700 transition hover:bg-rose-50/75 hover:text-rose-800"
+                      >
+                        <LogOut className="size-4" />
+                        <span>Sign out</span>
+                      </button>
+                    </div>
+                  </>
+                ) : null}
+              </div>
+            ) : (
+              <TooltipTarget text={isCompact ? "Sign in" : null}>
                 <button
                   type="button"
-                  aria-expanded={accountMenuOpen}
-                  aria-label="Account menu"
+                  onClick={() => {
+                    onNavigate("/auth/login");
+                    onCloseMobile();
+                  }}
                   className={cn(
-                    "group flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
-                    "text-slate-700 hover:bg-white/80 hover:text-slate-900",
+                    "flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-white/80 hover:text-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
                     isCompact && "lg:justify-center",
                   )}
                 >
-                  <UserRound className="size-4 shrink-0 text-blue-700 transition-colors group-hover:text-blue-800" />
-                  {!isCompact ? (
-                    <div className="min-w-0 flex-1">
-                      <p className="truncate text-sm font-semibold tracking-[-0.01em] text-slate-800">{accountDisplayName}</p>
-                      <p className="truncate text-xs text-slate-500">{auth.user?.email || "-"}</p>
-                    </div>
-                  ) : null}
+                  <LogIn className="size-4 shrink-0 text-blue-700" />
+                  {!isCompact ? <span>Sign in</span> : null}
                 </button>
               </TooltipTarget>
-
-	              {accountMenuOpen ? (
-	                <>
-	                  <div
-	                    aria-hidden="true"
-	                    className={cn(
-	                      "absolute",
-	                      isCompact ? "left-full top-0 bottom-0 w-2" : "bottom-full left-0 right-0 h-2",
-	                    )}
-	                  />
-	                  <div
-	                    className={cn(
-	                      "absolute z-20 rounded-xl border border-blue-100/90 bg-white/95 p-1.5 shadow-soft backdrop-blur",
-	                      isCompact ? "bottom-0 left-full ml-2 w-48" : "bottom-full left-0 right-0 mb-2",
-	                    )}
-	                  >
-	                    <button
-	                      type="button"
-	                      onClick={() => {
-	                        setAccountMenuOpen(false);
-	                        onNavigate("/profile");
-	                        onCloseMobile();
-	                      }}
-	                      className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-blue-50/85 hover:text-blue-800"
-	                    >
-	                      <UserRound className="size-4" />
-	                      <span>My profile</span>
-	                    </button>
-	                    <button
-	                      type="button"
-	                      onClick={() => {
-	                        setAccountMenuOpen(false);
-	                        handleSignOut();
-	                      }}
-	                      className="flex w-full items-center gap-2 rounded-lg px-2 py-2 text-left text-sm font-medium text-rose-700 transition hover:bg-rose-50/75 hover:text-rose-800"
-	                    >
-	                      <LogOut className="size-4" />
-	                      <span>Sign out</span>
-	                    </button>
-	                  </div>
-	                </>
-	              ) : null}
-	            </div>
-          ) : (
-            <TooltipTarget text={isCompact ? "Sign in" : null}>
-              <button
-                type="button"
-                onClick={() => {
-                  onNavigate("/auth/login");
-                  onCloseMobile();
-                }}
-                className={cn(
-                  "flex w-full items-center gap-2 rounded-xl px-2 py-2 text-left text-sm font-medium text-slate-700 transition hover:bg-white/80 hover:text-blue-800 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
-                  isCompact && "lg:justify-center",
-                )}
-              >
-                <LogIn className="size-4 shrink-0 text-blue-700" />
-                {!isCompact ? <span>Sign in</span> : null}
-              </button>
-            </TooltipTarget>
-          )}
+            )}
           </div>
         </div>
       </aside>

@@ -15,7 +15,7 @@ const SIDEBAR_COLLAPSED_EVENT = "workspace-sidebar-collapsed-change";
 
 function readSidebarCollapsedState(): boolean {
   if (typeof window === "undefined") {
-    return false;
+    return true;
   }
 
   try {
@@ -23,9 +23,10 @@ function readSidebarCollapsedState(): boolean {
     if (nextValue !== null) {
       return nextValue === "1";
     }
-    return window.localStorage.getItem(LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY) === "1";
+    const legacyValue = window.localStorage.getItem(LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY);
+    return legacyValue !== null ? legacyValue === "1" : true;
   } catch {
-    return false;
+    return true;
   }
 }
 

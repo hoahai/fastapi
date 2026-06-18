@@ -18,16 +18,17 @@ const PAGE_FOOTER_SPACER_CLASSNAME = "h-[calc(5.25rem+env(safe-area-inset-bottom
 
 function readSidebarCollapsedState(): boolean {
   if (typeof window === "undefined") {
-    return false;
+    return true;
   }
   try {
     const nextValue = window.localStorage.getItem(SIDEBAR_COLLAPSED_STORAGE_KEY);
     if (nextValue !== null) {
       return nextValue === "1";
     }
-    return window.localStorage.getItem(LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY) === "1";
+    const legacyValue = window.localStorage.getItem(LEGACY_SIDEBAR_COLLAPSED_STORAGE_KEY);
+    return legacyValue !== null ? legacyValue === "1" : true;
   } catch {
-    return false;
+    return true;
   }
 }
 
