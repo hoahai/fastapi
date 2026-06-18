@@ -11,6 +11,7 @@ from apps.tradsphere.api.v1.helpers.accountValidation import (
 )
 from apps.tradsphere.api.v1.helpers.accounts import list_accounts
 from apps.tradsphere.api.v1.helpers.dbQueries import (
+    get_account_creation_lookup,
     get_contacts_by_station_codes,
     get_stations,
 )
@@ -401,6 +402,58 @@ def get_ui_accounts_load_route(
     """
     try:
         return _build_ui_accounts_load_payload(account_code)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.get("/accounts/create-lookup")
+def get_ui_account_creation_lookup_route(
+    account_code: str = Query(..., alias="accountCode"),
+):
+    """
+    Return the master account lookup payload used by the Create Account modal.
+
+    Example request:
+        GET /api/tradsphere/v1/ui/accounts/create-lookup?accountCode=TAAA
+
+    Example response:
+        {
+          "meta": {"timestamp": "2026-06-18T19:20:00+07:00", "duration_ms": 3},
+          "data": {
+            "accountCode": "TAAA",
+            "accountName": "Alpha Motors",
+            "logoUrl": "https://cdn.example.com/logos/taaa.png",
+            "existsInTradSphere": false,
+            "tradSphereAccountCode": null,
+            "billingType": null,
+            "market": null,
+            "note": null,
+            "active": 1
+          }
+        }
+
+    Example error response (unknown master account code):
+        {
+          "meta": {"timestamp": "2026-06-18T19:20:00+07:00", "duration_ms": 3},
+          "error": {
+            "message": "Bad Request",
+            "detail": "Unknown master accountCode values: TAAA"
+          }
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires valid API key
+        - accountCode is required
+        - accountCode must exist in master Accounts
+        - response is used to gate the Create Account modal flow
+    """
+    try:
+        normalized_account_code = require_account_code(account_code)
+        lookup = get_account_creation_lookup(normalized_account_code)
+        if not lookup:
+            raise ValueError(f"Unknown master accountCode values: {normalized_account_code}")
+        return lookup
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

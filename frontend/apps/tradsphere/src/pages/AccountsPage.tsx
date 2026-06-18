@@ -101,6 +101,22 @@ type CreateAccountFormState = {
   note: string;
 };
 
+type AccountCreationLookup = {
+  accountCode: string;
+  accountName: string;
+  logoUrl: string | null;
+  existsInTradSphere: boolean;
+  tradSphereAccountCode: string | null;
+};
+
+type CreateAccountLookupState =
+  | { status: "idle" }
+  | { status: "checking"; accountCode: string }
+  | { status: "available"; lookup: AccountCreationLookup }
+  | { status: "duplicate"; lookup: AccountCreationLookup }
+  | { status: "missing"; accountCode: string; message: string }
+  | { status: "error"; accountCode: string; message: string };
+
 const CREATE_ACCOUNT_DEFAULT_FORM: CreateAccountFormState = {
   accountCode: "",
   billingType: ACCOUNT_BILLING_OPTIONS[0].value,
@@ -200,6 +216,10 @@ function App() {
   const [isCreatingAccount, setIsCreatingAccount] = useState(false);
   const [createAccountForm, setCreateAccountForm] = useState<CreateAccountFormState>({ ...CREATE_ACCOUNT_DEFAULT_FORM });
   const [createAccountError, setCreateAccountError] = useState<string | null>(null);
+  const [createAccountLookupState, setCreateAccountLookupState] = useState<CreateAccountLookupState>({
+    status: "idle",
+  });
+  const createAccountLookupRequestIdRef = useRef(0);
   const [isEstimateNumberModalOpen, setIsEstimateNumberModalOpen] = useState(false);
   const [estimateModalMode, setEstimateModalMode] = useState<EstimateNumberModalMode>("create");
   const [estimateModalInitialData, setEstimateModalInitialData] = useState<EstimateNumberModalData | null>(null);
@@ -710,6 +730,8 @@ function App() {
   function resetCreateAccountForm() {
     setCreateAccountForm({ ...CREATE_ACCOUNT_DEFAULT_FORM });
     setCreateAccountError(null);
+    createAccountLookupRequestIdRef.current += 1;
+    setCreateAccountLookupState({ status: "idle" });
   }
 
   function hasCreateAccountUnsavedChanges() {
@@ -763,10 +785,71 @@ function App() {
     setIsCreateAccountUnsavedDialogOpen(true);
   }
 
+  async function lookupCreateAccountCode(accountCodeInput: string): Promise<void> {
+    const normalizedAccountCode = accountCodeInput.trim().toUpperCase();
+    if (!normalizedAccountCode) {
+      createAccountLookupRequestIdRef.current += 1;
+      setCreateAccountLookupState({ status: "idle" });
+      return;
+    }
+
+    const requestId = createAccountLookupRequestIdRef.current + 1;
+    createAccountLookupRequestIdRef.current = requestId;
+    setCreateAccountError(null);
+    setCreateAccountLookupState({ status: "checking", accountCode: normalizedAccountCode });
+
+    try {
+      const payload = await requestJson(
+        `/api/tradsphere/v1/ui/accounts/create-lookup?accountCode=${encodeURIComponent(normalizedAccountCode)}`,
+        {
+          headers: requestHeaders,
+          errorToast: false,
+        },
+      );
+      if (createAccountLookupRequestIdRef.current !== requestId) {
+        return;
+      }
+
+      const lookup = parseAccountCreationLookup(payload);
+      if (!lookup) {
+        setCreateAccountLookupState({
+          status: "error",
+          accountCode: normalizedAccountCode,
+          message: "Unable to verify the selected account code.",
+        });
+        return;
+      }
+
+      setCreateAccountLookupState(
+        lookup.existsInTradSphere
+          ? { status: "duplicate", lookup }
+          : { status: "available", lookup },
+      );
+    } catch (error) {
+      if (createAccountLookupRequestIdRef.current !== requestId) {
+        return;
+      }
+      const message = getErrorMessage(error, "");
+      const isMissingAccount = message.toLowerCase().includes("unknown master accountcode values");
+      setCreateAccountLookupState({
+        status: isMissingAccount ? "missing" : "error",
+        accountCode: normalizedAccountCode,
+        message: isMissingAccount
+          ? `No master account was found for ${normalizedAccountCode}.`
+          : getCreateAccountLookupErrorMessage(error, normalizedAccountCode),
+      });
+    }
+  }
+
   async function handleCreateAccount() {
     if (!canEditTradsphere) {
       return;
     }
+    if (createAccountLookupState.status !== "available") {
+      setCreateAccountError("Verify a master account code before creating the TradSphere account.");
+      return;
+    }
+
     const validationError = getCreateAccountValidationError();
     if (validationError) {
       setCreateAccountError(validationError);
@@ -809,8 +892,9 @@ function App() {
   }
 
   const createAccountValidationError = getCreateAccountValidationError();
-  const canCreateAccount = !createAccountValidationError;
-  const shouldShowCreateAccountSubmit = canCreateAccount || isCreatingAccount;
+  const canCreateAccount = createAccountLookupState.status === "available" && !createAccountValidationError;
+  const shouldShowCreateAccountSubmit = createAccountLookupState.status === "available" || isCreatingAccount;
+  const createAccountLookupMessage = getCreateAccountLookupMessage(createAccountLookupState);
 
   const selectionsStatusText = isLoadingSelections
     ? "Loading..."
@@ -1084,6 +1168,7 @@ function App() {
 
             <div className="mt-4 space-y-4">
               <LabeledField
+                alignStart
                 label={
                   <>
                     Account Code<RequiredMark />
@@ -1095,13 +1180,47 @@ function App() {
                   onChange={(event) => {
                     const value = event.target.value.toUpperCase();
                     setCreateAccountForm((current) => ({ ...current, accountCode: value }));
+                    setCreateAccountLookupState({ status: "idle" });
                     if (createAccountError) {
                       setCreateAccountError(null);
                     }
                   }}
                   placeholder="e.g. TAAA"
+                  onBlur={() => {
+                    void lookupCreateAccountCode(createAccountForm.accountCode);
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === "Enter") {
+                      event.preventDefault();
+                      void lookupCreateAccountCode(createAccountForm.accountCode);
+                    }
+                  }}
                   disabled={isCreatingAccount}
                 />
+                <div className="mt-1 text-xs leading-5" aria-live="polite">
+                  {createAccountLookupState.status === "checking" ? (
+                    <div className="flex items-center gap-2 text-slate-500">
+                      <Loader2 className="size-3.5 animate-spin text-slate-400" />
+                      <span>{`Checking ${createAccountLookupState.accountCode} against master Accounts...`}</span>
+                    </div>
+                  ) : null}
+                  {renderCreateAccountLookupPreview(createAccountLookupState)}
+                  {createAccountLookupMessage ? (
+                    <p
+                      className={
+                        createAccountLookupMessage.tone === "success"
+                          ? "text-emerald-700"
+                          : createAccountLookupMessage.tone === "warning"
+                            ? "text-amber-700"
+                            : createAccountLookupMessage.tone === "error"
+                              ? "text-rose-600"
+                              : "text-slate-500"
+                      }
+                    >
+                      {createAccountLookupMessage.text}
+                    </p>
+                  ) : null}
+                </div>
               </LabeledField>
 
               <AccountEditableFields
@@ -1123,7 +1242,7 @@ function App() {
                     setCreateAccountError(null);
                   }
                 }}
-                disabled={isCreatingAccount}
+                disabled={isCreatingAccount || createAccountLookupState.status !== "available"}
                 billingAriaLabel="Create account billing type"
                 marketPlaceholder="e.g. Los Angeles"
                 notePlaceholder="Optional note"
@@ -1516,6 +1635,98 @@ function getErrorMessage(error: unknown, fallback: string): string {
     return error.message;
   }
   return fallback;
+}
+
+function parseAccountCreationLookup(payload: unknown): AccountCreationLookup | null {
+  if (!isRecord(payload)) {
+    return null;
+  }
+
+  const data = isRecord(payload.data) ? payload.data : payload;
+  if (!isRecord(data)) {
+    return null;
+  }
+
+  const accountCode = asString(data.accountCode).toUpperCase();
+  const accountName = asString(data.accountName);
+  if (!accountCode || !accountName) {
+    return null;
+  }
+
+  return {
+    accountCode,
+    accountName,
+    logoUrl: asNullableString(data.logoUrl),
+    existsInTradSphere: asBoolean(data.existsInTradSphere),
+    tradSphereAccountCode: asNullableString(data.tradSphereAccountCode)?.toUpperCase() || null,
+  };
+}
+
+function getCreateAccountLookupErrorMessage(error: unknown, accountCode: string): string {
+  const message = getErrorMessage(error, "").trim();
+  if (!message) {
+    return `No master account was found for ${accountCode}.`;
+  }
+  if (message.toLowerCase().includes("unknown master accountcode values")) {
+    return `No master account was found for ${accountCode}.`;
+  }
+  return message;
+}
+
+function getCreateAccountLookupMessage(
+  state: CreateAccountLookupState,
+): { text: string; tone: "neutral" | "success" | "warning" | "error" } | null {
+  switch (state.status) {
+    case "idle":
+      return null;
+    case "available":
+      return {
+        text: `Found master account: ${state.lookup.accountName}. You can add the TradSphere mapping below.`,
+        tone: "success",
+      };
+    case "duplicate":
+      return {
+        text: `Found master account: ${state.lookup.accountName}, but it already exists in TradSphere.`,
+        tone: "warning",
+      };
+    case "missing":
+    case "error":
+      return {
+        text: state.message,
+        tone: "error",
+      };
+    default:
+      return null;
+  }
+}
+
+function renderCreateAccountLookupPreview(state: CreateAccountLookupState) {
+  if (state.status !== "available" && state.status !== "duplicate") {
+    return null;
+  }
+
+  const lookup = state.lookup;
+  return (
+    <div className="mt-1 flex items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2">
+      <div className="flex size-8 shrink-0 items-center justify-center overflow-hidden rounded-md bg-white ring-1 ring-slate-200">
+        {lookup.logoUrl ? (
+          <img
+            src={lookup.logoUrl}
+            alt={`${lookup.accountName} logo`}
+            className="h-full w-full object-contain p-1"
+            loading="lazy"
+          />
+        ) : (
+          <span className="text-xs font-semibold text-slate-500">
+            {lookup.accountName.slice(0, 2).toUpperCase() || "AC"}
+          </span>
+        )}
+      </div>
+      <div className="min-w-0">
+        <p className="truncate text-sm font-medium text-slate-900">{lookup.accountName}</p>
+      </div>
+    </div>
+  );
 }
 
 function RequiredMark() {
