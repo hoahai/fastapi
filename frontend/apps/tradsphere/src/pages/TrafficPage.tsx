@@ -9070,7 +9070,7 @@ export default function TrafficPage() {
         }}
       >
         <DialogContent className="!h-[92vh] !max-h-[92vh] !w-[min(96vw,1160px)] !max-w-[1160px] overflow-hidden p-0">
-          <div className="border-b border-slate-200 px-5 pt-4 pb-4">
+          <div className="border-b border-slate-200 px-5 pb-4">
             <ModalHeaderRow
               actionsClassName="pt-0"
               actions={(
