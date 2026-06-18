@@ -43,6 +43,11 @@ import { ModalCloseButton, ModalHeaderRow, ModalShell } from "@shared/components
 import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
+import {
+  resolveCriteriaLoadPlan,
+  type CriteriaLoadPlan,
+  useCriteriaBaselineStore,
+} from "@shared/hooks/useCriteriaLoadPolicy";
 import { DEFAULT_TIME_ZONE, formatDateInTimeZone, getCurrentMonthKeyInTimeZone, getCurrentYearInTimeZone, getTodayIsoDateInTimeZone, shiftIsoDateByDays } from "@shared/utils/time";
 import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 import { LeaveSpherePtoEmployeeHeader } from "@leavesphere/components/LeaveSpherePtoEmployeeHeader";
@@ -199,6 +204,23 @@ type PersistedLeaveManagementPageState = {
   scrollY: number;
 };
 
+type LeaveManagementLoadSnapshot = {
+  tab: AdminTab;
+  calendarMonth: string;
+  selectedRequestId: string | null;
+  selectedHolidayId: string | null;
+  reviewNote: string;
+  isCreateModalOpen: boolean;
+  createForm: CreateRequestForm;
+  isAdjustModalOpen: boolean;
+  adjustForm: LeaveSpherePtoLoadHoursFormState;
+  isSetupModalOpen: boolean;
+  setupForm: SetupForm;
+  draftRecentHistorySearch: string;
+  appliedRecentHistorySearch: string;
+  scrollY: number;
+};
+
 const PTO_TYPE_OPTIONS: Array<{ value: LeaveSpherePtoType; label: string }> = [
   { value: "vacation", label: "Vacation" },
   { value: "sick", label: "Sick" },
@@ -320,6 +342,129 @@ function requestTypeLabel(type: string, lookup: Map<string, PtoTypeMeta> | null 
 
 function hasBalanceActivity(balance: { totalHours: number; usedHours: number; scheduledHours: number }): boolean {
   return balance.totalHours !== 0 || balance.usedHours !== 0 || balance.scheduledHours !== 0;
+}
+
+function buildLeaveManagementLoadSnapshot(params: {
+  tab: AdminTab;
+  calendarMonth: string;
+  selectedRequestId: string | null;
+  selectedHolidayId: string | null;
+  reviewNote: string;
+  isCreateModalOpen: boolean;
+  createForm: CreateRequestForm;
+  isAdjustModalOpen: boolean;
+  adjustForm: LeaveSpherePtoLoadHoursFormState;
+  isSetupModalOpen: boolean;
+  setupForm: SetupForm;
+  draftRecentHistorySearch: string;
+  appliedRecentHistorySearch: string;
+  scrollY: number;
+}): LeaveManagementLoadSnapshot {
+  return {
+    tab: params.tab,
+    calendarMonth: params.calendarMonth,
+    selectedRequestId: params.selectedRequestId,
+    selectedHolidayId: params.selectedHolidayId,
+    reviewNote: params.reviewNote,
+    isCreateModalOpen: params.isCreateModalOpen,
+    createForm: { ...params.createForm },
+    isAdjustModalOpen: params.isAdjustModalOpen,
+    adjustForm: { ...params.adjustForm },
+    isSetupModalOpen: params.isSetupModalOpen,
+    setupForm: { ...params.setupForm },
+    draftRecentHistorySearch: params.draftRecentHistorySearch,
+    appliedRecentHistorySearch: params.appliedRecentHistorySearch,
+    scrollY: params.scrollY,
+  };
+}
+
+function areLeaveManagementLoadSnapshotsEqual(
+  left: LeaveManagementLoadSnapshot | null,
+  right: LeaveManagementLoadSnapshot | null,
+): boolean {
+  if (left === right) {
+    return true;
+  }
+  if (!left || !right) {
+    return false;
+  }
+
+  return (
+    left.tab === right.tab
+    && left.calendarMonth === right.calendarMonth
+    && left.selectedRequestId === right.selectedRequestId
+    && left.selectedHolidayId === right.selectedHolidayId
+    && left.reviewNote.trim() === right.reviewNote.trim()
+    && left.isCreateModalOpen === right.isCreateModalOpen
+    && left.isAdjustModalOpen === right.isAdjustModalOpen
+    && left.isSetupModalOpen === right.isSetupModalOpen
+    && JSON.stringify(left.createForm) === JSON.stringify(right.createForm)
+    && JSON.stringify(left.adjustForm) === JSON.stringify(right.adjustForm)
+    && JSON.stringify(left.setupForm) === JSON.stringify(right.setupForm)
+    && left.draftRecentHistorySearch.trim() === right.draftRecentHistorySearch.trim()
+    && left.appliedRecentHistorySearch.trim() === right.appliedRecentHistorySearch.trim()
+  );
+}
+
+function isLeaveManagementLoadSnapshot(value: unknown): value is LeaveManagementLoadSnapshot {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  const record = value as Record<string, unknown>;
+  return (
+    isAdminTab(record.tab)
+    && typeof record.calendarMonth === "string"
+    && (record.selectedRequestId === null || typeof record.selectedRequestId === "string")
+    && (record.selectedHolidayId === null || typeof record.selectedHolidayId === "string")
+    && typeof record.reviewNote === "string"
+    && typeof record.isCreateModalOpen === "boolean"
+    && isCreateRequestForm(record.createForm)
+    && typeof record.isAdjustModalOpen === "boolean"
+    && isAdjustBalanceForm(record.adjustForm)
+    && typeof record.isSetupModalOpen === "boolean"
+    && isSetupForm(record.setupForm)
+    && typeof record.draftRecentHistorySearch === "string"
+    && typeof record.appliedRecentHistorySearch === "string"
+    && typeof record.scrollY === "number"
+    && Number.isFinite(record.scrollY)
+  );
+}
+
+function restoreLeaveManagementLoadSnapshot(
+  snapshot: LeaveManagementLoadSnapshot,
+  actions: {
+    setTab: (value: AdminTab) => void;
+    setCalendarMonth: (value: string) => void;
+    setSelectedRequestId: (value: string | null) => void;
+    setSelectedHolidayId: (value: string | null) => void;
+    setReviewNote: (value: string) => void;
+    setIsCreateModalOpen: (value: boolean) => void;
+    setCreateForm: (value: CreateRequestForm) => void;
+    setIsAdjustModalOpen: (value: boolean) => void;
+    setAdjustForm: (value: LeaveSpherePtoLoadHoursFormState) => void;
+    setIsSetupModalOpen: (value: boolean) => void;
+    setSetupForm: (value: SetupForm) => void;
+    setDraftRecentHistorySearch: (value: string) => void;
+    setAppliedRecentHistorySearch: (value: string) => void;
+    setScrollY: (value: number) => void;
+    setSetupError: (value: string | null) => void;
+  },
+): void {
+  actions.setTab(snapshot.tab === "requests" ? "calendar" : snapshot.tab);
+  actions.setCalendarMonth(snapshot.calendarMonth);
+  actions.setSelectedRequestId(snapshot.selectedRequestId);
+  actions.setSelectedHolidayId(snapshot.selectedHolidayId);
+  actions.setReviewNote(snapshot.reviewNote);
+  actions.setIsCreateModalOpen(snapshot.isCreateModalOpen);
+  actions.setCreateForm({ ...snapshot.createForm });
+  actions.setIsAdjustModalOpen(snapshot.isAdjustModalOpen);
+  actions.setAdjustForm({ ...snapshot.adjustForm });
+  actions.setIsSetupModalOpen(snapshot.isSetupModalOpen);
+  actions.setSetupForm({ ...snapshot.setupForm });
+  actions.setDraftRecentHistorySearch(snapshot.draftRecentHistorySearch);
+  actions.setAppliedRecentHistorySearch(snapshot.appliedRecentHistorySearch);
+  actions.setScrollY(Math.max(0, snapshot.scrollY));
+  actions.setSetupError(null);
 }
 
 type PtoTypeMeta = {
@@ -702,6 +847,7 @@ export default function LeaveManagementPage() {
   const [selectedHolidayId, setSelectedHolidayId] = useState<string | null>(null);
   const [reviewNote, setReviewNote] = useState("");
   const [pendingReviewAction, setPendingReviewAction] = useState<LeaveSphereReviewAction | null>(null);
+  const [pendingReloadYear, setPendingReloadYear] = useState<number | null>(null);
 
   const [isAdjustModalOpen, setIsAdjustModalOpen] = useState(false);
   const [adjustForm, setAdjustForm] = useState<LeaveSpherePtoLoadHoursFormState>(EMPTY_ADJUST_FORM);
@@ -731,6 +877,17 @@ export default function LeaveManagementPage() {
   const workspaceRef = useRef<LeaveManagementWorkspaceData | null>(null);
   const loadedYearRef = useRef<number | null>(null);
   const loadedRequestMonthKeysRef = useRef<Set<string>>(new Set());
+  const {
+    captureBaseline: captureLeaveManagementLoadBaseline,
+    getBaseline: getLeaveManagementLoadBaseline,
+    isDirty: isLeaveManagementLoadDirty,
+  } = useCriteriaBaselineStore<LeaveManagementLoadSnapshot>({
+    areSnapshotsEqual: areLeaveManagementLoadSnapshotsEqual,
+    persistence: {
+      scope: pageStateScope,
+      validateSnapshot: isLeaveManagementLoadSnapshot,
+    },
+  });
 
   useEffect(() => {
     if (loadedYear !== null) {
@@ -1418,6 +1575,137 @@ export default function LeaveManagementPage() {
     return `Data source: ${cacheStatus.source}. Last updated ${formatRelativeTime(cacheStatus.fetchedAt)}.`;
   }, [cacheStatus, isOnline, isRefreshing, loadedYear]);
 
+  const currentLoadSnapshot = useMemo(
+    () => buildLeaveManagementLoadSnapshot({
+      tab,
+      calendarMonth,
+      selectedRequestId,
+      selectedHolidayId,
+      reviewNote,
+      isCreateModalOpen,
+      createForm,
+      isAdjustModalOpen,
+      adjustForm,
+      isSetupModalOpen,
+      setupForm,
+      draftRecentHistorySearch,
+      appliedRecentHistorySearch,
+      scrollY,
+    }),
+    [
+      adjustForm,
+      appliedRecentHistorySearch,
+      calendarMonth,
+      createForm,
+      draftRecentHistorySearch,
+      isAdjustModalOpen,
+      isCreateModalOpen,
+      isSetupModalOpen,
+      reviewNote,
+      scrollY,
+      selectedHolidayId,
+      selectedRequestId,
+      setupForm,
+      tab,
+    ],
+  );
+  const hasUnsavedLoadChanges = useMemo(
+    () => Number.isInteger(loadedYear) && isLeaveManagementLoadDirty(loadedYear, currentLoadSnapshot),
+    [currentLoadSnapshot, isLeaveManagementLoadDirty, loadedYear],
+  );
+  const captureCurrentLoadBaseline = useCallback((year: number, overrides?: Partial<LeaveManagementLoadSnapshot>) => {
+    captureLeaveManagementLoadBaseline(year, buildLeaveManagementLoadSnapshot({
+      tab: overrides?.tab ?? tab,
+      calendarMonth: overrides?.calendarMonth ?? calendarMonth,
+      selectedRequestId: overrides?.selectedRequestId ?? selectedRequestId,
+      selectedHolidayId: overrides?.selectedHolidayId ?? selectedHolidayId,
+      reviewNote: overrides?.reviewNote ?? reviewNote,
+      isCreateModalOpen: overrides?.isCreateModalOpen ?? isCreateModalOpen,
+      createForm: overrides?.createForm ?? createForm,
+      isAdjustModalOpen: overrides?.isAdjustModalOpen ?? isAdjustModalOpen,
+      adjustForm: overrides?.adjustForm ?? adjustForm,
+      isSetupModalOpen: overrides?.isSetupModalOpen ?? isSetupModalOpen,
+      setupForm: overrides?.setupForm ?? setupForm,
+      draftRecentHistorySearch: overrides?.draftRecentHistorySearch ?? draftRecentHistorySearch,
+      appliedRecentHistorySearch: overrides?.appliedRecentHistorySearch ?? appliedRecentHistorySearch,
+      scrollY: overrides?.scrollY ?? scrollY,
+    }));
+  }, [
+    adjustForm,
+    appliedRecentHistorySearch,
+    calendarMonth,
+    captureLeaveManagementLoadBaseline,
+    createForm,
+    draftRecentHistorySearch,
+    isAdjustModalOpen,
+    isCreateModalOpen,
+    isSetupModalOpen,
+    reviewNote,
+    scrollY,
+    selectedHolidayId,
+    selectedRequestId,
+    setupForm,
+    tab,
+  ]);
+
+  const restoreCurrentLoadBaseline = useCallback((year: number) => {
+    const baseline = getLeaveManagementLoadBaseline(year);
+    if (!baseline) {
+      return false;
+    }
+    restoreLeaveManagementLoadSnapshot(baseline, {
+      setTab,
+      setCalendarMonth,
+      setSelectedRequestId,
+      setSelectedHolidayId,
+      setReviewNote,
+      setIsCreateModalOpen,
+      setCreateForm,
+      setIsAdjustModalOpen,
+      setAdjustForm,
+      setIsSetupModalOpen,
+      setSetupForm,
+      setDraftRecentHistorySearch,
+      setAppliedRecentHistorySearch,
+      setScrollY,
+      setSetupError,
+    });
+    return true;
+  }, [
+    getLeaveManagementLoadBaseline,
+    setAdjustForm,
+    setAppliedRecentHistorySearch,
+    setCalendarMonth,
+    setCreateForm,
+    setDraftRecentHistorySearch,
+    setIsAdjustModalOpen,
+    setIsCreateModalOpen,
+    setIsSetupModalOpen,
+    setReviewNote,
+    setScrollY,
+    setSelectedHolidayId,
+    setSelectedRequestId,
+    setSetupError,
+    setSetupForm,
+    setTab,
+  ]);
+
+  useEffect(() => {
+    if (!hasHydratedPageState || loadedYear === null || !workspaceForYear) {
+      return;
+    }
+    if (getLeaveManagementLoadBaseline(loadedYear)) {
+      return;
+    }
+    captureCurrentLoadBaseline(loadedYear);
+  }, [
+    captureCurrentLoadBaseline,
+    getLeaveManagementLoadBaseline,
+    hasHydratedPageState,
+    loadedYear,
+    workspaceForYear,
+  ]);
+
   const applyRecentHistorySearchKeyword = useCallback((rawValue: string) => {
     const normalized = asString(rawValue);
     setDraftRecentHistorySearch(normalized);
@@ -1514,7 +1802,7 @@ export default function LeaveManagementPage() {
 
   const loadWorkspace = useCallback(async (
     year: number,
-    policy: CachePolicy = "stale-while-revalidate",
+    policy: CachePolicy = "cache-first",
     options: WorkspaceLoadOptions = {},
     freshData = false,
   ): Promise<boolean> => {
@@ -1619,24 +1907,68 @@ export default function LeaveManagementPage() {
     leaveManagementWorkspaceKey,
   ]);
 
+  const executeYearLoad = useCallback(async (parsedYear: number, plan: CriteriaLoadPlan) => {
+    const requestedMonthKey = buildMonthKeyForYear(currentMonthKey, parsedYear) || `${parsedYear}-01`;
+    if (plan.shouldResetToBaseline) {
+      restoreCurrentLoadBaseline(parsedYear);
+    }
+    setCalendarMonth(requestedMonthKey);
+    const didLoad = await loadWorkspace(
+      parsedYear,
+      plan.shouldIgnoreCache ? "network-only" : "cache-first",
+      buildInitialRequestLoadWindow(requestedMonthKey, parsedYear),
+      plan.shouldIgnoreCache,
+    );
+    if (didLoad) {
+      applyRecentHistorySearchKeyword("");
+      captureCurrentLoadBaseline(parsedYear, {
+        calendarMonth: requestedMonthKey,
+        draftRecentHistorySearch: "",
+        appliedRecentHistorySearch: "",
+      });
+    }
+    return didLoad;
+  }, [
+    applyRecentHistorySearchKeyword,
+    captureCurrentLoadBaseline,
+    currentMonthKey,
+    loadWorkspace,
+    restoreCurrentLoadBaseline,
+  ]);
+
   const handleLoadByYear = useCallback(async () => {
     const parsedYear = Number(selectedYear);
     if (!Number.isInteger(parsedYear)) {
       return;
     }
-    const requestedMonthKey = buildMonthKeyForYear(currentMonthKey, parsedYear) || `${parsedYear}-01`;
-    setCalendarMonth(requestedMonthKey);
-    const shouldHardRefresh = loadedYear === parsedYear;
-    const didLoad = await loadWorkspace(
-      parsedYear,
-      shouldHardRefresh ? "network-only" : "cache-first",
-      buildInitialRequestLoadWindow(requestedMonthKey, parsedYear),
-      shouldHardRefresh,
-    );
-    if (didLoad) {
-      applyRecentHistorySearchKeyword("");
+    const loadPlan = resolveCriteriaLoadPlan({
+      trigger: "load-button",
+      criteriaKey: parsedYear,
+      loadedCriteriaKey: loadedYear,
+      hasDirtyState: hasUnsavedLoadChanges,
+    });
+    if (loadPlan.shouldPromptBeforeReload) {
+      setPendingReloadYear(parsedYear);
+      return;
     }
-  }, [applyRecentHistorySearchKeyword, currentMonthKey, loadWorkspace, loadedYear, selectedYear]);
+    await executeYearLoad(parsedYear, loadPlan);
+  }, [executeYearLoad, hasUnsavedLoadChanges, loadedYear, selectedYear]);
+
+  const handleConfirmReloadLoad = useCallback(async () => {
+    if (pendingReloadYear === null || !Number.isInteger(pendingReloadYear)) {
+      setPendingReloadYear(null);
+      return;
+    }
+    const parsedYear = pendingReloadYear;
+    setPendingReloadYear(null);
+    const loadPlan = resolveCriteriaLoadPlan({
+      trigger: "load-button",
+      criteriaKey: parsedYear,
+      loadedCriteriaKey: loadedYear,
+      hasDirtyState: false,
+    });
+    await executeYearLoad(parsedYear, loadPlan);
+  }, [executeYearLoad, loadedYear, pendingReloadYear]);
 
   const isRequestMonthAlreadyLoaded = useCallback((monthKey: string) => {
     const normalizedMonthKey = normalizeMonthKey(monthKey);
@@ -2528,11 +2860,16 @@ export default function LeaveManagementPage() {
             setCalendarMonth(requestedMonthKey);
             void (async () => {
               try {
+                const refreshPlan = resolveCriteriaLoadPlan({
+                  trigger: "cache-chip",
+                  criteriaKey: loadYear,
+                  loadedCriteriaKey: loadedYear,
+                });
                 await loadWorkspace(
                   loadYear,
-                  "network-only",
+                  refreshPlan.shouldIgnoreCache ? "network-only" : "cache-first",
                   buildInitialRequestLoadWindow(requestedMonthKey, loadYear),
-                  true,
+                  refreshPlan.shouldIgnoreCache,
                 );
               } finally {
                 setIsChipRefreshOverlayVisible(false);
@@ -2629,6 +2966,22 @@ export default function LeaveManagementPage() {
           </div>
         </>
       )}
+
+      <ConfirmDialog
+        open={pendingReloadYear !== null}
+        title="Reload Leave Management?"
+        description={
+          pendingReloadYear !== null
+            ? `Reload the loaded ${pendingReloadYear} workspace and reset current draft state to the last loaded baseline.`
+            : ""
+        }
+        confirmLabel="Reload and reset"
+        cancelLabel="Keep editing"
+        onCancel={() => setPendingReloadYear(null)}
+        onConfirm={() => {
+          void handleConfirmReloadLoad();
+        }}
+      />
 
       <LeaveSpherePtoRequestDetailModal
         mode="create"

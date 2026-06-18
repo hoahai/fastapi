@@ -23,6 +23,7 @@ import { readBrowserCacheSnapshot, writeBrowserCache } from "@/lib/browserCache"
 import { TRADSPHERE_CACHE_TTL_MS } from "@shared/cache";
 import { ModalCacheFooter, ModalCloseButton, ModalHeaderRow, ModalShell } from "@shared/components";
 import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
+import { resolveCriteriaLoadPlan } from "@shared/hooks/useCriteriaLoadPolicy";
 import { playSuccessSound, primeSuccessSound } from "@shared/utils/audio";
 import {
   normalizeUsPhoneDisplay,
@@ -1662,10 +1663,15 @@ export function StationModal({
     setDetailError(null);
     setIsDiscardDialogOpen(false);
     const isManualRefresh = detailRefreshToken !== handledDetailRefreshTokenRef.current;
+    const loadPlan = resolveCriteriaLoadPlan({
+      trigger: isManualRefresh ? "cache-chip" : "load-button",
+      criteriaKey: stationCode ? String(stationCode).trim().toUpperCase() : "",
+      loadedCriteriaKey: null,
+    });
     if (isManualRefresh) {
       handledDetailRefreshTokenRef.current = detailRefreshToken;
     }
-    setIsRefreshingDetail(isManualRefresh);
+    setIsRefreshingDetail(loadPlan.shouldIgnoreCache);
 
     if (mode === "create") {
       const baseDraft = createEmptyDraft();
@@ -1695,7 +1701,7 @@ export function StationModal({
     setOriginalDraft(null);
 
     const cacheKey = `station-detail:${normalizedStationCode}`;
-    if (!isManualRefresh) {
+    if (!loadPlan.shouldIgnoreCache) {
       const cachedSnapshot = readBrowserCacheSnapshot<StationModalDraft>(cacheKey);
       if (cachedSnapshot && !cachedSnapshot.isExpired) {
         const sanitizedCached = redactDeliveryMethodPassword(cachedSnapshot.data);

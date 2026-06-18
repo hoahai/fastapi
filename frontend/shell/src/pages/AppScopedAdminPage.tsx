@@ -30,6 +30,7 @@ import { Tooltip } from "@shared/components/actions/Tooltip";
 import { roleLabel } from "@shared/auth/accessAssignments";
 import { useAuth } from "@shared/auth/useAuth";
 import { useScopedPersistentState } from "@shared/hooks/useScopedPersistentState";
+import { resolveCriteriaLoadPlan } from "@shared/hooks/useCriteriaLoadPolicy";
 
 type ScopedUser = {
   userId: string;
@@ -325,17 +326,22 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
     );
   }, [scopedAdminCacheKey]);
 
-  const loadScopedUsers = useCallback(async (showRefreshing: boolean) => {
+  const loadScopedUsers = useCallback(async (trigger: "load-button" | "cache-chip" = "load-button") => {
     const loadInvocationId = loadInvocationRef.current + 1;
     loadInvocationRef.current = loadInvocationId;
+    const loadPlan = resolveCriteriaLoadPlan({
+      trigger,
+      criteriaKey: scopedAdminCacheKey,
+      loadedCriteriaKey: trigger === "cache-chip" ? scopedAdminCacheKey : null,
+    });
 
-    const cachedSnapshot = !showRefreshing
+    const cachedSnapshot = !loadPlan.shouldIgnoreCache
       ? readBrowserCacheSnapshot<ScopedUsersCacheSnapshot>(scopedAdminCacheKey)
       : null;
     const cachedData = cachedSnapshot?.data;
     const canUseCachedData = Boolean(cachedData && Array.isArray(cachedData.items));
 
-    if (showRefreshing) {
+    if (loadPlan.shouldIgnoreCache) {
       setRefreshingUsers(true);
       setBackgroundRefreshingUsers(false);
     } else {
@@ -412,7 +418,7 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
       setCacheStatus(null);
       return;
     }
-    void loadScopedUsers(false);
+    void loadScopedUsers("load-button");
   }, [loadScopedUsers, needsUserDirectory]);
 
   const normalizedLookupQuery = lookupQuery.trim();
@@ -592,7 +598,7 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
           : [{ ...grantedUser, assignedInScope: true }, ...users];
         persistScopedUsersCache(nextUsers);
       } else {
-        await loadScopedUsers(true);
+        await loadScopedUsers("cache-chip");
       }
       setLastRemovedUserId(null);
       setPermissionSyncNonce((current) => current + 1);
@@ -645,7 +651,7 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
           : item));
         persistScopedUsersCache(nextUsers);
       } else {
-        await loadScopedUsers(true);
+        await loadScopedUsers("cache-chip");
       }
       setPermissionSyncNonce((current) => current + 1);
     } finally {
@@ -736,7 +742,7 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
       }
       setPermissionSyncNonce((current) => current + 1);
       setRemoveTarget(null);
-      await loadScopedUsers(true);
+      await loadScopedUsers("cache-chip");
     } finally {
       setRemovingUserId(null);
     }
@@ -749,7 +755,7 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
   async function handleRefreshFromChip() {
     setIsChipRefreshOverlayVisible(true);
     try {
-      await loadScopedUsers(true);
+      await loadScopedUsers("cache-chip");
     } finally {
       setIsChipRefreshOverlayVisible(false);
     }
@@ -901,7 +907,7 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
                 type="button"
                 variant="outline"
                 disabled={refreshingUsers || backgroundRefreshingUsers || loadingUsers || !isOnline}
-                onClick={() => void loadScopedUsers(true)}
+                onClick={() => void loadScopedUsers("cache-chip")}
                 className="h-8 px-2.5 text-xs"
               >
                 {refreshingUsers ? <Spinner className="size-3.5" /> : <RefreshCw className="size-3.5" />}

@@ -9,6 +9,7 @@ import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { PageLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
+import { resolveCriteriaLoadPlan } from "@shared/hooks/useCriteriaLoadPolicy";
 import { getAccessAssignments, roleChipClass, roleLabel, rolePriority, tenantChipClass } from "@shared/auth/accessAssignments";
 import { hasSuperAdminAccess } from "@shared/auth/permissions";
 import { useAuth } from "@shared/auth/useAuth";
@@ -148,7 +149,12 @@ export function WorkspacePortalPage({ onNavigate }: WorkspacePortalPageProps) {
   async function handleRefreshAccessProfileFromChip() {
     setIsChipRefreshOverlayVisible(true);
     try {
-      await auth.refreshAccessProfile();
+      const refreshPlan = resolveCriteriaLoadPlan({
+        trigger: "cache-chip",
+        criteriaKey: "workspace-access-profile",
+        loadedCriteriaKey: "workspace-access-profile",
+      });
+      auth.refreshAccessProfile({ force: refreshPlan.shouldIgnoreCache });
     } finally {
       setIsChipRefreshOverlayVisible(false);
     }

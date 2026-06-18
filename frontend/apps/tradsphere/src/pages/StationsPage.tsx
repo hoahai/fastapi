@@ -33,6 +33,7 @@ import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
+import { resolveCriteriaLoadPlan } from "@shared/hooks/useCriteriaLoadPolicy";
 import { shouldFetchSubmittedSearchNetwork } from "@shared/search";
 import { hasAtLeastOneSearchCriterion } from "@shared/search";
 import { FRONTEND_CACHE_TTL_MS, type CachePolicy } from "@shared/cache";
@@ -1108,7 +1109,7 @@ export default function StationsPage() {
     if (!submittedSearch) {
       return;
     }
-    void loadSearchData({ policy: "stale-while-revalidate" }, submittedSearch);
+    void loadSearchData({ policy: "cache-first" }, submittedSearch);
   }, [submittedSearch, submissionVersion]);
 
   function handleDraftChange<K extends keyof StationSearchFormValues>(field: K, nextValue: StationSearchFormValues[K]) {
@@ -1144,7 +1145,12 @@ export default function StationsPage() {
 
     const isSameSearch = submittedSearch?.cacheKey === result.submitted.cacheKey;
     if (isSameSearch) {
-      void loadSearchData({ policy: "stale-while-revalidate" }, result.submitted);
+      const loadPlan = resolveCriteriaLoadPlan({
+        trigger: "load-button",
+        criteriaKey: result.submitted.cacheKey,
+        loadedCriteriaKey: submittedSearch?.cacheKey,
+      });
+      void loadSearchData({ policy: loadPlan.shouldIgnoreCache ? "network-only" : "cache-first" }, result.submitted);
       return;
     }
 
@@ -1179,7 +1185,12 @@ export default function StationsPage() {
     }
     setIsChipRefreshOverlayVisible(true);
     try {
-      await loadSearchData({ policy: "network-only" }, submittedSearch);
+      const refreshPlan = resolveCriteriaLoadPlan({
+        trigger: "cache-chip",
+        criteriaKey: submittedSearch.cacheKey,
+        loadedCriteriaKey: submittedSearch.cacheKey,
+      });
+      await loadSearchData({ policy: refreshPlan.shouldIgnoreCache ? "network-only" : "cache-first" }, submittedSearch);
     } finally {
       setIsChipRefreshOverlayVisible(false);
     }

@@ -13,6 +13,7 @@ import {
 } from "@/lib/browserCache";
 import { cn } from "@/lib/utils";
 import { TRADSPHERE_CACHE_TTL_MS, shouldFetchNetwork, type CachePolicy } from "@shared/cache";
+import { resolveCriteriaLoadPlan } from "@shared/hooks/useCriteriaLoadPolicy";
 
 import { ScheduleTable, type ScheduleTableData, type ScheduleViewMode } from "./ScheduleTable";
 import { ScheduleViewModeToggle } from "./ScheduleViewModeToggle";
@@ -459,11 +460,19 @@ export function ScheduleModal({
     }
 
     const isManualRefresh = refreshRequestId !== handledRefreshRequestRef.current;
-    const policy: CachePolicy = isManualRefresh ? "network-only" : "stale-while-revalidate";
+    const refreshPlan = resolveCriteriaLoadPlan({
+      trigger: isManualRefresh ? "cache-chip" : "load-button",
+      criteriaKey: buildScheduleTableCacheKey(estnum, mode),
+      loadedCriteriaKey: null,
+    });
     if (isManualRefresh) {
       handledRefreshRequestRef.current = refreshRequestId;
     }
-    void loadScheduleTable(estnum, mode, policy);
+    void loadScheduleTable(
+      estnum,
+      mode,
+      refreshPlan.shouldIgnoreCache ? "network-only" : "cache-first",
+    );
 
     return () => {
       cancelled = true;

@@ -33,6 +33,7 @@ import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
+import { resolveCriteriaLoadPlan } from "@shared/hooks/useCriteriaLoadPolicy";
 import { hasAtLeastOneSearchCriterion, shouldFetchSubmittedSearchNetwork } from "@shared/search";
 
 const CONTACTS_SEARCH_CACHE_TTL_MS = FRONTEND_CACHE_TTL_MS.DEFAULT;
@@ -1338,11 +1339,17 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
 
   async function loadModalContactDetail(
     baseContact: ContactRecord,
-    options: { policy: CachePolicy } = { policy: "stale-while-revalidate" },
+    options: { trigger?: "load-button" | "cache-chip" } = {},
   ): Promise<void> {
     const requestToken = ++modalDetailRequestTokenRef.current;
     const normalizedBase = normalizeContactRecords([baseContact])[0];
     const cacheKey = buildContactDetailCacheKey(normalizedBase.id);
+    const loadPlan = resolveCriteriaLoadPlan({
+      trigger: options.trigger ?? "load-button",
+      criteriaKey: cacheKey,
+      loadedCriteriaKey: null,
+    });
+    const policy: CachePolicy = loadPlan.shouldIgnoreCache ? "network-only" : "cache-first";
     const snapshot = readBrowserCacheSnapshot<ContactRecord>(cacheKey);
     const snapshotDetailData = snapshot?.data;
     const normalizedSnapshotDetail = snapshotDetailData ? normalizeContactRecords([snapshotDetailData]) : [];
@@ -1356,7 +1363,7 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
       removeBrowserCache(cacheKey);
     }
 
-    if (normalizedSnapshotDetail.length > 0 && options.policy !== "network-only") {
+    if (normalizedSnapshotDetail.length > 0 && policy !== "network-only") {
       const cached = mergeContactDetailFallback(normalizedBase, normalizedSnapshotDetail[0]);
       setModalContact(cached);
       setModalDetailCacheStatus({
@@ -1368,7 +1375,7 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
       setModalDetailCacheStatus(null);
     }
 
-    const shouldFetch = shouldFetchNetwork(options.policy, effectiveSnapshot);
+    const shouldFetch = shouldFetchNetwork(policy, effectiveSnapshot);
     if (!shouldFetch) {
       if (requestToken === modalDetailRequestTokenRef.current) {
         setIsModalDetailRefreshing(false);
@@ -1526,7 +1533,7 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
     if (!submittedSearch) {
       return;
     }
-    void loadSearchData({ policy: "stale-while-revalidate" }, submittedSearch);
+    void loadSearchData({ policy: "cache-first" }, submittedSearch);
   }, [submittedSearch, submissionVersion]);
 
   function handleDraftChange<K extends keyof ContactSearchFormValues>(field: K, nextValue: ContactSearchFormValues[K]) {
@@ -1561,7 +1568,12 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
     setRefreshMessage(null);
     const isSameSearch = submittedSearch?.cacheKey === result.submitted.cacheKey;
     if (isSameSearch) {
-      void loadSearchData({ policy: "stale-while-revalidate" }, result.submitted);
+      const loadPlan = resolveCriteriaLoadPlan({
+        trigger: "load-button",
+        criteriaKey: result.submitted.cacheKey,
+        loadedCriteriaKey: submittedSearch?.cacheKey,
+      });
+      void loadSearchData({ policy: loadPlan.shouldIgnoreCache ? "network-only" : "cache-first" }, result.submitted);
       return;
     }
 
@@ -1596,7 +1608,12 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
     }
     setIsChipRefreshOverlayVisible(true);
     try {
-      await loadSearchData({ policy: "network-only" }, submittedSearch);
+      const refreshPlan = resolveCriteriaLoadPlan({
+        trigger: "cache-chip",
+        criteriaKey: submittedSearch.cacheKey,
+        loadedCriteriaKey: submittedSearch.cacheKey,
+      });
+      await loadSearchData({ policy: refreshPlan.shouldIgnoreCache ? "network-only" : "cache-first" }, submittedSearch);
     } finally {
       setIsChipRefreshOverlayVisible(false);
     }
@@ -1636,7 +1653,7 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
     setModalDetailCacheStatus(null);
     setIsModalDetailRefreshing(false);
     setIsModalOpen(true);
-    void loadModalContactDetail(contact, { policy: "stale-while-revalidate" });
+    void loadModalContactDetail(contact, { trigger: "load-button" });
   }
 
   function handleViewUsage(contact: ContactRecord) {
@@ -1646,14 +1663,14 @@ async function fetchContactsForSearch(search: SubmittedSearch): Promise<ContactR
     setModalDetailCacheStatus(null);
     setIsModalDetailRefreshing(false);
     setIsModalOpen(true);
-    void loadModalContactDetail(contact, { policy: "stale-while-revalidate" });
+    void loadModalContactDetail(contact, { trigger: "load-button" });
   }
 
   function handleRefreshModalContactDetail() {
     if (modalMode !== "edit" || !modalContact) {
       return;
     }
-    void loadModalContactDetail(modalContact, { policy: "network-only" });
+    void loadModalContactDetail(modalContact, { trigger: "cache-chip" });
   }
 
   function applyLocalContactsSearchPatch(nextContacts: ContactRecord[]) {

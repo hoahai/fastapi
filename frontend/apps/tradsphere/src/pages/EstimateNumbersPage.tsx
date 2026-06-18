@@ -36,6 +36,7 @@ import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, SectionMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
+import { resolveCriteriaLoadPlan } from "@shared/hooks/useCriteriaLoadPolicy";
 import { hasAtLeastOneSearchCriterion, shouldFetchSubmittedSearchNetwork } from "@shared/search";
 
 const SEARCH_LIMIT = 50;
@@ -1780,7 +1781,7 @@ export default function EstimateNumbersPage() {
       return;
     }
     void loadPageData({
-      policy: "stale-while-revalidate",
+      policy: "cache-first",
       append: false,
     });
   }, [submittedSearch, submissionVersion]);
@@ -1821,8 +1822,13 @@ export default function EstimateNumbersPage() {
     setBackendSearchUnavailable(false);
     const isSameSubmittedSearch = submittedSearch?.cacheKey === result.submitted.cacheKey;
     if (isSameSubmittedSearch) {
+      const loadPlan = resolveCriteriaLoadPlan({
+        trigger: "load-button",
+        criteriaKey: result.submitted.cacheKey,
+        loadedCriteriaKey: submittedSearch?.cacheKey,
+      });
       void loadPageData({
-        policy: "stale-while-revalidate",
+        policy: loadPlan.shouldIgnoreCache ? "network-only" : "cache-first",
         append: false,
       });
       return;
@@ -1860,6 +1866,11 @@ export default function EstimateNumbersPage() {
     }
     setIsChipRefreshOverlayVisible(true);
     try {
+      const refreshPlan = resolveCriteriaLoadPlan({
+        trigger: "cache-chip",
+        criteriaKey: submittedSearch.cacheKey,
+        loadedCriteriaKey: submittedSearch.cacheKey,
+      });
       await refreshSelections();
       setIsLoadingBillingDirectory(true);
       try {
@@ -1871,7 +1882,7 @@ export default function EstimateNumbersPage() {
         setIsLoadingBillingDirectory(false);
       }
       await loadPageData({
-        policy: "network-only",
+        policy: refreshPlan.shouldIgnoreCache ? "network-only" : "cache-first",
         append: false,
       });
     } finally {

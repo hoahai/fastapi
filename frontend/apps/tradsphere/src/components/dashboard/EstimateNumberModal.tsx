@@ -27,6 +27,7 @@ import { readBrowserCacheSnapshot, writeBrowserCache } from "@/lib/browserCache"
 import { TRADSPHERE_CACHE_TTL_MS } from "@shared/cache";
 import { ModalCacheFooter, ModalCloseButton, ModalHeaderRow, ModalShell } from "@shared/components";
 import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
+import { resolveCriteriaLoadPlan } from "@shared/hooks/useCriteriaLoadPolicy";
 
 import { FlightDateRangeField, FLIGHT_DATE_PICKER_POPOVER_SELECTOR } from "./FlightDateRangeField";
 import { type FlightRangePresetState } from "./FlightRangeSelector";
@@ -575,12 +576,6 @@ export function EstimateNumberModal({
     setIsDiscardDialogOpen(false);
     setFlightRangeError(null);
     setHasAutoSeededDefaultDates(false);
-    const isManualRefresh = detailRefreshToken !== handledDetailRefreshTokenRef.current;
-    if (isManualRefresh) {
-      handledDetailRefreshTokenRef.current = detailRefreshToken;
-    }
-    setIsRefreshingDetail(isManualRefresh);
-
     const initialForm = buildInitialFormState(accountCode, mode, initialData);
     const parsedStart = parseIsoDate(initialForm.flightStart);
     const defaultPreset = buildDefaultQuarterPreset(
@@ -588,6 +583,16 @@ export function EstimateNumberModal({
       parsedStart?.year ?? chicagoToday.year,
     );
     setFlightRangePreset(defaultPreset);
+    const isManualRefresh = detailRefreshToken !== handledDetailRefreshTokenRef.current;
+    const loadPlan = resolveCriteriaLoadPlan({
+      trigger: isManualRefresh ? "cache-chip" : "load-button",
+      criteriaKey: `${asString(initialData?.accountCode).toUpperCase() || accountCode.trim().toUpperCase()}:${asString(initialData?.estNum) || initialForm.estNum}`,
+      loadedCriteriaKey: null,
+    });
+    if (isManualRefresh) {
+      handledDetailRefreshTokenRef.current = detailRefreshToken;
+    }
+    setIsRefreshingDetail(loadPlan.shouldIgnoreCache);
 
     if (mode === "create") {
       let seededInitialForm = initialForm;
@@ -608,7 +613,7 @@ export function EstimateNumberModal({
 
     // For search-result edits we often already have a full row payload.
     // Reuse it directly and skip refetch unless user explicitly requests refresh.
-    if (!isManualRefresh && canUseInitialDataForEdit(initialData)) {
+    if (!loadPlan.shouldIgnoreCache && canUseInitialDataForEdit(initialData)) {
       setForm(initialForm);
       setOriginalForm(initialForm);
       setHasAttemptedDetailLoad(true);
@@ -653,7 +658,7 @@ export function EstimateNumberModal({
     let isMounted = true;
     setIsLoadingDetail(true);
 
-    void fetchEstNumDetail(requestJson, estNum, accountCode, headers, isManualRefresh)
+    void fetchEstNumDetail(requestJson, estNum, accountCode, headers, loadPlan.shouldIgnoreCache)
       .then((detailResult) => {
         if (!isMounted || !detailResult.detail) {
           if (isMounted) {

@@ -74,6 +74,7 @@ import { ModalCloseButton, ModalHeaderRow, ModalShell } from "@shared/components
 import { PageLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
+import { resolveCriteriaLoadPlan } from "@shared/hooks/useCriteriaLoadPolicy";
 
 const scheduleColumns: ColumnDef<EsnumItem>[] = [{ accessorKey: "estnum" }, { accessorKey: "name" }];
 
@@ -525,13 +526,15 @@ function App() {
 
   async function handleLoadAccount() {
     setIsLoadActionOverlayVisible(true);
-    const isSameLoadedAccount =
-      hasLoadedDashboard &&
-      accountOriginal?.code?.trim().toUpperCase() === selectedAccountCode.trim().toUpperCase();
+    const loadPlan = resolveCriteriaLoadPlan({
+      trigger: "load-button",
+      criteriaKey: selectedAccountCode,
+      loadedCriteriaKey: accountOriginal?.code,
+    });
     try {
-      const result = await loadAccountDashboard(isSameLoadedAccount ? "network-only" : "cache-first");
+      const result = await loadAccountDashboard(loadPlan.shouldIgnoreCache ? "network-only" : "cache-first");
       if (result.success && selectedAccountCode) {
-        if (isSameLoadedAccount) {
+        if (loadPlan.isSameCriteria) {
           toast.success("Dashboard refreshed", `Fetched fresh data for ${selectedAccountCode}.`);
         } else {
           const suffix = result.source === "cache" ? " from cache." : ".";
@@ -549,8 +552,13 @@ function App() {
     }
     setIsChipRefreshOverlayVisible(true);
     try {
+      const refreshPlan = resolveCriteriaLoadPlan({
+        trigger: "cache-chip",
+        criteriaKey: selectedAccountCode,
+        loadedCriteriaKey: accountOriginal?.code,
+      });
       await refreshSelections();
-      const result = await loadAccountDashboard("network-only");
+      const result = await loadAccountDashboard(refreshPlan.shouldIgnoreCache ? "network-only" : "cache-first");
       if (result.success) {
         toast.success("Dashboard refreshed", `Fetched fresh data for ${selectedAccountCode}.`);
       }

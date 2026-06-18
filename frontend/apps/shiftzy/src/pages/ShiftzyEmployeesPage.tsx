@@ -22,6 +22,7 @@ import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { PageLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
+import { resolveCriteriaLoadPlan, type CriteriaLoadTrigger } from "@shared/hooks/useCriteriaLoadPolicy";
 import {
   createShiftzyEmployees,
   deleteShiftzyEmployees,
@@ -75,6 +76,13 @@ const INITIAL_SEARCH_FORM: ShiftzyEmployeeSearchFormValues = {
 };
 const SHIFTZY_EMPLOYEES_PAGE_CODE = "employees";
 const SHIFTZY_APP_CODE = "shiftzy";
+
+function getSearchCriteriaKey(criteria: ShiftzyEmployeeSearchFormValues | null): string {
+  if (!criteria) {
+    return "";
+  }
+  return JSON.stringify(normalizeSearchValues(criteria));
+}
 
 function normalizeText(value: string | null | undefined): string {
   return String(value || "").trim().toLowerCase();
@@ -230,6 +238,7 @@ export default function ShiftzyEmployeesPage() {
   const [editingEmployee, setEditingEmployee] = useState<ShiftzyEmployee | null>(null);
   const [deactivateTarget, setDeactivateTarget] = useState<DeactivateTarget | null>(null);
   const hydratedPageStateScopeRef = useRef<string | null>(null);
+  const loadedSearchCriteriaRef = useRef<string | null>(null);
 
   const positionMap = useMemo(() => toPositionMap(positions), [positions]);
 
@@ -390,7 +399,7 @@ export default function ShiftzyEmployeesPage() {
     options: {
       refreshing?: boolean;
       criteria?: ShiftzyEmployeeSearchFormValues | null;
-      networkOnly?: boolean;
+      trigger?: CriteriaLoadTrigger;
     } = {},
   ) => {
     if (!hasSessionToken || auth.status !== "authenticated" || !auth.tenantSlug) {
@@ -398,8 +407,13 @@ export default function ShiftzyEmployeesPage() {
     }
     const requestToken = ++requestTokenRef.current;
     const nextRefreshing = options.refreshing === true;
-    const networkOnly = options.networkOnly === true;
     const criteria = options.criteria ?? null;
+    const criteriaKey = getSearchCriteriaKey(criteria);
+    const loadPlan = resolveCriteriaLoadPlan({
+      trigger: options.trigger ?? "load-button",
+      criteriaKey,
+      loadedCriteriaKey: loadedSearchCriteriaRef.current,
+    });
     const syncResults = (
       nextCriteria: ShiftzyEmployeeSearchFormValues | null,
       sourceEmployees: ShiftzyEmployee[],
@@ -416,21 +430,20 @@ export default function ShiftzyEmployeesPage() {
       applySearch(nextCriteria, sourceEmployees, toPositionMap(sourcePositions));
     };
     const cacheScope = getCacheScope();
-    const cachedSnapshot = networkOnly
-      ? null
-      : readCacheSnapshot<ShiftzyEmployeesCachePayload>(SHIFTZY_EMPLOYEES_CACHE_KEY, {
-        namespace: SHIFTZY_CACHE_NAMESPACE,
-        scope: cacheScope,
-        storage: "persistent",
-        allowExpired: true,
-      });
+    const cachedSnapshot = readCacheSnapshot<ShiftzyEmployeesCachePayload>(SHIFTZY_EMPLOYEES_CACHE_KEY, {
+      namespace: SHIFTZY_CACHE_NAMESPACE,
+      scope: cacheScope,
+      storage: "persistent",
+      allowExpired: true,
+    });
     const cachedData = cachedSnapshot?.data;
     const canUseCached = Boolean(
       cachedData
       && Array.isArray(cachedData.employees)
       && Array.isArray(cachedData.positions),
     );
-    const shouldFetchNetwork = networkOnly || !canUseCached || Boolean(cachedSnapshot?.isExpired);
+    const shouldUseCacheFirst = loadPlan.shouldUseCacheFirst && canUseCached;
+    const shouldFetchNetwork = loadPlan.shouldIgnoreCache || !canUseCached || Boolean(cachedSnapshot?.isExpired);
 
     if (nextRefreshing) {
       setRefreshing(true);
@@ -443,7 +456,7 @@ export default function ShiftzyEmployeesPage() {
     setRefreshMessage(null);
     setError(null);
 
-    if (canUseCached && cachedData) {
+    if (shouldUseCacheFirst && cachedData) {
       setEmployees(cachedData.employees);
       setPositions(cachedData.positions);
       syncResults(criteria, cachedData.employees, cachedData.positions);
@@ -451,6 +464,7 @@ export default function ShiftzyEmployeesPage() {
         source: "cache",
         fetchedAt: cachedSnapshot?.fetchedAt ?? Date.now(),
       });
+      loadedSearchCriteriaRef.current = criteriaKey || null;
       setLoadingPage(false);
       if (!nextRefreshing && shouldFetchNetwork) {
         setBackgroundRefreshing(true);
@@ -486,6 +500,7 @@ export default function ShiftzyEmployeesPage() {
       });
 
       syncResults(criteria, nextEmployees, nextPositions);
+      loadedSearchCriteriaRef.current = criteriaKey || null;
     } catch (loadError) {
       if (requestToken !== requestTokenRef.current) {
         return;
@@ -499,6 +514,7 @@ export default function ShiftzyEmployeesPage() {
           fetchedAt: cachedSnapshot?.fetchedAt ?? Date.now(),
         });
         setRefreshMessage("Showing cached Shiftzy employees. Could not refresh.");
+        loadedSearchCriteriaRef.current = criteriaKey || null;
       } else {
         const message = loadError instanceof Error ? loadError.message : "Could not load Shiftzy employees.";
         setError(message);
@@ -560,8 +576,10 @@ export default function ShiftzyEmployeesPage() {
       return;
     }
     setSearching(true);
-    setSubmittedSearch(draft);
-    applySearch(draft, employees, positionMap);
+    const nextSearch = normalizeSearchValues(draft);
+    setSubmittedSearch(nextSearch);
+    loadedSearchCriteriaRef.current = getSearchCriteriaKey(nextSearch) || null;
+    applySearch(nextSearch, employees, positionMap);
     setCacheStatus((current) => current ? { ...current, source: "local" } : current);
     setSearching(false);
   }
@@ -569,6 +587,7 @@ export default function ShiftzyEmployeesPage() {
   function handleClearSearch() {
     setDraft(INITIAL_SEARCH_FORM);
     setSubmittedSearch(INITIAL_SEARCH_FORM);
+    loadedSearchCriteriaRef.current = getSearchCriteriaKey(INITIAL_SEARCH_FORM) || null;
     applySearch(INITIAL_SEARCH_FORM, employees, positionMap);
   }
 
@@ -619,8 +638,8 @@ export default function ShiftzyEmployeesPage() {
       setIsEditModalOpen(false);
       await loadData({
         refreshing: true,
-        networkOnly: true,
         criteria: submittedSearch,
+        trigger: "cache-chip",
       });
     } catch (saveError) {
       const message = saveError instanceof Error ? saveError.message : "Could not save employee.";
@@ -647,8 +666,8 @@ export default function ShiftzyEmployeesPage() {
       }
       await loadData({
         refreshing: true,
-        networkOnly: true,
         criteria: submittedSearch,
+        trigger: "cache-chip",
       });
     } catch (toggleError) {
       const message = toggleError instanceof Error ? toggleError.message : "Could not update employee status.";
@@ -677,8 +696,8 @@ export default function ShiftzyEmployeesPage() {
       setDeactivateTarget(null);
       await loadData({
         refreshing: true,
-        networkOnly: true,
         criteria: submittedSearch,
+        trigger: "cache-chip",
       });
     } catch (deactivateError) {
       const message = deactivateError instanceof Error ? deactivateError.message : "Could not update employee status.";
@@ -693,8 +712,8 @@ export default function ShiftzyEmployeesPage() {
     try {
       await loadData({
         refreshing: true,
-        networkOnly: true,
         criteria: submittedSearch,
+        trigger: "cache-chip",
       });
     } finally {
       setIsChipRefreshOverlayVisible(false);

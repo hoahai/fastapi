@@ -64,6 +64,7 @@ import { ModalCacheFooter } from "@shared/components/modal/ModalCacheFooter";
 import { PageLoadingLayer, SectionLoadingLayer, SectionLoadingOverlay } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, SectionMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
+import { resolveCriteriaLoadPlan } from "@shared/hooks/useCriteriaLoadPolicy";
 import { isLikelyEmailAddress, mergeUniqueEmails } from "@shared/utils/email";
 import { normalizeRichTextHtml } from "@shared/utils/richText";
 import { playSuccessSound, primeSuccessSound } from "@shared/utils/audio";
@@ -4360,8 +4361,13 @@ export default function TrafficPage() {
 
       const nextSelected = resolveExistingSelection(cachedList, preferredSelectedId);
       if (nextSelected) {
+        const detailLoadPlan = resolveCriteriaLoadPlan({
+          trigger: "load-button",
+          criteriaKey: nextSelected,
+          loadedCriteriaKey: null,
+        });
         await loadTrafficDetail(nextSelected, {
-          policy: "stale-while-revalidate",
+          policy: detailLoadPlan.shouldIgnoreCache ? "network-only" : "cache-first",
           deferWhenDirty: options?.deferWhenDirty,
         });
       }
@@ -5708,7 +5714,15 @@ export default function TrafficPage() {
     setRefreshMessage(null);
     clearDeferredUpdate();
     if (nextSelectedId && !isLocalTrafficId(nextSelectedId)) {
-      void loadTrafficDetail(nextSelectedId, { policy: "stale-while-revalidate", deferWhenDirty: false });
+      const detailLoadPlan = resolveCriteriaLoadPlan({
+        trigger: "load-button",
+        criteriaKey: nextSelectedId,
+        loadedCriteriaKey: null,
+      });
+      void loadTrafficDetail(nextSelectedId, {
+        policy: detailLoadPlan.shouldIgnoreCache ? "network-only" : "cache-first",
+        deferWhenDirty: false,
+      });
     }
   }, [
     activeAccountCode,
@@ -5952,11 +5966,29 @@ export default function TrafficPage() {
   const handleRefreshFromChip = useCallback(async () => {
     setIsChipRefreshOverlayVisible(true);
     try {
-      await handleRefresh();
+      const refreshPlan = resolveCriteriaLoadPlan({
+        trigger: "cache-chip",
+        criteriaKey: activeAccountCode,
+        loadedCriteriaKey: activeAccountCode,
+      });
+      if (!activeAccountCode) {
+        return;
+      }
+      await loadAccountTraffic(activeAccountCode, refreshPlan.shouldIgnoreCache ? "network-only" : "cache-first", {
+        selectedIdOverride: selectedTrafficId,
+        deferWhenDirty: false,
+      });
+      await refreshSelections();
+      await refreshStationRowsFromMaster({
+        trafficId: asString(selectedTrafficId || activeDraft?.traffic.id) || null,
+        stationCodes: (activeDraft?.stations ?? [])
+          .map((station) => asString(station.stationCode).toUpperCase())
+          .filter(Boolean),
+      });
     } finally {
       setIsChipRefreshOverlayVisible(false);
     }
-  }, [handleRefresh]);
+  }, [activeAccountCode, activeDraft?.stations, activeDraft?.traffic.id, activeDraft?.traffic.accountCode, loadAccountTraffic, refreshSelections, refreshStationRowsFromMaster, selectedTrafficId]);
 
   const resolveSyncMissingStationsDialog = useCallback((stationCodesToRemove: string[]) => {
     const resolver = syncMissingStationsResolverRef.current;
@@ -6055,6 +6087,17 @@ export default function TrafficPage() {
     if (!targetAccountCode) {
       return;
     }
+    const loadPlan = resolveCriteriaLoadPlan({
+      trigger: "load-button",
+      criteriaKey: targetAccountCode,
+      loadedCriteriaKey: activeAccountCode,
+      hasDirtyState: hasAnyUnsavedChanges,
+    });
+    if (loadPlan.shouldPromptBeforeReload) {
+      setPendingAction({ type: "account", accountCode: targetAccountCode });
+      setIsUnsavedDialogOpen(true);
+      return;
+    }
     const cacheSnapshot = readBrowserCacheSnapshot<TrafficSummary[]>(buildTrafficListCacheKey(targetAccountCode));
     const hasCachedList = normalizeTrafficSummaryList(cacheSnapshot?.data).length > 0;
     if (!hasCachedList) {
@@ -6062,7 +6105,7 @@ export default function TrafficPage() {
     }
     try {
       setLoadedAccountCode(targetAccountCode);
-      await loadAccountTraffic(targetAccountCode, "stale-while-revalidate", {
+      await loadAccountTraffic(targetAccountCode, loadPlan.shouldIgnoreCache ? "network-only" : "cache-first", {
         selectedIdOverride: selectedTrafficByAccount[targetAccountCode] || null,
         deferWhenDirty: false,
       });
@@ -6071,7 +6114,7 @@ export default function TrafficPage() {
         setIsLoadActionOverlayVisible(false);
       }
     }
-  }, [loadAccountTraffic, selectedAccountCode, selectedTrafficByAccount]);
+  }, [activeAccountCode, hasAnyUnsavedChanges, loadAccountTraffic, selectedAccountCode, selectedTrafficByAccount]);
 
   const handleRefreshFromSelector = useCallback(async () => {
     if (!activeAccountCode) {
@@ -6079,11 +6122,21 @@ export default function TrafficPage() {
     }
     setIsSelectorRefreshOverlayVisible(true);
     try {
-      await handleRefresh();
+      await loadAccountTraffic(activeAccountCode, "network-only", {
+        selectedIdOverride: selectedTrafficId,
+        deferWhenDirty: false,
+      });
+      await refreshSelections();
+      await refreshStationRowsFromMaster({
+        trafficId: asString(selectedTrafficId || activeDraft?.traffic.id) || null,
+        stationCodes: (activeDraft?.stations ?? [])
+          .map((station) => asString(station.stationCode).toUpperCase())
+          .filter(Boolean),
+      });
     } finally {
       setIsSelectorRefreshOverlayVisible(false);
     }
-  }, [activeAccountCode, handleRefresh]);
+  }, [activeAccountCode, activeDraft?.stations, activeDraft?.traffic.id, loadAccountTraffic, refreshSelections, refreshStationRowsFromMaster, selectedTrafficId]);
 
   const handleAccountChange = useCallback((nextAccountCodeRaw: string) => {
     const nextAccountCode = asString(nextAccountCodeRaw).toUpperCase();
@@ -6116,7 +6169,15 @@ export default function TrafficPage() {
     if (isLocalTrafficId(trafficId)) {
       return;
     }
-    void loadTrafficDetail(trafficId, { policy: "stale-while-revalidate", deferWhenDirty: false });
+    const trafficLoadPlan = resolveCriteriaLoadPlan({
+      trigger: "load-button",
+      criteriaKey: trafficId,
+      loadedCriteriaKey: selectedTrafficId,
+    });
+    void loadTrafficDetail(trafficId, {
+      policy: trafficLoadPlan.shouldIgnoreCache ? "network-only" : "cache-first",
+      deferWhenDirty: false,
+    });
   }, [activeAccountCode, loadTrafficDetail, restoreDraftSession, selectedTrafficId, stashCurrentDraftSession, upsertSelectedByAccount]);
 
   const handleCreateTraffic = useCallback(async () => {
@@ -6392,7 +6453,15 @@ export default function TrafficPage() {
       return;
     }
     if (snapshot.removedSelected && snapshot.nextSelected && !isLocalTrafficId(snapshot.nextSelected)) {
-      await loadTrafficDetail(snapshot.nextSelected, { policy: "stale-while-revalidate", deferWhenDirty: false });
+      const detailLoadPlan = resolveCriteriaLoadPlan({
+        trigger: "load-button",
+        criteriaKey: snapshot.nextSelected,
+        loadedCriteriaKey: selectedTrafficId,
+      });
+      await loadTrafficDetail(snapshot.nextSelected, {
+        policy: detailLoadPlan.shouldIgnoreCache ? "network-only" : "cache-first",
+        deferWhenDirty: false,
+      });
     }
   }, [applyOptimisticTrafficRemoval, loadTrafficDetail]);
 
@@ -6446,7 +6515,15 @@ export default function TrafficPage() {
         return;
       }
       if (snapshot.removedSelected && snapshot.nextSelected && !isLocalTrafficId(snapshot.nextSelected)) {
-        await loadTrafficDetail(snapshot.nextSelected, { policy: "stale-while-revalidate", deferWhenDirty: false });
+        const detailLoadPlan = resolveCriteriaLoadPlan({
+          trigger: "load-button",
+          criteriaKey: snapshot.nextSelected,
+          loadedCriteriaKey: selectedTrafficId,
+        });
+        await loadTrafficDetail(snapshot.nextSelected, {
+          policy: detailLoadPlan.shouldIgnoreCache ? "network-only" : "cache-first",
+          deferWhenDirty: false,
+        });
       }
     } catch (archiveError) {
       setError(getTrafficErrorMessage(
@@ -6522,8 +6599,13 @@ export default function TrafficPage() {
 
     if (!action) {
       if (nextSelectedId && !isLocalTrafficId(nextSelectedId)) {
+        const detailLoadPlan = resolveCriteriaLoadPlan({
+          trigger: "load-button",
+          criteriaKey: nextSelectedId,
+          loadedCriteriaKey: selectedTrafficId,
+        });
         void loadTrafficDetail(nextSelectedId, {
-          policy: "stale-while-revalidate",
+          policy: detailLoadPlan.shouldIgnoreCache ? "network-only" : "cache-first",
           deferWhenDirty: false,
         });
       }
@@ -6532,7 +6614,12 @@ export default function TrafficPage() {
     if (action.type === "account") {
       setSelectedAccountCode(action.accountCode);
       setLoadedAccountCode(action.accountCode);
-      await loadAccountTraffic(action.accountCode, "stale-while-revalidate", {
+      const accountLoadPlan = resolveCriteriaLoadPlan({
+        trigger: "load-button",
+        criteriaKey: action.accountCode,
+        loadedCriteriaKey: action.accountCode,
+      });
+      await loadAccountTraffic(action.accountCode, accountLoadPlan.shouldIgnoreCache ? "network-only" : "cache-first", {
         selectedIdOverride: selectedTrafficByAccount[action.accountCode] || null,
         deferWhenDirty: false,
       });
@@ -6545,8 +6632,13 @@ export default function TrafficPage() {
       if (isLocalTrafficId(action.trafficId)) {
         return;
       }
+      const trafficLoadPlan = resolveCriteriaLoadPlan({
+        trigger: "load-button",
+        criteriaKey: action.trafficId,
+        loadedCriteriaKey: action.trafficId,
+      });
       await loadTrafficDetail(action.trafficId, {
-        policy: "stale-while-revalidate",
+        policy: trafficLoadPlan.shouldIgnoreCache ? "network-only" : "cache-first",
         deferWhenDirty: false,
       });
       return;
@@ -8656,12 +8748,18 @@ export default function TrafficPage() {
           onLoad={() => {
             const targetAccountCode = asString(selectedAccountCode).toUpperCase();
             const isSwitchingAccount = Boolean(activeAccountCode && targetAccountCode && targetAccountCode !== activeAccountCode);
+            const loadPlan = resolveCriteriaLoadPlan({
+              trigger: "load-button",
+              criteriaKey: targetAccountCode,
+              loadedCriteriaKey: activeAccountCode,
+              hasDirtyState: hasAnyUnsavedChanges,
+            });
             if (hasAnyUnsavedChanges && isSwitchingAccount) {
               setPendingAction({ type: "account", accountCode: targetAccountCode });
               setIsUnsavedDialogOpen(true);
               return;
             }
-            if (hasAnyUnsavedChanges) {
+            if (loadPlan.shouldPromptBeforeReload) {
               setPendingAction({ type: "refresh" });
               setIsUnsavedDialogOpen(true);
               return;

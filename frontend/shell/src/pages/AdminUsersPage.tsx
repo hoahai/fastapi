@@ -30,6 +30,7 @@ import { PageLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
 import { FRONTEND_CACHE_TTL_MS } from "@shared/cache";
+import { resolveCriteriaLoadPlan } from "@shared/hooks/useCriteriaLoadPolicy";
 import { useAuth } from "@shared/auth/useAuth";
 
 type RoleItem = {
@@ -592,7 +593,7 @@ export default function AdminUsersPage() {
   const currentUserId = String(auth.user?.id || "").trim();
   const { requestJson } = useApiRequest();
   const { isOnline } = useOnlineStatus();
-  const loadDataRef = useRef<(showRefreshing: boolean) => Promise<void>>(async () => undefined);
+  const loadDataRef = useRef<(trigger?: "load-button" | "cache-chip") => Promise<void>>(async () => undefined);
   const loadInvocationRef = useRef(0);
 
   const [loading, setLoading] = useState(true);
@@ -838,11 +839,16 @@ export default function AdminUsersPage() {
     [filteredGroupedMembers],
   );
 
-  const loadData = useCallback(async (showRefreshing: boolean) => {
+  const loadData = useCallback(async (trigger: "load-button" | "cache-chip" = "load-button") => {
     const loadInvocationId = loadInvocationRef.current + 1;
     loadInvocationRef.current = loadInvocationId;
+    const loadPlan = resolveCriteriaLoadPlan({
+      trigger,
+      criteriaKey: ADMIN_PAGE_CACHE_KEY,
+      loadedCriteriaKey: trigger === "cache-chip" ? ADMIN_PAGE_CACHE_KEY : null,
+    });
 
-    const cachedSnapshot = !showRefreshing
+    const cachedSnapshot = !loadPlan.shouldIgnoreCache
       ? readBrowserCacheSnapshot<AdminPageCacheSnapshot>(ADMIN_PAGE_CACHE_KEY)
       : null;
     const cachedData = cachedSnapshot?.data;
@@ -855,7 +861,7 @@ export default function AdminUsersPage() {
       && Array.isArray(cachedData.apps),
     );
 
-    if (showRefreshing) {
+    if (loadPlan.shouldIgnoreCache) {
       setRefreshing(true);
       setBackgroundRefreshing(false);
     } else {
@@ -934,7 +940,7 @@ export default function AdminUsersPage() {
   }, [loadData]);
 
   useEffect(() => {
-    void loadDataRef.current(false);
+    void loadDataRef.current("load-button");
   }, []);
 
   function resetInviteDraft() {
@@ -1105,7 +1111,7 @@ export default function AdminUsersPage() {
         },
       });
       closeEditUser();
-      await loadData(true);
+      await loadData("cache-chip");
     } finally {
       setSavingEdit(false);
     }
@@ -1180,7 +1186,7 @@ export default function AdminUsersPage() {
       resetInviteDraft();
       setIsInviteUnsavedDialogOpen(false);
       setIsInviteModalOpen(false);
-      await loadData(true);
+      await loadData("cache-chip");
     } finally {
       setCreatingInvite(false);
     }
@@ -1194,7 +1200,7 @@ export default function AdminUsersPage() {
         message: `Pending invite for ${email} has been revoked.`,
       },
     });
-    await loadData(true);
+    await loadData("cache-chip");
   }
 
   async function handleDisableConfirmed() {
@@ -1220,7 +1226,7 @@ export default function AdminUsersPage() {
       });
       setDisableTarget(null);
       closeEditUser();
-      await loadData(true);
+      await loadData("cache-chip");
     } finally {
       setProcessingDisable(false);
     }
@@ -1383,7 +1389,7 @@ export default function AdminUsersPage() {
   async function handleRefreshFromChip() {
     setIsChipRefreshOverlayVisible(true);
     try {
-      await loadData(true);
+      await loadData("cache-chip");
     } finally {
       setIsChipRefreshOverlayVisible(false);
     }

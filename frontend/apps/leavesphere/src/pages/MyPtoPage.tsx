@@ -37,6 +37,7 @@ import { SectionCard } from "@shared/components/layout/SectionCard";
 import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
+import { resolveCriteriaLoadPlan } from "@shared/hooks/useCriteriaLoadPolicy";
 import { DEFAULT_TIME_ZONE, formatDateInTimeZone, getCurrentMonthKeyInTimeZone, getCurrentYearInTimeZone, getTodayIsoDateInTimeZone } from "@shared/utils/time";
 import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 import { LeaveSpherePtoRequestList } from "@leavesphere/components/LeaveSpherePtoRequestList";
@@ -1058,7 +1059,7 @@ export default function LeaveSphereMyPtoPage() {
 
   const loadWorkspace = useCallback(async (
     year: number,
-    policy: CachePolicy = "stale-while-revalidate",
+    policy: CachePolicy = "cache-first",
     freshData = false,
   ): Promise<boolean> => {
     const requestToken = ++workspaceLoadRequestTokenRef.current;
@@ -1153,13 +1154,17 @@ export default function LeaveSphereMyPtoPage() {
     if (!Number.isInteger(parsedYear)) {
       return;
     }
+    const loadPlan = resolveCriteriaLoadPlan({
+      trigger: "load-button",
+      criteriaKey: parsedYear,
+      loadedCriteriaKey: loadedYear,
+    });
     const requestedMonthKey = buildMonthKeyForYear(currentMonthKey, parsedYear) || `${parsedYear}-01`;
     setCalendarMonth(requestedMonthKey);
-    const shouldHardRefresh = loadedYear === parsedYear;
     const didLoad = await loadWorkspace(
       parsedYear,
-      shouldHardRefresh ? "network-only" : "cache-first",
-      shouldHardRefresh,
+      loadPlan.shouldIgnoreCache ? "network-only" : "cache-first",
+      loadPlan.shouldIgnoreCache,
     );
     if (!didLoad) {
       return;
@@ -1461,7 +1466,16 @@ export default function LeaveSphereMyPtoPage() {
             setIsChipRefreshOverlayVisible(true);
             const requestedMonthKey = buildMonthKeyForYear(currentMonthKey, loadedYearForRequests) || `${loadedYearForRequests}-01`;
             setCalendarMonth(requestedMonthKey);
-            void loadWorkspace(loadedYearForRequests, "network-only", true).finally(() => {
+            const refreshPlan = resolveCriteriaLoadPlan({
+              trigger: "cache-chip",
+              criteriaKey: loadedYearForRequests,
+              loadedCriteriaKey: loadedYearForRequests,
+            });
+            void loadWorkspace(
+              loadedYearForRequests,
+              refreshPlan.shouldIgnoreCache ? "network-only" : "cache-first",
+              refreshPlan.shouldIgnoreCache,
+            ).finally(() => {
               setIsChipRefreshOverlayVisible(false);
             });
           }}

@@ -45,6 +45,7 @@ import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
+import { resolveCriteriaLoadPlan, type CriteriaLoadTrigger } from "@shared/hooks/useCriteriaLoadPolicy";
 import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 import { FormRow } from "@shared/components/form/FormRow";
 import { readCacheSnapshot, setCacheData, type CacheSource } from "@shared/cache";
@@ -257,6 +258,7 @@ export default function ShiftzySchedulePage() {
   const schedulesRef = useRef<ShiftzySchedule[]>([]);
   const pendingScheduleIdsRef = useRef<Record<string, true>>({});
   const pendingDeletedScheduleIdsRef = useRef<Record<string, true>>({});
+  const loadedWeekNoRef = useRef<number | null>(null);
   const canEditShiftzy = hasAppEditAccess(auth.accessProfile, "shiftzy");
   const hasSessionToken = Boolean(auth.session?.accessToken);
 
@@ -467,9 +469,13 @@ export default function ShiftzySchedulePage() {
 
   async function loadSchedulesForWeek(
     weekNo: number,
-    options: { forceNetwork?: boolean } = {},
+    options: { trigger?: CriteriaLoadTrigger } = {},
   ): Promise<void> {
-    const forceNetwork = options.forceNetwork === true;
+    const loadPlan = resolveCriteriaLoadPlan({
+      trigger: options.trigger ?? "load-button",
+      criteriaKey: weekNo,
+      loadedCriteriaKey: loadedWeekNoRef.current,
+    });
     const cacheScope = getCacheScope();
     const cachedWeekSnapshot = readCacheSnapshot<ShiftzySchedule[]>(getWeekScheduleCacheKey(weekNo), {
       namespace: SHIFTZY_CACHE_NAMESPACE,
@@ -478,40 +484,34 @@ export default function ShiftzySchedulePage() {
       allowExpired: true,
     });
     const cachedWeekRows = Array.isArray(cachedWeekSnapshot?.data) ? cachedWeekSnapshot?.data : null;
-    const hasFreshCachedWeek = Boolean(cachedWeekRows && !cachedWeekSnapshot?.isExpired);
+    const canUseCachedWeek = Boolean(cachedWeekRows);
+    const shouldUseCacheFirst = loadPlan.shouldUseCacheFirst && canUseCachedWeek;
+    const shouldFetchNetwork = loadPlan.shouldIgnoreCache || !canUseCachedWeek || Boolean(cachedWeekSnapshot?.isExpired);
 
-    if (!forceNetwork && hasFreshCachedWeek) {
-      applyServerSchedules(cachedWeekRows!, { preservePending: true });
-      setState(cachedWeekRows!.length ? "ready" : "empty");
-      setError(null);
-      setRefreshMessage(null);
-      setCacheStatus({
-        source: "cache",
-        fetchedAt: cachedWeekSnapshot?.fetchedAt ?? Date.now(),
-      });
-      setLoadingPage(false);
-      setRefreshing(false);
-      setBackgroundRefreshing(false);
-      return;
-    }
-
-    if (forceNetwork) {
+    if (loadPlan.shouldIgnoreCache) {
       setRefreshing(true);
       setBackgroundRefreshing(false);
     } else {
       setRefreshing(false);
-      setBackgroundRefreshing(true);
-      setState(cachedWeekRows ? (cachedWeekRows.length ? "ready" : "empty") : "loading");
-      if (cachedWeekRows) {
+      setBackgroundRefreshing(shouldFetchNetwork);
+      setState(shouldUseCacheFirst && cachedWeekRows ? (cachedWeekRows.length ? "ready" : "empty") : "loading");
+      if (shouldUseCacheFirst && cachedWeekRows) {
         applyServerSchedules(cachedWeekRows, { preservePending: true });
         setError(null);
         setCacheStatus({
           source: "cache",
           fetchedAt: cachedWeekSnapshot?.fetchedAt ?? Date.now(),
         });
-      } else {
+        loadedWeekNoRef.current = weekNo;
+      } else if (!canUseCachedWeek) {
         setSchedules([]);
       }
+    }
+    if (!shouldFetchNetwork) {
+      setRefreshing(false);
+      setBackgroundRefreshing(false);
+      setLoadingPage(false);
+      return;
     }
     const requestToken = ++requestTokenRef.current;
     try {
@@ -539,6 +539,7 @@ export default function ShiftzySchedulePage() {
         source: "network",
         fetchedAt: Date.now(),
       });
+      loadedWeekNoRef.current = weekNo;
     } catch (loadError) {
       if (requestToken !== requestTokenRef.current) {
         return;
@@ -552,6 +553,7 @@ export default function ShiftzySchedulePage() {
           fetchedAt: cachedWeekSnapshot?.fetchedAt ?? Date.now(),
         });
         setRefreshMessage("Showing cached schedule for this week. Could not refresh.");
+        loadedWeekNoRef.current = weekNo;
         return;
       }
       setState("error");
@@ -605,6 +607,7 @@ export default function ShiftzySchedulePage() {
           source: "cache",
           fetchedAt: cachedSnapshot?.fetchedAt ?? Date.now(),
         });
+        loadedWeekNoRef.current = cachedData.selectedWeekNo;
         setLoadingPage(false);
       }
     } else {
@@ -620,6 +623,7 @@ export default function ShiftzySchedulePage() {
           source: "cache",
           fetchedAt: cachedSnapshot?.fetchedAt ?? Date.now(),
         });
+        loadedWeekNoRef.current = cachedData.selectedWeekNo;
         setLoadingPage(false);
         setBackgroundRefreshing(shouldFetchNetwork);
       }
@@ -655,6 +659,7 @@ export default function ShiftzySchedulePage() {
         setSchedules([]);
         setState("empty");
         setCacheStatus({ source: "network", fetchedAt: Date.now() });
+        loadedWeekNoRef.current = null;
         setBackgroundRefreshing(false);
         setLoadingPage(false);
         setRefreshing(false);
@@ -669,6 +674,7 @@ export default function ShiftzySchedulePage() {
       writeWeekScheduleCache(preferredWeekNo, rows);
       setState(rows.length ? "ready" : "empty");
       setCacheStatus({ source: "network", fetchedAt: Date.now() });
+      loadedWeekNoRef.current = preferredWeekNo;
       setBackgroundRefreshing(false);
       setLoadingPage(false);
       setRefreshing(false);
@@ -701,6 +707,7 @@ export default function ShiftzySchedulePage() {
             source: "cache",
             fetchedAt: cachedSnapshot?.fetchedAt ?? Date.now(),
           });
+          loadedWeekNoRef.current = cachedData.selectedWeekNo;
         }
         setRefreshMessage("Showing cached Shiftzy data. Could not refresh.");
         setBackgroundRefreshing(false);
@@ -929,7 +936,7 @@ export default function ShiftzySchedulePage() {
         await deleteShiftzySchedules(requestJson, deletedIds);
       }
       if (selectedWeekNo) {
-        await loadSchedulesForWeek(selectedWeekNo, { forceNetwork: true });
+        await loadSchedulesForWeek(selectedWeekNo, { trigger: "cache-chip" });
       }
       setCacheStatus({ source: "network", fetchedAt: Date.now() });
     } catch (saveError) {
@@ -963,7 +970,7 @@ export default function ShiftzySchedulePage() {
       });
       setIsDuplicateModalOpen(false);
       setSelectedWeekNo(duplicateToWeekNo);
-      await loadSchedulesForWeek(duplicateToWeekNo, { forceNetwork: true });
+      await loadSchedulesForWeek(duplicateToWeekNo, { trigger: "cache-chip" });
       setCacheStatus({ source: "network", fetchedAt: Date.now() });
     } catch (duplicateError) {
       setRefreshMessage(duplicateError instanceof Error ? duplicateError.message : "Could not duplicate schedules.");
@@ -1087,7 +1094,7 @@ export default function ShiftzySchedulePage() {
     }
     setIsChipRefreshOverlayVisible(true);
     try {
-      await loadSchedulesForWeek(selectedWeekNo, { forceNetwork: true });
+      await loadSchedulesForWeek(selectedWeekNo, { trigger: "cache-chip" });
     } finally {
       setIsChipRefreshOverlayVisible(false);
     }

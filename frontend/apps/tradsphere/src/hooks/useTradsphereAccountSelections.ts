@@ -31,7 +31,7 @@ export function useTradsphereAccountSelections({
   requestJson,
   requestHeaders,
   autoLoad = true,
-  initialPolicy = "stale-while-revalidate",
+  initialPolicy = "cache-first",
   loadErrorMessage = "Unable to load account selections.",
   requestOptions,
 }: UseTradsphereAccountSelectionsOptions) {

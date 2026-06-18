@@ -59,6 +59,7 @@ import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 import { PageLoadingLayer, SectionLoadingLayer, SectionLoadingOverlay } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
+import { resolveCriteriaLoadPlan } from "@shared/hooks/useCriteriaLoadPolicy";
 import { shouldTreatChecklistDetailAsHydrating } from "@/utils/invoiceChecklistHydration";
 import {
   buildPeriodValue,
@@ -3485,7 +3486,7 @@ export default function InvoiceChecklistPage() {
     }
     try {
       await loadData({
-        policy: "network-first",
+        policy: "cache-first",
         periodValue: selectedDraftPeriodValue,
         checklistId: selectedChecklistIdForReload,
         includeSelectedDetail: true,
@@ -3531,17 +3532,23 @@ export default function InvoiceChecklistPage() {
   }
 
   function handleLoadClick() {
-    if (!hasAnyUnsavedChanges) {
-      if (isSelectedPeriodLoaded) {
-        void runRefreshForSelectedPeriod();
-      } else {
-        void runLoadForSelectedPeriod();
-      }
+    const loadPlan = resolveCriteriaLoadPlan({
+      trigger: "load-button",
+      criteriaKey: selectedDraftPeriodValue,
+      loadedCriteriaKey: loadedPeriodValue,
+      hasDirtyState: hasAnyUnsavedChanges,
+    });
+    if (hasAnyUnsavedChanges) {
+      pendingUnsavedActionTypeRef.current = "load";
+      pendingUnsavedRouteProceedRef.current = null;
+      setIsUnsavedDialogOpen(true);
       return;
     }
-    pendingUnsavedActionTypeRef.current = "load";
-    pendingUnsavedRouteProceedRef.current = null;
-    setIsUnsavedDialogOpen(true);
+    if (loadPlan.isSameCriteria) {
+      void runRefreshForSelectedPeriod();
+      return;
+    }
+    void runLoadForSelectedPeriod();
   }
 
   async function runSyncChecklistPeriod() {
@@ -4091,8 +4098,13 @@ export default function InvoiceChecklistPage() {
     }
     setIsChipRefreshing(true);
     try {
+      const refreshPlan = resolveCriteriaLoadPlan({
+        trigger: "cache-chip",
+        criteriaKey: loadedPeriodValue,
+        loadedCriteriaKey: loadedPeriodValue,
+      });
       await loadData({
-        policy: "network-only",
+        policy: refreshPlan.shouldIgnoreCache ? "network-only" : "cache-first",
         periodValue: loadedPeriodValue,
         checklistId: selectedChecklistId,
       });

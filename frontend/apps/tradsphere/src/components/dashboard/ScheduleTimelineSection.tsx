@@ -35,6 +35,7 @@ import {
   shouldFetchNetwork,
   type CachePolicy,
 } from "@shared/cache";
+import { resolveCriteriaLoadPlan } from "@shared/hooks/useCriteriaLoadPolicy";
 import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 import { SectionCard } from "@shared/components/layout/SectionCard";
 import type { EsnumItem } from "./types";
@@ -893,6 +894,11 @@ export function ScheduleTimelineSection({
         : addDays(mondayOfIsoDate(effectiveEnd), 1);
     const adjacentEnd = addDays(adjacentStart, requestWeeks * 7 - 1);
     const cacheKey = buildTimelineCacheKey(accountCode, adjacentStart, adjacentEnd);
+    const loadPlan = resolveCriteriaLoadPlan({
+      trigger: "load-button",
+      criteriaKey: cacheKey,
+      loadedCriteriaKey: null,
+    });
 
     if (loadedWindowKeysRef.current.has(cacheKey)) {
       return;
@@ -908,7 +914,7 @@ export function ScheduleTimelineSection({
       startDate: adjacentStart,
       endDate: adjacentEnd,
       mode: direction === "previous" ? "prepend" : "append",
-      policy: "stale-while-revalidate",
+      policy: loadPlan.shouldIgnoreCache ? "network-only" : "cache-first",
       requestId,
     });
 
@@ -937,6 +943,11 @@ export function ScheduleTimelineSection({
     if (!windows.length) {
       return;
     }
+    const refreshPlan = resolveCriteriaLoadPlan({
+      trigger: "cache-chip",
+      criteriaKey: accountCode,
+      loadedCriteriaKey: accountCode,
+    });
 
     loadedWindowKeysRef.current = new Set();
     loadedWindowsRef.current = [];
@@ -946,7 +957,7 @@ export function ScheduleTimelineSection({
         startDate: windowRequest.start,
         endDate: windowRequest.end,
         mode: windowRequest.mode,
-        policy: "network-only",
+        policy: refreshPlan.shouldIgnoreCache ? "network-only" : "cache-first",
         requestId,
       });
       if (requestId !== requestIdRef.current) {
@@ -961,7 +972,12 @@ export function ScheduleTimelineSection({
 
   function handleCurrentPeriod(): void {
     if (visibleStart === currentWeekStart) {
-      void loadInitialWindow("stale-while-revalidate");
+      const currentPeriodPlan = resolveCriteriaLoadPlan({
+        trigger: "load-button",
+        criteriaKey: currentWeekStart,
+        loadedCriteriaKey: null,
+      });
+      void loadInitialWindow(currentPeriodPlan.shouldIgnoreCache ? "network-only" : "cache-first");
       return;
     }
     setVisibleStart(currentWeekStart);
@@ -989,7 +1005,12 @@ export function ScheduleTimelineSection({
       return;
     }
 
-    void loadInitialWindow("stale-while-revalidate");
+    const initialLoadPlan = resolveCriteriaLoadPlan({
+      trigger: "load-button",
+      criteriaKey: `${accountCode}:${visibleStart}`,
+      loadedCriteriaKey: null,
+    });
+    void loadInitialWindow(initialLoadPlan.shouldIgnoreCache ? "network-only" : "cache-first");
   }, [accountCode, isCollapsed, isTableOnlyPresentation, normalizedAnchorEnd, normalizedAnchorStart, visibleStart]);
 
   useEffect(() => {
