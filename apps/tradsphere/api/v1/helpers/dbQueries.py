@@ -284,6 +284,7 @@ def _invalidate_accounts_related_cache() -> None:
     _invalidate_db_read_cache_scopes(
         "accounts",
         "accounts_directory",
+        "account_creation_lookup",
         "invoice_checklist_expected_rows",
     )
 
@@ -830,6 +831,63 @@ def get_accounts_directory(
     rows = fetch_all(query, tuple(params))
     _set_cached_value(cache_key, rows)
     return rows
+
+
+def get_account_creation_lookup(account_code: str) -> dict | None:
+    normalized_account_code = _normalize_account_code(account_code)
+    tables = get_db_tables()
+    accounts_table = _quote_table_name(tables["ACCOUNTS"])
+    master_accounts_table = _quote_table_name(tables["MASTERACCOUNTS"])
+
+    cache_key = _build_db_read_cache_key(
+        "account_creation_lookup",
+        f"accounts_table={accounts_table}",
+        f"master_accounts_table={master_accounts_table}",
+        f"account_code={normalized_account_code}",
+    )
+    cached_row = _get_cached_dict(
+        cache_key,
+        ttl_key="db_accounts_ttl_time",
+    )
+    if cached_row is not None:
+        return cached_row
+
+    query = (
+        "SELECT "
+        "m.code AS accountCode, "
+        "m.name AS accountName, "
+        "m.logoUrl AS logoUrl, "
+        "CASE WHEN t.accountCode IS NULL THEN 0 ELSE 1 END AS existsInTradSphere, "
+        "t.accountCode AS tradSphereAccountCode, "
+        "t.billingType AS billingType, "
+        "t.market AS market, "
+        "t.note AS note, "
+        "COALESCE(t.active, 1) AS active "
+        f"FROM {master_accounts_table} m "
+        f"LEFT JOIN {accounts_table} t "
+        "ON UPPER(t.accountCode) = UPPER(m.code) "
+        "WHERE UPPER(m.code) = %s "
+        "LIMIT 1"
+    )
+    rows = fetch_all(query, (normalized_account_code,))
+    if not rows:
+      return None
+    row = rows[0]
+    if not isinstance(row, dict):
+        return None
+    result = {
+        "accountCode": str(row.get("accountCode") or "").strip().upper() or normalized_account_code,
+        "accountName": str(row.get("accountName") or "").strip() or None,
+        "logoUrl": str(row.get("logoUrl") or "").strip() or None,
+        "existsInTradSphere": bool(row.get("existsInTradSphere")),
+        "tradSphereAccountCode": str(row.get("tradSphereAccountCode") or "").strip().upper() or None,
+        "billingType": str(row.get("billingType") or "").strip() or None,
+        "market": str(row.get("market") or "").strip() or None,
+        "note": str(row.get("note") or "").strip() or None,
+        "active": row.get("active"),
+    }
+    _set_cached_value(cache_key, result)
+    return result
 
 
 def insert_accounts(items: list[dict]) -> int:
