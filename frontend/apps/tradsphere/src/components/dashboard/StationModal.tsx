@@ -21,7 +21,7 @@ import { useApiRequest } from "@/hooks/useApiRequest";
 import { useOnlineStatus } from "@/hooks/useOnlineStatus";
 import { readBrowserCacheSnapshot, writeBrowserCache } from "@/lib/browserCache";
 import { TRADSPHERE_CACHE_TTL_MS } from "@shared/cache";
-import { ModalCacheFooter, ModalCloseButton, ModalShell } from "@shared/components";
+import { ModalCacheFooter, ModalCloseButton, ModalHeaderRow, ModalShell } from "@shared/components";
 import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
 import { playSuccessSound, primeSuccessSound } from "@shared/utils/audio";
 import {
@@ -2943,14 +2943,18 @@ export function StationModal({
           }}
         >
           <ModalShell busy={isSubmitting} busyMessage="Saving station..." className="min-h-0 flex-1">
-            <DialogClose asChild aria-label="Close station modal">
-              <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
-            </DialogClose>
-
-            <DialogHeader className="pr-8">
-              <DialogTitle>{modalTitle}</DialogTitle>
-              <DialogDescription>{description}</DialogDescription>
-            </DialogHeader>
+            <ModalHeaderRow
+              actions={(
+                <DialogClose asChild aria-label="Close station modal">
+                  <ModalCloseButton icon={<X className="size-4" />} />
+                </DialogClose>
+              )}
+            >
+              <DialogHeader>
+                <DialogTitle>{modalTitle}</DialogTitle>
+                <DialogDescription>{description}</DialogDescription>
+              </DialogHeader>
+            </ModalHeaderRow>
 
             <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
               {isEditMode && !isDetailReady ? (
@@ -3100,19 +3104,23 @@ export function StationModal({
             }
           }}
         >
-          <DialogClose asChild aria-label="Close select delivery method modal">
-            <ModalCloseButton
-              icon={<X className="size-4" />}
-              className="absolute right-0 top-0 z-20"
-              onClick={() => closeDeliveryMethodSelector()}
-            />
-          </DialogClose>
-          <DialogHeader className="pr-8">
-            <DialogTitle>Select Delivery Method</DialogTitle>
-            <DialogDescription>
-              Choose an existing delivery method to use for this station draft.
-            </DialogDescription>
-          </DialogHeader>
+          <ModalHeaderRow
+            actions={(
+              <DialogClose asChild aria-label="Close select delivery method modal">
+                <ModalCloseButton
+                  icon={<X className="size-4" />}
+                  onClick={() => closeDeliveryMethodSelector()}
+                />
+              </DialogClose>
+            )}
+          >
+            <DialogHeader>
+              <DialogTitle>Select Delivery Method</DialogTitle>
+              <DialogDescription>
+                Choose an existing delivery method to use for this station draft.
+              </DialogDescription>
+            </DialogHeader>
+          </ModalHeaderRow>
 
           <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
             <div className="space-y-3">
@@ -3268,21 +3276,25 @@ export function StationModal({
             }
           }}
         >
-          <DialogClose asChild aria-label="Close delivery method editor modal">
-            <ModalCloseButton
-              icon={<X className="size-4" />}
-              className="absolute right-0 top-0 z-20"
-              onClick={() => closeDeliveryMethodEditor()}
-            />
-          </DialogClose>
-          <DialogHeader className="pr-8">
-            <DialogTitle>
-              {deliveryMethodEditorForm.id !== null ? "Edit Delivery Method" : "Add Delivery Method"}
-            </DialogTitle>
-            <DialogDescription>
-              Update delivery method details in a separate workflow, then apply to this station draft.
-            </DialogDescription>
-          </DialogHeader>
+          <ModalHeaderRow
+            actions={(
+              <DialogClose asChild aria-label="Close delivery method editor modal">
+                <ModalCloseButton
+                  icon={<X className="size-4" />}
+                  onClick={() => closeDeliveryMethodEditor()}
+                />
+              </DialogClose>
+            )}
+          >
+            <DialogHeader>
+              <DialogTitle>
+                {deliveryMethodEditorForm.id !== null ? "Edit Delivery Method" : "Add Delivery Method"}
+              </DialogTitle>
+              <DialogDescription>
+                Update delivery method details in a separate workflow, then apply to this station draft.
+              </DialogDescription>
+            </DialogHeader>
+          </ModalHeaderRow>
 
           <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
             <div className="space-y-3">
@@ -3462,19 +3474,23 @@ export function StationModal({
             }
           }}
         >
-          <DialogClose asChild aria-label="Close contact editor modal">
-            <ModalCloseButton
-              icon={<X className="size-4" />}
-              className="absolute right-0 top-0 z-20"
-              onClick={() => closeContactEditor()}
-            />
-          </DialogClose>
-          <DialogHeader className="pr-8">
-            <DialogTitle>{contactEditorIndex === null ? "Create Contact" : "Edit Contact"}</DialogTitle>
-            <DialogDescription>
-              Contact changes remain local in this station draft until you save the station.
-            </DialogDescription>
-          </DialogHeader>
+          <ModalHeaderRow
+            actions={(
+              <DialogClose asChild aria-label="Close contact editor modal">
+                <ModalCloseButton
+                  icon={<X className="size-4" />}
+                  onClick={() => closeContactEditor()}
+                />
+              </DialogClose>
+            )}
+          >
+            <DialogHeader>
+              <DialogTitle>{contactEditorIndex === null ? "Create Contact" : "Edit Contact"}</DialogTitle>
+              <DialogDescription>
+                Contact changes remain local in this station draft until you save the station.
+              </DialogDescription>
+            </DialogHeader>
+          </ModalHeaderRow>
 
           <div className="space-y-3">
             <LabeledField label="Full Name">
@@ -3693,19 +3709,23 @@ export function StationModal({
             }
           }}
         >
-          <DialogClose asChild aria-label="Close add existing contact modal">
-            <ModalCloseButton
-              icon={<X className="size-4" />}
-              className="absolute right-0 top-0 z-20"
-              onClick={() => closeAddExistingContact()}
-            />
-          </DialogClose>
-          <DialogHeader className="pr-8">
-            <DialogTitle>Add Existing Contact</DialogTitle>
-            <DialogDescription>
-              Select an existing contact and link it to this station in draft state.
-            </DialogDescription>
-          </DialogHeader>
+          <ModalHeaderRow
+            actions={(
+              <DialogClose asChild aria-label="Close add existing contact modal">
+                <ModalCloseButton
+                  icon={<X className="size-4" />}
+                  onClick={() => closeAddExistingContact()}
+                />
+              </DialogClose>
+            )}
+          >
+            <DialogHeader>
+              <DialogTitle>Add Existing Contact</DialogTitle>
+              <DialogDescription>
+                Select an existing contact and link it to this station in draft state.
+              </DialogDescription>
+            </DialogHeader>
+          </ModalHeaderRow>
 
           <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
             <div className="space-y-3">

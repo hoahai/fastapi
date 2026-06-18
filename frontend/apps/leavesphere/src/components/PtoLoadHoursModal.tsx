@@ -17,7 +17,7 @@ import { ConfirmDialog } from "@tradsphere/components/ui/confirm-dialog";
 import { canModalClose, shouldBlockOutsideClose } from "@tradsphere/components/ui/modal-close-guard";
 import { Textarea } from "@tradsphere/components/ui/textarea";
 import { UnsavedChangesDialog } from "@tradsphere/components/ui/unsaved-changes-dialog";
-import { ModalCloseButton, ModalShell } from "@shared/components";
+import { ModalCloseButton, ModalHeaderRow, ModalShell } from "@shared/components";
 
 import type { LeaveSpherePtoType } from "@leavesphere/lib/ptoTypes";
 import type {
@@ -388,13 +388,18 @@ export function LeaveSpherePtoLoadHoursModal({
           }}
         >
           <ModalShell busy={saving} busyMessage="Saving PTO hours..." className="min-h-0 flex-1">
-            <DialogClose asChild aria-label="Close load PTO hours modal">
-              <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
-            </DialogClose>
-            <DialogHeader className="pr-8">
-              <DialogTitle>{title}</DialogTitle>
-              <DialogDescription>{description}</DialogDescription>
-            </DialogHeader>
+            <ModalHeaderRow
+              actions={(
+                <DialogClose asChild aria-label="Close load PTO hours modal">
+                  <ModalCloseButton icon={<X className="size-4" />} />
+                </DialogClose>
+              )}
+            >
+              <DialogHeader>
+                <DialogTitle>{title}</DialogTitle>
+                <DialogDescription>{description}</DialogDescription>
+              </DialogHeader>
+            </ModalHeaderRow>
 
             {formError ? (
               <div className="rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{formError}</div>

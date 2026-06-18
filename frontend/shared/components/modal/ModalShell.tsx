@@ -21,7 +21,7 @@ export function ModalShell({
   return (
     <div className={cn("relative flex min-h-0 flex-1 flex-col", className)} {...props}>
       {closeButton ? (
-        <div className="absolute right-0 top-0 z-20">
+        <div className="absolute right-0 top-1 z-20">
           {closeButton}
         </div>
       ) : null}

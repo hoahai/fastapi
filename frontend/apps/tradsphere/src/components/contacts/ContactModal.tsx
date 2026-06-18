@@ -16,7 +16,7 @@ import { Input } from "@/components/ui/input";
 import { canModalClose, shouldBlockOutsideClose } from "@/components/ui/modal-close-guard";
 import { Textarea } from "@/components/ui/textarea";
 import { UnsavedChangesDialog } from "@/components/ui/unsaved-changes-dialog";
-import { ModalCloseButton, ModalFooter, ModalShell, Section, SectionHeader } from "@shared/components";
+import { ModalCloseButton, ModalFooter, ModalHeaderRow, ModalShell, Section, SectionHeader } from "@shared/components";
 import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
 import {
   normalizeUsPhoneDisplay,
@@ -467,16 +467,20 @@ export function ContactModal({
           }}
         >
           <ModalShell busy={isSubmitting} busyMessage="Saving contact..." className="min-h-0 flex-1">
-            <DialogClose asChild aria-label="Close contact modal">
-              <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
-            </DialogClose>
-
-            <DialogHeader className="pr-8">
-              <DialogTitle>{modalTitle}</DialogTitle>
-              <DialogDescription>
-                Manage contact details and review station usage.
-              </DialogDescription>
-            </DialogHeader>
+            <ModalHeaderRow
+              actions={(
+                <DialogClose asChild aria-label="Close contact modal">
+                  <ModalCloseButton icon={<X className="size-4" />} />
+                </DialogClose>
+              )}
+            >
+              <DialogHeader>
+                <DialogTitle>{modalTitle}</DialogTitle>
+                <DialogDescription>
+                  Manage contact details and review station usage.
+                </DialogDescription>
+              </DialogHeader>
+            </ModalHeaderRow>
 
             <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
               <div

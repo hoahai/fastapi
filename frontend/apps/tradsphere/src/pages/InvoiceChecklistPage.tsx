@@ -54,7 +54,7 @@ import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
 import { LoadActionArea } from "@shared/components/layout/LoadActionArea";
 import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { SectionCard } from "@shared/components/layout/SectionCard";
-import { ModalCloseButton, ModalShell } from "@shared/components";
+import { ModalCloseButton, ModalHeaderRow, ModalShell } from "@shared/components";
 import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 import { PageLoadingLayer, SectionLoadingLayer, SectionLoadingOverlay } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
@@ -7094,19 +7094,24 @@ export default function InvoiceChecklistPage() {
             setAttachmentModalNoteId(null);
           }
         }}
-        >
+      >
         <DialogContent className="max-w-3xl">
-          <DialogClose asChild aria-label="Close attachments modal">
-            <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
-          </DialogClose>
-          <DialogHeader className="pr-8">
-            <DialogTitle>Attachments</DialogTitle>
-            <DialogDescription>
-              {attachmentModalNote
-                ? `${attachmentModalNote.attachments.length} attachment${attachmentModalNote.attachments.length === 1 ? "" : "s"} for this note`
-                : "Attachments"}
-            </DialogDescription>
-          </DialogHeader>
+          <ModalHeaderRow
+            actions={(
+              <DialogClose asChild aria-label="Close attachments modal">
+                <ModalCloseButton icon={<X className="size-4" />} />
+              </DialogClose>
+            )}
+          >
+            <DialogHeader>
+              <DialogTitle>Attachments</DialogTitle>
+              <DialogDescription>
+                {attachmentModalNote
+                  ? `${attachmentModalNote.attachments.length} attachment${attachmentModalNote.attachments.length === 1 ? "" : "s"} for this note`
+                  : "Attachments"}
+              </DialogDescription>
+            </DialogHeader>
+          </ModalHeaderRow>
 
           <div className="mt-3">
             {!attachmentModalNote || attachmentModalNote.attachments.length === 0 ? (
@@ -7393,16 +7398,20 @@ function AddChecklistAccountDialog({
           }}
         >
           <ModalShell busy={isBusy} busyMessage="Adding checklist account..." className="min-h-0 flex-1">
-            <DialogClose asChild aria-label="Close add checklist account modal">
-              <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
-            </DialogClose>
-
-            <DialogHeader className="pb-2 pr-8">
-              <DialogTitle>Add Checklist Account</DialogTitle>
-              <DialogDescription>
-                Add a checklist account row for the selected period.
-              </DialogDescription>
-            </DialogHeader>
+            <ModalHeaderRow
+              actions={(
+                <DialogClose asChild aria-label="Close add checklist account modal">
+                  <ModalCloseButton icon={<X className="size-4" />} />
+                </DialogClose>
+              )}
+            >
+              <DialogHeader className="pb-2">
+                <DialogTitle>Add Checklist Account</DialogTitle>
+                <DialogDescription>
+                  Add a checklist account row for the selected period.
+                </DialogDescription>
+              </DialogHeader>
+            </ModalHeaderRow>
 
             <div className="space-y-4 pt-1">
               <LabeledField label="Account Code">
@@ -7570,16 +7579,20 @@ function AddChecklistStationDialog({
           }}
         >
           <ModalShell busy={isBusy} busyMessage="Adding station..." className="min-h-0 flex-1">
-            <DialogClose asChild aria-label="Close add station modal">
-              <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
-            </DialogClose>
-
-            <DialogHeader className="pb-2 pr-8">
-              <DialogTitle>Add Station</DialogTitle>
-              <DialogDescription>
-                {formatAddChecklistStationSubtitle(checklist)}
-              </DialogDescription>
-            </DialogHeader>
+            <ModalHeaderRow
+              actions={(
+                <DialogClose asChild aria-label="Close add station modal">
+                  <ModalCloseButton icon={<X className="size-4" />} />
+                </DialogClose>
+              )}
+            >
+              <DialogHeader className="pb-2">
+                <DialogTitle>Add Station</DialogTitle>
+                <DialogDescription>
+                  {formatAddChecklistStationSubtitle(checklist)}
+                </DialogDescription>
+              </DialogHeader>
+            </ModalHeaderRow>
 
             <div className="space-y-4 pt-1">
               <LabeledField label="Est Num">
@@ -7962,16 +7975,20 @@ function AddStationNoteDialog({
           }}
         >
           <ModalShell busy={isBusy} busyMessage={isEditMode ? "Saving note..." : "Adding note..."} className="min-h-0 flex-1">
-            <DialogClose asChild aria-label={isEditMode ? "Close edit station note modal" : "Close add station note modal"}>
-              <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
-            </DialogClose>
-
-            <DialogHeader className="pb-2 pr-8">
-              <DialogTitle>{isEditMode ? "Edit Station Note" : "Add Station Note"}</DialogTitle>
-              <DialogDescription>
-                {formatAddNoteStationSubtitle(station)}
-              </DialogDescription>
-            </DialogHeader>
+            <ModalHeaderRow
+              actions={(
+                <DialogClose asChild aria-label={isEditMode ? "Close edit station note modal" : "Close add station note modal"}>
+                  <ModalCloseButton icon={<X className="size-4" />} />
+                </DialogClose>
+              )}
+            >
+              <DialogHeader className="pb-2">
+                <DialogTitle>{isEditMode ? "Edit Station Note" : "Add Station Note"}</DialogTitle>
+                <DialogDescription>
+                  {formatAddNoteStationSubtitle(station)}
+                </DialogDescription>
+              </DialogHeader>
+            </ModalHeaderRow>
 
             <div className="space-y-4 pt-1">
               <LabeledField label="Amount">

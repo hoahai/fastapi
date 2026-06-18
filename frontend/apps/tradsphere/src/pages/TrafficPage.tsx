@@ -41,7 +41,7 @@ import {
   DateInputField,
   FLIGHT_DATE_PICKER_POPOVER_SELECTOR,
 } from "@/components/dashboard/FlightDateRangeField";
-import { ModalCloseButton, ModalShell } from "@shared/components";
+import { ModalCloseButton, ModalHeaderRow, ModalShell } from "@shared/components";
 import { buildAuthHeaders as buildSharedAuthHeaders } from "@shared/api/authHeaders";
 import { useAuth } from "@shared/auth/useAuth";
 import { shouldProtectFrontendAuth } from "@shared/auth/guards";
@@ -9031,15 +9031,20 @@ export default function TrafficPage() {
         }}
       >
         <DialogContent className="!h-fit !max-h-[95vh] !w-fit !max-w-[95vw] overflow-hidden p-4 sm:p-5 lg:p-6">
-          <DialogClose asChild aria-label="Close schedule timeline modal">
-            <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
-          </DialogClose>
-          <DialogHeader className="space-y-1 pr-12 text-left">
-            <DialogTitle>Schedule Timeline</DialogTitle>
-            <DialogDescription>
-              View account schedule timeline table with cache-first loading.
-            </DialogDescription>
-          </DialogHeader>
+          <ModalHeaderRow
+            actions={(
+              <DialogClose asChild aria-label="Close schedule timeline modal">
+                <ModalCloseButton icon={<X className="size-4" />} />
+              </DialogClose>
+            )}
+          >
+            <DialogHeader className="space-y-1 text-left">
+              <DialogTitle>Schedule Timeline</DialogTitle>
+              <DialogDescription>
+                View account schedule timeline table with cache-first loading.
+              </DialogDescription>
+            </DialogHeader>
+          </ModalHeaderRow>
           <div className="mt-3">
             <ScheduleTimelineSection
               accountCode={timelineAccountCode}
@@ -9065,9 +9070,6 @@ export default function TrafficPage() {
         }}
       >
         <DialogContent className="!h-[92vh] !max-h-[92vh] !w-[min(96vw,1160px)] !max-w-[1160px] overflow-hidden p-0">
-          <DialogClose asChild aria-label="Close email preview modal">
-            <ModalCloseButton icon={<X className="size-4" />} className="absolute right-6 top-6 z-20" />
-          </DialogClose>
           <DialogHeader className="border-b border-slate-200 px-5 py-4 pr-12">
             <div className="flex items-center justify-between gap-2">
               <DialogTitle>Email Preview</DialogTitle>
@@ -9143,6 +9145,9 @@ export default function TrafficPage() {
                     </Button>
                   )
                 ) : null}
+                <DialogClose asChild aria-label="Close email preview modal">
+                  <ModalCloseButton icon={<X className="size-4" />} />
+                </DialogClose>
               </div>
             </div>
             <DialogDescription>
@@ -9241,17 +9246,22 @@ export default function TrafficPage() {
           }
           setIsSendEmailConfirmationOpen(open);
         }}
-        >
+      >
         <DialogContent className="max-w-lg">
-          <DialogClose asChild aria-label="Close send traffic email dialog" disabled={isSaving || isSendingEmail || isMarkingTrafficSent}>
-            <ModalCloseButton icon={<X className="size-4" />} className="absolute right-6 top-6 z-20" />
-          </DialogClose>
-          <DialogHeader className="pr-8">
-            <DialogTitle>Send traffic email?</DialogTitle>
-            <DialogDescription>
-              Choose whether a successful send should also mark the traffic status as Sent.
-            </DialogDescription>
-          </DialogHeader>
+          <ModalHeaderRow
+            actions={(
+              <DialogClose asChild aria-label="Close send traffic email dialog" disabled={isSaving || isSendingEmail || isMarkingTrafficSent}>
+                <ModalCloseButton icon={<X className="size-4" />} />
+              </DialogClose>
+            )}
+          >
+            <DialogHeader>
+              <DialogTitle>Send traffic email?</DialogTitle>
+              <DialogDescription>
+                Choose whether a successful send should also mark the traffic status as Sent.
+              </DialogDescription>
+            </DialogHeader>
+          </ModalHeaderRow>
           {activeTrafficNeedsSaveBeforeSending ? (
             <p className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-900">
               Any unsaved changes in the selected traffic will be saved before the email is sent.
@@ -9298,18 +9308,23 @@ export default function TrafficPage() {
         onOpenChange={(open) => {
           setIsTestEmailModalOpen(open);
         }}
-      >
-        <DialogContent className="flex max-h-[90vh] max-w-lg flex-col overflow-hidden rounded-xl bg-white p-6">
+        >
+          <DialogContent className="flex max-h-[90vh] max-w-lg flex-col overflow-hidden rounded-xl bg-white p-6">
           <ModalShell busy={isSendingTestEmail} busyMessage="Sending test email..." className="min-h-0 flex-1">
-            <DialogClose asChild aria-label="Close test email modal">
-              <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
-            </DialogClose>
-            <DialogHeader className="pr-8">
-              <DialogTitle>Send Test Email</DialogTitle>
-              <DialogDescription>
-                Send a one-off copy to a single recipient. The message includes a visible test-email notice.
-              </DialogDescription>
-            </DialogHeader>
+            <ModalHeaderRow
+              actions={(
+                <DialogClose asChild aria-label="Close test email modal">
+                  <ModalCloseButton icon={<X className="size-4" />} />
+                </DialogClose>
+              )}
+            >
+              <DialogHeader>
+                <DialogTitle>Send Test Email</DialogTitle>
+                <DialogDescription>
+                  Send a one-off copy to a single recipient. The message includes a visible test-email notice.
+                </DialogDescription>
+              </DialogHeader>
+            </ModalHeaderRow>
             <div className="space-y-2">
               <label className="space-y-1 text-sm">
                 <span className="text-slate-600">Test recipient</span>
@@ -9399,17 +9414,22 @@ export default function TrafficPage() {
           }}
         >
           <ModalShell busy={isSaving} busyMessage="Saving download note..." className="min-h-0 flex-1">
-            <DialogClose asChild aria-label="Close download note modal">
-              <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
-            </DialogClose>
-            <DialogHeader className="pr-8">
-              <DialogTitle>{activeDownloadLinkNoteEntry?.note ? "Edit Download Note" : "Add Download Note"}</DialogTitle>
-              <DialogDescription>
-                {activeDownloadLinkNoteEntry
-                  ? `ISCI: ${asString(activeDownloadLinkNoteEntry.isci) || "-"}. This note appears in the Download Links email table.`
-                  : "Add a short note for this flight download item."}
-              </DialogDescription>
-            </DialogHeader>
+            <ModalHeaderRow
+              actions={(
+                <DialogClose asChild aria-label="Close download note modal">
+                  <ModalCloseButton icon={<X className="size-4" />} />
+                </DialogClose>
+              )}
+            >
+              <DialogHeader>
+                <DialogTitle>{activeDownloadLinkNoteEntry?.note ? "Edit Download Note" : "Add Download Note"}</DialogTitle>
+                <DialogDescription>
+                  {activeDownloadLinkNoteEntry
+                    ? `ISCI: ${asString(activeDownloadLinkNoteEntry.isci) || "-"}. This note appears in the Download Links email table.`
+                    : "Add a short note for this flight download item."}
+                </DialogDescription>
+              </DialogHeader>
+            </ModalHeaderRow>
             <div className="space-y-2">
               <label className="space-y-1 text-sm">
                 <span className="text-slate-600">Note</span>
@@ -9478,15 +9498,20 @@ export default function TrafficPage() {
           }}
         >
           <ModalShell busy={isSaving} busyMessage="Saving flight..." className="min-h-0 flex-1">
-            <DialogClose asChild aria-label="Close flight modal">
-              <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
-            </DialogClose>
-            <DialogHeader className="pb-2 pr-8">
-              <DialogTitle>{flightModalMode === "create" ? "Add Flight" : "Edit Flight"}</DialogTitle>
-              <DialogDescription>
-                Update flight scheduling and delivery references.
-              </DialogDescription>
-            </DialogHeader>
+            <ModalHeaderRow
+              actions={(
+                <DialogClose asChild aria-label="Close flight modal">
+                  <ModalCloseButton icon={<X className="size-4" />} />
+                </DialogClose>
+              )}
+            >
+              <DialogHeader className="pb-2">
+                <DialogTitle>{flightModalMode === "create" ? "Add Flight" : "Edit Flight"}</DialogTitle>
+                <DialogDescription>
+                  Update flight scheduling and delivery references.
+                </DialogDescription>
+              </DialogHeader>
+            </ModalHeaderRow>
           <div className="space-y-3 pt-1">
             <div className="grid gap-3 sm:grid-cols-2">
               <label className="space-y-1 text-sm">
@@ -9850,17 +9875,22 @@ export default function TrafficPage() {
         }}
       >
         <DialogContent>
-          <DialogClose asChild aria-label="Close station sync modal">
-            <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
-          </DialogClose>
-          <DialogHeader className="pr-8">
-            <DialogTitle>Select Estimate Numbers To Sync Stations</DialogTitle>
-            <DialogDescription>
-              {flightStationSyncDialogSource === "manual_sync"
-                ? "Select estimate numbers, then sync stations from matching schedules."
-                : "This flight update changed the date range. Select estimate numbers, then sync stations from matching schedules."}
-            </DialogDescription>
-          </DialogHeader>
+          <ModalHeaderRow
+            actions={(
+              <DialogClose asChild aria-label="Close station sync modal">
+                <ModalCloseButton icon={<X className="size-4" />} />
+              </DialogClose>
+            )}
+          >
+            <DialogHeader>
+              <DialogTitle>Select Estimate Numbers To Sync Stations</DialogTitle>
+              <DialogDescription>
+                {flightStationSyncDialogSource === "manual_sync"
+                  ? "Select estimate numbers, then sync stations from matching schedules."
+                  : "This flight update changed the date range. Select estimate numbers, then sync stations from matching schedules."}
+              </DialogDescription>
+            </DialogHeader>
+          </ModalHeaderRow>
           <div className="space-y-3">
             {isFlightStationSyncCandidatesLoading ? (
               <div className="flex items-center gap-2 rounded-md border border-slate-200 bg-slate-50 px-3 py-2 text-sm text-slate-700">
@@ -9990,15 +10020,20 @@ export default function TrafficPage() {
           }}
         >
           <ModalShell busy={isSaving} busyMessage="Saving station..." className="min-h-0 flex-1">
-            <DialogClose asChild aria-label="Close station modal">
-              <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
-            </DialogClose>
-            <DialogHeader className="pb-2 pr-8">
-              <DialogTitle>{stationModalMode === "create" ? "Add Station" : "Edit Station"}</DialogTitle>
-              <DialogDescription>
-                Update delivery workflow and confirmation tracking for this station row.
-              </DialogDescription>
-            </DialogHeader>
+            <ModalHeaderRow
+              actions={(
+                <DialogClose asChild aria-label="Close station modal">
+                  <ModalCloseButton icon={<X className="size-4" />} />
+                </DialogClose>
+              )}
+            >
+              <DialogHeader className="pb-2">
+                <DialogTitle>{stationModalMode === "create" ? "Add Station" : "Edit Station"}</DialogTitle>
+                <DialogDescription>
+                  Update delivery workflow and confirmation tracking for this station row.
+                </DialogDescription>
+              </DialogHeader>
+            </ModalHeaderRow>
             <SectionMessageStack
               className="pt-1"
               messages={[

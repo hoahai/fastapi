@@ -18,7 +18,7 @@ import { canModalClose, shouldBlockOutsideClose } from "@tradsphere/components/u
 import { Textarea } from "@tradsphere/components/ui/textarea";
 import { UnsavedChangesDialog } from "@tradsphere/components/ui/unsaved-changes-dialog";
 import { LeaveSpherePtoStatusChip } from "@leavesphere/components/PtoStatusChip";
-import { ModalCloseButton, ModalShell } from "@shared/components";
+import { ModalCloseButton, ModalHeaderRow, ModalShell } from "@shared/components";
 import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
 import { formatLeaveSpherePtoStatusLabel } from "@leavesphere/lib/ptoStatus";
 
@@ -501,19 +501,22 @@ export function LeaveSpherePtoRequestDetailModal({
           busy={saving}
           busyMessage="Saving PTO request..."
           className="min-h-0 flex-1"
-          closeButton={(
-            <DialogClose
-              asChild
-              aria-label="Close PTO request modal"
-            >
-              <ModalCloseButton icon={<X className="size-4" />} />
-            </DialogClose>
-          )}
         >
-          <DialogHeader className="pr-8">
-            <DialogTitle>{title}</DialogTitle>
-            <DialogDescription>{description}</DialogDescription>
-          </DialogHeader>
+          <ModalHeaderRow
+            actions={(
+              <DialogClose
+                asChild
+                aria-label="Close PTO request modal"
+              >
+                <ModalCloseButton icon={<X className="size-4" />} />
+              </DialogClose>
+            )}
+          >
+            <DialogHeader>
+              <DialogTitle>{title}</DialogTitle>
+              <DialogDescription>{description}</DialogDescription>
+            </DialogHeader>
+          </ModalHeaderRow>
 
           {isMyPtoDetailLayout ? (
             <div className="mt-4 space-y-4">

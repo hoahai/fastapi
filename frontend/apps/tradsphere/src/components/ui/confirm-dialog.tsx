@@ -13,7 +13,7 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import { cn } from "@/lib/utils";
-import { ModalCloseButton } from "@shared/components";
+import { ModalCloseButton, ModalHeaderRow, ModalShell } from "@shared/components";
 
 type ConfirmDialogNoteProps = {
   label: string;
@@ -57,39 +57,44 @@ export function ConfirmDialog({
       }}
       >
       <DialogContent className={cn("!z-[60]", note || children ? "max-w-lg" : "max-w-md")}>
-        <div className="flex items-start justify-between gap-4">
-          <DialogHeader className="min-w-0 flex-1">
-            <DialogTitle>{title}</DialogTitle>
-            <DialogDescription>{description}</DialogDescription>
-          </DialogHeader>
-          <DialogClose asChild aria-label="Close confirm dialog">
-            <ModalCloseButton icon={<X className="size-4" />} className="mt-0.5 shrink-0" />
-          </DialogClose>
-        </div>
-        {note ? (
-          <label className="mt-4 block space-y-1 text-sm">
-            <span className="text-slate-600">{note.label}</span>
-            <Textarea
-              value={note.value}
-              onChange={(event) => note.onChange(event.target.value)}
-              className={cn("min-h-[120px]")}
-              placeholder={note.placeholder ?? "Add a note or reason for this decision"}
-              disabled={note.disabled}
-            />
-            {note.helpText ? (
-              <p className="text-xs leading-5 text-slate-500">{note.helpText}</p>
-            ) : null}
-          </label>
-        ) : null}
-        {children ? <div className="mt-4">{children}</div> : null}
-        <DialogFooter>
-          <Button variant="outline" onClick={onCancel}>
-            {cancelLabel}
-          </Button>
-          <Button onClick={onConfirm}>
-            {confirmLabel}
-          </Button>
-        </DialogFooter>
+        <ModalShell className="min-h-0 flex-1">
+          <ModalHeaderRow
+            actions={(
+              <DialogClose asChild aria-label="Close confirm dialog">
+                <ModalCloseButton icon={<X className="size-4" />} />
+              </DialogClose>
+            )}
+          >
+            <DialogHeader>
+              <DialogTitle>{title}</DialogTitle>
+              <DialogDescription>{description}</DialogDescription>
+            </DialogHeader>
+          </ModalHeaderRow>
+          {note ? (
+            <label className="mt-4 block space-y-1 text-sm">
+              <span className="text-slate-600">{note.label}</span>
+              <Textarea
+                value={note.value}
+                onChange={(event) => note.onChange(event.target.value)}
+                className={cn("min-h-[120px]")}
+                placeholder={note.placeholder ?? "Add a note or reason for this decision"}
+                disabled={note.disabled}
+              />
+              {note.helpText ? (
+                <p className="text-xs leading-5 text-slate-500">{note.helpText}</p>
+              ) : null}
+            </label>
+          ) : null}
+          {children ? <div className="mt-4">{children}</div> : null}
+          <DialogFooter>
+            <Button variant="outline" onClick={onCancel}>
+              {cancelLabel}
+            </Button>
+            <Button onClick={onConfirm}>
+              {confirmLabel}
+            </Button>
+          </DialogFooter>
+        </ModalShell>
       </DialogContent>
     </Dialog>
   );

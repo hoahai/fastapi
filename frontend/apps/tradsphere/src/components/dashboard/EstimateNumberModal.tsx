@@ -25,10 +25,10 @@ import { UnsavedChangesDialog } from "@/components/ui/unsaved-changes-dialog";
 import { useApiRequest, type ApiRequestOptions } from "@/hooks/useApiRequest";
 import { readBrowserCacheSnapshot, writeBrowserCache } from "@/lib/browserCache";
 import { TRADSPHERE_CACHE_TTL_MS } from "@shared/cache";
-import { ModalCacheFooter, ModalCloseButton, ModalShell } from "@shared/components";
+import { ModalCacheFooter, ModalCloseButton, ModalHeaderRow, ModalShell } from "@shared/components";
 import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
 
-import { FlightDateRangeField } from "./FlightDateRangeField";
+import { FlightDateRangeField, FLIGHT_DATE_PICKER_POPOVER_SELECTOR } from "./FlightDateRangeField";
 import { type FlightRangePresetState } from "./FlightRangeSelector";
 import { LabeledField, ReadOnlyValue } from "./FormFieldRow";
 
@@ -978,7 +978,24 @@ export function EstimateNumberModal({
     <Dialog open={open} onOpenChange={handleDialogOpenChange}>
       <DialogContent
         className="max-w-[620px] rounded-xl bg-white p-6"
+        onPointerDownOutside={(event) => {
+          const target = event.target;
+          if (target instanceof Element && target.closest(FLIGHT_DATE_PICKER_POPOVER_SELECTOR)) {
+            event.preventDefault();
+          }
+        }}
+        onFocusOutside={(event) => {
+          const target = event.target;
+          if (target instanceof Element && target.closest(FLIGHT_DATE_PICKER_POPOVER_SELECTOR)) {
+            event.preventDefault();
+          }
+        }}
         onInteractOutside={(event) => {
+          const target = event.target;
+          if (target instanceof Element && target.closest(FLIGHT_DATE_PICKER_POPOVER_SELECTOR)) {
+            event.preventDefault();
+            return;
+          }
           if (
             shouldBlockOutsideClose({
               isBusy: isSubmitting,
@@ -990,14 +1007,18 @@ export function EstimateNumberModal({
         }}
         >
           <ModalShell busy={isSubmitting} busyMessage="Saving estimate number..." className="min-h-0 flex-1">
-            <DialogClose asChild aria-label="Close estimate number modal">
-              <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
-            </DialogClose>
-
-            <DialogHeader className="pr-8">
-              <DialogTitle>{modalTitle}</DialogTitle>
-              <DialogDescription>{description}</DialogDescription>
-            </DialogHeader>
+            <ModalHeaderRow
+              actions={(
+                <DialogClose asChild aria-label="Close estimate number modal">
+                  <ModalCloseButton icon={<X className="size-4" />} />
+                </DialogClose>
+              )}
+            >
+              <DialogHeader>
+                <DialogTitle>{modalTitle}</DialogTitle>
+                <DialogDescription>{description}</DialogDescription>
+              </DialogHeader>
+            </ModalHeaderRow>
 
           {isEditMode && !isDetailReady ? (
             <div className="mt-8 flex min-h-52 flex-col items-center justify-center gap-3 text-center">

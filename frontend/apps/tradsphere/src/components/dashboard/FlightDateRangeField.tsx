@@ -1,4 +1,3 @@
-import { createPortal } from "react-dom";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { CalendarDays } from "lucide-react";
 
@@ -242,19 +241,15 @@ export function DateInputField({
         CALENDAR_POPUP_WIDTH_PX,
         Math.max(0, window.innerWidth - (CALENDAR_POPUP_EDGE_PADDING_PX * 2)),
       );
-      const resolvedLeft = Math.min(
-        Math.max(CALENDAR_POPUP_EDGE_PADDING_PX, rect.left),
-        Math.max(CALENDAR_POPUP_EDGE_PADDING_PX, window.innerWidth - CALENDAR_POPUP_EDGE_PADDING_PX - resolvedWidth),
-      );
 
       setCalendarPopoverMaxHeight(resolvedMaxHeight);
       setCalendarPopoverStyle({
-        position: "fixed",
-        left: resolvedLeft,
-        top: preferAbove ? rect.top - CALENDAR_POPUP_OFFSET_PX : rect.bottom + CALENDAR_POPUP_OFFSET_PX,
+        position: "absolute",
+        left: 0,
+        top: preferAbove ? undefined : "calc(100% + 8px)",
+        bottom: preferAbove ? "calc(100% + 8px)" : undefined,
         width: resolvedWidth,
         zIndex: 90,
-        transform: preferAbove ? "translateY(-100%)" : "none",
       });
     }
 
@@ -355,7 +350,7 @@ export function DateInputField({
       </button>
 
       {isCalendarOpen && calendarPopoverStyle && typeof document !== "undefined"
-        ? createPortal(
+        ? (
             <div
               ref={calendarPopoverRef}
               data-flight-date-picker-popover="true"
@@ -426,8 +421,7 @@ export function DateInputField({
                   })}
                 </div>
               </div>
-            </div>,
-            document.body,
+            </div>
           )
         : null}
     </div>

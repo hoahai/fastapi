@@ -39,7 +39,7 @@ import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
 import { LoadActionArea } from "@shared/components/layout/LoadActionArea";
 import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { SectionCard } from "@shared/components/layout/SectionCard";
-import { ModalCloseButton, ModalShell } from "@shared/components";
+import { ModalCloseButton, ModalHeaderRow, ModalShell } from "@shared/components";
 import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { resolveSharedLoadingContract } from "@shared/components/status/loadingContract";
@@ -67,6 +67,7 @@ import {
   mapLeaveSphereHolidayRegionToChipTone,
   mapLeaveSpherePtoStatusToChipTone,
   LeaveSpherePtoToneChip,
+  LeaveSpherePtoStatusChip,
 } from "@leavesphere/components/PtoStatusChip";
 import {
   adjustLeaveManagementBalance,
@@ -106,7 +107,7 @@ import type { LeaveSpherePtoRequest, LeaveSpherePtoType, LeaveSphereTeamRegion }
 import type { LeaveSpherePtoBalance } from "@leavesphere/lib/ptoTypes";
 import { ActionIconButton } from "@tradsphere/components/dashboard/ActionIconButton";
 import { buildMonthKeyForYear, formatMonthDayYearLabel } from "@leavesphere/lib/ptoDate";
-import { formatLeaveSpherePtoStatusLabel, getLeaveSpherePtoRequestSurfaceClassName } from "@leavesphere/lib/ptoStatus";
+import { formatLeaveSpherePtoStatusLabel, getLeaveSpherePtoRequestSurfaceClassName, normalizeLeaveSpherePtoStatus } from "@leavesphere/lib/ptoStatus";
 import {
   readLeaveSpherePtoWorkspaceCacheSnapshot,
   syncLeaveSpherePtoWorkspaceCache,
@@ -1322,6 +1323,13 @@ export default function LeaveManagementPage() {
     }
     return resolveAdjustLoadRequests(adjustRequestPickerTarget.employeeId, adjustRequestPickerTarget.ptoTypeCode);
   }, [adjustRequestPickerTarget, resolveAdjustLoadRequests]);
+  const adjustRequestPickerEmployeeName = useMemo(() => {
+    if (!adjustRequestPickerTarget) {
+      return "";
+    }
+    const employee = employeeById.get(adjustRequestPickerTarget.employeeId);
+    return employee?.employeeName || adjustRequestPickerTarget.employeeId;
+  }, [adjustRequestPickerTarget, employeeById]);
   const adjustCancelConfirmCopy = useMemo(() => ({
     title: "Cancel Load Request?",
     description: "This will cancel the selected approved PTO load request and remove it from the balance.",
@@ -2667,18 +2675,21 @@ export default function LeaveManagementPage() {
           setPendingCreateRequest(null);
         }
       }}>
-        <DialogContent className="max-w-lg">
-          <div className="flex items-start justify-between gap-4">
-            <DialogHeader className="min-w-0 flex-1">
+        <DialogContent className="max-w-md">
+          <ModalHeaderRow
+            actions={(
+              <DialogClose asChild aria-label="Close submit choice dialog" disabled={isMutating}>
+                <ModalCloseButton icon={<X className="size-4" />} />
+              </DialogClose>
+            )}
+          >
+            <DialogHeader>
               <DialogTitle>Submit PTO Request?</DialogTitle>
               <DialogDescription>
                 Choose whether this admin-created request should be submitted as pending or submitted and approved immediately.
               </DialogDescription>
             </DialogHeader>
-            <DialogClose asChild aria-label="Close submit choice dialog" disabled={isMutating}>
-              <ModalCloseButton icon={<X className="size-4" />} className="mt-0.5 shrink-0" />
-            </DialogClose>
-          </div>
+          </ModalHeaderRow>
 
           <DialogFooter className="gap-2 sm:gap-2">
             <Button
@@ -2705,20 +2716,21 @@ export default function LeaveManagementPage() {
         }}
       >
         <DialogContent className="max-w-3xl flex max-h-[90vh] flex-col overflow-visible rounded-xl bg-white p-6">
-          <ModalShell
-            className="min-h-0 flex-1"
-            closeButton={(
-              <DialogClose asChild aria-label="Close pending requests modal">
-                <ModalCloseButton icon={<X className="size-4" />} />
-              </DialogClose>
-            )}
-          >
-            <DialogHeader className="pr-8">
-              <DialogTitle>Pending requests</DialogTitle>
-              <DialogDescription>
-                Select a pending PTO request to open its review modal.
-              </DialogDescription>
-            </DialogHeader>
+          <ModalShell className="min-h-0 flex-1">
+            <ModalHeaderRow
+              actions={(
+                <DialogClose asChild aria-label="Close pending requests modal">
+                  <ModalCloseButton icon={<X className="size-4" />} />
+                </DialogClose>
+              )}
+            >
+              <DialogHeader>
+                <DialogTitle>Pending requests</DialogTitle>
+                <DialogDescription>
+                  Select a pending PTO request to open its review modal.
+                </DialogDescription>
+              </DialogHeader>
+            </ModalHeaderRow>
 
             <div className="mt-4 max-h-[60vh] space-y-4 overflow-y-auto pr-1 pt-1.5">
               <LeaveSpherePtoRequestList
@@ -2918,40 +2930,57 @@ export default function LeaveManagementPage() {
           }
         }}
       >
-        <DialogContent className="max-w-xl">
-          <DialogClose asChild aria-label="Close request selection modal">
-            <ModalCloseButton icon={<X className="size-4" />} className="absolute right-0 top-0 z-20" />
-          </DialogClose>
-          <DialogHeader className="pr-8">
-            <DialogTitle>Choose Load Request</DialogTitle>
-            <DialogDescription>
-              Select the approved load request you want to adjust.
-            </DialogDescription>
-          </DialogHeader>
+        <DialogContent className="flex max-h-[90vh] max-w-md flex-col overflow-hidden rounded-xl bg-white p-6">
+          <ModalShell className="min-h-0 flex-1">
+            <ModalHeaderRow
+              actions={(
+                <DialogClose asChild aria-label="Close request selection modal">
+                  <ModalCloseButton icon={<X className="size-4" />} />
+                </DialogClose>
+              )}
+            >
+              <DialogHeader>
+                <DialogTitle>Choose Load Request</DialogTitle>
+                <DialogDescription>
+                  {adjustRequestPickerEmployeeName
+                    ? `Select the approved load request for ${adjustRequestPickerEmployeeName}.`
+                    : "Select the approved load request you want to adjust."}
+                </DialogDescription>
+              </DialogHeader>
+            </ModalHeaderRow>
 
-          <div className="mt-4 grid gap-2">
-            {adjustRequestPickerRequests.map((request) => (
-              <button
-                key={request.id}
-                type="button"
-                onClick={() => openAdjustRequestEditor(request)}
-                className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left transition hover:border-blue-200 hover:bg-blue-50/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
-              >
-                <div className="flex items-center justify-between gap-3">
-                  <div>
-                    <p className="text-sm font-semibold text-slate-900">{formatDateLabel(request.createdAt, tenantTimeZone)}</p>
-                    <p className="text-xs text-slate-500">{request.approverNote || "No note"}</p>
+            <div className="mt-4 grid gap-2">
+              {adjustRequestPickerRequests.map((request) => (
+                <button
+                  key={request.id}
+                  type="button"
+                  onClick={() => openAdjustRequestEditor(request)}
+                  className="rounded-xl border border-slate-200 bg-white px-4 py-3 text-left transition hover:border-blue-200 hover:bg-blue-50/60 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300"
+                >
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0 space-y-1">
+                      <p className="text-sm font-semibold text-slate-900">{formatDateLabel(request.createdAt, tenantTimeZone)}</p>
+                      {asString(request.description) ? (
+                        <p className="text-xs leading-5 text-slate-500">{request.description}</p>
+                      ) : null}
+                    </div>
+                    <div className="flex shrink-0 flex-col items-end gap-2">
+                      <LeaveSpherePtoStatusChip
+                        status={normalizeLeaveSpherePtoStatus(request.status)}
+                        label={formatLeaveSpherePtoStatusLabel(normalizeLeaveSpherePtoStatus(request.status))}
+                      />
+                      <p className="text-sm font-semibold text-slate-900">{formatHoursLabel(request.hours)}</p>
+                    </div>
                   </div>
-                  <p className="text-sm font-semibold text-slate-900">{formatHoursLabel(request.hours)}</p>
+                </button>
+              ))}
+              {adjustRequestPickerRequests.length === 0 ? (
+                <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
+                  No approved load requests were found for this balance.
                 </div>
-              </button>
-            ))}
-            {adjustRequestPickerRequests.length === 0 ? (
-              <div className="rounded-xl border border-slate-200 bg-slate-50 px-4 py-3 text-sm text-slate-600">
-                No approved load requests were found for this balance.
-              </div>
-            ) : null}
-          </div>
+              ) : null}
+            </div>
+          </ModalShell>
         </DialogContent>
       </Dialog>
 
