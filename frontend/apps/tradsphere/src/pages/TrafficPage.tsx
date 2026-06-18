@@ -9244,12 +9244,14 @@ export default function TrafficPage() {
                 />
               </div>
             </div>
-            {isSendingEmail || isMarkingTrafficSent ? (
+            {isSendingEmail || isMarkingTrafficSent || isSendingTestEmail ? (
               <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-950/25 backdrop-blur-[1px]">
                 <div className="flex items-center gap-2 rounded-2xl border border-blue-100/90 bg-white/95 px-5 py-3.5 text-sm font-medium text-slate-700 shadow-soft">
                   <Loader2 className="size-4 animate-spin text-blue-600" />
                   <span>
-                    {isMarkingTrafficSent
+                    {isSendingTestEmail
+                      ? "Sending test email..."
+                      : isMarkingTrafficSent
                       ? "Sending email and updating traffic status..."
                       : "Sending email..."}
                   </span>
