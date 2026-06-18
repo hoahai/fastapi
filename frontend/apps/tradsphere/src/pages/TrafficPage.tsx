@@ -9070,12 +9070,26 @@ export default function TrafficPage() {
         }}
       >
         <DialogContent className="!h-[92vh] !max-h-[92vh] !w-[min(96vw,1160px)] !max-w-[1160px] overflow-hidden p-0">
-          <div className="border-b border-slate-200 px-5 pt-5 pb-4">
+          <div className="border-b border-slate-200 px-5 py-5">
             <ModalHeaderRow
+              actionsClassName="pt-0"
               actions={(
-                <DialogClose asChild aria-label="Close email preview modal">
-                  <ModalCloseButton icon={<X className="size-4" />} />
-                </DialogClose>
+                <div className="flex items-center gap-1">
+                  <ActionIconButton
+                    icon={<Copy />}
+                    tooltip="Copy email HTML"
+                    aria-label="Copy email HTML"
+                    title="Copy email HTML"
+                    onClick={() => {
+                      void handleCopyEmailHtml();
+                    }}
+                    disabled={!activeEmailPreviewHtml}
+                    className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:!transition-transform [&_svg]:!duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
+                  />
+                  <DialogClose asChild aria-label="Close email preview modal">
+                    <ModalCloseButton icon={<X className="size-4" />} />
+                  </DialogClose>
+                </div>
               )}
             >
               <DialogHeader className="space-y-1 text-left">
@@ -9087,79 +9101,6 @@ export default function TrafficPage() {
             </ModalHeaderRow>
           </div>
           <div className="border-b border-slate-200 bg-white px-5 py-4">
-            <div className="flex flex-wrap items-center gap-2">
-              <ActionIconButton
-                icon={<Copy />}
-                tooltip="Copy email HTML"
-                aria-label="Copy email HTML"
-                title="Copy email HTML"
-                onClick={() => {
-                  void handleCopyEmailHtml();
-                }}
-                disabled={!activeEmailPreviewHtml}
-                className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:!transition-transform [&_svg]:!duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
-              />
-              <Button
-                variant="secondary"
-                onClick={() => {
-                  handleOpenTestEmailModal();
-                }}
-                disabled={!canOpenTrafficTestEmailModal}
-              >
-                {isSendingTestEmail ? (
-                  <>
-                    <Loader2 className="size-4 animate-spin" />
-                    Sending Test...
-                  </>
-                ) : (
-                  "Send Test"
-                )}
-              </Button>
-              {!isEmailLocked ? (
-                !canSendTrafficEmail || isSendingTestEmail ? (
-                  <TooltipTarget text={sendTrafficEmailDisabledReason}>
-                    <span className="inline-flex">
-                      <Button
-                        onClick={() => {
-                          void handleSendTrafficEmail();
-                        }}
-                        disabled
-                      >
-                        {isSendingEmail ? (
-                          <>
-                            <Loader2 className="size-4 animate-spin" />
-                            Sending...
-                          </>
-                        ) : (
-                          <>
-                            <Send className="size-4" />
-                            Send
-                          </>
-                        )}
-                      </Button>
-                    </span>
-                  </TooltipTarget>
-                ) : (
-                  <Button
-                    onClick={() => {
-                      void handleSendTrafficEmail();
-                    }}
-                  >
-                    {isSendingEmail ? (
-                      <>
-                        <Loader2 className="size-4 animate-spin" />
-                        Sending...
-                      </>
-                    ) : (
-                      <>
-                        <Send className="size-4" />
-                        Send
-                      </>
-                    )}
-                  </Button>
-                )
-              ) : null}
-            </div>
             {!activeDraft?.email ? (
               <div className="mt-4 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
                 Email draft is unavailable for this traffic record.
@@ -9223,8 +9164,70 @@ export default function TrafficPage() {
                     }))}
                   />
                 </div>
+                <div className="flex flex-wrap justify-end gap-2 pt-1">
+                  <Button
+                    variant="secondary"
+                    onClick={() => {
+                      handleOpenTestEmailModal();
+                    }}
+                    disabled={!canOpenTrafficTestEmailModal}
+                  >
+                    {isSendingTestEmail ? (
+                      <>
+                        <Loader2 className="size-4 animate-spin" />
+                        Sending Test...
+                      </>
+                    ) : (
+                      "Send Test"
+                    )}
+                  </Button>
+                  {!isEmailLocked ? (
+                    !canSendTrafficEmail || isSendingTestEmail ? (
+                      <TooltipTarget text={sendTrafficEmailDisabledReason}>
+                        <span className="inline-flex">
+                          <Button
+                            onClick={() => {
+                              void handleSendTrafficEmail();
+                            }}
+                            disabled
+                          >
+                            {isSendingEmail ? (
+                              <>
+                                <Loader2 className="size-4 animate-spin" />
+                                Sending...
+                              </>
+                            ) : (
+                              <>
+                                <Send className="size-4" />
+                                Send
+                              </>
+                            )}
+                          </Button>
+                        </span>
+                      </TooltipTarget>
+                    ) : (
+                      <Button
+                        onClick={() => {
+                          void handleSendTrafficEmail();
+                        }}
+                      >
+                        {isSendingEmail ? (
+                          <>
+                            <Loader2 className="size-4 animate-spin" />
+                            Sending...
+                          </>
+                        ) : (
+                          <>
+                            <Send className="size-4" />
+                            Send
+                          </>
+                        )}
+                      </Button>
+                    )
+                  ) : null}
+                </div>
                 {activeTrafficId && isLocalTrafficId(activeTrafficId) ? (
-                  <p className="mt-2 text-xs text-amber-700">
+                  <p className="mt-2 text-right text-xs text-amber-700">
                     This traffic draft will be saved first when you send email.
                   </p>
                 ) : null}
