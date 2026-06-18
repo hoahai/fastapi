@@ -9070,72 +9070,57 @@ export default function TrafficPage() {
         }}
       >
         <DialogContent className="!h-[92vh] !max-h-[92vh] !w-[min(96vw,1160px)] !max-w-[1160px] overflow-hidden p-0">
-          <div className="border-b border-slate-200 px-5 pb-4">
-            <ModalHeaderRow
-              actionsClassName="pt-0"
-              actions={(
-                <div className="flex items-center gap-1">
-                  <ActionIconButton
-                    icon={<Copy />}
-                    tooltip="Copy email HTML"
-                    aria-label="Copy email HTML"
-                    title="Copy email HTML"
-                    onClick={() => {
-                      void handleCopyEmailHtml();
-                    }}
-                    disabled={!activeEmailPreviewHtml}
-                    className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:!transition-transform [&_svg]:!duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
-                  />
-                  <DialogClose asChild aria-label="Close email preview modal">
-                    <ModalCloseButton icon={<X className="size-4" />} />
-                  </DialogClose>
+          <div className="relative flex h-full flex-col overflow-hidden">
+            <div className="border-b border-slate-200 px-5 pb-4">
+              <ModalHeaderRow
+                actionsClassName="pt-0"
+                actions={(
+                  <div className="flex items-center gap-1">
+                    <ActionIconButton
+                      icon={<Copy />}
+                      tooltip="Copy email HTML"
+                      aria-label="Copy email HTML"
+                      title="Copy email HTML"
+                      onClick={() => {
+                        void handleCopyEmailHtml();
+                      }}
+                      disabled={!activeEmailPreviewHtml}
+                      className="!h-7 !w-7 !p-0 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-4 [&_svg]:!w-4 [&_svg]:!transition-transform [&_svg]:!duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110"
+                    />
+                    <DialogClose asChild aria-label="Close email preview modal">
+                      <ModalCloseButton icon={<X className="size-4" />} />
+                    </DialogClose>
+                  </div>
+                )}
+              >
+                <DialogHeader className="space-y-1 text-left">
+                  <DialogTitle>Email Preview</DialogTitle>
+                  <DialogDescription>
+                    Review recipients and final HTML before sending.
+                  </DialogDescription>
+                </DialogHeader>
+              </ModalHeaderRow>
+            </div>
+            <div className="border-b border-slate-200 bg-white px-5 py-4">
+              {!activeDraft?.email ? (
+                <div className="mt-4 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
+                  Email draft is unavailable for this traffic record.
                 </div>
-              )}
-            >
-              <DialogHeader className="space-y-1 text-left">
-                <DialogTitle>Email Preview</DialogTitle>
-                <DialogDescription>
-                  Review recipients and final HTML before sending.
-                </DialogDescription>
-              </DialogHeader>
-            </ModalHeaderRow>
-          </div>
-          <div className="border-b border-slate-200 bg-white px-5 py-4">
-            {!activeDraft?.email ? (
-              <div className="mt-4 rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-3 text-sm text-slate-600">
-                Email draft is unavailable for this traffic record.
-              </div>
-            ) : (
-              <div className="mt-4 space-y-2">
-                {emailLockBannerKind ? (
-                  <TrafficLockBanner
-                    kind={emailLockBannerKind}
-                    isUnlocking={isUnlockingTraffic}
-                    disabled={!canEditTradsphere || isSaving || isUnlockingTraffic}
-                    onUnlock={() => {
-                      void handleUnlockTraffic();
-                    }}
-                  />
-                ) : null}
-                <EmailChipsInput
-                  value={activeDraft.email.toEmails || []}
-                  placeholder="To emails"
-                  disabled={!canEditTradsphere || isSaving || isSendingEmail || isMarkingTrafficSent || isEmailLocked}
-                  labelByEmail={contactNameByEmail}
-                  onChange={(nextEmails) => updateDraft((current) => ({
-                    ...current,
-                    email: current.email
-                      ? {
-                          ...current.email,
-                          toEmails: nextEmails,
-                        }
-                      : current.email,
-                  }))}
-                />
-                <div className="grid gap-2 md:grid-cols-2">
+              ) : (
+                <div className="mt-4 space-y-2">
+                  {emailLockBannerKind ? (
+                    <TrafficLockBanner
+                      kind={emailLockBannerKind}
+                      isUnlocking={isUnlockingTraffic}
+                      disabled={!canEditTradsphere || isSaving || isUnlockingTraffic}
+                      onUnlock={() => {
+                        void handleUnlockTraffic();
+                      }}
+                    />
+                  ) : null}
                   <EmailChipsInput
-                    value={activeDraft.email.ccEmails || []}
-                    placeholder="CC emails"
+                    value={activeDraft.email.toEmails || []}
+                    placeholder="To emails"
                     disabled={!canEditTradsphere || isSaving || isSendingEmail || isMarkingTrafficSent || isEmailLocked}
                     labelByEmail={contactNameByEmail}
                     onChange={(nextEmails) => updateDraft((current) => ({
@@ -9143,105 +9128,134 @@ export default function TrafficPage() {
                       email: current.email
                         ? {
                             ...current.email,
-                            ccEmails: nextEmails,
+                            toEmails: nextEmails,
                           }
                         : current.email,
                     }))}
                   />
-                  <EmailChipsInput
-                    value={activeDraft.email.bccEmails || []}
-                    placeholder="BCC emails"
-                    disabled={!canEditTradsphere || isSaving || isSendingEmail || isMarkingTrafficSent || isEmailLocked}
-                    labelByEmail={contactNameByEmail}
-                    onChange={(nextEmails) => updateDraft((current) => ({
-                      ...current,
-                      email: current.email
-                        ? {
-                            ...current.email,
-                            bccEmails: nextEmails,
-                          }
-                        : current.email,
-                    }))}
-                  />
-                </div>
-                <div className="flex flex-wrap justify-end gap-2 pt-1">
-                  <Button
-                    variant="secondary"
-                    onClick={() => {
-                      handleOpenTestEmailModal();
-                    }}
-                    disabled={!canOpenTrafficTestEmailModal}
-                  >
-                    {isSendingTestEmail ? (
-                      <>
-                        <Loader2 className="size-4 animate-spin" />
-                        Sending Test...
-                      </>
-                    ) : (
-                      "Send Test"
-                    )}
-                  </Button>
-                  {!isEmailLocked ? (
-                    !canSendTrafficEmail || isSendingTestEmail ? (
-                      <TooltipTarget text={sendTrafficEmailDisabledReason}>
-                        <span className="inline-flex">
-                          <Button
-                            onClick={() => {
-                              void handleSendTrafficEmail();
-                            }}
-                            disabled
-                          >
-                            {isSendingEmail ? (
-                              <>
-                                <Loader2 className="size-4 animate-spin" />
-                                Sending...
-                              </>
-                            ) : (
-                              <>
-                                <Send className="size-4" />
-                                Send
-                              </>
-                            )}
-                          </Button>
-                        </span>
-                      </TooltipTarget>
-                    ) : (
-                      <Button
-                        onClick={() => {
-                          void handleSendTrafficEmail();
-                        }}
-                      >
-                        {isSendingEmail ? (
-                          <>
-                            <Loader2 className="size-4 animate-spin" />
-                            Sending...
-                          </>
-                        ) : (
-                          <>
-                            <Send className="size-4" />
-                            Send
-                          </>
-                        )}
-                      </Button>
-                    )
+                  <div className="grid gap-2 md:grid-cols-2">
+                    <EmailChipsInput
+                      value={activeDraft.email.ccEmails || []}
+                      placeholder="CC emails"
+                      disabled={!canEditTradsphere || isSaving || isSendingEmail || isMarkingTrafficSent || isEmailLocked}
+                      labelByEmail={contactNameByEmail}
+                      onChange={(nextEmails) => updateDraft((current) => ({
+                        ...current,
+                        email: current.email
+                          ? {
+                              ...current.email,
+                              ccEmails: nextEmails,
+                            }
+                          : current.email,
+                      }))}
+                    />
+                    <EmailChipsInput
+                      value={activeDraft.email.bccEmails || []}
+                      placeholder="BCC emails"
+                      disabled={!canEditTradsphere || isSaving || isSendingEmail || isMarkingTrafficSent || isEmailLocked}
+                      labelByEmail={contactNameByEmail}
+                      onChange={(nextEmails) => updateDraft((current) => ({
+                        ...current,
+                        email: current.email
+                          ? {
+                              ...current.email,
+                              bccEmails: nextEmails,
+                            }
+                          : current.email,
+                      }))}
+                    />
+                  </div>
+                  <div className="flex flex-wrap justify-end gap-2 pt-1">
+                    <Button
+                      variant="secondary"
+                      onClick={() => {
+                        handleOpenTestEmailModal();
+                      }}
+                      disabled={!canOpenTrafficTestEmailModal}
+                    >
+                      {isSendingTestEmail ? (
+                        <>
+                          <Loader2 className="size-4 animate-spin" />
+                          Sending Test...
+                        </>
+                      ) : (
+                        "Send Test"
+                      )}
+                    </Button>
+                    {!isEmailLocked ? (
+                      !canSendTrafficEmail || isSendingTestEmail ? (
+                        <TooltipTarget text={sendTrafficEmailDisabledReason}>
+                          <span className="inline-flex">
+                            <Button
+                              onClick={() => {
+                                void handleSendTrafficEmail();
+                              }}
+                              disabled
+                            >
+                              {isSendingEmail ? (
+                                <>
+                                  <Loader2 className="size-4 animate-spin" />
+                                  Sending...
+                                </>
+                              ) : (
+                                <>
+                                  <Send className="size-4" />
+                                  Send
+                                </>
+                              )}
+                            </Button>
+                          </span>
+                        </TooltipTarget>
+                      ) : (
+                        <Button
+                          onClick={() => {
+                            void handleSendTrafficEmail();
+                          }}
+                        >
+                          {isSendingEmail ? (
+                            <>
+                              <Loader2 className="size-4 animate-spin" />
+                              Sending...
+                            </>
+                          ) : (
+                            <>
+                              <Send className="size-4" />
+                              Send
+                            </>
+                          )}
+                        </Button>
+                      )
+                    ) : null}
+                  </div>
+                  {activeTrafficId && isLocalTrafficId(activeTrafficId) ? (
+                    <p className="mt-2 text-right text-xs text-amber-700">
+                      This traffic draft will be saved first when you send email.
+                    </p>
                   ) : null}
                 </div>
-                {activeTrafficId && isLocalTrafficId(activeTrafficId) ? (
-                  <p className="mt-2 text-right text-xs text-amber-700">
-                    This traffic draft will be saved first when you send email.
-                  </p>
-                ) : null}
-              </div>
-            )}
-          </div>
-          <div className="h-[calc(92vh-16.5rem)] overflow-y-auto bg-slate-100 p-4">
-            <div className="mx-auto h-full w-full max-w-[980px] overflow-hidden rounded-xl border border-blue-100 bg-white shadow-sm">
-              <iframe
-                title="Traffic email preview"
-                srcDoc={activeEmailPreviewHtml}
-                className="h-full min-h-[920px] w-full border-0 bg-white"
-              />
+              )}
             </div>
+            <div className="h-[calc(92vh-16.5rem)] overflow-y-auto bg-slate-100 p-4">
+              <div className="mx-auto h-full w-full max-w-[980px] overflow-hidden rounded-xl border border-blue-100 bg-white shadow-sm">
+                <iframe
+                  title="Traffic email preview"
+                  srcDoc={activeEmailPreviewHtml}
+                  className="h-full min-h-[920px] w-full border-0 bg-white"
+                />
+              </div>
+            </div>
+            {isSendingEmail || isMarkingTrafficSent ? (
+              <div className="absolute inset-0 z-30 flex items-center justify-center bg-slate-950/25 backdrop-blur-[1px]">
+                <div className="flex items-center gap-2 rounded-2xl border border-blue-100/90 bg-white/95 px-5 py-3.5 text-sm font-medium text-slate-700 shadow-soft">
+                  <Loader2 className="size-4 animate-spin text-blue-600" />
+                  <span>
+                    {isMarkingTrafficSent
+                      ? "Sending email and updating traffic status..."
+                      : "Sending email..."}
+                  </span>
+                </div>
+              </div>
+            ) : null}
           </div>
         </DialogContent>
       </Dialog>
