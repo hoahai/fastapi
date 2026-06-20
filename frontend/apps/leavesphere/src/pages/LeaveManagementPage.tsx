@@ -1277,6 +1277,7 @@ export default function LeaveManagementPage() {
     () => (pendingReviewAction ? getLeaveSphereReviewActionConfirmCopy(pendingReviewAction, "admin") : null),
     [pendingReviewAction],
   );
+  const pendingReviewActionRequiresNote = Boolean(pendingReviewActionCopy?.noteRequired);
   const selectedHoliday = useMemo(
     () => (workspaceForYear?.holidays ?? []).find((item) => item.id === selectedHolidayId) || null,
     [selectedHolidayId, workspaceForYear?.holidays],
@@ -2208,10 +2209,14 @@ export default function LeaveManagementPage() {
     if (!pendingReviewAction) {
       return;
     }
+    if (pendingReviewActionRequiresNote && !reviewNote.trim()) {
+      toast.error("Admin note required", "Add a note before rejecting or cancelling this request.");
+      return;
+    }
     const action = pendingReviewAction;
     setPendingReviewAction(null);
     await handleReviewRequest(action);
-  }, [handleReviewRequest, pendingReviewAction]);
+  }, [handleReviewRequest, pendingReviewAction, pendingReviewActionRequiresNote, reviewNote, toast]);
 
   const closeAdjustModal = useCallback(() => {
     setPendingAdjustAction(null);
@@ -3248,12 +3253,13 @@ export default function LeaveManagementPage() {
         }}
         note={
           pendingReviewAction ? {
-          label: "Admin note / reason",
-          value: reviewNote,
-          onChange: setReviewNote,
-          placeholder: "Add a note or reason for this decision",
-          disabled: isMutating,
-          helpText: pendingReviewActionCopy?.noteHelpText,
+            label: "Admin note / reason",
+            value: reviewNote,
+            onChange: setReviewNote,
+            placeholder: "Add a note or reason for this decision",
+            disabled: isMutating,
+            required: pendingReviewActionRequiresNote,
+            helpText: pendingReviewActionCopy?.noteHelpText,
           } : undefined
         }
       />

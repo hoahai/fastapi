@@ -5,6 +5,7 @@ export type LeaveSphereReviewActionConfirmCopy = {
   title: string;
   description: string;
   confirmLabel: string;
+  noteRequired: boolean;
   noteHelpText?: string;
 };
 
@@ -19,6 +20,7 @@ export function getLeaveSphereReviewActionConfirmCopy(
       title: "Approve Request?",
       description: `This will approve the PTO request and apply the current ${reviewerLabel} note.`,
       confirmLabel: "Approve",
+      noteRequired: false,
       noteHelpText: "Optional. Add context for why this request is being approved.",
     };
   }
@@ -28,7 +30,8 @@ export function getLeaveSphereReviewActionConfirmCopy(
       title: "Reject Request?",
       description: `This will reject the PTO request and apply the current ${reviewerLabel} note.`,
       confirmLabel: "Reject",
-      noteHelpText: "Optional. Explain why this request is being rejected.",
+      noteRequired: true,
+      noteHelpText: "Required. Explain why this request is being rejected.",
     };
   }
 
@@ -37,7 +40,8 @@ export function getLeaveSphereReviewActionConfirmCopy(
       title: "Cancel Request?",
       description: `This will cancel the PTO request and apply the current ${reviewerLabel} note.`,
       confirmLabel: "Cancel request",
-      noteHelpText: "Optional. Add context for why this request is being cancelled.",
+      noteRequired: true,
+      noteHelpText: "Required. Add context for why this request is being cancelled.",
     };
   }
 
@@ -45,6 +49,7 @@ export function getLeaveSphereReviewActionConfirmCopy(
     title: "Revert Decision?",
     description: "This will revert the PTO request back to pending and record the note below.",
     confirmLabel: "Revert",
+    noteRequired: false,
     noteHelpText: "Optional. Add a reason for reverting this decision.",
   };
 }

@@ -785,6 +785,7 @@ export default function LeaveSphereMyPtoPage() {
     () => (pendingReviewAction ? getLeaveSphereReviewActionConfirmCopy(pendingReviewAction, "manager") : null),
     [pendingReviewAction],
   );
+  const pendingReviewActionRequiresNote = Boolean(pendingReviewActionCopy?.noteRequired);
   const submissionDeadline = workspaceForYear?.lastSubmissionDate ?? workspace?.lastSubmissionDate ?? null;
   const submissionDeadlineError = useMemo(
     () => getLeaveSphereSubmissionDeadlineError({
@@ -1364,10 +1365,14 @@ export default function LeaveSphereMyPtoPage() {
     if (!pendingReviewAction) {
       return;
     }
+    if (pendingReviewActionRequiresNote && !reviewNote.trim()) {
+      toast.error("Manager note required", "Add a note before rejecting or cancelling this request.");
+      return;
+    }
     const action = pendingReviewAction;
     setPendingReviewAction(null);
     await handleReviewRequest(action);
-  }, [handleReviewRequest, pendingReviewAction]);
+  }, [handleReviewRequest, pendingReviewAction, pendingReviewActionRequiresNote, reviewNote, toast]);
 
   const handleSaveMyRequestDetail = useCallback(async (params: {
     requestId: string | null;
@@ -1995,6 +2000,7 @@ export default function LeaveSphereMyPtoPage() {
           onChange: setReviewNote,
           placeholder: "Add a note or reason for this decision",
           disabled: isReviewing,
+          required: pendingReviewActionRequiresNote,
           helpText: pendingReviewActionCopy?.noteHelpText,
         }}
       />

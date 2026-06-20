@@ -70,6 +70,14 @@ def _normalize_text(value: object | None) -> str:
     return str(value or "").strip()
 
 
+def _normalize_review_note_for_action(action: object | None, approver_note: object | None) -> str | None:
+    normalized_action = _normalize_text(action).lower()
+    normalized_note = _normalize_text(approver_note)
+    if normalized_action in {"reject", "cancel"} and not normalized_note:
+        raise ValueError("approverNote is required when action is reject or cancel")
+    return normalized_note or None
+
+
 def _normalize_lookup_key(value: object | None) -> str:
     return re.sub(r"[^a-z0-9]+", "", _normalize_text(value).lower())
 
@@ -1126,6 +1134,7 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
     if not has_admin_override and not is_direct_manager:
         raise ValueError("Only a direct manager can approve or reject this PTO request")
 
+    approver_note = _normalize_review_note_for_action(action, payload.get("approverNote"))
     status = _normalize_text(transaction.get("status")).lower()
     workspace_year = int(transaction.get("year") or date.today().year)
     if action in {"approve", "reject"}:
@@ -1135,7 +1144,7 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
             updated = approve_pending_pto_request(
                 transaction_id=transaction_id,
                 approver_id=current_employee_id if current_employee_id else None,
-                approverNote=_normalize_text(payload.get("approverNote")) or None,
+                approverNote=approver_note,
             )
 
             def _apply_approve(cached_workspace: dict) -> bool:
@@ -1143,7 +1152,7 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
                 new_row = {
                     **(old_row or {}),
                     "status": "approved",
-                    "approverNote": _normalize_text(payload.get("approverNote")) or None,
+                    "approverNote": approver_note,
                     "reviewedAt": date.today().isoformat(),
                     "reviewerName": _normalize_text(cached_workspace.get("currentUserName")) or current_employee_name,
                 }
@@ -1180,7 +1189,7 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
         updated = reject_pending_pto_request(
             transaction_id=transaction_id,
             approver_id=current_employee_id if current_employee_id else None,
-            approverNote=_normalize_text(payload.get("approverNote")) or None,
+            approverNote=approver_note,
         )
 
         def _apply_reject(cached_workspace: dict) -> bool:
@@ -1188,7 +1197,7 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
             new_row = {
                 **(old_row or {}),
                 "status": "rejected",
-                "approverNote": _normalize_text(payload.get("approverNote")) or None,
+                "approverNote": approver_note,
                 "reviewedAt": date.today().isoformat(),
                 "reviewerName": _normalize_text(cached_workspace.get("currentUserName")) or current_employee_name,
             }
@@ -1232,22 +1241,21 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
             raise ValueError("Only Pending, Approved, or Rejected PTO transactions can be canceled")
         if not _is_before_start_date(start_date=_to_date_string(transaction.get("startDate"))):
             raise ValueError("Only future PTO requests can be canceled")
-        if status == "pending":
-            updated = cancel_pending_pto_transaction(transaction_id=transaction_id)
-        else:
-            updated = update_pto_transaction(
-                transaction_id=transaction_id,
-                updates={
-                    "status": "Canceled",
-                    "approverId": None,
-                },
-            )
+        updated = update_pto_transaction(
+            transaction_id=transaction_id,
+            updates={
+                "status": "Canceled",
+                "approverId": None,
+                "approverNote": approver_note,
+            },
+        )
 
         def _apply_cancel(cached_workspace: dict) -> bool:
             old_row = _find_my_pto_request_row(cached_workspace, transaction_id)
             new_row = {
                 **(old_row or {}),
                 "status": "canceled",
+                "approverNote": approver_note,
                 "reviewedAt": date.today().isoformat(),
                 "reviewerName": _normalize_text(cached_workspace.get("currentUserName")) or current_employee_name,
             }

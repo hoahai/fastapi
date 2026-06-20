@@ -277,15 +277,19 @@ def review_leave_management_request_route(
     payload: LeaveManagementReviewRequest = Body(...),
 ):
     """
-    Approve or reject a PTO request transaction.
+    Approve, reject, cancel, or revert a PTO request transaction.
 
     Example request:
         POST /api/leavesphere/v1/admin/pto/review
         {"requestId": "pto-1", "action": "approve", "approverNote": "Approved"}
 
-    Example request (cancel/revert):
+    Example request (reject):
         POST /api/leavesphere/v1/admin/pto/review
-        {"requestId": "pto-1", "action": "cancel", "approverNote": "Canceling"}
+        {"requestId": "pto-1", "action": "reject", "approverNote": "Insufficient staffing coverage"}
+
+    Example request (cancel):
+        POST /api/leavesphere/v1/admin/pto/review
+        {"requestId": "pto-1", "action": "cancel", "approverNote": "Employee requested cancellation"}
 
     Example response:
         {
@@ -303,6 +307,7 @@ def review_leave_management_request_route(
         - `action` must be `approve`, `reject`, `cancel`, or `revert`
         - The transaction must already exist
         - Admin review bypasses direct-manager validation
+        - `approverNote` is required when `action` is `reject` or `cancel`
         - Mutation responses may return `workspacePatch` instead of a full `workspace` when the server can patch a cached snapshot
     """
     try:

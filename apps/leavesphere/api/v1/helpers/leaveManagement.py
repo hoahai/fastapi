@@ -12,7 +12,6 @@ from apps.leavesphere.api.v1.helpers.dbQueries import (
     get_employees_by_ids,
     get_db_tables,
     get_holidays,
-    cancel_pending_pto_transaction,
     get_pto_actions,
     get_pto_transactions,
     get_pto_types,
@@ -27,6 +26,7 @@ from apps.leavesphere.api.v1.helpers.myPto import (
     _normalize_email,
     _normalize_team_region,
     _normalize_text,
+    _normalize_review_note_for_action,
     _normalize_year,
     _is_before_start_date,
     _resolve_current_employee,
@@ -1415,12 +1415,12 @@ def review_leave_management_request(*, request, payload: dict) -> dict:
         raise ValueError("requestId is required")
 
     action = _normalize_text(payload.get("action")).lower()
-    approver_note = _normalize_optional_text(payload.get("approverNote"))
     transaction_rows = get_pto_transactions(transaction_id=transaction_id)
     if not transaction_rows:
         raise ValueError("PTO transaction not found")
     transaction = transaction_rows[0]
 
+    approver_note = _normalize_review_note_for_action(action, payload.get("approverNote"))
     if action == "approve":
         result = approve_request(
             request=request,
@@ -1440,16 +1440,14 @@ def review_leave_management_request(*, request, payload: dict) -> dict:
             raise ValueError("Only Pending, Approved, or Rejected PTO transactions can be canceled")
         if not _is_before_start_date(start_date=_to_date_string(transaction.get("startDate"))):
             raise ValueError("Only future PTO requests can be canceled")
-        if _normalize_text(transaction.get("status")).lower() == "pending":
-            updated = cancel_pending_pto_transaction(transaction_id=transaction_id)
-        else:
-            updated = update_pto_transaction(
-                transaction_id=transaction_id,
-                updates={
-                    "status": "Canceled",
-                    "approverId": None,
-                },
-            )
+        updated = update_pto_transaction(
+            transaction_id=transaction_id,
+            updates={
+                "status": "Canceled",
+                "approverId": None,
+                "approverNote": approver_note,
+            },
+        )
         result = {"updated": updated, "status": "Canceled"}
     elif action == "revert":
         if _normalize_text(transaction.get("status")).lower() not in {"approved", "rejected", "canceled"}:

@@ -281,6 +281,14 @@ def review_my_pto_request_route(
         POST /api/leavesphere/v1/ui/my-pto/review
         {"requestId": "pto-1", "transactionId": "pto-1", "action": "approve", "approverNote": "Approved for travel"}
 
+    Example request (reject):
+        POST /api/leavesphere/v1/ui/my-pto/review
+        {"requestId": "pto-1", "transactionId": "pto-1", "action": "reject", "approverNote": "Insufficient staffing coverage"}
+
+    Example request (cancel):
+        POST /api/leavesphere/v1/ui/my-pto/review
+        {"requestId": "pto-1", "transactionId": "pto-1", "action": "cancel", "approverNote": "Employee requested cancellation"}
+
     Example response:
         {
           "meta": {"timestamp": "2026-05-29T10:00:00+07:00", "duration_ms": 2},
@@ -299,6 +307,7 @@ def review_my_pto_request_route(
         - Requires leavesphere.editor permission or higher
         - The manager is resolved from the signed-in user's login email
         - `requestId` and `transactionId` are both accepted for compatibility
+        - `approverNote` is required when `action` is `reject` or `cancel`
         - Mutation responses may return `workspacePatch` instead of a full `workspace` when the server can patch a cached snapshot
     """
     try:

@@ -22,6 +22,7 @@ type ConfirmDialogNoteProps = {
   placeholder?: string;
   disabled?: boolean;
   helpText?: string;
+  required?: boolean;
 };
 
 type ConfirmDialogProps = {
@@ -47,6 +48,9 @@ export function ConfirmDialog({
   note,
   children,
 }: ConfirmDialogProps) {
+  const noteValue = note?.value.trim() ?? "";
+  const isNoteMissing = Boolean(note?.required) && noteValue.length === 0;
+
   return (
     <Dialog
       open={open}
@@ -55,7 +59,7 @@ export function ConfirmDialog({
           onCancel();
         }
       }}
-      >
+    >
       <DialogContent className={cn("!z-[60]", note || children ? "max-w-lg" : "max-w-md")}>
         <ModalShell className="min-h-0 flex-1">
           <ModalHeaderRow
@@ -72,16 +76,22 @@ export function ConfirmDialog({
           </ModalHeaderRow>
           {note ? (
             <label className="mt-4 block space-y-1 text-sm">
-              <span className="text-slate-600">{note.label}</span>
+              <span className="text-slate-600">
+                {note.label}
+                {note.required ? " *" : ""}
+              </span>
               <Textarea
                 value={note.value}
                 onChange={(event) => note.onChange(event.target.value)}
                 className={cn("min-h-[120px]")}
                 placeholder={note.placeholder ?? "Add a note or reason for this decision"}
                 disabled={note.disabled}
+                required={note.required}
               />
               {note.helpText ? (
-                <p className="text-xs leading-5 text-slate-500">{note.helpText}</p>
+                <p className={cn("text-xs leading-5", isNoteMissing ? "text-rose-600" : "text-slate-500")}>
+                  {note.helpText}
+                </p>
               ) : null}
             </label>
           ) : null}
@@ -90,7 +100,7 @@ export function ConfirmDialog({
             <Button variant="outline" onClick={onCancel}>
               {cancelLabel}
             </Button>
-            <Button onClick={onConfirm}>
+            <Button onClick={onConfirm} disabled={isNoteMissing || note?.disabled}>
               {confirmLabel}
             </Button>
           </DialogFooter>
