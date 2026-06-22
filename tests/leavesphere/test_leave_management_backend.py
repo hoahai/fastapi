@@ -897,6 +897,74 @@ class LeaveManagementBackendTests(unittest.TestCase):
             ["Alex Chen", "Taylor Morgan"],
         )
 
+    def test_pending_reminder_test_email_override_sends_only_to_override(self):
+        request = SimpleNamespace(base_url="https://workspace.example.com/")
+        pending_request = {
+            "id": "txn-pending-soon",
+            "employeeId": "emp-1",
+            "ptoTypeCode": "VAC",
+            "ptoActionCode": "REQUEST",
+            "hours": 8,
+            "year": 2026,
+            "status": "Pending",
+            "dateCreated": "2026-06-18T09:00:00",
+            "dateUpdated": "2026-06-18T09:00:00",
+            "startDate": "2026-06-24",
+            "endDate": "2026-06-24",
+            "description": "Family trip",
+        }
+        employees = [
+            {
+                "id": "emp-1",
+                "firstName": "Alex",
+                "lastName": "Chen",
+                "email": "alex@example.com",
+            },
+            {
+                "id": "mgr-1",
+                "firstName": "Jordan",
+                "lastName": "Lee",
+                "email": "jordan@example.com",
+            },
+        ]
+
+        with patch.object(
+            leaveManagement,
+            "load_leave_sphere_pto_workspace_catalogs",
+            return_value=SimpleNamespace(
+                pto_type_by_code={"VAC": {"code": "VAC", "name": "Vacation"}},
+                pto_action_by_code={"REQUEST": {"code": "REQUEST", "name": "Request"}},
+            ),
+        ), patch.object(
+            leaveManagement,
+            "get_pto_transactions",
+            return_value=[pending_request],
+        ), patch.object(
+            leaveManagement,
+            "get_employees_by_ids",
+            side_effect=lambda *, employee_ids: [row for row in employees if row["id"] in employee_ids],
+        ), patch.object(
+            leaveManagement,
+            "get_employee_managers",
+            return_value=[{"employeeId": "emp-1", "managerId": "mgr-1"}],
+        ), patch.object(
+            leaveManagement,
+            "send_leave_sphere_reminder_email",
+            return_value=True,
+        ) as mock_send:
+            result = leaveManagement.send_leave_management_pending_approval_reminders(
+                request=request,
+                year=2026,
+                coming_days=7,
+                test_email="hai@theautoadagency.com",
+                today=date(2026, 6, 22),
+            )
+
+        self.assertEqual(result["emailsSent"], 1)
+        call_kwargs = mock_send.call_args.kwargs
+        self.assertEqual(call_kwargs["recipient_email"], "hai@theautoadagency.com")
+        self.assertEqual(call_kwargs["cc_addresses"], [])
+
     def test_review_workspace_supports_cancel_and_revert_actions(self):
         request = self._build_request()
         transaction = {

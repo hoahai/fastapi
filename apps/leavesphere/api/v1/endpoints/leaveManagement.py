@@ -141,6 +141,7 @@ def send_leave_management_pending_approvals_reminder_route(
     request: Request,
     year: int | None = Query(None, ge=1901, le=2155),
     coming_days: int = Query(7, alias="comingDays", ge=0),
+    test_email: str | None = Query(None, alias="testEmail"),
 ):
     """
     Send reminder emails for pending PTO approvals to every manager of each employee in scope.
@@ -150,6 +151,9 @@ def send_leave_management_pending_approvals_reminder_route(
 
     Example request (defaults to current year and 7-day window):
         POST /api/leavesphere/v1/admin/pto/reminders/pending-approvals
+
+    Example request (test mode):
+        POST /api/leavesphere/v1/admin/pto/reminders/pending-approvals?testEmail=hai@theautoadagency.com
 
     Example response:
         {
@@ -186,12 +190,14 @@ def send_leave_management_pending_approvals_reminder_route(
         - `comingDays` defaults to 7 when omitted
         - Only pending PTO requests in the selected year with start dates up to `today + comingDays` are included
         - Each employee's requests are fanned out to all of that employee's managers
+        - When `testEmail` is provided, all reminder emails are sent only to that address and CC recipients are suppressed
     """
     try:
         return send_leave_management_pending_approval_reminders(
             request=request,
             year=year,
             coming_days=coming_days,
+            test_email=test_email,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

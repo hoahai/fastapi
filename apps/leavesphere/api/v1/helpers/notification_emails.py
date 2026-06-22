@@ -48,25 +48,18 @@ EMAIL_MUTED_STRONG = "#494551"
 EMAIL_OUTLINE = "#cbc4d3"
 FONT_HEADLINE = "Manrope, Arial, Helvetica, sans-serif"
 FONT_BODY = "Inter, Arial, Helvetica, sans-serif"
-NOTE_AVATAR_ICON_SVG = """
-<svg xmlns="http://www.w3.org/2000/svg" width="22" height="22" viewBox="0 0 22 22" fill="none" aria-hidden="true" role="img">
-  <circle cx="11" cy="7" r="3" stroke="currentColor" stroke-width="2" />
-  <path d="M5 19c0-3.314 2.686-6 6-6s6 2.686 6 6" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-</svg>
-""".strip()
-REQUEST_DETAILS_ICON_SVG = """
-<svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 16 16" fill="none" aria-hidden="true" role="img">
-  <path d="M3 2.5h10a.5.5 0 0 1 .5.5v10.5a.5.5 0 0 1-.5.5H3a.5.5 0 0 1-.5-.5V3a.5.5 0 0 1 .5-.5Z" stroke="currentColor" stroke-width="2"/>
-  <path d="M5 1.5v2M11 1.5v2M4.5 6.5h7M4.5 9.5h7M4.5 12.5h5" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
-</svg>
-""".strip()
-INFO_ICON_SVG = """
-<svg xmlns="http://www.w3.org/2000/svg" width="18" height="18" viewBox="0 0 18 18" fill="none" aria-hidden="true" role="img">
-  <circle cx="9" cy="9" r="8" stroke="currentColor" stroke-width="2" />
-  <path d="M9 8v5" stroke="currentColor" stroke-width="2" stroke-linecap="round" />
-  <circle cx="9" cy="5.5" r="1" fill="currentColor" />
-</svg>
-""".strip()
+REQUEST_DETAILS_ICON_URL = (
+    "https://res.cloudinary.com/dpmjwuqfl/image/upload/v1782137160/"
+    "request-details_dgnrwe.svg"
+)
+NOTE_AVATAR_ICON_URL = (
+    "https://res.cloudinary.com/dpmjwuqfl/image/upload/v1782137161/"
+    "note-avatar_yyhp2j.svg"
+)
+INFO_ICON_URL = (
+    "https://res.cloudinary.com/dpmjwuqfl/image/upload/v1782137160/"
+    "info_qkn9id.svg"
+)
 
 
 @dataclass(frozen=True)
@@ -159,6 +152,34 @@ def _normalize_timeout(value: object | None, *, default: float) -> float:
     if timeout <= 0:
         raise ValueError("SMTP timeout must be greater than zero")
     return timeout
+
+
+def _build_icon_badge_html(
+    *,
+    label: str,
+    background: str,
+    color: str,
+    size: int = 18,
+    font_size: int = 12,
+    border: str | None = None,
+) -> str:
+    border_style = f"border:1px solid {border};" if border else ""
+    return (
+        f'<span style="display:inline-block;width:{size}px;height:{size}px;'
+        f'border-radius:999px;background:{background};{border_style}'
+        f'color:{color};font-family:{FONT_HEADLINE};font-size:{font_size}px;'
+        f'line-height:{size}px;font-weight:800;text-align:center;vertical-align:middle;">'
+        f"{escape_html(label)}"
+        "</span>"
+    )
+
+
+def _build_icon_image_html(*, src: str, alt: str, size: int, top: int = 0) -> str:
+    return (
+        f'<img src="{escape_html(src)}" alt="{escape_html(alt)}" width="{size}" height="{size}" '
+        f'style="display:block;width:{size}px;height:{size}px;border:0;outline:none;'
+        f'text-decoration:none;line-height:0;vertical-align:middle;position:relative;top:{top}px;" />'
+    )
 
 
 def _get_employees_by_ids(*, employee_ids: list[str]) -> list[dict]:
@@ -648,13 +669,15 @@ def send_leave_sphere_reminder_email(
     manager_name: str,
     pending_requests: list[dict],
     reminder_note: str | None = None,
+    recipient_email: str | None = None,
+    cc_addresses: list[str] | None = None,
 ) -> bool:
     smtp_settings = _get_leave_sphere_smtp_settings()
     if smtp_settings is None:
         return False
 
-    normalized_manager_email = normalize_text(manager_email)
-    if not normalized_manager_email or "@" not in normalized_manager_email:
+    normalized_recipient_email = normalize_text(recipient_email or manager_email)
+    if not normalized_recipient_email or "@" not in normalized_recipient_email:
         return False
 
     try:
@@ -663,10 +686,15 @@ def send_leave_sphere_reminder_email(
             pending_requests=pending_requests,
             reminder_note=reminder_note,
         )
+        resolved_cc_addresses = (
+            list(cc_addresses)
+            if cc_addresses is not None
+            else get_reminder_cc_emails()
+        )
         send_smtp_email(
             settings=smtp_settings,
-            to_addresses=[normalized_manager_email],
-            cc_addresses=get_reminder_cc_emails(),
+            to_addresses=[normalized_recipient_email],
+            cc_addresses=resolved_cc_addresses,
             subject=email.subject,
             text_body=email.text_body,
             html_body=email.html_body,
@@ -674,7 +702,7 @@ def send_leave_sphere_reminder_email(
     except (ValueError, SmtpSendError, OSError) as exc:
         _LOGGER.warning(
             "LeaveSphere reminder email send failed for %s: %s",
-            normalized_manager_email,
+            normalized_recipient_email,
             exc,
         )
         return False
@@ -1073,7 +1101,7 @@ def _build_request_details_card(
           <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;">
             <tr>
               <td valign="middle" style="width:18px;padding-right:8px;color:{EMAIL_SECONDARY};line-height:0;text-align:center;">
-                <span style="display:block;width:15px;height:15px;margin:0 auto;position:relative;top:-2px;color:{EMAIL_SECONDARY};">{REQUEST_DETAILS_ICON_SVG}</span>
+                {_build_icon_image_html(src=REQUEST_DETAILS_ICON_URL, alt="", size=18, top=-1)}
               </td>
               <td valign="middle" style="font-family:{FONT_HEADLINE};font-size:18px;line-height:1.16;font-weight:600;letter-spacing:-0.01em;color:{EMAIL_PRIMARY};padding-right:10px;text-align:left;">
                 {escape_html(title)}
@@ -1123,7 +1151,14 @@ def _build_note_card(
         'style="display:block;width:48px;height:48px;border:0;outline:none;text-decoration:none;'
         'border-radius:999px;object-fit:cover;" />'
         if normalize_text(avatar_url)
-        else f'<div style="width:22px;height:22px;color:{icon_color};">{NOTE_AVATAR_ICON_SVG}</div>'
+        else (
+            f'<table role="presentation" cellpadding="0" cellspacing="0" width="48" height="48" '
+            f'style="border-collapse:collapse;width:48px;height:48px;border-radius:999px;background:{avatar_bg};'
+            f'border:1px solid {border};box-shadow:inset 0 0 0 1px rgba(255,255,255,0.35);overflow:hidden;">'
+            f'<tr><td align="center" valign="middle" style="width:48px;height:48px;">'
+            f'{_build_icon_image_html(src=NOTE_AVATAR_ICON_URL, alt="", size=22, top=0)}'
+            f'</td></tr></table>'
+        )
     )
     return f"""
     <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:separate;border-spacing:0;">
@@ -1167,9 +1202,7 @@ def _build_info_card(*, title: str, body_html: str) -> str:
           <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;">
             <tr>
               <td valign="middle" style="padding-right:14px;width:20px;">
-                <div style="width:20px;height:20px;color:{EMAIL_MUTED};display:block;line-height:0;">
-                  <span style="display:block;width:18px;height:18px;">{INFO_ICON_SVG}</span>
-                </div>
+                {_build_icon_image_html(src=INFO_ICON_URL, alt="", size=18, top=0)}
               </td>
               <td valign="middle">
                 <div style="font-family:{FONT_HEADLINE};font-size:11px;line-height:1.3;letter-spacing:0.16em;text-transform:uppercase;color:{EMAIL_MUTED};">{escape_html(title)}</div>

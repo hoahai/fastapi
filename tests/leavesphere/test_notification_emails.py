@@ -35,6 +35,7 @@ class LeaveSphereNotificationEmailTests(unittest.TestCase):
         self.assertIn("scfgs5yjhapadizhl1py_ktuep1.png", email.html_body)
         self.assertIn("leavesphere-emailheader_qcgdxy.png", email.html_body)
         self.assertIn("leavesphere-emailfooter_a4f49e.png", email.html_body)
+        self.assertIn("request-details_dgnrwe.svg", email.html_body)
         self.assertIn("Request Details", email.html_body)
         self.assertIn("Family trip", email.html_body)
         self.assertIn("This email is to confirm that your request for paid time off has been received.", email.html_body)
@@ -81,6 +82,7 @@ class LeaveSphereNotificationEmailTests(unittest.TestCase):
         self.assertIn("AWAITING APPROVAL", email.html_body)
         self.assertIn("background:#dbeafe", email.html_body)
         self.assertIn("color:#1d4ed8", email.html_body)
+        self.assertIn("request-details_dgnrwe.svg", email.html_body)
         self.assertIn("A new Paid Time Off (PTO) request has been submitted by Alex Chen", email.html_body)
         self.assertIn("Open Quick Approval", email.html_body)
         self.assertIn("token-123", email.html_body)
@@ -128,6 +130,7 @@ class LeaveSphereNotificationEmailTests(unittest.TestCase):
         self.assertIn("ADMIN NOTE", email.html_body)
         self.assertIn("LeaveSphere HR", email.html_body)
         self.assertIn("picsum.photos/seed/leave-approver/96/96", email.html_body)
+        self.assertIn("info_qkn9id.svg", email.html_body)
         self.assertNotIn("View Request in LeaveSphere", email.html_body)
         self.assertIn("Approved after coverage was confirmed.", email.text_body)
         self.assertIn("Please ensure that all your current responsibilities are managed appropriately", email.text_body)
@@ -295,6 +298,8 @@ class LeaveSphereNotificationEmailTests(unittest.TestCase):
         self.assertIn("Alex Chen", email.html_body)
         self.assertIn("Taylor Morgan", email.html_body)
         self.assertIn("picsum.photos/seed/alex-chen/96/96", email.html_body)
+        self.assertIn("request-details_dgnrwe.svg", email.html_body)
+        self.assertIn("info_qkn9id.svg", email.html_body)
         self.assertIn("https://workspace.example.com/leavesphere/my-pto/requests/pto-123", email.html_body)
         self.assertIn("https://workspace.example.com/leavesphere/my-pto/requests/pto-456", email.html_body)
         self.assertIn("Instruction", email.html_body)
@@ -332,6 +337,51 @@ class LeaveSphereNotificationEmailTests(unittest.TestCase):
         call_kwargs = send_smtp_email.call_args.kwargs
         self.assertEqual(call_kwargs["to_addresses"], ["jordan@example.com"])
         self.assertEqual(call_kwargs["cc_addresses"], ["hr@example.com", "ops@example.com"])
+
+    @patch("apps.leavesphere.api.v1.helpers.notification_emails.send_smtp_email")
+    @patch("apps.leavesphere.api.v1.helpers.notification_emails.get_app_scoped_env")
+    def test_send_reminder_email_can_override_recipient_and_suppress_cc(self, get_app_scoped_env, send_smtp_email) -> None:
+        get_app_scoped_env.return_value = "{'host': 'smtp.example.com', 'port': 587, 'from_email': 'noreply@example.com'}"
+
+        result = send_leave_sphere_reminder_email(
+            manager_email="jordan@example.com",
+            manager_name="Jordan Lee",
+            pending_requests=[
+                {
+                    "employeeName": "Alex Chen",
+                    "ptoTypeLabel": "Vacation",
+                    "startDate": "2026-06-10",
+                    "endDate": "2026-06-12",
+                    "hours": 24,
+                    "requestId": "pto-123",
+                    "submittedAt": "2026-05-29T10:00:00",
+                    "requestUrl": "https://workspace.example.com/leavesphere/my-pto/requests/pto-123",
+                }
+            ],
+            recipient_email="hai@theautoadagency.com",
+            cc_addresses=[],
+        )
+
+        self.assertTrue(result)
+        call_kwargs = send_smtp_email.call_args.kwargs
+        self.assertEqual(call_kwargs["to_addresses"], ["hai@theautoadagency.com"])
+        self.assertEqual(call_kwargs["cc_addresses"], [])
+
+    def test_status_email_uses_note_avatar_icon_when_admin_avatar_is_missing(self) -> None:
+        email = build_leave_sphere_status_email(
+            status="approved",
+            employee_name="Alex Chen",
+            pto_type_label="Vacation",
+            start_date="2026-06-10",
+            end_date="2026-06-12",
+            hours=24,
+            request_id="pto-123",
+            submitted_at="2026-05-29T10:00:00",
+            admin_note="Approved after coverage was confirmed.",
+        )
+
+        self.assertIn("note-avatar_yyhp2j.svg", email.html_body)
+        self.assertIn("Approved after coverage was confirmed.", email.html_body)
 
     @patch("apps.leavesphere.api.v1.helpers.notification_emails.send_smtp_email")
     @patch("apps.leavesphere.api.v1.helpers.notification_emails._get_pto_types")

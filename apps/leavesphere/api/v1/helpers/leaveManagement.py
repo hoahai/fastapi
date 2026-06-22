@@ -1112,6 +1112,7 @@ def send_leave_management_pending_approval_reminders(
     request,
     year: int | None = None,
     coming_days: int = 7,
+    test_email: str | None = None,
     today: date | None = None,
 ) -> dict:
     current_date = today or date.today()
@@ -1122,6 +1123,9 @@ def send_leave_management_pending_approval_reminders(
         raise ValueError("comingDays must be an integer") from exc
     if coming_days < 0:
         raise ValueError("comingDays must be zero or greater")
+    normalized_test_email = _normalize_text(test_email)
+    if normalized_test_email and "@" not in normalized_test_email:
+        raise ValueError("testEmail must be a valid email address")
 
     year_start = date(selected_year, 1, 1)
     year_end = date(selected_year, 12, 31)
@@ -1282,6 +1286,8 @@ def send_leave_management_pending_approval_reminders(
             manager_email=bucket["managerEmail"],
             manager_name=bucket["managerName"],
             pending_requests=pending_requests,
+            recipient_email=normalized_test_email or None,
+            cc_addresses=[] if normalized_test_email else None,
         )
         if sent:
             emails_sent += 1
