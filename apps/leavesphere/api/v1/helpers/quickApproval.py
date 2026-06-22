@@ -92,6 +92,7 @@ def _grant_payload_from_row(row: dict[str, object]) -> dict[str, object]:
         "app_code": _APP_CODE,
         "request_id": _normalize_text(row.get("request_id")),
         "recipient_email": _normalize_text(row.get("recipient_email")).lower(),
+        "recipient_name": _normalize_text(row.get("recipient_name")) or None,
         "recipient_role": _normalize_text(row.get("recipient_role")).lower(),
         "recipient_employee_id": _normalize_text(row.get("recipient_employee_id")) or None,
         "jti": _normalize_text(row.get("jti")),
@@ -116,7 +117,7 @@ def _grant_delivery_from_row(row: dict[str, object], *, base_url: str | None) ->
         "token": token,
         "url": build_quick_approval_url(token=token, base_url=base_url or ""),
         "recipient_email": _normalize_text(row.get("recipient_email")).lower(),
-        "recipient_name": None,
+        "recipient_name": _normalize_text(row.get("recipient_name")) or None,
         "recipient_role": _normalize_text(row.get("recipient_role")).lower() or None,
         "recipient_picture_url": None,
         "expires_at": expires_at or None,
@@ -447,6 +448,7 @@ def _create_grant(
         "app_code": _APP_CODE,
         "request_id": normalized_request_id,
         "recipient_email": recipient.email,
+        "recipient_name": recipient.name,
         "recipient_role": recipient.role,
         "recipient_employee_id": recipient.employee_id,
         "jti": jti,
@@ -463,6 +465,7 @@ def _create_grant(
         "token": token,
         "recipient_employee_id": recipient.employee_id,
         "recipient_email": recipient.email,
+        "recipient_name": recipient.name,
         "recipient_role": recipient.role,
         "jti": jti,
         "request_snapshot_json": snapshot,
@@ -541,7 +544,7 @@ def _find_active_grant(
             table=_GRANT_TABLE,
             query={
                 **query,
-                "select": "id,tenant_id,tenant_slug,app_id,request_id,token,recipient_employee_id,recipient_email,recipient_role,jti,issued_at,expires_at,used_at,used_action,used_reason,revoked_at,created_by_user_id",
+                "select": "id,tenant_id,tenant_slug,app_id,request_id,token,recipient_employee_id,recipient_email,recipient_name,recipient_role,jti,issued_at,expires_at,used_at,used_action,used_reason,revoked_at,created_by_user_id",
             },
         )
     except SupabaseClientError:
@@ -724,7 +727,7 @@ def _get_grant_by_token(*, token: str, debug_trace: dict[str, object] | None = N
                 "tenant_id": f"eq.{tenant_id}",
                 "tenant_slug": f"eq.{tenant_slug}",
             },
-            select="id,tenant_id,tenant_slug,app_id,request_id,recipient_employee_id,recipient_email,recipient_role,jti,request_snapshot_json,issued_at,expires_at,used_at,used_action,used_reason,revoked_at,created_by_user_id",
+            select="id,tenant_id,tenant_slug,app_id,request_id,recipient_employee_id,recipient_email,recipient_name,recipient_role,jti,request_snapshot_json,issued_at,expires_at,used_at,used_action,used_reason,revoked_at,created_by_user_id",
         )
         if not row:
             if isinstance(debug_trace, dict):
@@ -820,7 +823,7 @@ def _to_preview(transaction: dict) -> dict[str, object]:
     }
 
 
-def load_quick_approval_context(*, token: str, debug: bool = False) -> dict[str, object]:
+def load_quick_approval_context(*, token: str, debug: bool = False, refresh: bool = False) -> dict[str, object]:
     debug_trace: dict[str, object] | None = {} if debug else None
     grant_payload = _get_grant_by_token(token=token, debug_trace=debug_trace)
     if grant_payload is None:
@@ -844,16 +847,19 @@ def load_quick_approval_context(*, token: str, debug: bool = False) -> dict[str,
     tenant_token = set_tenant_context(tenant_slug)
     try:
         state, handled_decision = _grant_state(grant)
+        recipient_role = _normalize_text(grant.get("recipient_role")).lower()
+        recipient_email = _normalize_text(grant.get("recipient_email")).lower() or None
         if debug_trace is not None:
             debug_trace["grant_state"] = state
             debug_trace["request_id"] = request_id
             debug_trace["tenant_id"] = tenant_id
             debug_trace["tenant_slug"] = tenant_slug
-        if state != "ready":
-            preview = _to_preview(_current_transaction(transaction_id=request_id) or grant)
+        preview = _to_preview(grant)
+        preview["currentStatus"] = "pending" if state == "ready" else preview.get("currentStatus") or "pending"
+        if not refresh and state != "ready":
             response = {
                 "state": state,
-                "preview": None if state in {"invalid", "expired"} else preview,
+                "preview": None if state == "invalid" else preview,
                 "handledDecision": handled_decision,
                 "message": (
                     "This quick approval link has expired."
@@ -863,21 +869,43 @@ def load_quick_approval_context(*, token: str, debug: bool = False) -> dict[str,
                     else "This quick approval link is invalid."
                 ),
                 "recipientRole": _normalize_text(grant.get("recipient_role")) or None,
+                "recipientEmail": recipient_email,
+                "recipientName": _normalize_text(grant.get("recipient_name")) or None,
             }
             if debug_trace is not None:
+                debug_trace["reason"] = state
+                debug_trace["preview_source"] = "grant_snapshot"
+                response["debugTrace"] = debug_trace
+            return response
+
+        if not refresh:
+            response = {
+                "state": "ready",
+                "preview": preview,
+                "handledDecision": None,
+                "message": None,
+                "recipientRole": recipient_role or None,
+                "recipientEmail": recipient_email,
+                "recipientName": _normalize_text(grant.get("recipient_name")) or None,
+                "canAct": True,
+            }
+            if debug_trace is not None:
+                debug_trace["reason"] = "snapshot_ready"
+                debug_trace["preview_source"] = "grant_snapshot"
                 response["debugTrace"] = debug_trace
             return response
 
         transaction = _current_transaction(transaction_id=request_id)
         if transaction is None:
-            preview = _to_preview(grant)
             preview["currentStatus"] = _normalize_text(preview.get("currentStatus")).lower() or "pending"
             response = {
                 "state": "ready",
                 "preview": preview,
                 "handledDecision": None,
                 "message": "This quick approval link is valid, but the live request record could not be loaded.",
-                "recipientRole": _normalize_text(grant.get("recipient_role")) or None,
+                "recipientRole": recipient_role or None,
+                "recipientEmail": recipient_email,
+                "recipientName": _normalize_text(grant.get("recipient_name")) or None,
                 "canAct": False,
             }
             if debug_trace is not None:
@@ -896,14 +924,15 @@ def load_quick_approval_context(*, token: str, debug: bool = False) -> dict[str,
                 "preview": None,
                 "handledDecision": handled,
                 "message": "This request has already been handled.",
-                "recipientRole": _normalize_text(grant.get("recipient_role")) or None,
+                "recipientRole": recipient_role or None,
+                "recipientEmail": recipient_email,
+                "recipientName": _normalize_text(grant.get("recipient_name")) or None,
             }
             if debug_trace is not None:
                 debug_trace["reason"] = "transaction_not_pending"
                 response["debugTrace"] = debug_trace
             return response
 
-        recipient_role = _normalize_text(grant.get("recipient_role")).lower()
         if recipient_role == _ROLE_MANAGER:
             recipient_employee_id = _normalize_text(grant.get("recipient_employee_id"))
             employee_id = _normalize_text(transaction.get("employeeId"))
@@ -916,6 +945,8 @@ def load_quick_approval_context(*, token: str, debug: bool = False) -> dict[str,
                     "handledDecision": None,
                     "message": "This quick approval link is valid for preview, but the manager assignment could not be verified.",
                     "recipientRole": recipient_role,
+                    "recipientEmail": recipient_email,
+                    "recipientName": _normalize_text(grant.get("recipient_name")) or None,
                     "canAct": False,
                 }
                 if debug_trace is not None:
@@ -932,6 +963,8 @@ def load_quick_approval_context(*, token: str, debug: bool = False) -> dict[str,
                     "handledDecision": None,
                     "message": "This quick approval link is valid for preview, but this manager is no longer assigned to the request.",
                     "recipientRole": recipient_role,
+                    "recipientEmail": recipient_email,
+                    "recipientName": _normalize_text(grant.get("recipient_name")) or None,
                     "canAct": False,
                 }
                 if debug_trace is not None:
@@ -949,10 +982,15 @@ def load_quick_approval_context(*, token: str, debug: bool = False) -> dict[str,
             "handledDecision": None,
             "message": None,
             "recipientRole": recipient_role or None,
+            "recipientEmail": recipient_email,
+            "recipientName": _normalize_text(grant.get("recipient_name")) or None,
             "canAct": True,
         }
         if debug_trace is not None:
             debug_trace["reason"] = "ready"
+            debug_trace["preview_source"] = "live_request"
+            debug_trace["transaction_found"] = True
+            debug_trace["transaction_status"] = current_status
             response["debugTrace"] = debug_trace
         return response
     finally:

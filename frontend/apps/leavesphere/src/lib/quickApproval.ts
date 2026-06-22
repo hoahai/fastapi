@@ -22,6 +22,9 @@ export type LeaveSphereQuickApprovalLoadResult = {
   preview: LeaveSphereQuickApprovalPreview | null;
   handledDecision: LeaveSphereQuickApprovalDecision | null;
   canAct: boolean;
+  recipientRole: "manager" | "admin" | null;
+  recipientEmail: string | null;
+  recipientName: string | null;
   source: "api" | "mock";
   message: string | null;
 };
@@ -343,6 +346,9 @@ async function loadMockDetail(token: string): Promise<LeaveSphereQuickApprovalLo
       preview: buildMockPreview(),
       handledDecision: null,
       canAct: true,
+      recipientRole: "manager",
+      recipientEmail: "manager@example.com",
+      recipientName: "Manager",
       source: "mock",
       message: "Preview mode: backend public approval endpoints are not available in this environment.",
     };
@@ -352,6 +358,9 @@ async function loadMockDetail(token: string): Promise<LeaveSphereQuickApprovalLo
     preview: null,
     handledDecision: state === "already_handled" ? "approved" : null,
     canAct: false,
+    recipientRole: "manager",
+    recipientEmail: "manager@example.com",
+    recipientName: "Manager",
     source: "mock",
     message: "Preview mode: backend public approval endpoints are not available in this environment.",
   };
@@ -401,6 +410,15 @@ export async function loadLeaveSphereQuickApproval(token: string): Promise<Leave
   const handledDecision = normalizeDecision(body?.decision ?? body?.handledDecision);
   const preview = parsePreview(body);
   const canAct = normalizeCanAct(body?.canAct);
+  const recipientRole = (() => {
+    const normalized = asString(body?.recipientRole).toLowerCase();
+    if (normalized === "manager" || normalized === "admin") {
+      return normalized;
+    }
+    return null;
+  })();
+  const recipientEmail = asString(body?.recipientEmail) || null;
+  const recipientName = asString(body?.recipientName) || null;
   if (state === "ready" && !preview) {
     throw new LeaveSphereQuickApprovalError("generic", "The quick approval request data is unavailable.");
   }
@@ -409,6 +427,55 @@ export async function loadLeaveSphereQuickApproval(token: string): Promise<Leave
     preview,
     handledDecision,
     canAct,
+    recipientRole,
+    recipientEmail,
+    recipientName,
+    source: "api",
+    message: null,
+  };
+}
+
+export async function refreshLeaveSphereQuickApproval(token: string): Promise<LeaveSphereQuickApprovalLoadResult> {
+  const path = `${PUBLIC_APPROVAL_BASE}/${encodeURIComponent(token)}?refresh=true`;
+  const response = await requestPublicJson(path, { method: "GET" });
+
+  if (shouldUseMockFallback() && (isMissingRouteResponse(response) || isMockFallbackEligibleError(response))) {
+    return loadMockDetail(token);
+  }
+
+  if (isMissingRouteResponse(response)) {
+    throw new LeaveSphereQuickApprovalError("generic", "Quick approval service is unavailable.");
+  }
+
+  if (response.status >= 400) {
+    throw mapDecisionError(response.status, response.payload);
+  }
+
+  const body = unwrapEnvelope(response.payload);
+  const state = normalizeViewState(body?.state ?? body?.tokenState ?? body?.status);
+  const handledDecision = normalizeDecision(body?.decision ?? body?.handledDecision);
+  const preview = parsePreview(body);
+  const canAct = normalizeCanAct(body?.canAct);
+  const recipientRole = (() => {
+    const normalized = asString(body?.recipientRole).toLowerCase();
+    if (normalized === "manager" || normalized === "admin") {
+      return normalized;
+    }
+    return null;
+  })();
+  const recipientEmail = asString(body?.recipientEmail) || null;
+  const recipientName = asString(body?.recipientName) || null;
+  if (state === "ready" && !preview) {
+    throw new LeaveSphereQuickApprovalError("generic", "The quick approval request data is unavailable.");
+  }
+  return {
+    state,
+    preview,
+    handledDecision,
+    canAct,
+    recipientRole,
+    recipientEmail,
+    recipientName,
     source: "api",
     message: null,
   };

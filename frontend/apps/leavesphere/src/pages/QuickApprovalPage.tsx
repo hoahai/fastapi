@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertTriangle,
   CalendarRange,
@@ -31,6 +31,7 @@ import { LeaveSpherePtoStatusChip } from "@leavesphere/components/PtoStatusChip"
 import { formatLeaveSpherePtoStatusLabel } from "@leavesphere/lib/ptoStatus";
 import {
   loadLeaveSphereQuickApproval,
+  refreshLeaveSphereQuickApproval,
   submitLeaveSphereQuickApprovalDecision,
   type LeaveSphereQuickApprovalDecision,
   type LeaveSphereQuickApprovalPreview,
@@ -97,6 +98,16 @@ function fallbackStateMessage(state: PageState): string {
   return "We couldn't process this quick approval link right now.";
 }
 
+function recipientRoleLabel(role: "manager" | "admin" | null): string {
+  if (role === "admin") {
+    return "Admin";
+  }
+  if (role === "manager") {
+    return "Manager";
+  }
+  return "Recipient";
+}
+
 export default function LeaveSphereQuickApprovalPage({ token }: LeaveSphereQuickApprovalPageProps) {
   const [pageState, setPageState] = useState<PageState>("loading");
   const [preview, setPreview] = useState<LeaveSphereQuickApprovalPreview | null>(null);
@@ -105,7 +116,13 @@ export default function LeaveSphereQuickApprovalPage({ token }: LeaveSphereQuick
   const [stateMessage, setStateMessage] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
   const [canAct, setCanAct] = useState(true);
+  const [recipientRole, setRecipientRole] = useState<"manager" | "admin" | null>(null);
+  const [recipientEmail, setRecipientEmail] = useState<string | null>(null);
+  const [recipientName, setRecipientName] = useState<string | null>(null);
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const isActionInFlightRef = useRef(false);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const closeTimerRef = useRef<number | null>(null);
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
 
@@ -118,6 +135,10 @@ export default function LeaveSphereQuickApprovalPage({ token }: LeaveSphereQuick
       setStateMessage(null);
       setInfoMessage(null);
       setCanAct(true);
+      setRecipientRole(null);
+      setRecipientEmail(null);
+      setRecipientName(null);
+      setIsRefreshing(false);
       try {
         const result = await loadLeaveSphereQuickApproval(token);
         if (cancelled) {
@@ -126,9 +147,14 @@ export default function LeaveSphereQuickApprovalPage({ token }: LeaveSphereQuick
         setInfoMessage(result.message);
         setHandledDecision(result.handledDecision);
         setCanAct(result.canAct);
+        setRecipientRole(result.recipientRole);
+        setRecipientEmail(result.recipientEmail);
+        setRecipientName(result.recipientName);
         if (result.state === "ready" && result.preview) {
           setPreview(result.preview);
           setPageState("ready");
+          setIsRefreshing(true);
+          void refreshLiveRequest();
           return;
         }
         setPageState(result.state);
@@ -141,13 +167,69 @@ export default function LeaveSphereQuickApprovalPage({ token }: LeaveSphereQuick
         setStateMessage("We couldn't validate this link. Please try again in a moment.");
       }
     }
+
+    async function refreshLiveRequest(): Promise<void> {
+      try {
+        const result = await refreshLeaveSphereQuickApproval(token);
+        if (cancelled || isActionInFlightRef.current) {
+          return;
+        }
+        setInfoMessage(result.message);
+        setHandledDecision(result.handledDecision);
+        setCanAct(result.canAct);
+        setRecipientRole(result.recipientRole);
+        setRecipientEmail(result.recipientEmail);
+        setRecipientName(result.recipientName);
+        if (result.state === "ready" && result.preview) {
+          setPreview(result.preview);
+          setPageState("ready");
+          setStateMessage(null);
+          return;
+        }
+        setPreview(null);
+        setPageState(result.state);
+        setStateMessage(result.message);
+      } catch {
+        if (cancelled || isActionInFlightRef.current) {
+          return;
+        }
+        setStateMessage("We couldn't refresh this request right now. The snapshot is still shown.");
+      } finally {
+        if (!cancelled) {
+          setIsRefreshing(false);
+        }
+      }
+    }
+
     void run();
     return () => {
       cancelled = true;
     };
   }, [token]);
 
+  useEffect(() => {
+    if (closeTimerRef.current !== null) {
+      window.clearTimeout(closeTimerRef.current);
+      closeTimerRef.current = null;
+    }
+    if (pageState !== "success" || !decisionSuccess) {
+      return;
+    }
+
+    closeTimerRef.current = window.setTimeout(() => {
+      window.close();
+    }, 5000);
+
+    return () => {
+      if (closeTimerRef.current !== null) {
+        window.clearTimeout(closeTimerRef.current);
+        closeTimerRef.current = null;
+      }
+    };
+  }, [decisionSuccess, pageState]);
+
   async function submitDecision(decision: LeaveSphereQuickApprovalDecision, reason?: string): Promise<void> {
+    isActionInFlightRef.current = true;
     setIsSubmitting(true);
     setStateMessage(null);
     try {
@@ -172,6 +254,7 @@ export default function LeaveSphereQuickApprovalPage({ token }: LeaveSphereQuick
       setStateMessage("We couldn't submit your decision right now. Please retry.");
     } finally {
       setIsSubmitting(false);
+      isActionInFlightRef.current = false;
     }
   }
 
@@ -213,6 +296,31 @@ export default function LeaveSphereQuickApprovalPage({ token }: LeaveSphereQuick
         </section>
 
         {pageMessages.length ? <PageMessageStack messages={pageMessages} /> : null}
+
+        {(recipientName || recipientRole || recipientEmail) && pageState === "ready" ? (
+          <section className="rounded-[1.4rem] border border-slate-200/90 bg-slate-50/80 px-4 py-3 text-sm text-slate-700 shadow-sm">
+            <p className="flex items-start gap-3 leading-6 text-slate-600">
+              <span className="mt-0.5 rounded-full border border-slate-200 bg-white p-2">
+                <UserRound className="size-4 text-slate-500" />
+              </span>
+              <span className="min-w-0">
+                <span className="font-medium text-slate-900">
+                  Hello{recipientName || recipientRole ? `, ${recipientName || recipientRoleLabel(recipientRole)}` : ""}
+                </span>
+                . Below is the request waiting for your approval.
+                {recipientRole || recipientEmail ? (
+                  <>
+                    {" "}
+                    <span className="text-slate-500">
+                      ({recipientRoleLabel(recipientRole)}
+                      {recipientEmail ? ` · ${recipientEmail}` : ""})
+                    </span>
+                  </>
+                ) : null}
+              </span>
+            </p>
+          </section>
+        ) : null}
 
         {pageState === "ready" && preview ? (
           <SectionCard
@@ -318,11 +426,23 @@ export default function LeaveSphereQuickApprovalPage({ token }: LeaveSphereQuick
                   </p>
                 ) : null}
                 {pageState === "success" ? (
-                  <p className="mt-3 text-xs text-slate-600">You can close this tab now.</p>
+                  <p className="mt-3 text-xs text-slate-600">This tab will close automatically in 5 seconds.</p>
                 ) : null}
               </div>
             </div>
           </section>
+        ) : null}
+
+        {pageState === "ready" && isRefreshing ? (
+          <div className="flex items-start gap-3 rounded-xl border border-slate-200 bg-slate-50/90 px-4 py-3 text-sm text-slate-700">
+            <Loader2 className="mt-0.5 size-4 shrink-0 animate-spin text-slate-500" />
+            <div className="min-w-0">
+              <p className="font-medium text-slate-900">Refreshing live request</p>
+              <p className="mt-1 leading-6 text-slate-600">
+                Showing the email snapshot now. We are rechecking the live request in the background.
+              </p>
+            </div>
+          </div>
         ) : null}
       </main>
 

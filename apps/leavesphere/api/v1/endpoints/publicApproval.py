@@ -30,12 +30,15 @@ class QuickApprovalDecisionRequest(_LeaveSphereModel):
 
 
 @router.get("/{token}")
-def load_quick_approval_route(token: str, debug: bool = False):
+def load_quick_approval_route(token: str, debug: bool = False, refresh: bool = False):
     """
     Load the public quick-approval preview for one signed approval token.
 
     Example request:
         GET /api/leavesphere/v1/public/approval/v1.eyJ...token...
+
+    Example request (live refresh):
+        GET /api/leavesphere/v1/public/approval/v1.eyJ...token...?refresh=true
 
     Example response:
         {
@@ -64,9 +67,10 @@ def load_quick_approval_route(token: str, debug: bool = False):
         - Public route, no login required
         - Token must be valid, signed, and unexpired
         - Token is bound to a specific tenant, request, and recipient
+        - `refresh=true` re-checks the live request after the initial snapshot render
         - When `debug=true`, the response includes a `debugTrace` object
     """
-    return load_quick_approval_context(token=token, debug=debug)
+    return load_quick_approval_context(token=token, debug=debug, refresh=refresh)
 
 
 @router.post("/{token}/approve")

@@ -7,6 +7,7 @@ create table if not exists leave_sphere_quick_approval_grants (
     token text null unique,
     recipient_employee_id text null,
     recipient_email text not null,
+    recipient_name text null,
     recipient_role text not null,
     jti text not null unique,
     request_snapshot_json jsonb not null default '{}'::jsonb,
@@ -27,6 +28,9 @@ create table if not exists leave_sphere_quick_approval_grants (
 
 alter table if exists leave_sphere_quick_approval_grants
     add column if not exists tenant_slug text;
+
+alter table if exists leave_sphere_quick_approval_grants
+    add column if not exists recipient_name text;
 
 update leave_sphere_quick_approval_grants
 set tenant_slug = tenant_id
