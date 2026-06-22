@@ -30,7 +30,7 @@ class QuickApprovalDecisionRequest(_LeaveSphereModel):
 
 
 @router.get("/{token}")
-def load_quick_approval_route(token: str):
+def load_quick_approval_route(token: str, debug: bool = False):
     """
     Load the public quick-approval preview for one signed approval token.
 
@@ -64,8 +64,9 @@ def load_quick_approval_route(token: str):
         - Public route, no login required
         - Token must be valid, signed, and unexpired
         - Token is bound to a specific tenant, request, and recipient
+        - When `debug=true`, the response includes a `debugTrace` object
     """
-    return load_quick_approval_context(token=token)
+    return load_quick_approval_context(token=token, debug=debug)
 
 
 @router.post("/{token}/approve")

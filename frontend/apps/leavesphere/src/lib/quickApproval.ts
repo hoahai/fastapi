@@ -21,6 +21,7 @@ export type LeaveSphereQuickApprovalLoadResult = {
   state: LeaveSphereQuickApprovalViewState;
   preview: LeaveSphereQuickApprovalPreview | null;
   handledDecision: LeaveSphereQuickApprovalDecision | null;
+  canAct: boolean;
   source: "api" | "mock";
   message: string | null;
 };
@@ -211,6 +212,13 @@ function parsePreview(candidate: Record<string, unknown> | null): LeaveSphereQui
   };
 }
 
+function normalizeCanAct(value: unknown): boolean {
+  if (typeof value === "boolean") {
+    return value;
+  }
+  return true;
+}
+
 function mapDecisionError(status: number, payload: unknown): LeaveSphereQuickApprovalError {
   const message = extractApiMessage(payload).toLowerCase();
   if (status === 410 || message.includes("expired")) {
@@ -334,6 +342,7 @@ async function loadMockDetail(token: string): Promise<LeaveSphereQuickApprovalLo
       state,
       preview: buildMockPreview(),
       handledDecision: null,
+      canAct: true,
       source: "mock",
       message: "Preview mode: backend public approval endpoints are not available in this environment.",
     };
@@ -342,6 +351,7 @@ async function loadMockDetail(token: string): Promise<LeaveSphereQuickApprovalLo
     state,
     preview: null,
     handledDecision: state === "already_handled" ? "approved" : null,
+    canAct: false,
     source: "mock",
     message: "Preview mode: backend public approval endpoints are not available in this environment.",
   };
@@ -390,6 +400,7 @@ export async function loadLeaveSphereQuickApproval(token: string): Promise<Leave
   const state = normalizeViewState(body?.state ?? body?.tokenState ?? body?.status);
   const handledDecision = normalizeDecision(body?.decision ?? body?.handledDecision);
   const preview = parsePreview(body);
+  const canAct = normalizeCanAct(body?.canAct);
   if (state === "ready" && !preview) {
     throw new LeaveSphereQuickApprovalError("generic", "The quick approval request data is unavailable.");
   }
@@ -397,6 +408,7 @@ export async function loadLeaveSphereQuickApproval(token: string): Promise<Leave
     state,
     preview,
     handledDecision,
+    canAct,
     source: "api",
     message: null,
   };

@@ -104,6 +104,7 @@ export default function LeaveSphereQuickApprovalPage({ token }: LeaveSphereQuick
   const [decisionSuccess, setDecisionSuccess] = useState<LeaveSphereQuickApprovalDecision | null>(null);
   const [stateMessage, setStateMessage] = useState<string | null>(null);
   const [infoMessage, setInfoMessage] = useState<string | null>(null);
+  const [canAct, setCanAct] = useState(true);
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [rejectDialogOpen, setRejectDialogOpen] = useState(false);
   const [rejectReason, setRejectReason] = useState("");
@@ -116,6 +117,7 @@ export default function LeaveSphereQuickApprovalPage({ token }: LeaveSphereQuick
       setDecisionSuccess(null);
       setStateMessage(null);
       setInfoMessage(null);
+      setCanAct(true);
       try {
         const result = await loadLeaveSphereQuickApproval(token);
         if (cancelled) {
@@ -123,6 +125,7 @@ export default function LeaveSphereQuickApprovalPage({ token }: LeaveSphereQuick
         }
         setInfoMessage(result.message);
         setHandledDecision(result.handledDecision);
+        setCanAct(result.canAct);
         if (result.state === "ready" && result.preview) {
           setPreview(result.preview);
           setPageState("ready");
@@ -261,25 +264,31 @@ export default function LeaveSphereQuickApprovalPage({ token }: LeaveSphereQuick
               </div>
             </div>
 
-            <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
-              <Button
-                variant="outline"
-                onClick={() => setRejectDialogOpen(true)}
-                disabled={isSubmitting}
-                className="border-rose-200 text-rose-700 hover:border-rose-300 hover:bg-rose-50/80 hover:text-rose-800"
-              >
-                {isSubmitting ? <Loader2 className="size-4 animate-spin" /> : <XCircle className="size-4" />}
-                Reject request
-              </Button>
-              <Button
-                onClick={() => void submitDecision("approved")}
-                disabled={isSubmitting}
-                className="bg-emerald-600 text-white hover:bg-emerald-600/95"
-              >
-                {isSubmitting ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
-                Approve request
-              </Button>
-            </div>
+            {canAct ? (
+              <div className="mt-6 flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+                <Button
+                  variant="outline"
+                  onClick={() => setRejectDialogOpen(true)}
+                  disabled={isSubmitting}
+                  className="border-rose-200 text-rose-700 hover:border-rose-300 hover:bg-rose-50/80 hover:text-rose-800"
+                >
+                  {isSubmitting ? <Loader2 className="size-4 animate-spin" /> : <XCircle className="size-4" />}
+                  Reject request
+                </Button>
+                <Button
+                  onClick={() => void submitDecision("approved")}
+                  disabled={isSubmitting}
+                  className="bg-emerald-600 text-white hover:bg-emerald-600/95"
+                >
+                  {isSubmitting ? <Loader2 className="size-4 animate-spin" /> : <CheckCircle2 className="size-4" />}
+                  Approve request
+                </Button>
+              </div>
+            ) : (
+              <div className="mt-6 rounded-xl border border-amber-200 bg-amber-50/80 px-4 py-3 text-sm text-amber-900">
+                This link is preview-only. The request details are shown, but approval actions are disabled for this recipient.
+              </div>
+            )}
           </SectionCard>
         ) : null}
 

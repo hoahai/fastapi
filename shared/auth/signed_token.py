@@ -75,3 +75,17 @@ def verify_json_token(*, token: str, secret: str) -> dict[str, Any]:
         raise ValueError("Token payload must be an object")
     return payload
 
+
+def decode_json_token_payload_unverified(*, token: str) -> dict[str, Any]:
+    parts = [part.strip() for part in str(token or "").split(".") if part.strip()]
+    if len(parts) != 3:
+        raise ValueError("Invalid token format")
+
+    version, payload_segment, _signature_segment = parts
+    if version != _TOKEN_VERSION:
+        raise ValueError("Unsupported token version")
+
+    payload = json.loads(_base64url_decode(payload_segment).decode("utf-8"))
+    if not isinstance(payload, dict):
+        raise ValueError("Token payload must be an object")
+    return payload

@@ -48,6 +48,7 @@ app.state.public_path_prefixes = {
     "/assets/",
     "/fe/assets/",
     "/auth/",
+    "/api/leavesphere/v1/public/approval",
     "/public/opssphere/advWebsiteReport/reports/cta",
 }
 app.state.tenant_validator_registry = [
