@@ -10,6 +10,7 @@ from apps.leavesphere.api.v1.helpers.notification_emails import (
     build_leave_sphere_status_email,
     send_leave_sphere_approval_email,
     send_leave_sphere_confirmation_email,
+    send_leave_sphere_reminder_email,
     send_leave_sphere_status_preview_email,
     send_leave_sphere_status_email,
 )
@@ -301,6 +302,36 @@ class LeaveSphereNotificationEmailTests(unittest.TestCase):
         self.assertIn("Instruction:", email.text_body)
         self.assertIn("1. Alex Chen - Vacation", email.text_body)
         self.assertIn("2. Taylor Morgan - Sick Leave", email.text_body)
+
+    @patch("apps.leavesphere.api.v1.helpers.notification_emails.send_smtp_email")
+    @patch("apps.leavesphere.api.v1.helpers.notification_emails.get_reminder_cc_emails")
+    @patch("apps.leavesphere.api.v1.helpers.notification_emails.get_app_scoped_env")
+    def test_send_reminder_email_includes_cc_recipients(self, get_app_scoped_env, get_reminder_cc_emails, send_smtp_email) -> None:
+        get_app_scoped_env.return_value = "{'host': 'smtp.example.com', 'port': 587, 'from_email': 'noreply@example.com'}"
+        get_reminder_cc_emails.return_value = ["hr@example.com", "ops@example.com"]
+
+        result = send_leave_sphere_reminder_email(
+            manager_email="jordan@example.com",
+            manager_name="Jordan Lee",
+            pending_requests=[
+                {
+                    "employeeName": "Alex Chen",
+                    "ptoTypeLabel": "Vacation",
+                    "startDate": "2026-06-10",
+                    "endDate": "2026-06-12",
+                    "hours": 24,
+                    "requestId": "pto-123",
+                    "submittedAt": "2026-05-29T10:00:00",
+                    "requestUrl": "https://workspace.example.com/leavesphere/my-pto/requests/pto-123",
+                }
+            ],
+        )
+
+        self.assertTrue(result)
+        send_smtp_email.assert_called_once()
+        call_kwargs = send_smtp_email.call_args.kwargs
+        self.assertEqual(call_kwargs["to_addresses"], ["jordan@example.com"])
+        self.assertEqual(call_kwargs["cc_addresses"], ["hr@example.com", "ops@example.com"])
 
     @patch("apps.leavesphere.api.v1.helpers.notification_emails.send_smtp_email")
     @patch("apps.leavesphere.api.v1.helpers.notification_emails._get_pto_types")

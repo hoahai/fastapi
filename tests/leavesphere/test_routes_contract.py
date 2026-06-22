@@ -46,6 +46,7 @@ class LeaveSphereRouteContractTests(unittest.TestCase):
             ("POST", "/v1/ptoTransactions/{transaction_id}/reject"),
             ("GET", "/v1/admin/pto/workspace"),
             ("POST", "/v1/admin/pto/email-preview/test-email"),
+            ("POST", "/v1/admin/pto/reminders/pending-approvals"),
             ("POST", "/v1/admin/pto/requests"),
             ("PUT", "/v1/admin/pto/requests"),
             ("POST", "/v1/admin/pto/review"),
@@ -99,6 +100,7 @@ class LeaveSphereRouteContractTests(unittest.TestCase):
         ]
         self.assertIn("/v1/admin/pto/workspace", route_paths)
         self.assertIn("/v1/admin/pto/email-preview/test-email", route_paths)
+        self.assertIn("/v1/admin/pto/reminders/pending-approvals", route_paths)
         self.assertIn("/v1/admin/pto/requests", route_paths)
         self.assertIn("/v1/admin/pto/review", route_paths)
         self.assertIn("/v1/admin/pto/balances/adjust", route_paths)

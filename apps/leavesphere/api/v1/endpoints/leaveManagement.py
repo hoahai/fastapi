@@ -8,6 +8,7 @@ from apps.leavesphere.api.v1.helpers.leaveManagement import (
     create_leave_management_request,
     load_leave_management_workspace,
     review_leave_management_request,
+    send_leave_management_pending_approval_reminders,
     update_leave_management_request,
     update_leave_management_setup_data,
 )
@@ -133,6 +134,67 @@ def send_leave_management_email_preview_test_route(
         raise HTTPException(status_code=400, detail=str(exc)) from exc
     except (SmtpSendError, OSError) as exc:
         raise HTTPException(status_code=502, detail=str(exc)) from exc
+
+
+@router.post("/reminders/pending-approvals")
+def send_leave_management_pending_approvals_reminder_route(
+    request: Request,
+    year: int | None = Query(None, ge=1901, le=2155),
+    coming_days: int = Query(7, alias="comingDays", ge=0),
+):
+    """
+    Send reminder emails for pending PTO approvals to every manager of each employee in scope.
+
+    Example request:
+        POST /api/leavesphere/v1/admin/pto/reminders/pending-approvals?year=2026&comingDays=7
+
+    Example request (defaults to current year and 7-day window):
+        POST /api/leavesphere/v1/admin/pto/reminders/pending-approvals
+
+    Example response:
+        {
+          "meta": {"timestamp": "2026-06-22T10:00:00+07:00", "duration_ms": 2},
+          "data": {
+            "source": "network",
+            "year": 2026,
+            "comingDays": 7,
+            "windowStart": "2026-01-01",
+            "windowEnd": "2026-06-29",
+            "requestsFound": 2,
+            "managersFound": 2,
+            "emailsSent": 2,
+            "emailsFailed": 0,
+            "skippedRequests": 0,
+            "skippedManagerContacts": 0,
+            "managers": [
+              {
+                "managerId": "mgr-1",
+                "managerName": "Jordan Lee",
+                "managerEmail": "jordan@example.com",
+                "requestCount": 1,
+                "sent": true
+              }
+            ]
+          }
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires leavesphere.admin permission or workspace.super_admin
+        - Requires valid API key or bearer token in compat mode
+        - `year` defaults to the current year when omitted
+        - `comingDays` defaults to 7 when omitted
+        - Only pending PTO requests in the selected year with start dates up to `today + comingDays` are included
+        - Each employee's requests are fanned out to all of that employee's managers
+    """
+    try:
+        return send_leave_management_pending_approval_reminders(
+            request=request,
+            year=year,
+            coming_days=coming_days,
+        )
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
 
 
 @router.get("/workspace")

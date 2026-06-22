@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from copy import deepcopy
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
@@ -63,6 +63,7 @@ from apps.leavesphere.api.v1.helpers.ptoActions import create_pto_action, modify
 from apps.leavesphere.api.v1.helpers.notification_emails import (
     send_leave_sphere_approval_email,
     send_leave_sphere_confirmation_email,
+    send_leave_sphere_reminder_email,
     send_leave_sphere_status_email,
 )
 from apps.leavesphere.api.v1.helpers.ptoTypes import create_pto_type, modify_pto_type
@@ -1096,6 +1097,220 @@ def load_leave_management_workspace(
         params=cache_params,
     )
     return workspace
+
+
+def _resolve_leave_management_reminder_request_url(*, request, year: int) -> str:
+    base_url = _normalize_text(getattr(request, "base_url", "")).rstrip("/")
+    path = f"/leavesphere/leave-management?year={year}"
+    if base_url:
+        return f"{base_url}{path}"
+    return path
+
+
+def send_leave_management_pending_approval_reminders(
+    *,
+    request,
+    year: int | None = None,
+    coming_days: int = 7,
+    today: date | None = None,
+) -> dict:
+    current_date = today or date.today()
+    selected_year = _normalize_year(year if year is not None else current_date.year)
+    try:
+        coming_days = int(str(coming_days).strip())
+    except (TypeError, ValueError) as exc:
+        raise ValueError("comingDays must be an integer") from exc
+    if coming_days < 0:
+        raise ValueError("comingDays must be zero or greater")
+
+    year_start = date(selected_year, 1, 1)
+    year_end = date(selected_year, 12, 31)
+    window_end = min(year_end, current_date + timedelta(days=coming_days))
+    reminder_request_url = _resolve_leave_management_reminder_request_url(request=request, year=selected_year)
+
+    catalogs = load_leave_sphere_pto_workspace_catalogs()
+    pto_type_by_code = catalogs.pto_type_by_code
+    pto_action_by_code = catalogs.pto_action_by_code
+
+    pending_rows: list[dict] = []
+    if window_end >= year_start:
+        pending_rows = get_pto_transactions(
+            year=selected_year,
+            status="Pending",
+            start_date_from=year_start.isoformat(),
+            start_date_to=window_end.isoformat(),
+        )
+    pending_rows = [
+        row
+        for row in pending_rows
+        if isinstance(row, dict)
+        and is_request_action_row(row, pto_action_by_code)
+        and _normalize_text(row.get("employeeId"))
+        and _normalize_text(row.get("startDate"))
+    ]
+    windowed_pending_rows: list[dict] = []
+    for row in pending_rows:
+        start_date_text = _normalize_text(row.get("startDate"))
+        try:
+            start_date_value = date.fromisoformat(start_date_text[:10])
+        except ValueError:
+            continue
+        if year_start <= start_date_value <= window_end:
+            windowed_pending_rows.append(row)
+    pending_rows = windowed_pending_rows
+    pending_rows.sort(
+        key=lambda row: (
+            _normalize_text(row.get("startDate")),
+            _normalize_text(row.get("dateCreated")),
+            _normalize_text(row.get("id")),
+        )
+    )
+
+    employee_ids: list[str] = []
+    for row in pending_rows:
+        employee_id = _normalize_text(row.get("employeeId"))
+        if employee_id and employee_id not in employee_ids:
+            employee_ids.append(employee_id)
+
+    employees = get_employees_by_ids(employee_ids=employee_ids) if employee_ids else []
+    employee_by_id = {
+        _normalize_text(row.get("id")): row
+        for row in employees
+        if _normalize_text(row.get("id"))
+    }
+
+    manager_rows = get_employee_managers() if employee_ids else []
+    manager_ids_by_employee: dict[str, list[str]] = OrderedDict()
+    for row in manager_rows:
+        employee_id = _normalize_text(row.get("employeeId"))
+        manager_id = _normalize_text(row.get("managerId"))
+        if not employee_id or not manager_id or employee_id not in employee_by_id:
+            continue
+        bucket = manager_ids_by_employee.setdefault(employee_id, [])
+        if manager_id not in bucket:
+            bucket.append(manager_id)
+
+    all_manager_ids: list[str] = []
+    for manager_ids in manager_ids_by_employee.values():
+        for manager_id in manager_ids:
+            if manager_id not in all_manager_ids:
+                all_manager_ids.append(manager_id)
+
+    manager_employees = get_employees_by_ids(employee_ids=all_manager_ids) if all_manager_ids else []
+    manager_employee_by_id = {
+        _normalize_text(row.get("id")): row
+        for row in manager_employees
+        if _normalize_text(row.get("id"))
+    }
+
+    manager_buckets: OrderedDict[str, dict] = OrderedDict()
+    skipped_requests = 0
+    skipped_manager_contacts = 0
+
+    for row in pending_rows:
+        employee_id = _normalize_text(row.get("employeeId"))
+        employee = employee_by_id.get(employee_id)
+        if not employee:
+            skipped_requests += 1
+            continue
+
+        employee_name = _normalize_text(employee.get("firstName"))
+        last_name = _normalize_text(employee.get("lastName"))
+        display_name = " ".join(part for part in (employee_name, last_name) if part)
+        if not display_name:
+            display_name = _normalize_text(employee.get("email")) or "Employee"
+
+        pto_type_code = _normalize_text(row.get("ptoTypeCode")).upper()
+        pto_type_label = _normalize_text(pto_type_by_code.get(pto_type_code, {}).get("name")) or pto_type_code or "PTO"
+
+        request_payload = {
+            "employeeName": display_name,
+            "ptoTypeLabel": pto_type_label,
+            "startDate": _normalize_text(row.get("startDate")),
+            "endDate": _normalize_text(row.get("endDate")),
+            "hours": row.get("hours"),
+            "requestId": _normalize_text(row.get("id")) or None,
+            "description": _normalize_text(row.get("description")) or None,
+            "submittedAt": _normalize_text(row.get("dateCreated")) or None,
+            "requestUrl": reminder_request_url,
+            "pictureUrl": _normalize_text(employee.get("pictureUrl")) or None,
+        }
+
+        manager_ids = manager_ids_by_employee.get(employee_id, [])
+        if not manager_ids:
+            skipped_requests += 1
+            continue
+
+        delivered_to_any_manager = False
+        for manager_id in manager_ids:
+            manager = manager_employee_by_id.get(manager_id)
+            if not manager:
+                skipped_manager_contacts += 1
+                continue
+            manager_email = _normalize_text(manager.get("email"))
+            if not manager_email or "@" not in manager_email:
+                skipped_manager_contacts += 1
+                continue
+            manager_name = " ".join(
+                part for part in (_normalize_text(manager.get("firstName")), _normalize_text(manager.get("lastName"))) if part
+            )
+            if not manager_name:
+                manager_name = _normalize_text(manager.get("email")) or "Manager"
+            bucket = manager_buckets.setdefault(
+                manager_id,
+                {
+                    "managerId": manager_id,
+                    "managerName": manager_name,
+                    "managerEmail": manager_email,
+                    "pendingRequests": [],
+                },
+            )
+            bucket["pendingRequests"].append(deepcopy(request_payload))
+            delivered_to_any_manager = True
+
+        if not delivered_to_any_manager:
+            skipped_requests += 1
+
+    emails_sent = 0
+    emails_failed = 0
+    manager_summaries: list[dict] = []
+    for manager_id, bucket in manager_buckets.items():
+        pending_requests = bucket["pendingRequests"]
+        if not pending_requests:
+            continue
+        sent = send_leave_sphere_reminder_email(
+            manager_email=bucket["managerEmail"],
+            manager_name=bucket["managerName"],
+            pending_requests=pending_requests,
+        )
+        if sent:
+            emails_sent += 1
+        else:
+            emails_failed += 1
+        manager_summaries.append(
+            {
+                "managerId": manager_id,
+                "managerName": bucket["managerName"],
+                "managerEmail": bucket["managerEmail"],
+                "requestCount": len(pending_requests),
+                "sent": sent,
+            }
+        )
+
+    return {
+        "source": "network",
+        "year": selected_year,
+        "comingDays": coming_days,
+        "windowStart": year_start.isoformat(),
+        "windowEnd": window_end.isoformat(),
+        "requestsFound": len(pending_rows),
+        "managersFound": len(manager_summaries),
+        "emailsSent": emails_sent,
+        "emailsFailed": emails_failed,
+        "skippedRequests": skipped_requests,
+        "skippedManagerContacts": skipped_manager_contacts,
+        "managers": manager_summaries,
+    }
 
 
 def _resolve_request_year(payload: dict, transaction: dict | None = None) -> int:

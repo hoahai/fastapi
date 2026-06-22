@@ -8,6 +8,7 @@ from datetime import date, datetime
 from typing import Literal
 
 from shared.smtp import SmtpSendError, SmtpSettings, send_smtp_email
+from apps.leavesphere.api.v1.helpers.config import get_reminder_cc_emails
 from shared.tenant import get_app_scoped_env
 from shared.email_templates import escape_html, normalize_text
 
@@ -665,6 +666,7 @@ def send_leave_sphere_reminder_email(
         send_smtp_email(
             settings=smtp_settings,
             to_addresses=[normalized_manager_email],
+            cc_addresses=get_reminder_cc_emails(),
             subject=email.subject,
             text_body=email.text_body,
             html_body=email.html_body,

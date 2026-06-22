@@ -1,5 +1,5 @@
 import unittest
-from datetime import datetime
+from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import patch
 
@@ -738,6 +738,164 @@ class LeaveManagementBackendTests(unittest.TestCase):
         self.assertIn("txn-pending-2026", request_ids)
         self.assertNotIn("txn-pending-2025", request_ids)
         self.assertIn("txn-cross-year", request_ids)
+
+    def test_pending_reminder_reminder_groups_requests_by_manager_and_window(self):
+        request = SimpleNamespace(base_url="https://workspace.example.com/")
+        pending_soon = {
+            "id": "txn-pending-soon",
+            "employeeId": "emp-1",
+            "ptoTypeCode": "VAC",
+            "ptoActionCode": "REQUEST",
+            "hours": 8,
+            "year": 2026,
+            "status": "Pending",
+            "dateCreated": "2026-06-18T09:00:00",
+            "dateUpdated": "2026-06-18T09:00:00",
+            "startDate": "2026-06-24",
+            "endDate": "2026-06-24",
+            "description": "Family trip",
+        }
+        pending_multi_manager = {
+            "id": "txn-pending-managers",
+            "employeeId": "emp-2",
+            "ptoTypeCode": "SICK",
+            "ptoActionCode": "REQUEST",
+            "hours": 4,
+            "year": 2026,
+            "status": "Pending",
+            "dateCreated": "2026-06-20T10:00:00",
+            "dateUpdated": "2026-06-20T10:00:00",
+            "startDate": "2026-06-28",
+            "endDate": "2026-06-28",
+            "description": "Doctor visit",
+        }
+        pending_outside_window = {
+            "id": "txn-pending-late",
+            "employeeId": "emp-1",
+            "ptoTypeCode": "VAC",
+            "ptoActionCode": "REQUEST",
+            "hours": 8,
+            "year": 2026,
+            "status": "Pending",
+            "dateCreated": "2026-06-18T09:00:00",
+            "dateUpdated": "2026-06-18T09:00:00",
+            "startDate": "2026-07-10",
+            "endDate": "2026-07-10",
+            "description": "Too far out",
+        }
+        employees = [
+            {
+                "id": "emp-1",
+                "firstName": "Alex",
+                "lastName": "Chen",
+                "email": "alex@example.com",
+                "pictureUrl": "https://picsum.photos/seed/alex/96/96",
+            },
+            {
+                "id": "emp-2",
+                "firstName": "Taylor",
+                "lastName": "Morgan",
+                "email": "taylor@example.com",
+            },
+        ]
+        managers = [
+            {
+                "id": "mgr-1",
+                "firstName": "Jordan",
+                "lastName": "Lee",
+                "email": "jordan@example.com",
+            },
+            {
+                "id": "mgr-2",
+                "firstName": "Casey",
+                "lastName": "Ng",
+                "email": "casey@example.com",
+            },
+        ]
+
+        def _transactions_side_effect(*, transaction_id=None, employee_id=None, employee_ids=None, pto_type_code=None, year=None, status=None, start_date_from=None, start_date_to=None, end_date_from=None, end_date_to=None):
+            if transaction_id:
+                return []
+            if status == "Pending":
+                return [pending_soon, pending_multi_manager, pending_outside_window]
+            return []
+
+        def _employees_by_ids_side_effect(*, employee_ids):
+            requested = list(employee_ids)
+            if set(requested) <= {"emp-1", "emp-2"}:
+                return [row for row in employees if row["id"] in requested]
+            if set(requested) <= {"mgr-1", "mgr-2"}:
+                return [row for row in managers if row["id"] in requested]
+            return []
+
+        with patch.object(
+            leaveManagement,
+            "load_leave_sphere_pto_workspace_catalogs",
+            return_value=SimpleNamespace(
+                pto_type_by_code={
+                    "VAC": {"code": "VAC", "name": "Vacation"},
+                    "SICK": {"code": "SICK", "name": "Sick Leave"},
+                },
+                pto_action_by_code={"REQUEST": {"code": "REQUEST", "name": "Request"}},
+            ),
+        ), patch.object(
+            leaveManagement, "get_pto_transactions", side_effect=_transactions_side_effect
+        ) as mock_transactions, patch.object(
+            leaveManagement, "get_employees_by_ids", side_effect=_employees_by_ids_side_effect
+        ) as mock_employees_by_ids, patch.object(
+            leaveManagement,
+            "get_employee_managers",
+            return_value=[
+                {"employeeId": "emp-1", "managerId": "mgr-1"},
+                {"employeeId": "emp-1", "managerId": "mgr-2"},
+                {"employeeId": "emp-2", "managerId": "mgr-2"},
+            ],
+        ) as mock_employee_managers, patch.object(
+            leaveManagement, "send_leave_sphere_reminder_email", return_value=True
+        ) as mock_send:
+            result = leaveManagement.send_leave_management_pending_approval_reminders(
+                request=request,
+                year=None,
+                coming_days=7,
+                today=date(2026, 6, 22),
+            )
+
+        self.assertEqual(result["year"], 2026)
+        self.assertEqual(result["comingDays"], 7)
+        self.assertEqual(result["windowStart"], "2026-01-01")
+        self.assertEqual(result["windowEnd"], "2026-06-29")
+        self.assertEqual(result["requestsFound"], 2)
+        self.assertEqual(result["managersFound"], 2)
+        self.assertEqual(result["emailsSent"], 2)
+        self.assertEqual(result["emailsFailed"], 0)
+        self.assertEqual(result["skippedRequests"], 0)
+        self.assertEqual(result["skippedManagerContacts"], 0)
+
+        mock_transactions.assert_called_once_with(
+            year=2026,
+            status="Pending",
+            start_date_from="2026-01-01",
+            start_date_to="2026-06-29",
+        )
+        mock_employee_managers.assert_called_once()
+        mock_employees_by_ids.assert_any_call(employee_ids=["emp-1", "emp-2"])
+        mock_employees_by_ids.assert_any_call(employee_ids=["mgr-1", "mgr-2"])
+        self.assertEqual(mock_send.call_count, 2)
+
+        first_call = mock_send.call_args_list[0].kwargs
+        second_call = mock_send.call_args_list[1].kwargs
+        self.assertEqual(first_call["manager_email"], "jordan@example.com")
+        self.assertEqual(first_call["manager_name"], "Jordan Lee")
+        self.assertEqual(len(first_call["pending_requests"]), 1)
+        self.assertEqual(first_call["pending_requests"][0]["employeeName"], "Alex Chen")
+        self.assertEqual(first_call["pending_requests"][0]["requestUrl"], "https://workspace.example.com/leavesphere/leave-management?year=2026")
+        self.assertEqual(second_call["manager_email"], "casey@example.com")
+        self.assertEqual(second_call["manager_name"], "Casey Ng")
+        self.assertEqual(len(second_call["pending_requests"]), 2)
+        self.assertEqual(
+            [item["employeeName"] for item in second_call["pending_requests"]],
+            ["Alex Chen", "Taylor Morgan"],
+        )
 
     def test_review_workspace_supports_cancel_and_revert_actions(self):
         request = self._build_request()

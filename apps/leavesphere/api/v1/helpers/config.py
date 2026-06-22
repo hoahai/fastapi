@@ -43,6 +43,7 @@ _DB_KEY_ALIASES = {
 }
 
 _EMPLOYEE_EMAIL_MAP_CONFIG_KEY = "EMPLOYEE_EMAIL_MAP"
+_REMINDER_CC_CONFIG_KEY = "REMINDERCC"
 _LAST_SUBMISSION_DATE_CONFIG_KEY = "LASTSUBMISSIONDATE"
 _LAST_SUBMISSION_DATE_RE = re.compile(
     r"^(?P<month>0?[1-9]|1[0-2])-(?P<day>0?[1-9]|[12]\d|3[01])$"
@@ -161,6 +162,56 @@ def get_employee_email_map() -> dict[str, str]:
     return resolved
 
 
+def _parse_email_list_value(value: object | None, *, config_key: str) -> list[str]:
+    if value is None:
+        return []
+
+    items: list[object]
+    if isinstance(value, (list, tuple, set)):
+        items = list(value)
+    else:
+        text = str(value or "").strip()
+        if not text:
+            return []
+
+        parsed: object = text
+        if text.startswith("[") or text.startswith("(") or text.startswith("{"):
+            try:
+                parsed = json.loads(text)
+            except json.JSONDecodeError:
+                try:
+                    parsed = ast.literal_eval(text)
+                except (ValueError, SyntaxError):
+                    parsed = text
+        if isinstance(parsed, (list, tuple, set)):
+            items = list(parsed)
+        else:
+            parts = [part.strip() for part in re.split(r"[;,]", str(parsed)) if part.strip()]
+            items = parts if len(parts) > 1 else [parsed]
+
+    normalized: list[str] = []
+    seen: set[str] = set()
+    for item in items:
+        email = _normalize_email(item)
+        if not email:
+            continue
+        if "@" not in email:
+            raise TenantConfigValidationError(
+                app_name=APP_NAME,
+                invalid=[f"leavesphere.{config_key}"],
+            )
+        if email in seen:
+            continue
+        seen.add(email)
+        normalized.append(email)
+    return normalized
+
+
+def get_reminder_cc_emails() -> list[str]:
+    raw = _get_scoped_env(_REMINDER_CC_CONFIG_KEY)
+    return _parse_email_list_value(raw, config_key=_REMINDER_CC_CONFIG_KEY)
+
+
 def get_last_submission_date() -> str | None:
     raw = _get_scoped_env(_LAST_SUBMISSION_DATE_CONFIG_KEY)
     if raw is None or str(raw).strip() == "":
@@ -227,6 +278,7 @@ def validate_tenant_config(tenant_id: str | None = None) -> None:
             try:
                 get_db_tables()
                 get_employee_email_map()
+                get_reminder_cc_emails()
                 get_last_submission_date()
             except TenantConfigValidationError as exc:
                 missing.extend(exc.missing)
