@@ -185,7 +185,7 @@ function parsePreview(candidate: Record<string, unknown> | null): LeaveSphereQui
   if (!candidate) {
     return null;
   }
-  const request = asRecord(candidate.request) || candidate;
+  const request = asRecord(candidate.preview) || asRecord(candidate.request) || candidate;
   if (!request) {
     return null;
   }

@@ -7,6 +7,11 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from typing import Literal
 
+from apps.leavesphere.api.v1.helpers.quickApproval import (
+    issue_quick_approval_deliveries,
+    resolve_quick_approval_delivery,
+    revoke_quick_approval_grant,
+)
 from shared.smtp import SmtpSendError, SmtpSettings, send_smtp_email
 from apps.leavesphere.api.v1.helpers.config import get_reminder_cc_emails
 from shared.tenant import get_app_scoped_env
@@ -667,10 +672,14 @@ def send_leave_sphere_reminder_email(
     *,
     manager_email: str,
     manager_name: str,
+    manager_id: str | None = None,
     pending_requests: list[dict],
     reminder_note: str | None = None,
     recipient_email: str | None = None,
     cc_addresses: list[str] | None = None,
+    quick_approval_base_url: str | None = None,
+    quick_approval_tenant_id: str | None = None,
+    quick_approval_tenant_slug: str | None = None,
 ) -> bool:
     smtp_settings = _get_leave_sphere_smtp_settings()
     if smtp_settings is None:
@@ -680,10 +689,39 @@ def send_leave_sphere_reminder_email(
     if not normalized_recipient_email or "@" not in normalized_recipient_email:
         return False
 
+    enriched_requests = [dict(request) for request in pending_requests]
+    if quick_approval_base_url and (quick_approval_tenant_id or quick_approval_tenant_slug):
+        for request in enriched_requests:
+            request_id = normalize_text(request.get("requestId") or request.get("request_id"))
+            employee_id = normalize_text(request.get("employeeId") or request.get("employee_id"))
+            if not request_id or not employee_id:
+                continue
+            delivery = resolve_quick_approval_delivery(
+                transaction={
+                    "id": request_id,
+                    "employeeId": employee_id,
+                    "ptoTypeCode": request.get("ptoTypeCode") or request.get("pto_type_code") or request.get("ptoTypeLabel"),
+                    "startDate": request.get("startDate") or request.get("start_date"),
+                    "endDate": request.get("endDate") or request.get("end_date"),
+                    "hours": request.get("hours"),
+                    "description": request.get("description") or request.get("reason"),
+                    "dateCreated": request.get("submittedAt") or request.get("submitted_at"),
+                },
+                tenant_id=quick_approval_tenant_id,
+                tenant_slug=quick_approval_tenant_slug,
+                recipient_email=manager_email,
+                recipient_role="manager",
+                recipient_employee_id=manager_id,
+                recipient_name=manager_name,
+                quick_approval_base_url=quick_approval_base_url,
+            )
+            if delivery and normalize_text(delivery.get("url")):
+                request["requestUrl"] = normalize_text(delivery.get("url"))
+
     try:
         email = build_leave_sphere_reminder_email(
             manager_name=manager_name,
-            pending_requests=pending_requests,
+            pending_requests=enriched_requests,
             reminder_note=reminder_note,
         )
         resolved_cc_addresses = (
@@ -768,6 +806,9 @@ def send_leave_sphere_approval_email(
     *,
     transaction: dict,
     quick_approval_url: str | None = None,
+    quick_approval_base_url: str | None = None,
+    quick_approval_tenant_id: str | None = None,
+    quick_approval_tenant_slug: str | None = None,
 ) -> bool:
     if not isinstance(transaction, dict):
         return False
@@ -798,7 +839,42 @@ def send_leave_sphere_approval_email(
     reason = normalize_text(transaction.get("description")) or None
 
     sent_any = False
-    for manager in manager_contacts:
+    deliveries: list[dict[str, object]] = []
+    if quick_approval_url:
+        deliveries = [
+            {
+                "grant_id": None,
+                "recipient_email": manager["managerEmail"],
+                "recipient_name": manager["managerName"],
+                "recipient_picture_url": manager["managerPictureUrl"],
+                "url": quick_approval_url,
+            }
+            for manager in manager_contacts
+        ]
+    elif quick_approval_base_url:
+        deliveries = issue_quick_approval_deliveries(
+            transaction=transaction,
+            tenant_id=quick_approval_tenant_id or "",
+            tenant_slug=quick_approval_tenant_slug or "",
+            quick_approval_base_url=quick_approval_base_url,
+        )
+
+    if not deliveries:
+        deliveries = [
+            {
+                "grant_id": None,
+                "recipient_email": manager["managerEmail"],
+                "recipient_name": manager["managerName"],
+                "recipient_picture_url": manager["managerPictureUrl"],
+                "url": None,
+            }
+            for manager in manager_contacts
+        ]
+
+    for delivery in deliveries:
+        recipient_email = normalize_text(delivery.get("recipient_email"))
+        recipient_name = normalize_text(delivery.get("recipient_name"))
+        recipient_picture_url = normalize_text(delivery.get("recipient_picture_url")) or None
         email = build_leave_sphere_approval_email(
             employee_name=employee_name,
             pto_type_label=pto_type_label,
@@ -808,23 +884,26 @@ def send_leave_sphere_approval_email(
             request_id=request_id,
             reason=reason,
             submitted_at=submitted_at,
-            manager_name=manager["managerName"],
-            manager_picture_url=manager["managerPictureUrl"],
-            quick_approval_url=quick_approval_url,
+            manager_name=recipient_name,
+            manager_picture_url=recipient_picture_url,
+            quick_approval_url=normalize_text(delivery.get("url")) or None,
         )
         try:
             send_smtp_email(
                 settings=smtp_settings,
-                to_addresses=[manager["managerEmail"]],
+                to_addresses=[recipient_email],
                 subject=email.subject,
                 text_body=email.text_body,
                 html_body=email.html_body,
             )
             sent_any = True
         except (SmtpSendError, ValueError, OSError) as exc:
+            grant_id = normalize_text(delivery.get("grant_id"))
+            if grant_id:
+                revoke_quick_approval_grant(grant_id=grant_id, tenant_id=str(delivery.get("tenant_id") or ""))
             _LOGGER.warning(
                 "LeaveSphere approval email send failed for %s: %s",
-                manager["managerEmail"],
+                recipient_email,
                 exc,
             )
     return sent_any

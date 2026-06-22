@@ -76,3 +76,5 @@ checkpoints/
 
 # Local AI skill/reference files
 .ai/
+
+superbase/*

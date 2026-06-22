@@ -142,6 +142,8 @@ def send_leave_management_pending_approvals_reminder_route(
     year: int | None = Query(None, ge=1901, le=2155),
     coming_days: int = Query(7, alias="comingDays", ge=0),
     test_email: str | None = Query(None, alias="testEmail"),
+    send_email: bool = Query(True, alias="sendEmail"),
+    debug: bool = Query(False),
 ):
     """
     Send reminder emails for pending PTO approvals to every manager of each employee in scope.
@@ -154,6 +156,12 @@ def send_leave_management_pending_approvals_reminder_route(
 
     Example request (test mode):
         POST /api/leavesphere/v1/admin/pto/reminders/pending-approvals?testEmail=hai@theautoadagency.com
+
+    Example request (debug mode):
+        POST /api/leavesphere/v1/admin/pto/reminders/pending-approvals?testEmail=hai@theautoadagency.com&debug=true
+
+    Example request (dry run, no email send):
+        POST /api/leavesphere/v1/admin/pto/reminders/pending-approvals?sendEmail=false&debug=true
 
     Example response:
         {
@@ -176,7 +184,20 @@ def send_leave_management_pending_approvals_reminder_route(
                 "managerName": "Jordan Lee",
                 "managerEmail": "jordan@example.com",
                 "requestCount": 1,
-                "sent": true
+                "sent": true,
+                "deliveryMode": "smtp"
+              }
+            ],
+            "sendEmail": true,
+            "emailsSkippedDryRun": 0,
+            "debugQuickApprovalUrls": [
+              {
+                "managerId": "mgr-1",
+                "managerEmail": "jordan@example.com",
+                "managerName": "Jordan Lee",
+                "requestId": "pto-123",
+                "employeeId": "emp-9",
+                "url": "http://127.0.0.1:8000/leavesphere/quick-approval/v1.eyJ..."
               }
             ]
           }
@@ -191,6 +212,8 @@ def send_leave_management_pending_approvals_reminder_route(
         - Only pending PTO requests in the selected year with start dates up to `today + comingDays` are included
         - Each employee's requests are fanned out to all of that employee's managers
         - When `testEmail` is provided, all reminder emails are sent only to that address and CC recipients are suppressed
+        - When `sendEmail=false`, the route performs a dry run and does not send SMTP mail
+        - When `debug=true`, the response includes generated quick-approval URLs for inspection
     """
     try:
         return send_leave_management_pending_approval_reminders(
@@ -198,6 +221,8 @@ def send_leave_management_pending_approvals_reminder_route(
             year=year,
             coming_days=coming_days,
             test_email=test_email,
+            send_email=send_email,
+            include_debug_quick_approval_urls=debug,
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc

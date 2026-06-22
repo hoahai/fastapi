@@ -178,15 +178,7 @@ class SupabaseRestClient:
         return payload
 
     def select_single(self, *, table: str, filters: dict[str, str], select: str = "*") -> dict[str, Any] | None:
-        query = {"select": select, "limit": "1"}
-        for key, value in filters.items():
-            query[key] = f"eq.{value}"
-        rows = self._request(
-            path=f"/rest/v1/{table}",
-            method="GET",
-            query=query,
-            use_service_role=True,
-        )
+        rows = self.select_many_query(table=table, query={**{"select": select, "limit": "1"}, **{key: f"eq.{value}" for key, value in filters.items()}})
         if not isinstance(rows, list) or not rows:
             return None
         row = rows[0]
@@ -195,18 +187,30 @@ class SupabaseRestClient:
         return row
 
     def select_many(self, *, table: str, filters: dict[str, str], select: str = "*") -> list[dict[str, Any]]:
-        query = {"select": select}
-        for key, value in filters.items():
-            query[key] = f"eq.{value}"
-        rows = self._request(
+        rows = self.select_many_query(
+            table=table,
+            query={"select": select, **{key: f"eq.{value}" for key, value in filters.items()}},
+        )
+        if not isinstance(rows, list):
+            return []
+        return [row for row in rows if isinstance(row, dict)]
+
+    def select_many_query(self, *, table: str, query: dict[str, str]) -> Any:
+        return self._request(
             path=f"/rest/v1/{table}",
             method="GET",
             query=query,
             use_service_role=True,
         )
-        if not isinstance(rows, list):
-            return []
-        return [row for row in rows if isinstance(row, dict)]
+
+    def select_single_query(self, *, table: str, query: dict[str, str], select: str = "*") -> dict[str, Any] | None:
+        rows = self.select_many_query(table=table, query={"select": select, "limit": "1", **query})
+        if not isinstance(rows, list) or not rows:
+            return None
+        row = rows[0]
+        if not isinstance(row, dict):
+            return None
+        return row
 
     def insert_row(self, *, table: str, row: dict[str, Any]) -> dict[str, Any]:
         result = self._request(
@@ -222,33 +226,33 @@ class SupabaseRestClient:
         raise SupabaseClientError(f"Unexpected insert response for table '{table}'")
 
     def patch_rows(self, *, table: str, filters: dict[str, str], patch: dict[str, Any]) -> list[dict[str, Any]]:
-        query: dict[str, str] = {}
-        for key, value in filters.items():
-            query[key] = f"eq.{value}"
-        result = self._request(
+        result = self.patch_rows_query(table=table, query={key: f"eq.{value}" for key, value in filters.items()}, patch=patch)
+        if not isinstance(result, list):
+            return []
+        return [row for row in result if isinstance(row, dict)]
+
+    def patch_rows_query(self, *, table: str, query: dict[str, str], patch: dict[str, Any]) -> Any:
+        return self._request(
             path=f"/rest/v1/{table}",
             method="PATCH",
             query=query,
             body=patch,
             use_service_role=True,
         )
+
+    def delete_rows(self, *, table: str, filters: dict[str, str]) -> list[dict[str, Any]]:
+        result = self.delete_rows_query(table=table, query={key: f"eq.{value}" for key, value in filters.items()})
         if not isinstance(result, list):
             return []
         return [row for row in result if isinstance(row, dict)]
 
-    def delete_rows(self, *, table: str, filters: dict[str, str]) -> list[dict[str, Any]]:
-        query: dict[str, str] = {}
-        for key, value in filters.items():
-            query[key] = f"eq.{value}"
-        result = self._request(
+    def delete_rows_query(self, *, table: str, query: dict[str, str]) -> Any:
+        return self._request(
             path=f"/rest/v1/{table}",
             method="DELETE",
             query=query,
             use_service_role=True,
         )
-        if not isinstance(result, list):
-            return []
-        return [row for row in result if isinstance(row, dict)]
 
     def now_iso(self) -> str:
         return datetime.now(timezone.utc).isoformat()

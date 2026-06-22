@@ -2,6 +2,7 @@ from contextlib import asynccontextmanager
 
 from fastapi import Depends, FastAPI
 
+from apps.leavesphere.api.v1.endpoints.publicApproval import router as public_approval_router
 from apps.leavesphere.api.v1.router import router as v1_router
 from shared.exceptionHandlers import register_exception_handlers
 from shared.logger import log_run_start
@@ -25,6 +26,8 @@ app = FastAPI(
 )
 app.middleware("http")(timing_middleware)
 app.middleware("http")(response_envelope_middleware)
+app.state.public_path_prefixes = ("/api/leavesphere/v1/public/approval",)
+app.include_router(public_approval_router)
 app.include_router(v1_router)
 
 register_exception_handlers(app, logger_name="LeaveSphere API")

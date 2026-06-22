@@ -66,6 +66,7 @@ from apps.leavesphere.api.v1.helpers.notification_emails import (
     send_leave_sphere_reminder_email,
     send_leave_sphere_status_email,
 )
+from apps.leavesphere.api.v1.helpers.quickApproval import resolve_quick_approval_delivery
 from apps.leavesphere.api.v1.helpers.ptoTypes import create_pto_type, modify_pto_type
 from apps.leavesphere.api.v1.helpers.ptoTransactions import approve_request, create_adjustment, create_request, reject_request
 from apps.leavesphere.api.v1.helpers.workspaceCache import (
@@ -75,7 +76,9 @@ from apps.leavesphere.api.v1.helpers.workspaceCache import (
     write_leave_sphere_workspace_cache,
     write_leave_sphere_workspace_cache_value,
 )
-from shared.auth.dependencies import get_auth_principal
+from shared.auth.config import get_invite_base_url
+from shared.auth.dependencies import get_auth_principal, get_tenant_access
+from shared.auth.frontend_url import resolve_frontend_base_url
 from shared.db import execute_write, run_transaction
 
 LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE = "leave-management"
@@ -1113,6 +1116,8 @@ def send_leave_management_pending_approval_reminders(
     year: int | None = None,
     coming_days: int = 7,
     test_email: str | None = None,
+    send_email: bool = True,
+    include_debug_quick_approval_urls: bool = False,
     today: date | None = None,
 ) -> dict:
     current_date = today or date.today()
@@ -1131,6 +1136,7 @@ def send_leave_management_pending_approval_reminders(
     year_end = date(selected_year, 12, 31)
     window_end = min(year_end, current_date + timedelta(days=coming_days))
     reminder_request_url = _resolve_leave_management_reminder_request_url(request=request, year=selected_year)
+    access = get_tenant_access(request)
 
     catalogs = load_leave_sphere_pto_workspace_catalogs()
     pto_type_by_code = catalogs.pto_type_by_code
@@ -1228,7 +1234,9 @@ def send_leave_management_pending_approval_reminders(
         pto_type_label = _normalize_text(pto_type_by_code.get(pto_type_code, {}).get("name")) or pto_type_code or "PTO"
 
         request_payload = {
+            "employeeId": employee_id,
             "employeeName": display_name,
+            "ptoTypeCode": pto_type_code,
             "ptoTypeLabel": pto_type_label,
             "startDate": _normalize_text(row.get("startDate")),
             "endDate": _normalize_text(row.get("endDate")),
@@ -1277,22 +1285,95 @@ def send_leave_management_pending_approval_reminders(
 
     emails_sent = 0
     emails_failed = 0
+    emails_skipped_dry_run = 0
     manager_summaries: list[dict] = []
+    debug_quick_approval_urls: list[dict[str, object]] = []
+    quick_approval_base_url = resolve_frontend_base_url(
+        request=request,
+        configured_base_url=get_invite_base_url(),
+    )
+    tenant_slug = str(request.headers.get("x-tenant-id") or "").strip()
+    tenant_id = access.tenant_id if access else None
     for manager_id, bucket in manager_buckets.items():
         pending_requests = bucket["pendingRequests"]
         if not pending_requests:
             continue
-        sent = send_leave_sphere_reminder_email(
-            manager_email=bucket["managerEmail"],
-            manager_name=bucket["managerName"],
-            pending_requests=pending_requests,
-            recipient_email=normalized_test_email or None,
-            cc_addresses=[] if normalized_test_email else None,
-        )
-        if sent:
-            emails_sent += 1
+        if quick_approval_base_url and (tenant_id or tenant_slug):
+            for request_payload in pending_requests:
+                debug_trace: dict[str, object] = {}
+                delivery = resolve_quick_approval_delivery(
+                    transaction={
+                        "id": request_payload.get("requestId"),
+                        "employeeId": request_payload.get("employeeId"),
+                        "ptoTypeCode": request_payload.get("ptoTypeCode"),
+                        "startDate": request_payload.get("startDate"),
+                        "endDate": request_payload.get("endDate"),
+                        "hours": request_payload.get("hours"),
+                        "description": request_payload.get("description"),
+                        "dateCreated": request_payload.get("submittedAt"),
+                    },
+                    tenant_id=tenant_id or "",
+                    tenant_slug=tenant_slug,
+                    recipient_email=bucket["managerEmail"],
+                    recipient_role="manager",
+                    recipient_employee_id=manager_id,
+                    recipient_name=bucket["managerName"],
+                    quick_approval_base_url=quick_approval_base_url,
+                    debug_trace=debug_trace,
+                )
+                if delivery and isinstance(delivery, dict):
+                    resolved_url = str(delivery.get("url") or request_payload.get("requestUrl") or "").strip()
+                    if resolved_url:
+                        request_payload["requestUrl"] = resolved_url
+                        if include_debug_quick_approval_urls:
+                            debug_quick_approval_urls.append(
+                                {
+                                    "managerId": manager_id,
+                                    "managerEmail": bucket["managerEmail"],
+                                    "managerName": bucket["managerName"],
+                                    "requestId": request_payload.get("requestId"),
+                                    "employeeId": request_payload.get("employeeId"),
+                                    "url": resolved_url,
+                                }
+                            )
+                elif include_debug_quick_approval_urls:
+                    debug_quick_approval_urls.append(
+                        {
+                            "managerId": manager_id,
+                            "managerEmail": bucket["managerEmail"],
+                            "managerName": bucket["managerName"],
+                            "requestId": request_payload.get("requestId"),
+                            "employeeId": request_payload.get("employeeId"),
+                            "url": None,
+                            "reason": str(debug_trace.get("reason") or "unknown"),
+                            "error": debug_trace.get("error"),
+                            "appId": debug_trace.get("app_id"),
+                            "tenantId": debug_trace.get("tenant_id"),
+                            "tenantSlug": debug_trace.get("tenant_slug"),
+                        }
+                    )
+        sent = False
+        if send_email:
+            sent = send_leave_sphere_reminder_email(
+                manager_email=bucket["managerEmail"],
+                manager_name=bucket["managerName"],
+                manager_id=manager_id,
+                pending_requests=pending_requests,
+                recipient_email=normalized_test_email or None,
+                cc_addresses=[] if normalized_test_email else None,
+                quick_approval_base_url=resolve_frontend_base_url(
+                    request=request,
+                    configured_base_url=get_invite_base_url(),
+                ),
+                quick_approval_tenant_id=access.tenant_id if access else None,
+                quick_approval_tenant_slug=access.tenant_slug if access else str(request.headers.get("x-tenant-id") or "").strip(),
+            )
+            if sent:
+                emails_sent += 1
+            else:
+                emails_failed += 1
         else:
-            emails_failed += 1
+            emails_skipped_dry_run += 1
         manager_summaries.append(
             {
                 "managerId": manager_id,
@@ -1300,11 +1381,13 @@ def send_leave_management_pending_approval_reminders(
                 "managerEmail": bucket["managerEmail"],
                 "requestCount": len(pending_requests),
                 "sent": sent,
+                "deliveryMode": "dry_run" if not send_email else "smtp",
             }
         )
 
-    return {
+    response = {
         "source": "network",
+        "sendEmail": send_email,
         "year": selected_year,
         "comingDays": coming_days,
         "windowStart": year_start.isoformat(),
@@ -1313,10 +1396,14 @@ def send_leave_management_pending_approval_reminders(
         "managersFound": len(manager_summaries),
         "emailsSent": emails_sent,
         "emailsFailed": emails_failed,
+        "emailsSkippedDryRun": emails_skipped_dry_run,
         "skippedRequests": skipped_requests,
         "skippedManagerContacts": skipped_manager_contacts,
         "managers": manager_summaries,
     }
+    if include_debug_quick_approval_urls:
+        response["debugQuickApprovalUrls"] = debug_quick_approval_urls
+    return response
 
 
 def _resolve_request_year(payload: dict, transaction: dict | None = None) -> int:
@@ -1517,6 +1604,7 @@ def create_leave_management_request(*, request, payload: dict) -> dict:
         )
 
     if not approve_immediately:
+        access = get_tenant_access(request)
         submission_transaction = {
             "id": created_request_id,
             "employeeId": employee_id,
@@ -1528,7 +1616,15 @@ def create_leave_management_request(*, request, payload: dict) -> dict:
             "dateCreated": datetime.utcnow().isoformat(),
         }
         send_leave_sphere_confirmation_email(transaction=submission_transaction)
-        send_leave_sphere_approval_email(transaction=submission_transaction)
+        send_leave_sphere_approval_email(
+            transaction=submission_transaction,
+            quick_approval_base_url=resolve_frontend_base_url(
+                request=request,
+                configured_base_url=get_invite_base_url(),
+            ),
+            quick_approval_tenant_id=access.tenant_id if access else None,
+            quick_approval_tenant_slug=access.tenant_slug if access else str(request.headers.get("x-tenant-id") or "").strip(),
+        )
 
     response = {
         "source": "network",

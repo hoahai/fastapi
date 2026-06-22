@@ -49,7 +49,9 @@ from apps.leavesphere.api.v1.helpers.workspaceCache import (
     write_leave_sphere_workspace_cache,
     write_leave_sphere_workspace_cache_value,
 )
+from shared.auth.config import get_invite_base_url
 from shared.auth.dependencies import get_auth_principal, get_tenant_access
+from shared.auth.frontend_url import resolve_frontend_base_url
 from shared.db import run_transaction
 
 _UI_PTO_TYPE_ORDER = ("vacation", "sick", "personal", "floating")
@@ -821,7 +823,15 @@ def create_my_pto_request(*, request, payload: dict) -> dict:
         "dateCreated": datetime.utcnow().isoformat(),
     }
     send_leave_sphere_confirmation_email(transaction=submission_transaction)
-    send_leave_sphere_approval_email(transaction=submission_transaction)
+    send_leave_sphere_approval_email(
+        transaction=submission_transaction,
+        quick_approval_base_url=resolve_frontend_base_url(
+            request=request,
+            configured_base_url=get_invite_base_url(),
+        ),
+        quick_approval_tenant_id=access.tenant_id if access else None,
+        quick_approval_tenant_slug=access.tenant_slug if access else str(request.headers.get("x-tenant-id") or "").strip(),
+    )
 
     response = {
         "source": "network",
