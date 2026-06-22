@@ -6,6 +6,7 @@ from unittest.mock import patch
 from apps.leavesphere.api.v1.helpers.notification_emails import (
     build_leave_sphere_approval_email,
     build_leave_sphere_confirmation_email,
+    build_leave_sphere_reminder_email,
     build_leave_sphere_status_email,
     send_leave_sphere_approval_email,
     send_leave_sphere_confirmation_email,
@@ -253,6 +254,53 @@ class LeaveSphereNotificationEmailTests(unittest.TestCase):
         self.assertNotIn("ADMIN NOTE", email.html_body)
         self.assertNotIn("No admin note was provided.", email.html_body)
         self.assertNotIn("Admin Note:", email.text_body)
+
+    def test_reminder_email_lists_pending_requests(self) -> None:
+        email = build_leave_sphere_reminder_email(
+            manager_name="Jordan Lee",
+            pending_requests=[
+                {
+                    "employeeName": "Alex Chen",
+                    "ptoTypeLabel": "Vacation",
+                    "startDate": "2026-06-10",
+                    "endDate": "2026-06-12",
+                    "hours": 24,
+                    "requestId": "pto-123",
+                    "description": "Family trip",
+                    "submittedAt": "2026-05-29T10:00:00",
+                    "requestUrl": "https://workspace.example.com/leavesphere/my-pto/requests/pto-123",
+                    "pictureUrl": "https://picsum.photos/seed/alex-chen/96/96",
+                },
+                {
+                    "employeeName": "Taylor Morgan",
+                    "ptoTypeLabel": "Sick Leave",
+                    "startDate": "2026-06-15",
+                    "endDate": "2026-06-15",
+                    "hours": 8,
+                    "requestId": "pto-456",
+                    "description": "Medical appointment",
+                    "submittedAt": "2026-05-30T09:15:00",
+                    "requestUrl": "https://workspace.example.com/leavesphere/my-pto/requests/pto-456",
+                },
+            ],
+        )
+
+        self.assertEqual(
+            email.subject,
+            "PTO approval reminder for Jordan Lee | 2 requests pending",
+        )
+        self.assertIn("Pending PTO requests", email.html_body)
+        self.assertNotIn("AWAITING APPROVAL", email.html_body)
+        self.assertIn("Alex Chen", email.html_body)
+        self.assertIn("Taylor Morgan", email.html_body)
+        self.assertIn("picsum.photos/seed/alex-chen/96/96", email.html_body)
+        self.assertIn("https://workspace.example.com/leavesphere/my-pto/requests/pto-123", email.html_body)
+        self.assertIn("https://workspace.example.com/leavesphere/my-pto/requests/pto-456", email.html_body)
+        self.assertIn("Instruction", email.html_body)
+        self.assertIn("click any request card", email.html_body.lower())
+        self.assertIn("Instruction:", email.text_body)
+        self.assertIn("1. Alex Chen - Vacation", email.text_body)
+        self.assertIn("2. Taylor Morgan - Sick Leave", email.text_body)
 
     @patch("apps.leavesphere.api.v1.helpers.notification_emails.send_smtp_email")
     @patch("apps.leavesphere.api.v1.helpers.notification_emails._get_pto_types")

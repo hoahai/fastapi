@@ -75,6 +75,20 @@ class LeaveSphereNotificationEmail:
     html_body: str
 
 
+@dataclass(frozen=True)
+class LeaveSpherePendingRequest:
+    employee_name: str
+    pto_type_label: str
+    start_date: str
+    end_date: str
+    hours: object
+    request_id: str | None = None
+    reason: str | None = None
+    submitted_at: str | None = None
+    request_url: str | None = None
+    picture_url: str | None = None
+
+
 _LOGGER = logging.getLogger(__name__)
 
 _SMTP_KEYS = {
@@ -484,6 +498,83 @@ def build_leave_sphere_status_email(
     )
 
 
+def build_leave_sphere_reminder_email(
+    *,
+    manager_name: str,
+    pending_requests: list[dict],
+    reminder_note: str | None = None,
+) -> LeaveSphereNotificationEmail:
+    normalized_manager_name = normalize_text(manager_name) or "Manager"
+    normalized_requests = [
+        request
+        for request in (_normalize_pending_request(item) for item in pending_requests)
+        if request is not None
+    ]
+    if not normalized_requests:
+        raise ValueError("pending_requests must include at least one request")
+
+    pending_count = len(normalized_requests)
+    plural_suffix = "s" if pending_count != 1 else ""
+    subject = (
+        f"PTO approval reminder for {normalized_manager_name} | "
+        f"{pending_count} request{plural_suffix} pending"
+    )
+    intro = (
+        f"You have {pending_count} PTO request{plural_suffix} waiting for your approval."
+    )
+
+    summary_card = _build_request_details_card(
+        title="Pending PTO requests",
+        badge="",
+        badge_tone="amber",
+        rows=[
+            ("Manager", normalized_manager_name),
+            ("Pending Requests", str(pending_count)),
+            ("Total Hours", _format_hours(sum(_parse_hours(request.hours) for request in normalized_requests))),
+        ],
+        description=None,
+    )
+    request_cards = _build_pending_request_cards_html(
+        pending_requests=normalized_requests,
+        fallback_url=None,
+    )
+    note_card = _build_info_card(
+        title="Instruction",
+        body_html=_paragraph_html(
+            reminder_note
+            or "Click any request card to open the request details and complete quick approval in LeaveSphere."
+        ),
+    )
+
+    body_sections = [
+        _build_section_row(summary_card, padding="24px 40px 0"),
+        _build_section_row(request_cards, padding="16px 40px 0"),
+        _build_section_row(note_card, padding="18px 40px 0"),
+    ]
+
+    html_body = _build_email_shell(
+        subject=subject,
+        title="Pending PTO requests",
+        recipient_name=normalized_manager_name,
+        intro=intro,
+        body_sections_html="".join(body_sections),
+        footer_note="This is an automated approval reminder. Please do not reply directly to this email.",
+    )
+
+    text_body = _build_reminder_text_body(
+        manager_name=normalized_manager_name,
+        pending_requests=normalized_requests,
+        reminder_note=reminder_note,
+        footer_note="This is an automated approval reminder. Please do not reply directly to this email.",
+    )
+
+    return LeaveSphereNotificationEmail(
+        subject=subject,
+        text_body=text_body,
+        html_body=html_body,
+    )
+
+
 def send_leave_sphere_status_email(
     *,
     transaction: dict,
@@ -544,6 +635,44 @@ def send_leave_sphere_status_email(
         _LOGGER.warning(
             "LeaveSphere status email send failed for %s: %s",
             recipient_email,
+            exc,
+        )
+        return False
+    return True
+
+
+def send_leave_sphere_reminder_email(
+    *,
+    manager_email: str,
+    manager_name: str,
+    pending_requests: list[dict],
+    reminder_note: str | None = None,
+) -> bool:
+    smtp_settings = _get_leave_sphere_smtp_settings()
+    if smtp_settings is None:
+        return False
+
+    normalized_manager_email = normalize_text(manager_email)
+    if not normalized_manager_email or "@" not in normalized_manager_email:
+        return False
+
+    try:
+        email = build_leave_sphere_reminder_email(
+            manager_name=manager_name,
+            pending_requests=pending_requests,
+            reminder_note=reminder_note,
+        )
+        send_smtp_email(
+            settings=smtp_settings,
+            to_addresses=[normalized_manager_email],
+            subject=email.subject,
+            text_body=email.text_body,
+            html_body=email.html_body,
+        )
+    except (ValueError, SmtpSendError, OSError) as exc:
+        _LOGGER.warning(
+            "LeaveSphere reminder email send failed for %s: %s",
+            normalized_manager_email,
             exc,
         )
         return False
@@ -883,126 +1012,22 @@ def _build_html_email(
             label=button_label,
             href=quick_approval_url,
         )
+    body_sections = [
+        _build_section_row(request_details_card, padding="24px 40px 0"),
+        _build_section_row(note_card, padding="20px 40px 0") if note_card else "",
+        _build_section_row(changes_card, padding="20px 40px 0") if changes_card else "",
+        _build_section_row(info_card, padding="20px 40px 0"),
+        _build_section_row(button_html, padding="36px 40px 44px", align="center"),
+    ]
 
-    return f"""<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
-    <meta name="color-scheme" content="light only" />
-    <title>{escape_html(spec["subject"])}</title>
-    <style>
-      @media only screen and (max-width: 640px) {{
-        .ls-wrap {{ width: 100% !important; }}
-        .ls-pad {{ padding-left: 20px !important; padding-right: 20px !important; }}
-        .ls-section {{ padding-left: 20px !important; padding-right: 20px !important; }}
-        .ls-header-logo {{ width: 96px !important; max-width: 96px !important; }}
-        .ls-header-wordmark {{ font-size: 26px !important; letter-spacing: 0.25em !important; }}
-        .ls-body-title {{ font-size: 28px !important; line-height: 1.18 !important; }}
-        .ls-button {{ width: 100% !important; }}
-        .ls-footer-links a {{ display: inline-block !important; margin: 0 6px 8px !important; }}
-      }}
-    </style>
-  </head>
-  <body style="margin:0;padding:0;background:{EMAIL_BACKGROUND};font-family:{FONT_BODY};color:{EMAIL_TEXT};">
-    <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;background:{EMAIL_BACKGROUND};">
-      <tr>
-        <td align="center" style="padding:38px 16px 48px;">
-          <table role="presentation" cellpadding="0" cellspacing="0" width="640" class="ls-wrap" style="width:640px;max-width:640px;border-collapse:separate;border-spacing:0;box-shadow:0 16px 44px rgba(21,0,61,0.12);border-radius:12px;overflow:hidden;">
-            <tr>
-              <td style="background:{EMAIL_PRIMARY};border-radius:12px 12px 0 0;background-image:url('{LEAVESPHERE_EMAIL_HEADER_IMAGE_URL}');background-size:cover;background-position:center center;background-repeat:no-repeat;">
-                <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;">
-                  <tr>
-                    <td align="center" style="padding:28px 40px 24px;">
-                      <img
-                        src="{LEAVESPHERE_TENANT_LOGO_URL}"
-                        alt="LeaveSphere tenant logo"
-                        class="ls-header-logo"
-                        width="96"
-                        style="display:block;width:96px;max-width:96px;height:auto;margin:0 auto 12px;border:0;outline:none;text-decoration:none;"
-                      />
-                      <div class="ls-header-wordmark" style="font-family:{FONT_HEADLINE};font-size:30px;line-height:1.15;font-weight:700;letter-spacing:0.25em;text-transform:uppercase;color:#ffffff;white-space:nowrap;text-shadow:0 2px 18px rgba(0,0,0,0.16);">
-                        LEAVESPHERE
-                      </div>
-                    </td>
-                  </tr>
-                </table>
-              </td>
-            </tr>
-            <tr>
-              <td style="background:{EMAIL_SURFACE};">
-                <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;">
-                  <tr>
-                    <td class="ls-section ls-pad" style="padding:48px 40px 6px;">
-                      <div class="ls-body-title" style="font-family:{FONT_HEADLINE};font-size:30px;line-height:1.16;font-weight:700;letter-spacing:-0.02em;color:{EMAIL_PRIMARY};">
-                        {escape_html(spec["title"])}
-                      </div>
-                      <div style="margin-top:18px;font-family:{FONT_BODY};font-size:15px;line-height:1.65;color:{EMAIL_TEXT};">
-                        Dear <strong>{escape_html(recipient_name or employee_name)}</strong>,
-                      </div>
-                      <div style="margin-top:8px;font-family:{FONT_BODY};font-size:15px;line-height:1.7;color:{EMAIL_MUTED};max-width:560px;">
-                        {escape_html(intro)}
-                      </div>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td class="ls-section ls-pad" style="padding:24px 40px 0;">
-                      {request_details_card}
-                    </td>
-                  </tr>
-                  {f'<tr><td class="ls-section ls-pad" style="padding:20px 40px 0;">{note_card}</td></tr>' if note_card else ''}
-                  {f'<tr><td class="ls-section ls-pad" style="padding:20px 40px 0;">{changes_card}</td></tr>' if changes_card else ''}
-                  <tr>
-                    <td class="ls-section ls-pad" style="padding:20px 40px 0;">
-                      {info_card}
-                    </td>
-                  </tr>
-                  <tr>
-                    <td align="center" class="ls-section ls-pad" style="padding:36px 40px 44px;">
-                      {button_html}
-                    </td>
-                  </tr>
-                </table>
-              </td>
-            </tr>
-            <tr>
-              <td style="background:{EMAIL_SURFACE};border-radius:0 0 16px 16px;">
-                <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;">
-                  <tr>
-                    <td style="background:{EMAIL_SURFACE};">
-                      <div style="height:20px;background:{EMAIL_SURFACE};"></div>
-                    </td>
-                  </tr>
-                  <tr>
-                    <td style="background:{EMAIL_SURFACE};padding:0 0 0;">
-                      <div style="background-image:url('{LEAVESPHERE_EMAIL_FOOTER_IMAGE_URL}');background-size:cover;background-position:center bottom;background-repeat:no-repeat;padding:40px 40px 44px;border-radius:0 0 12px 12px;">
-                        <div style="text-align:center;font-family:{FONT_HEADLINE};font-size:12px;line-height:1.4;letter-spacing:0.2em;text-transform:uppercase;color:{EMAIL_PRIMARY};font-weight:700;">
-                          Leavesphere
-                        </div>
-                        <div class="ls-footer-links" style="margin-top:6px;text-align:center;font-family:{FONT_BODY};font-size:14px;line-height:1.4;color:{EMAIL_MUTED_STRONG};">
-                          <a href="mailto:support@leavesphere.com" style="color:{EMAIL_MUTED_STRONG};text-decoration:none;margin:0 10px;">Support</a>
-                          <a href="mailto:privacy@leavesphere.com" style="color:{EMAIL_MUTED_STRONG};text-decoration:none;margin:0 10px;">Privacy</a>
-                          <a href="mailto:hr@leavesphere.com" style="color:{EMAIL_MUTED_STRONG};text-decoration:none;margin:0 10px;">Contact HR</a>
-                        </div>
-                        <div style="margin-top:10px;text-align:center;font-family:{FONT_BODY};font-size:14px;line-height:1.7;color:{EMAIL_MUTED_STRONG};">
-                          © {datetime.now().year} LeaveSphere HR. All rights reserved.
-                        </div>
-                        <div style="margin-top:6px;text-align:center;font-family:{FONT_BODY};font-size:12px;line-height:1.6;color:{EMAIL_MUTED};font-style:italic;">
-                          {escape_html(footer_note)}
-                        </div>
-                      </div>
-                    </td>
-                  </tr>
-                </table>
-              </td>
-            </tr>
-          </table>
-        </td>
-      </tr>
-    </table>
-  </body>
-</html>
-"""
+    return _build_email_shell(
+        subject=spec["subject"],
+        title=spec["title"],
+        recipient_name=recipient_name or employee_name,
+        intro=intro,
+        body_sections_html="".join(section for section in body_sections if section),
+        footer_note=footer_note,
+    )
 
 
 def _build_request_details_card(
@@ -1051,9 +1076,7 @@ def _build_request_details_card(
               <td valign="middle" style="font-family:{FONT_HEADLINE};font-size:18px;line-height:1.16;font-weight:600;letter-spacing:-0.01em;color:{EMAIL_PRIMARY};padding-right:10px;text-align:left;">
                 {escape_html(title)}
               </td>
-              <td align="right" valign="middle" style="white-space:nowrap;line-height:0;padding-top:1px;">
-                {_build_chip_html(badge, badge_tone)}
-              </td>
+              {f'<td align="right" valign="middle" style="white-space:nowrap;line-height:0;padding-top:1px;">{_build_chip_html(badge, badge_tone)}</td>' if normalize_text(badge) else ''}
             </tr>
           </table>
           <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;margin-top:16px;">
@@ -1163,6 +1186,350 @@ def _build_info_card(*, title: str, body_html: str) -> str:
       </tr>
     </table>
     """
+
+
+def _build_section_row(content: str, *, padding: str = "20px 40px 0", align: str | None = None) -> str:
+    align_attr = f' align="{align}"' if align else ""
+    return f'<tr><td{align_attr} class="ls-section ls-pad" style="padding:{padding};">{content}</td></tr>'
+
+
+def _build_email_shell(
+    *,
+    subject: str,
+    title: str,
+    recipient_name: str,
+    intro: str,
+    body_sections_html: str,
+    footer_note: str,
+) -> str:
+    return f"""<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="light only" />
+    <title>{escape_html(subject)}</title>
+    <style>
+      @media only screen and (max-width: 640px) {{
+        .ls-wrap {{ width: 100% !important; }}
+        .ls-pad {{ padding-left: 20px !important; padding-right: 20px !important; }}
+        .ls-section {{ padding-left: 20px !important; padding-right: 20px !important; }}
+        .ls-header-logo {{ width: 96px !important; max-width: 96px !important; }}
+        .ls-header-wordmark {{ font-size: 26px !important; letter-spacing: 0.25em !important; }}
+        .ls-body-title {{ font-size: 28px !important; line-height: 1.18 !important; }}
+        .ls-button {{ width: 100% !important; }}
+        .ls-footer-links a {{ display: inline-block !important; margin: 0 6px 8px !important; }}
+      }}
+    </style>
+  </head>
+  <body style="margin:0;padding:0;background:{EMAIL_BACKGROUND};font-family:{FONT_BODY};color:{EMAIL_TEXT};">
+    <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;background:{EMAIL_BACKGROUND};">
+      <tr>
+        <td align="center" style="padding:38px 16px 48px;">
+          <table role="presentation" cellpadding="0" cellspacing="0" width="640" class="ls-wrap" style="width:640px;max-width:640px;border-collapse:separate;border-spacing:0;box-shadow:0 16px 44px rgba(21,0,61,0.12);border-radius:12px;overflow:hidden;">
+            <tr>
+              <td style="background:{EMAIL_PRIMARY};border-radius:12px 12px 0 0;background-image:url('{LEAVESPHERE_EMAIL_HEADER_IMAGE_URL}');background-size:cover;background-position:center center;background-repeat:no-repeat;">
+                <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;">
+                  <tr>
+                    <td align="center" style="padding:28px 40px 24px;">
+                      <img
+                        src="{LEAVESPHERE_TENANT_LOGO_URL}"
+                        alt="LeaveSphere tenant logo"
+                        class="ls-header-logo"
+                        width="96"
+                        style="display:block;width:96px;max-width:96px;height:auto;margin:0 auto 12px;border:0;outline:none;text-decoration:none;"
+                      />
+                      <div class="ls-header-wordmark" style="font-family:{FONT_HEADLINE};font-size:30px;line-height:1.15;font-weight:700;letter-spacing:0.25em;text-transform:uppercase;color:#ffffff;white-space:nowrap;text-shadow:0 2px 18px rgba(0,0,0,0.16);">
+                        LEAVESPHERE
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="background:{EMAIL_SURFACE};">
+                <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;">
+                  <tr>
+                    <td class="ls-section ls-pad" style="padding:48px 40px 6px;">
+                      <div class="ls-body-title" style="font-family:{FONT_HEADLINE};font-size:30px;line-height:1.16;font-weight:700;letter-spacing:-0.02em;color:{EMAIL_PRIMARY};">
+                        {escape_html(title)}
+                      </div>
+                      <div style="margin-top:18px;font-family:{FONT_BODY};font-size:15px;line-height:1.65;color:{EMAIL_TEXT};">
+                        Dear <strong>{escape_html(recipient_name or "Employee")}</strong>,
+                      </div>
+                      <div style="margin-top:8px;font-family:{FONT_BODY};font-size:15px;line-height:1.7;color:{EMAIL_MUTED};max-width:560px;">
+                        {escape_html(intro)}
+                      </div>
+                    </td>
+                  </tr>
+                  {body_sections_html}
+                </table>
+              </td>
+            </tr>
+            <tr>
+              <td style="background:{EMAIL_SURFACE};border-radius:0 0 16px 16px;">
+                <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;">
+                  <tr>
+                    <td style="background:{EMAIL_SURFACE};">
+                      <div style="height:20px;background:{EMAIL_SURFACE};"></div>
+                    </td>
+                  </tr>
+                  <tr>
+                    <td style="background:{EMAIL_SURFACE};padding:0 0 0;">
+                      <div style="background-image:url('{LEAVESPHERE_EMAIL_FOOTER_IMAGE_URL}');background-size:cover;background-position:center bottom;background-repeat:no-repeat;padding:40px 40px 44px;border-radius:0 0 12px 12px;">
+                        <div style="text-align:center;font-family:{FONT_HEADLINE};font-size:12px;line-height:1.4;letter-spacing:0.2em;text-transform:uppercase;color:{EMAIL_PRIMARY};font-weight:700;">
+                          Leavesphere
+                        </div>
+                        <div class="ls-footer-links" style="margin-top:6px;text-align:center;font-family:{FONT_BODY};font-size:14px;line-height:1.4;color:{EMAIL_MUTED_STRONG};">
+                          <a href="mailto:support@leavesphere.com" style="color:{EMAIL_MUTED_STRONG};text-decoration:none;margin:0 10px;">Support</a>
+                          <a href="mailto:privacy@leavesphere.com" style="color:{EMAIL_MUTED_STRONG};text-decoration:none;margin:0 10px;">Privacy</a>
+                          <a href="mailto:hr@leavesphere.com" style="color:{EMAIL_MUTED_STRONG};text-decoration:none;margin:0 10px;">Contact HR</a>
+                        </div>
+                        <div style="margin-top:10px;text-align:center;font-family:{FONT_BODY};font-size:14px;line-height:1.7;color:{EMAIL_MUTED_STRONG};">
+                          © {datetime.now().year} LeaveSphere HR. All rights reserved.
+                        </div>
+                        <div style="margin-top:6px;text-align:center;font-family:{FONT_BODY};font-size:12px;line-height:1.6;color:{EMAIL_MUTED};font-style:italic;">
+                          {escape_html(footer_note)}
+                        </div>
+                      </div>
+                    </td>
+                  </tr>
+                </table>
+              </td>
+            </tr>
+          </table>
+        </td>
+      </tr>
+    </table>
+  </body>
+</html>
+"""
+
+
+def _normalize_pending_request(request: object) -> LeaveSpherePendingRequest | None:
+    if not isinstance(request, dict):
+        return None
+
+    employee_name = normalize_text(
+        request.get("employeeName")
+        or request.get("employee_name")
+        or request.get("employee")
+        or request.get("name")
+    )
+    pto_type_label = normalize_text(
+        request.get("ptoTypeLabel")
+        or request.get("pto_type_label")
+        or request.get("ptoTypeCode")
+        or request.get("pto_type_code")
+        or request.get("type")
+    )
+    start_date = normalize_text(request.get("startDate") or request.get("start_date"))
+    end_date = normalize_text(request.get("endDate") or request.get("end_date"))
+    hours = request.get("hours")
+    request_id = normalize_text(
+        request.get("requestId")
+        or request.get("transactionId")
+        or request.get("id")
+    )
+    reason = normalize_text(request.get("description") or request.get("reason")) or None
+    submitted_at = normalize_text(
+        request.get("submittedAt")
+        or request.get("submitted_at")
+        or request.get("dateCreated")
+        or request.get("createdAt")
+        or request.get("submittedOn")
+    ) or None
+    request_url = normalize_text(
+        request.get("requestUrl")
+        or request.get("request_url")
+        or request.get("detailUrl")
+        or request.get("detail_url")
+        or request.get("href")
+        or request.get("url")
+    ) or None
+    picture_url = normalize_text(
+        request.get("pictureUrl")
+        or request.get("picture_url")
+        or request.get("employeePictureUrl")
+        or request.get("employee_picture_url")
+        or request.get("avatarUrl")
+        or request.get("avatar_url")
+    ) or None
+
+    if not employee_name:
+        employee_name = "Employee"
+    if not pto_type_label:
+        pto_type_label = "PTO"
+    if not start_date:
+        start_date = ""
+    if not end_date:
+        end_date = ""
+
+    return LeaveSpherePendingRequest(
+        employee_name=employee_name,
+        pto_type_label=pto_type_label,
+        start_date=start_date,
+        end_date=end_date,
+        hours=hours,
+        request_id=request_id or None,
+        reason=reason,
+        submitted_at=submitted_at,
+        request_url=request_url,
+        picture_url=picture_url,
+    )
+
+
+def _build_pending_request_cards_html(
+    *,
+    pending_requests: list[LeaveSpherePendingRequest],
+    fallback_url: str | None,
+) -> str:
+    cards: list[str] = []
+    for request in pending_requests:
+        request_href = request.request_url or fallback_url or "#"
+        cards.append(
+            _build_pending_request_card_html(
+                request=request,
+                href=request_href,
+            )
+        )
+    return "".join(f'<div style="margin-top:14px;">{card}</div>' for card in cards)
+
+
+def _build_pending_request_card_html(
+    *,
+    request: LeaveSpherePendingRequest,
+    href: str,
+) -> str:
+    type_tone = _resolve_type_chip_tone(request.pto_type_label)
+    status_chip = _build_chip_html("Pending", "amber")
+    type_chip = _build_chip_html(request.pto_type_label, type_tone)
+    title = escape_html(request.employee_name)
+    card_href = href if href and href.strip() else "#"
+    submitted_label = _format_date(request.submitted_at)
+    date_label = _format_subject_date_range(request.start_date, request.end_date) or f"{_format_date(request.start_date)} - {_format_date(request.end_date)}"
+    detail_label = request.reason or ""
+    avatar_text = _initials(request.employee_name)
+    avatar_markup = (
+        f'<img src="{escape_html(request.picture_url)}" alt="{title}" width="28" height="28" '
+        'style="display:block;width:100%;height:100%;border:0;outline:none;text-decoration:none;object-fit:cover;" />'
+        if normalize_text(request.picture_url)
+        else f'<div style="font-family:{FONT_HEADLINE};font-size:10px;line-height:1;font-weight:700;letter-spacing:0.04em;color:#92400e;">{escape_html(avatar_text)}</div>'
+    )
+    return f"""
+    <a href="{escape_html(card_href)}" style="display:block;text-decoration:none;color:inherit;">
+      <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:separate;border-spacing:0;border:1px solid #fde68a;border-radius:16px;background:linear-gradient(135deg, #ffffff 0%, #fffbeb 100%);box-shadow:0 8px 24px rgba(15,23,42,0.06);overflow:hidden;">
+        <tr>
+          <td style="padding:14px 14px 12px;">
+            <table role="presentation" cellpadding="0" cellspacing="0" width="100%" style="border-collapse:collapse;">
+              <tr>
+                <td valign="top" style="padding-right:10px;width:28px;">
+                  <div style="width:28px;height:28px;border-radius:999px;border:1px solid #fcd34d;background:#fef3c7;display:flex;align-items:center;justify-content:center;overflow:hidden;">
+                    {avatar_markup}
+                  </div>
+                </td>
+                <td valign="top" style="padding-right:10px;">
+                  <div style="font-family:{FONT_BODY};font-size:14px;line-height:1.35;font-weight:600;color:{EMAIL_PRIMARY};">
+                    {title}
+                  </div>
+                  <div style="margin-top:2px;font-family:{FONT_BODY};font-size:11px;line-height:1.35;color:{EMAIL_MUTED};">
+                    Submitted {escape_html(submitted_label)}
+                  </div>
+                </td>
+                <td valign="top" align="right" style="white-space:nowrap;">
+                  <span style="display:inline-flex;flex-wrap:wrap;justify-content:flex-end;gap:6px;">
+                    {type_chip}
+                    {status_chip}
+                  </span>
+                </td>
+              </tr>
+            </table>
+            <div style="margin-top:10px;font-family:{FONT_BODY};font-size:12px;line-height:1.45;color:{EMAIL_MUTED_STRONG};">
+              {escape_html(date_label)}
+            </div>
+            <div style="margin-top:7px;display:flex;align-items:center;gap:6px;font-family:{FONT_BODY};font-size:11.5px;line-height:1.5;color:{EMAIL_MUTED_STRONG};">
+              <span style="flex:0 0 auto;">{escape_html(_format_hours(request.hours))}</span>
+              {f'<span style="flex:0 0 auto;">-</span><span style="min-width:0;flex:1 1 auto;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">{escape_html(detail_label)}</span>' if detail_label else ""}
+            </div>
+          </td>
+        </tr>
+      </table>
+    </a>
+    """
+
+
+def _resolve_type_chip_tone(type_label: str) -> str:
+    normalized = normalize_text(type_label).lower()
+    if "sick" in normalized:
+        return "amber"
+    if "personal" in normalized:
+        return "violet"
+    return "blue"
+
+
+def _build_reminder_text_body(
+    *,
+    manager_name: str,
+    pending_requests: list[LeaveSpherePendingRequest],
+    reminder_note: str | None,
+    footer_note: str,
+) -> str:
+    pending_count = len(pending_requests)
+    total_hours = 0.0
+    unique_employees = []
+    for request in pending_requests:
+        try:
+            total_hours += float(str(request.hours).strip())
+        except (TypeError, ValueError):
+            pass
+        if request.employee_name and request.employee_name not in unique_employees:
+            unique_employees.append(request.employee_name)
+
+    lines: list[str] = [
+        "LeaveSphere",
+        "Pending PTO requests",
+        "",
+        f"Dear {manager_name or 'Manager'},",
+        "",
+        f"You have {pending_count} PTO request{'s' if pending_count != 1 else ''} waiting for your approval.",
+        "",
+        "Pending PTO requests:",
+        f"- Employees Waiting: {len(unique_employees) or pending_count}",
+        f"- Pending Requests: {pending_count}",
+        f"- Total Hours: {_format_hours(total_hours)}",
+    ]
+    if pending_requests:
+        lines.extend(["", "Pending Requests:"])
+        for index, request in enumerate(pending_requests, start=1):
+            lines.extend(
+                [
+                    f"{index}. {request.employee_name} - {request.pto_type_label}",
+                    f"   - Start Date: {_format_date(request.start_date)}",
+                    f"   - End Date: {_format_date(request.end_date)}",
+                    f"   - Total Hours: {_format_hours(request.hours)}",
+                ]
+            )
+            if request.submitted_at:
+                lines.append(f"   - Submitted: {_format_date(request.submitted_at)}")
+            if request.request_id:
+                lines.append(f"   - Request ID: {request.request_id}")
+            if request.reason:
+                lines.append(f"   - Note: {request.reason}")
+    lines.extend([
+        "",
+        "Instruction:",
+        f"- {reminder_note or 'Click any request card to open the request details and complete quick approval in LeaveSphere.'}",
+    ])
+    lines.extend(["", footer_note])
+    return "\n".join(line for line in lines if line is not None)
+
+
+def _parse_hours(value: object) -> float:
+    try:
+        return float(str(value).strip())
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _build_button_html(*, label: str, href: str) -> str:

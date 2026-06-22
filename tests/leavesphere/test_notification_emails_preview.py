@@ -9,6 +9,7 @@ from pathlib import Path
 from apps.leavesphere.api.v1.helpers.notification_emails import (
     build_leave_sphere_approval_email,
     build_leave_sphere_confirmation_email,
+    build_leave_sphere_reminder_email,
     build_leave_sphere_status_email,
 )
 
@@ -267,6 +268,34 @@ def build_preview_bundle(output_dir: Path) -> Path:
         approver_picture_url="https://picsum.photos/seed/leave-approver/96/96",
         update_summary=["Start date moved", "End date moved"],
     )
+    reminder = build_leave_sphere_reminder_email(
+        manager_name="Jordan Lee",
+        pending_requests=[
+            {
+                "employeeName": "Alex Chen",
+                "ptoTypeLabel": "Vacation",
+                "startDate": "2026-06-10",
+                "endDate": "2026-06-12",
+                "hours": 24,
+                "requestId": "pto-123",
+                "description": "Family trip",
+                "submittedAt": "2026-05-29T10:00:00",
+                "requestUrl": "https://workspace.example.com/leavesphere/my-pto/requests/pto-123",
+                "pictureUrl": "https://picsum.photos/seed/alex-chen/96/96",
+            },
+            {
+                "employeeName": "Taylor Morgan",
+                "ptoTypeLabel": "Sick Leave",
+                "startDate": "2026-06-15",
+                "endDate": "2026-06-15",
+                "hours": 8,
+                "requestId": "pto-456",
+                "description": "Medical appointment",
+                "submittedAt": "2026-05-30T09:15:00",
+                "requestUrl": "https://workspace.example.com/leavesphere/my-pto/requests/pto-456",
+            },
+        ],
+    )
 
     all_variants = [
         ("confirmation", confirmation),
@@ -275,6 +304,7 @@ def build_preview_bundle(output_dir: Path) -> Path:
         ("rejected", rejected),
         ("canceled", canceled),
         ("updated", updated),
+        ("reminder", reminder),
     ]
 
     for label, email in all_variants:
@@ -298,6 +328,7 @@ class LeaveSphereNotificationEmailPreviewTests(unittest.TestCase):
         self.assertTrue((preview_dir / "rejected.html").is_file())
         self.assertTrue((preview_dir / "canceled.html").is_file())
         self.assertTrue((preview_dir / "updated.html").is_file())
+        self.assertTrue((preview_dir / "reminder.html").is_file())
         index_html = index_path.read_text(encoding="utf-8")
         self.assertIn("Send a test email", index_html)
         self.assertIn("hai@theautoadagency.com", index_html)
