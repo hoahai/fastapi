@@ -60,6 +60,11 @@ from apps.leavesphere.api.v1.helpers.ptoWorkspaceShared import (
 )
 from apps.leavesphere.api.v1.helpers.readCache import clear_leave_sphere_read_cache
 from apps.leavesphere.api.v1.helpers.ptoActions import create_pto_action, modify_pto_action
+from apps.leavesphere.api.v1.helpers.notification_emails import (
+    send_leave_sphere_approval_email,
+    send_leave_sphere_confirmation_email,
+    send_leave_sphere_status_email,
+)
 from apps.leavesphere.api.v1.helpers.ptoTypes import create_pto_type, modify_pto_type
 from apps.leavesphere.api.v1.helpers.ptoTransactions import approve_request, create_adjustment, create_request, reject_request
 from apps.leavesphere.api.v1.helpers.workspaceCache import (
@@ -1289,6 +1294,21 @@ def create_leave_management_request(*, request, payload: dict) -> dict:
             employee_ids=[employee_id],
             include_current_balances=_normalize_text(employee_id) == _normalize_text(workspace.get("currentUserId")),
         )
+
+    if not approve_immediately:
+        submission_transaction = {
+            "id": created_request_id,
+            "employeeId": employee_id,
+            "ptoTypeCode": pto_type_code,
+            "hours": requested_hours,
+            "startDate": start_date or None,
+            "endDate": end_date or None,
+            "description": description,
+            "dateCreated": datetime.utcnow().isoformat(),
+        }
+        send_leave_sphere_confirmation_email(transaction=submission_transaction)
+        send_leave_sphere_approval_email(transaction=submission_transaction)
+
     response = {
         "source": "network",
         "createdRequestId": created_request_id,
@@ -1404,6 +1424,16 @@ def update_leave_management_request(*, request, payload: dict) -> dict:
             response["workspacePatch"] = {"requests": [request_patch_row]}
         else:
             response["workspace"] = workspace
+    send_leave_sphere_status_email(
+        transaction=transaction,
+        status={
+            "Approved": "approved",
+            "Rejected": "rejected",
+            "Canceled": "canceled",
+            "Pending": "updated",
+        }.get(str(result.get("status") or "").capitalize(), "updated"),
+        admin_note=approver_note,
+    )
     return response
 
 

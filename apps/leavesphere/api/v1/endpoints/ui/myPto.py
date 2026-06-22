@@ -308,6 +308,7 @@ def review_my_pto_request_route(
         - The manager is resolved from the signed-in user's login email
         - `requestId` and `transactionId` are both accepted for compatibility
         - `approverNote` is required when `action` is `reject` or `cancel`
+        - When `leavesphere.smtp` is configured, the affected employee receives a status email using the LeaveSphere template
         - Mutation responses may return `workspacePatch` instead of a full `workspace` when the server can patch a cached snapshot
     """
     try:

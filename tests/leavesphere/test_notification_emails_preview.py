@@ -14,6 +14,15 @@ from apps.leavesphere.api.v1.helpers.notification_emails import (
 
 PREVIEW_ENV = "LEAVESPHERE_EMAIL_PREVIEW"
 PREVIEW_DIR_ENV = "LEAVESPHERE_EMAIL_PREVIEW_DIR"
+PREVIEW_SEND_URL_ENV = "LEAVESPHERE_EMAIL_PREVIEW_SEND_URL"
+DEFAULT_PREVIEW_SEND_URL = "http://localhost:8000/api/leavesphere/v1/admin/pto/email-preview/test-email"
+
+
+def _resolve_preview_send_url() -> str:
+    configured = str(os.getenv(PREVIEW_SEND_URL_ENV, "")).strip()
+    if configured:
+        return configured
+    return DEFAULT_PREVIEW_SEND_URL
 
 
 def _preview_enabled() -> bool:
@@ -57,6 +66,7 @@ def _build_index_html(items: list[tuple[str, str]]) -> str:
             """
         )
 
+    send_url = _resolve_preview_send_url()
     return f"""<!doctype html>
 <html lang="en">
   <head>
@@ -105,12 +115,70 @@ def _build_index_html(items: list[tuple[str, str]]) -> str:
         font-size: 13px;
         font-weight: 700;
       }}
+      .preview-send {{
+        display: flex;
+        flex-wrap: wrap;
+        align-items: center;
+        justify-content: space-between;
+        gap: 12px;
+        margin: 12px 0 22px;
+        padding: 16px 18px;
+        border-radius: 18px;
+        border: 1px solid #cbd5e1;
+        background: linear-gradient(135deg, #eff6ff 0%, #f8fafc 58%, #eef2ff 100%);
+        box-shadow: 0 10px 26px rgba(15, 23, 42, 0.06);
+      }}
+      .preview-send h2 {{
+        margin: 0;
+        font-size: 16px;
+        line-height: 1.4;
+      }}
+      .preview-send p {{
+        margin-top: 4px;
+        font-size: 13px;
+        color: #475569;
+      }}
+      .preview-send button {{
+        appearance: none;
+        border: 0;
+        border-radius: 999px;
+        background: #1d4ed8;
+        color: #ffffff;
+        cursor: pointer;
+        font-size: 13px;
+        font-weight: 700;
+        padding: 11px 16px;
+        box-shadow: 0 8px 18px rgba(29, 78, 216, 0.22);
+      }}
+      .preview-send button:hover {{
+        background: #1e40af;
+      }}
+      .preview-send code {{
+        background: rgba(255, 255, 255, 0.65);
+        border-radius: 999px;
+        padding: 2px 6px;
+      }}
     </style>
   </head>
   <body>
     <div class="wrap">
       <h1>LeaveSphere Email Preview</h1>
       <p>Each variant is rendered from the real builder and loaded below in its own iframe.</p>
+      <form class="preview-send" action="{send_url}" method="post" target="leaveSphereEmailPreviewResult">
+        <div>
+          <h2>Send a test email</h2>
+          <p>
+            Sends the approved sample email to <code>hai@theautoadagency.com</code> using the configured LeaveSphere SMTP settings.
+          </p>
+        </div>
+        <input type="hidden" name="toEmail" value="hai@theautoadagency.com" />
+        <button type="submit">Send test email</button>
+      </form>
+      <iframe
+        name="leaveSphereEmailPreviewResult"
+        title="LeaveSphere email preview send result"
+        style="display:none;width:0;height:0;border:0;"
+      ></iframe>
       <div class="links">{''.join(links)}</div>
       {''.join(iframes)}
     </div>
@@ -230,6 +298,9 @@ class LeaveSphereNotificationEmailPreviewTests(unittest.TestCase):
         self.assertTrue((preview_dir / "rejected.html").is_file())
         self.assertTrue((preview_dir / "canceled.html").is_file())
         self.assertTrue((preview_dir / "updated.html").is_file())
+        index_html = index_path.read_text(encoding="utf-8")
+        self.assertIn("Send a test email", index_html)
+        self.assertIn("hai@theautoadagency.com", index_html)
         print(index_path)
 
 

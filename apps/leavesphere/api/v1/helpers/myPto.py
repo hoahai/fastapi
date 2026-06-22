@@ -38,6 +38,11 @@ from apps.leavesphere.api.v1.helpers.ptoWorkspaceShared import (
     load_leave_sphere_pto_workspace_catalogs,
     resolve_pto_type_code_from_catalog,
 )
+from apps.leavesphere.api.v1.helpers.notification_emails import (
+    send_leave_sphere_approval_email,
+    send_leave_sphere_confirmation_email,
+    send_leave_sphere_status_email,
+)
 from apps.leavesphere.api.v1.helpers.workspaceCache import (
     read_leave_sphere_workspace_cache,
     read_leave_sphere_workspace_latest_cache,
@@ -810,6 +815,14 @@ def create_my_pto_request(*, request, payload: dict) -> dict:
             request_ids=[item["id"]],
             include_balances=employee_id == _normalize_text(workspace.get("currentUserId")),
         )
+
+    submission_transaction = {
+        **item,
+        "dateCreated": datetime.utcnow().isoformat(),
+    }
+    send_leave_sphere_confirmation_email(transaction=submission_transaction)
+    send_leave_sphere_approval_email(transaction=submission_transaction)
+
     response = {
         "source": "network",
         "createdRequestId": item["id"],
@@ -1184,6 +1197,11 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
                 response["workspacePatch"] = workspace_patch
             else:
                 response["workspace"] = workspace
+            send_leave_sphere_status_email(
+                transaction=transaction,
+                status="approved",
+                admin_note=approver_note,
+            )
             return response
 
         updated = reject_pending_pto_request(
@@ -1234,6 +1252,11 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
             response["workspacePatch"] = workspace_patch
         else:
             response["workspace"] = workspace
+        send_leave_sphere_status_email(
+            transaction=transaction,
+            status="rejected",
+            admin_note=approver_note,
+        )
         return response
 
     if action == "cancel":
@@ -1292,6 +1315,11 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
             response["workspacePatch"] = workspace_patch
         else:
             response["workspace"] = workspace
+        send_leave_sphere_status_email(
+            transaction=transaction,
+            status="canceled",
+            admin_note=approver_note,
+        )
         return response
 
     if action == "revert":
@@ -1343,6 +1371,11 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
             response["workspacePatch"] = workspace_patch
         else:
             response["workspace"] = workspace
+        send_leave_sphere_status_email(
+            transaction=transaction,
+            status="updated",
+            admin_note=approver_note,
+        )
         return response
 
     raise ValueError("Unsupported action")

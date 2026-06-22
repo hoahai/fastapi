@@ -188,6 +188,10 @@ class LeaveManagementBackendTests(unittest.TestCase):
         ), patch.object(
             leaveManagement, "get_holidays", return_value=[]
         ), patch.object(
+            leaveManagement,
+            "get_last_submission_date",
+            return_value=None,
+        ), patch.object(
             ptoWorkspaceShared,
             "get_pto_types",
             return_value=[{"code": "VAC", "name": "Vacation", "listingOrder": 1, "usaDefaultHour": 120, "phlDefaultHour": 0}],
@@ -196,7 +200,7 @@ class LeaveManagementBackendTests(unittest.TestCase):
             "get_pto_actions",
             return_value=[{"code": "LOAD", "name": "Load"}, {"code": "REQUEST", "name": "Request"}],
         ):
-            workspace = leaveManagement.load_leave_management_workspace(request=request, year=2026)
+            workspace = leaveManagement.load_leave_management_workspace(request=request, year=2026, force_refresh=True)
 
         self.assertEqual(workspace["currentUserEmail"], "employee@example.com")
         self.assertEqual(workspace["currentUserName"], "Hai Truong")
@@ -222,6 +226,10 @@ class LeaveManagementBackendTests(unittest.TestCase):
         ), patch.object(
             leaveManagement, "get_holidays", return_value=[]
         ), patch.object(
+            leaveManagement,
+            "get_last_submission_date",
+            return_value="10-30",
+        ), patch.object(
             ptoWorkspaceShared,
             "get_pto_types",
             return_value=[{"code": "VAC", "name": "Vacation", "listingOrder": 1, "usaDefaultHour": 120, "phlDefaultHour": 0}],
@@ -229,12 +237,8 @@ class LeaveManagementBackendTests(unittest.TestCase):
             ptoWorkspaceShared,
             "get_pto_actions",
             return_value=[{"code": "LOAD", "name": "Load"}, {"code": "REQUEST", "name": "Request"}],
-        ), patch.object(
-            leaveManagement,
-            "get_last_submission_date",
-            return_value="10-30",
         ):
-            workspace = leaveManagement.load_leave_management_workspace(request=request, year=2026)
+            workspace = leaveManagement.load_leave_management_workspace(request=request, year=2026, force_refresh=True)
 
         self.assertEqual(workspace["lastSubmissionDate"], "10-30")
 
@@ -313,6 +317,22 @@ class LeaveManagementBackendTests(unittest.TestCase):
             "_apply_my_pto_workspace_mutation_from_cache",
             return_value=None,
         ), patch.object(
+            myPto,
+            "send_leave_sphere_confirmation_email",
+            return_value=True,
+        ) as mock_send_confirmation, patch.object(
+            myPto,
+            "send_leave_sphere_approval_email",
+            return_value=True,
+        ) as mock_send_approval, patch.object(
+            leaveManagement,
+            "send_leave_sphere_confirmation_email",
+            return_value=True,
+        ), patch.object(
+            leaveManagement,
+            "send_leave_sphere_approval_email",
+            return_value=True,
+        ), patch.object(
             myPto, "load_my_pto_workspace", return_value=fresh_workspace
         ) as mock_load, patch.object(
             ptoTransactions, "create_request", return_value={"inserted": 1, "status": "Pending"}
@@ -337,8 +357,162 @@ class LeaveManagementBackendTests(unittest.TestCase):
         self.assertEqual(result["status"], "Pending")
         mock_load.assert_called_once_with(request=request, year=2026)
         mock_create.assert_called_once()
+        mock_send_confirmation.assert_called_once()
+        mock_send_approval.assert_called_once()
         created_item = mock_create.call_args.args[0]
         self.assertEqual(str(created_item["hours"]), "8.00")
+
+    def test_create_leave_management_request_sends_submission_emails(self):
+        request = self._build_request(email="hai@theautoadagency.com")
+        current_employee = {
+            "id": "emp-admin",
+            "firstName": "Hai",
+            "lastName": "Truong",
+            "email": "hai@theautoadagency.com",
+            "title": "Director",
+            "region": "US",
+            "active": 1,
+        }
+        workspace = {
+            "currentUserId": "emp-admin",
+            "currentUserName": "Hai Truong",
+            "currentUserEmail": "hai@theautoadagency.com",
+            "managerId": None,
+            "currentUserTeamRegion": "US",
+            "isManager": False,
+            "employees": [current_employee],
+            "ptoTypes": [{"code": "VAC", "type": "vacation", "label": "Vacation", "active": True, "listingOrder": 1}],
+            "ptoActions": [{"code": "REQUEST", "name": "Request"}],
+            "balances": [],
+            "employeeBalances": [],
+            "requests": [],
+            "holidays": [],
+            "directReports": [],
+        }
+
+        with patch.object(leaveManagement, "get_employees", return_value=[current_employee]), patch.object(
+            leaveManagement, "get_employee_managers", return_value=[{"employeeId": "emp-2", "managerId": "mgr-1"}]
+        ), patch.object(
+            leaveManagement,
+            "load_leave_sphere_pto_workspace_catalogs",
+            return_value=SimpleNamespace(
+                pto_type_by_code={"VAC": {"code": "VAC", "name": "Vacation"}},
+                pto_actions=[{"code": "REQUEST", "name": "Request"}],
+                default_request_action_code="REQUEST",
+            ),
+        ), patch.object(
+            leaveManagement, "create_request", return_value={"id": "pto-1", "inserted": 1}
+        ) as mock_create, patch.object(
+            leaveManagement, "_apply_leave_management_workspace_mutation_from_cache", return_value=workspace
+        ), patch.object(
+            leaveManagement, "_build_leave_management_workspace_patch", return_value={"requests": [{"id": "pto-1"}]}
+        ), patch.object(
+            leaveManagement,
+            "send_leave_sphere_confirmation_email",
+            return_value=True,
+        ) as mock_send_confirmation, patch.object(
+            leaveManagement,
+            "send_leave_sphere_approval_email",
+            return_value=True,
+        ) as mock_send_approval, patch.object(
+            leaveManagement,
+            "send_leave_sphere_status_email",
+            return_value=True,
+        ):
+            result = leaveManagement.create_leave_management_request(
+                request=request,
+                payload={
+                    "employeeId": "emp-2",
+                    "type": "vacation",
+                    "startDate": "2026-06-10",
+                    "endDate": "2026-06-10",
+                    "hours": 8,
+                    "description": "Family trip",
+                    "year": 2026,
+                },
+            )
+
+        self.assertEqual(result["status"], "Pending")
+        mock_create.assert_called_once()
+        mock_send_confirmation.assert_called_once()
+        mock_send_approval.assert_called_once()
+
+    def test_create_leave_management_request_sends_no_email_when_immediate_approval(self):
+        request = self._build_request(email="hai@theautoadagency.com")
+        current_employee = {
+            "id": "emp-admin",
+            "firstName": "Hai",
+            "lastName": "Truong",
+            "email": "hai@theautoadagency.com",
+            "title": "Director",
+            "region": "US",
+            "active": 1,
+        }
+        workspace = {
+            "currentUserId": "emp-admin",
+            "currentUserName": "Hai Truong",
+            "currentUserEmail": "hai@theautoadagency.com",
+            "managerId": None,
+            "currentUserTeamRegion": "US",
+            "isManager": False,
+            "employees": [current_employee],
+            "ptoTypes": [{"code": "VAC", "type": "vacation", "label": "Vacation", "active": True, "listingOrder": 1}],
+            "ptoActions": [{"code": "REQUEST", "name": "Request"}],
+            "balances": [],
+            "employeeBalances": [],
+            "requests": [],
+            "holidays": [],
+            "directReports": [],
+        }
+
+        with patch.object(leaveManagement, "get_employees", return_value=[current_employee]), patch.object(
+            leaveManagement, "get_employee_managers", return_value=[{"employeeId": "emp-2", "managerId": "mgr-1"}]
+        ), patch.object(
+            leaveManagement,
+            "load_leave_sphere_pto_workspace_catalogs",
+            return_value=SimpleNamespace(
+                pto_type_by_code={"VAC": {"code": "VAC", "name": "Vacation"}},
+                pto_actions=[{"code": "REQUEST", "name": "Request"}],
+                default_request_action_code="REQUEST",
+            ),
+        ), patch.object(
+            leaveManagement, "_create_immediate_approved_request", return_value=("pto-1", 1)
+        ) as mock_create, patch.object(
+            leaveManagement, "_apply_leave_management_workspace_mutation_from_cache", return_value=workspace
+        ), patch.object(
+            leaveManagement, "_build_leave_management_workspace_patch", return_value={"requests": [{"id": "pto-1"}]}
+        ), patch.object(
+            leaveManagement,
+            "send_leave_sphere_confirmation_email",
+            return_value=True,
+        ) as mock_send_confirmation, patch.object(
+            leaveManagement,
+            "send_leave_sphere_approval_email",
+            return_value=True,
+        ) as mock_send_approval, patch.object(
+            leaveManagement,
+            "send_leave_sphere_status_email",
+            return_value=True,
+        ) as mock_send_status:
+            result = leaveManagement.create_leave_management_request(
+                request=request,
+                payload={
+                    "employeeId": "emp-2",
+                    "type": "vacation",
+                    "startDate": "2026-06-10",
+                    "endDate": "2026-06-10",
+                    "hours": 8,
+                    "description": "Family trip",
+                    "year": 2026,
+                    "approveImmediately": True,
+                },
+            )
+
+        self.assertEqual(result["status"], "Approved")
+        mock_create.assert_called_once()
+        mock_send_status.assert_not_called()
+        mock_send_confirmation.assert_not_called()
+        mock_send_approval.assert_not_called()
 
     def test_create_my_pto_request_blocks_current_year_after_submission_deadline(self):
         request = self._build_request(email="hai@theautoadagency.com")
@@ -436,7 +610,7 @@ class LeaveManagementBackendTests(unittest.TestCase):
             "get_pto_actions",
             return_value=[{"code": "LOAD", "name": "Load"}, {"code": "REQUEST", "name": "Request"}],
         ):
-            workspace = leaveManagement.load_leave_management_workspace(request=request, year=2026)
+            workspace = leaveManagement.load_leave_management_workspace(request=request, year=2026, force_refresh=True)
 
         self.assertEqual([item["date"] for item in workspace["holidays"]], [
             "2026-10-15",

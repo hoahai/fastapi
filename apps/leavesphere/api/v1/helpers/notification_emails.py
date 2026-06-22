@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import ast
+import json
+import logging
 from dataclasses import dataclass
-from datetime import datetime
+from datetime import date, datetime
 from typing import Literal
 
+from shared.smtp import SmtpSendError, SmtpSettings, send_smtp_email
+from shared.tenant import get_app_scoped_env
 from shared.email_templates import escape_html, normalize_text
 
 LeaveSphereNotificationKind = Literal[
@@ -27,6 +32,7 @@ LEAVESPHERE_TENANT_LOGO_URL = (
     "https://res.cloudinary.com/dpmjwuqfl/image/upload/v1781880434/"
     "scfgs5yjhapadizhl1py_ktuep1.png"
 )
+LEAVESPHERE_EMAIL_PREVIEW_TEST_RECIPIENT = "hai@theautoadagency.com"
 
 EMAIL_BACKGROUND = "#f9f9fb"
 EMAIL_SURFACE = "#ffffff"
@@ -67,6 +73,220 @@ class LeaveSphereNotificationEmail:
     subject: str
     text_body: str
     html_body: str
+
+
+_LOGGER = logging.getLogger(__name__)
+
+_SMTP_KEYS = {
+    "host": "host",
+    "server": "host",
+    "smtp_host": "host",
+    "port": "port",
+    "smtp_port": "port",
+    "username": "username",
+    "user": "username",
+    "smtp_username": "username",
+    "password": "password",
+    "pass": "password",
+    "smtp_password": "password",
+    "from": "from_email",
+    "from_email": "from_email",
+    "email_from": "from_email",
+    "fromemail": "from_email",
+    "from_name": "from_name",
+    "fromname": "from_name",
+    "reply_to": "reply_to",
+    "replyto": "reply_to",
+    "use_tls": "use_tls",
+    "usetls": "use_tls",
+    "use_ssl": "use_ssl",
+    "usessl": "use_ssl",
+    "timeout_seconds": "timeout_seconds",
+    "timeoutseconds": "timeout_seconds",
+    "timeout": "timeout_seconds",
+}
+
+
+def _parse_config_payload(raw: str) -> dict[str, object]:
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        payload = ast.literal_eval(raw)
+    if not isinstance(payload, dict):
+        raise ValueError("SMTP config must be an object")
+    return payload
+
+
+def _normalize_bool(value: object | None, *, default: bool = False) -> bool:
+    if isinstance(value, bool):
+        return value
+    text = normalize_text(value).lower()
+    if not text:
+        return default
+    return text in {"1", "true", "yes", "on"}
+
+
+def _normalize_port(value: object | None, *, default: int) -> int:
+    text = normalize_text(value)
+    if not text:
+        return default
+    port = int(text)
+    if port < 1 or port > 65535:
+        raise ValueError("SMTP port must be between 1 and 65535")
+    return port
+
+
+def _normalize_timeout(value: object | None, *, default: float) -> float:
+    text = normalize_text(value)
+    if not text:
+        return default
+    timeout = float(text)
+    if timeout <= 0:
+        raise ValueError("SMTP timeout must be greater than zero")
+    return timeout
+
+
+def _get_employees_by_ids(*, employee_ids: list[str]) -> list[dict]:
+    from apps.leavesphere.api.v1.helpers.dbQueries import get_employees_by_ids
+
+    return get_employees_by_ids(employee_ids=employee_ids)
+
+
+def _get_employee_managers(*, employee_id: str | None = None, manager_id: str | None = None) -> list[dict]:
+    from apps.leavesphere.api.v1.helpers.dbQueries import get_employee_managers
+
+    return get_employee_managers(employee_id=employee_id, manager_id=manager_id)
+
+
+def _get_pto_types(*, code: str) -> list[dict]:
+    from apps.leavesphere.api.v1.helpers.dbQueries import get_pto_types
+
+    return get_pto_types(code=code)
+
+
+def _get_leave_sphere_smtp_settings() -> SmtpSettings | None:
+    raw = get_app_scoped_env("leavesphere", "SMTP")
+    if raw is None or not str(raw).strip():
+        return None
+
+    payload = _parse_config_payload(str(raw))
+    canonical: dict[str, object] = {}
+    for key, value in payload.items():
+        canonical_key = _SMTP_KEYS.get(str(key).strip().lower().replace("-", "_"))
+        if canonical_key:
+            canonical[canonical_key] = value
+
+    host = normalize_text(canonical.get("host"))
+    from_email = normalize_text(canonical.get("from_email"))
+    if not host or not from_email or "@" not in from_email:
+        raise ValueError("leavesphere.smtp.host and leavesphere.smtp.from_email are required")
+
+    use_ssl = _normalize_bool(canonical.get("use_ssl"), default=False)
+    use_tls = _normalize_bool(canonical.get("use_tls"), default=not use_ssl)
+    if use_ssl and use_tls:
+        raise ValueError("leavesphere.smtp.use_ssl and leavesphere.smtp.use_tls cannot both be true")
+
+    username = normalize_text(canonical.get("username")) or None
+    password = normalize_text(canonical.get("password")) or None
+    if username and not password:
+        raise ValueError("leavesphere.smtp.password is required when leavesphere.smtp.username is provided")
+
+    return SmtpSettings(
+        host=host,
+        port=_normalize_port(canonical.get("port"), default=465 if use_ssl else 587),
+        from_email=from_email,
+        username=username,
+        password=password,
+        from_name=normalize_text(canonical.get("from_name")) or None,
+        reply_to=normalize_text(canonical.get("reply_to")) or None,
+        use_tls=use_tls,
+        use_ssl=use_ssl,
+        timeout_seconds=_normalize_timeout(canonical.get("timeout_seconds"), default=20.0),
+    )
+
+
+def _resolve_employee_contact(*, employee_id: str) -> tuple[str, str] | None:
+    employee_rows = _get_employees_by_ids(employee_ids=[employee_id])
+    if not employee_rows:
+        return None
+
+    employee = employee_rows[0]
+    recipient_email = normalize_text(employee.get("email"))
+    if not recipient_email or "@" not in recipient_email:
+        return None
+
+    first_name = normalize_text(employee.get("firstName"))
+    last_name = normalize_text(employee.get("lastName"))
+    display_name = " ".join(part for part in (first_name, last_name) if part)
+    if not display_name:
+        display_name = normalize_text(employee.get("name")) or recipient_email
+
+    return display_name, recipient_email
+
+
+def _resolve_employee_name(*, employee_id: str) -> str | None:
+    employee_rows = _get_employees_by_ids(employee_ids=[employee_id])
+    if not employee_rows:
+        return None
+
+    employee = employee_rows[0]
+    first_name = normalize_text(employee.get("firstName"))
+    last_name = normalize_text(employee.get("lastName"))
+    display_name = " ".join(part for part in (first_name, last_name) if part)
+    if display_name:
+        return display_name
+    return normalize_text(employee.get("name")) or None
+
+
+def _resolve_manager_contacts(*, employee_id: str) -> list[dict[str, str | None]]:
+    manager_rows = _get_employee_managers(employee_id=employee_id)
+    manager_ids: list[str] = []
+    for row in manager_rows:
+        manager_id = normalize_text(row.get("managerId"))
+        if manager_id and manager_id not in manager_ids:
+            manager_ids.append(manager_id)
+
+    if not manager_ids:
+        return []
+
+    manager_employee_rows = _get_employees_by_ids(employee_ids=manager_ids)
+    manager_by_id = {
+        normalize_text(row.get("id")): row
+        for row in manager_employee_rows
+        if normalize_text(row.get("id"))
+    }
+
+    contacts: list[dict[str, str | None]] = []
+    for manager_id in manager_ids:
+        manager = manager_by_id.get(manager_id)
+        if not manager:
+            continue
+        recipient_email = normalize_text(manager.get("email"))
+        if not recipient_email or "@" not in recipient_email:
+            continue
+        first_name = normalize_text(manager.get("firstName"))
+        last_name = normalize_text(manager.get("lastName"))
+        display_name = " ".join(part for part in (first_name, last_name) if part)
+        if not display_name:
+            display_name = normalize_text(manager.get("name")) or recipient_email
+        contacts.append(
+            {
+                "managerId": manager_id,
+                "managerName": display_name,
+                "managerEmail": recipient_email,
+                "managerPictureUrl": normalize_text(manager.get("pictureUrl")) or None,
+            }
+        )
+    return contacts
+
+
+def _resolve_pto_type_label(*, pto_type_code: str) -> str:
+    type_rows = _get_pto_types(code=pto_type_code) if pto_type_code else []
+    if type_rows:
+        resolved_name = normalize_text(type_rows[0].get("name"))
+        if resolved_name:
+            return resolved_name
+    return normalize_text(pto_type_code) or "PTO"
 
 
 def build_leave_sphere_notification_email(
@@ -112,6 +332,8 @@ def build_leave_sphere_notification_email(
         kind=normalized_kind,
         employee_name=normalized_employee_name,
         pto_type_label=normalized_pto_type,
+        start_date=normalized_start_date,
+        end_date=normalized_end_date,
     )
 
     summary_rows: list[tuple[str, str]] = [
@@ -211,7 +433,7 @@ def build_leave_sphere_approval_email(
     submitted_at: str | None = None,
     manager_name: str | None = None,
     manager_picture_url: str | None = None,
-    quick_approval_url: str,
+    quick_approval_url: str | None = None,
 ) -> LeaveSphereNotificationEmail:
     return build_leave_sphere_notification_email(
         kind="approval",
@@ -262,15 +484,247 @@ def build_leave_sphere_status_email(
     )
 
 
+def send_leave_sphere_status_email(
+    *,
+    transaction: dict,
+    status: Literal["approved", "rejected", "canceled", "updated"],
+    admin_note: str | None = None,
+    approver_picture_url: str | None = None,
+    update_summary: list[str] | None = None,
+) -> bool:
+    if not isinstance(transaction, dict):
+        return False
+
+    smtp_settings = _get_leave_sphere_smtp_settings()
+    if smtp_settings is None:
+        return False
+
+    employee_id = normalize_text(transaction.get("employeeId"))
+    if not employee_id:
+        return False
+
+    contact = _resolve_employee_contact(employee_id=employee_id)
+    if contact is None:
+        return False
+    employee_name, recipient_email = contact
+
+    pto_type_code = normalize_text(transaction.get("ptoTypeCode")).upper()
+    pto_type_label = _resolve_pto_type_label(pto_type_code=pto_type_code)
+    start_date = normalize_text(transaction.get("startDate"))
+    end_date = normalize_text(transaction.get("endDate"))
+    hours = transaction.get("hours")
+    request_id = normalize_text(transaction.get("id"))
+    submitted_at = normalize_text(transaction.get("dateCreated"))
+    reason = normalize_text(transaction.get("description")) or None
+
+    email = build_leave_sphere_status_email(
+        status=status,
+        employee_name=employee_name,
+        pto_type_label=pto_type_label,
+        start_date=start_date,
+        end_date=end_date,
+        hours=hours,
+        request_id=request_id,
+        reason=reason,
+        submitted_at=submitted_at,
+        admin_note=admin_note,
+        approver_picture_url=approver_picture_url,
+        update_summary=update_summary,
+    )
+
+    try:
+        send_smtp_email(
+            settings=smtp_settings,
+            to_addresses=[recipient_email],
+            subject=email.subject,
+            text_body=email.text_body,
+            html_body=email.html_body,
+        )
+    except (SmtpSendError, ValueError, OSError) as exc:
+        _LOGGER.warning(
+            "LeaveSphere status email send failed for %s: %s",
+            recipient_email,
+            exc,
+        )
+        return False
+    return True
+
+
+def send_leave_sphere_confirmation_email(*, transaction: dict) -> bool:
+    if not isinstance(transaction, dict):
+        return False
+
+    smtp_settings = _get_leave_sphere_smtp_settings()
+    if smtp_settings is None:
+        return False
+
+    employee_id = normalize_text(transaction.get("employeeId"))
+    if not employee_id:
+        return False
+
+    contact = _resolve_employee_contact(employee_id=employee_id)
+    if contact is None:
+        return False
+    employee_name, recipient_email = contact
+
+    pto_type_code = normalize_text(transaction.get("ptoTypeCode")).upper()
+    pto_type_label = _resolve_pto_type_label(pto_type_code=pto_type_code)
+    start_date = normalize_text(transaction.get("startDate"))
+    end_date = normalize_text(transaction.get("endDate"))
+    hours = transaction.get("hours")
+    request_id = normalize_text(transaction.get("id"))
+    submitted_at = normalize_text(transaction.get("dateCreated"))
+    reason = normalize_text(transaction.get("description")) or None
+
+    email = build_leave_sphere_confirmation_email(
+        employee_name=employee_name,
+        pto_type_label=pto_type_label,
+        start_date=start_date,
+        end_date=end_date,
+        hours=hours,
+        request_id=request_id,
+        reason=reason,
+        submitted_at=submitted_at,
+    )
+
+    try:
+        send_smtp_email(
+            settings=smtp_settings,
+            to_addresses=[recipient_email],
+            subject=email.subject,
+            text_body=email.text_body,
+            html_body=email.html_body,
+        )
+    except (SmtpSendError, ValueError, OSError) as exc:
+        _LOGGER.warning(
+            "LeaveSphere confirmation email send failed for %s: %s",
+            recipient_email,
+            exc,
+        )
+        return False
+    return True
+
+
+def send_leave_sphere_approval_email(
+    *,
+    transaction: dict,
+    quick_approval_url: str | None = None,
+) -> bool:
+    if not isinstance(transaction, dict):
+        return False
+
+    smtp_settings = _get_leave_sphere_smtp_settings()
+    if smtp_settings is None:
+        return False
+
+    employee_id = normalize_text(transaction.get("employeeId"))
+    if not employee_id:
+        return False
+
+    employee_name = _resolve_employee_name(employee_id=employee_id)
+    if not employee_name:
+        return False
+
+    manager_contacts = _resolve_manager_contacts(employee_id=employee_id)
+    if not manager_contacts:
+        return False
+
+    pto_type_code = normalize_text(transaction.get("ptoTypeCode")).upper()
+    pto_type_label = _resolve_pto_type_label(pto_type_code=pto_type_code)
+    start_date = normalize_text(transaction.get("startDate"))
+    end_date = normalize_text(transaction.get("endDate"))
+    hours = transaction.get("hours")
+    request_id = normalize_text(transaction.get("id"))
+    submitted_at = normalize_text(transaction.get("dateCreated"))
+    reason = normalize_text(transaction.get("description")) or None
+
+    sent_any = False
+    for manager in manager_contacts:
+        email = build_leave_sphere_approval_email(
+            employee_name=employee_name,
+            pto_type_label=pto_type_label,
+            start_date=start_date,
+            end_date=end_date,
+            hours=hours,
+            request_id=request_id,
+            reason=reason,
+            submitted_at=submitted_at,
+            manager_name=manager["managerName"],
+            manager_picture_url=manager["managerPictureUrl"],
+            quick_approval_url=quick_approval_url,
+        )
+        try:
+            send_smtp_email(
+                settings=smtp_settings,
+                to_addresses=[manager["managerEmail"]],
+                subject=email.subject,
+                text_body=email.text_body,
+                html_body=email.html_body,
+            )
+            sent_any = True
+        except (SmtpSendError, ValueError, OSError) as exc:
+            _LOGGER.warning(
+                "LeaveSphere approval email send failed for %s: %s",
+                manager["managerEmail"],
+                exc,
+            )
+    return sent_any
+
+
+def send_leave_sphere_status_preview_email(
+    *,
+    recipient_email: str = LEAVESPHERE_EMAIL_PREVIEW_TEST_RECIPIENT,
+) -> dict[str, str]:
+    smtp_settings = _get_leave_sphere_smtp_settings()
+    if smtp_settings is None:
+        raise ValueError("LeaveSphere SMTP config is required")
+
+    normalized_recipient_email = normalize_text(recipient_email)
+    if not normalized_recipient_email or "@" not in normalized_recipient_email:
+        raise ValueError("recipient email is required")
+
+    email = build_leave_sphere_status_email(
+        status="approved",
+        employee_name="Alex Chen",
+        pto_type_label="Vacation",
+        start_date="2026-06-10",
+        end_date="2026-06-12",
+        hours=24,
+        request_id="pto-preview",
+        reason="Family trip",
+        submitted_at="2026-05-29T10:00:00",
+        admin_note="Preview test email sent from the LeaveSphere email preview.",
+        approver_picture_url="https://picsum.photos/seed/leave-approver/96/96",
+        update_summary=["Date changed to June 11", "Reason updated"],
+    )
+
+    send_smtp_email(
+        settings=smtp_settings,
+        to_addresses=[normalized_recipient_email],
+        subject=email.subject,
+        text_body=email.text_body,
+        html_body=email.html_body,
+    )
+    return {
+        "recipient_email": normalized_recipient_email,
+        "subject": email.subject,
+        "status": "sent",
+    }
+
+
 def _build_variant_spec(
     *,
     kind: LeaveSphereNotificationKind,
     employee_name: str,
     pto_type_label: str,
+    start_date: str,
+    end_date: str,
 ) -> dict[str, str]:
+    date_suffix = _format_subject_date_range(start_date, end_date)
+    date_part = f" | {date_suffix}" if date_suffix else ""
     if kind == "confirmation":
         return {
-            "subject": f"LeaveSphere: PTO request submitted for {employee_name}",
+            "subject": f"PTO request submitted for {employee_name}{date_part}",
             "title": "Confirmation of PTO Request",
             "intro": (
                 "This email is to confirm that your request for paid time off has been received. "
@@ -289,7 +743,7 @@ def _build_variant_spec(
         }
     if kind == "approval":
         return {
-            "subject": f"LeaveSphere: approval needed for {employee_name}",
+            "subject": f"New PTO Approval needed for {employee_name}{date_part}",
             "title": "PTO Request Needs Your Approval",
             "intro": (
                 "A new Paid Time Off (PTO) request has been submitted by "
@@ -297,7 +751,7 @@ def _build_variant_spec(
                 "convenience in the PTO management system."
             ),
             "badge": "AWAITING APPROVAL",
-            "badge_tone": "amber",
+            "badge_tone": "blue",
             "button_label": "Open Quick Approval",
             "footer_note": "This is an automated approval email. Please review the request in LeaveSphere.",
             "review_card_title": "",
@@ -305,7 +759,7 @@ def _build_variant_spec(
         }
     if kind == "approved":
         return {
-            "subject": f"LeaveSphere: PTO request approved for {employee_name}",
+            "subject": f"PTO request approved for {employee_name}{date_part}",
             "title": "PTO Request Approved",
             "intro": (
                 "We are pleased to inform you that your request for Paid Time Off below has been approved."
@@ -322,7 +776,7 @@ def _build_variant_spec(
         }
     if kind == "rejected":
         return {
-            "subject": f"LeaveSphere: PTO request rejected for {employee_name}",
+            "subject": f"PTO request rejected for {employee_name}{date_part}",
             "title": "PTO Request Rejected",
             "intro": "We regret to inform you that your request for Paid Time Off below has not been approved.",
             "badge": "REJECTED",
@@ -337,11 +791,11 @@ def _build_variant_spec(
         }
     if kind == "canceled":
         return {
-            "subject": f"LeaveSphere: PTO request canceled for {employee_name}",
+            "subject": f"PTO request canceled for {employee_name}{date_part}",
             "title": "PTO Request Canceled",
             "intro": "We regret to inform you that your recent request for Paid Time Off below has been canceled.",
             "badge": "CANCELED",
-            "badge_tone": "neutral",
+            "badge_tone": "gray",
             "button_label": "View Request in LeaveSphere",
             "footer_note": "This is an automated cancellation notice. Please do not reply directly to this email.",
             "review_card_title": "Next Steps",
@@ -352,7 +806,7 @@ def _build_variant_spec(
             ),
         }
     return {
-        "subject": f"LeaveSphere: PTO request updated for {employee_name}",
+        "subject": f"PTO request updated for {employee_name}{date_part}",
         "title": "PTO Request Updated",
         "intro": "This email is to inform you that there has been an update to your paid time off request originally submitted.",
         "badge": "UPDATED",
@@ -424,10 +878,10 @@ def _build_html_email(
             body_html=_build_bullets_html(update_summary),
         )
     button_html = ""
-    if kind == "approval":
+    if kind == "approval" and quick_approval_url:
         button_html = _build_button_html(
             label=button_label,
-            href=quick_approval_url or "#",
+            href=quick_approval_url,
         )
 
     return f"""<!doctype html>
@@ -730,14 +1184,16 @@ def _build_chip_html(label: str, tone: str) -> str:
     tone_map = {
         "green": ("#e7f7ef", "#0f7a4f"),
         "amber": ("#fff4df", "#9a5b00"),
+        "blue": ("#dbeafe", "#1d4ed8"),
         "red": ("#fde8ea", "#b42318"),
+        "gray": ("#eef1f4", "#475569"),
         "neutral": ("#ece7f7", "#15003d"),
         "violet": ("#ece7fb", "#2d0a6a"),
         "purple": ("#ece7fb", "#2d0a6a"),
     }
     background, text_color = tone_map.get(tone, tone_map["neutral"])
     return f"""
-    <span style="display:inline-block;padding:7px 15px;border-radius:999px;background:{background};color:{text_color};font-family:{FONT_HEADLINE};font-size:10px;line-height:1.05;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;border:1px solid rgba(45,10,106,0.18);position:relative;top:-1px;">
+    <span style="display:inline-block;padding:7px 15px;border-radius:999px;background:{background};color:{text_color};font-family:{FONT_HEADLINE};font-size:10px;line-height:1.05;font-weight:700;letter-spacing:0.14em;text-transform:uppercase;border:1px solid rgba(71,85,105,0.18);position:relative;top:-1px;">
       {escape_html(label)}
     </span>
     """
@@ -781,9 +1237,9 @@ def _build_text_body(
     for label, value in summary_rows:
         if value:
             lines.append(f"- {label}: {value}")
-    if kind == "approval":
+    if kind == "approval" and quick_approval_url:
         lines.append("")
-        lines.append(f"Open Quick Approval: {quick_approval_url or '#'}")
+        lines.append(f"Open Quick Approval: {quick_approval_url}")
     if kind == "confirmation" and reason:
         lines.append("")
         lines.append("Request Note:")
@@ -833,8 +1289,12 @@ def _initials(value: str) -> str:
 def _tone_class(tone: str) -> str:
     if tone in {"green", "amber"}:
         return "green"
+    if tone == "blue":
+        return "blue"
     if tone == "red":
         return "red"
+    if tone == "gray":
+        return "gray"
     if tone == "violet":
         return "violet"
     return "neutral"
@@ -846,6 +1306,29 @@ def _format_hours(value: object) -> str:
     except (TypeError, ValueError):
         return normalize_text(value) or "-"
     return f"{hours:.1f} Hours"
+
+
+def _format_subject_date(value: str | None) -> str:
+    text = normalize_text(value)
+    if not text:
+        return ""
+    try:
+        parsed = date.fromisoformat(text[:10])
+    except ValueError:
+        return text
+    return parsed.strftime("%m/%d/%Y")
+
+
+def _format_subject_date_range(start_date: str | None, end_date: str | None) -> str:
+    start_text = _format_subject_date(start_date)
+    end_text = _format_subject_date(end_date)
+    if not start_text and not end_text:
+        return ""
+    if start_text and start_text == end_text:
+        return start_text
+    if start_text and end_text:
+        return f"{start_text} - {end_text}"
+    return start_text or end_text
 
 
 def _format_date(value: str | None) -> str:

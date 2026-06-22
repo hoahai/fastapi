@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Body, Depends, Form, HTTPException, Query, Request
 from pydantic import BaseModel
 
 from apps.leavesphere.api.v1.helpers.leaveManagement import (
@@ -11,7 +11,12 @@ from apps.leavesphere.api.v1.helpers.leaveManagement import (
     update_leave_management_request,
     update_leave_management_setup_data,
 )
+from apps.leavesphere.api.v1.helpers.notification_emails import (
+    LEAVESPHERE_EMAIL_PREVIEW_TEST_RECIPIENT,
+    send_leave_sphere_status_preview_email,
+)
 from apps.leavesphere.api.v1.permissions import require_leavesphere_admin
+from shared.smtp import SmtpSendError
 
 router = APIRouter(
     prefix="/admin/pto",
@@ -87,6 +92,47 @@ class LeaveManagementSetupRequest(_LeaveSphereModel):
     date: str | None = None
     teamRegion: str | None = None
     active: bool | int | str | None = None
+
+
+@router.post("/email-preview/test-email")
+def send_leave_management_email_preview_test_route(
+    request: Request,
+    toEmail: str = Form(LEAVESPHERE_EMAIL_PREVIEW_TEST_RECIPIENT),
+):
+    """
+    Send a LeaveSphere status preview email to a test recipient.
+
+    Example request:
+        POST /api/leavesphere/v1/admin/pto/email-preview/test-email
+        toEmail=hai@theautoadagency.com
+
+    Example response:
+        {
+          "meta": {"timestamp": "2026-05-29T10:00:00+07:00", "duration_ms": 2},
+          "data": {
+            "status": "sent",
+            "recipient_email": "hai@theautoadagency.com",
+            "subject": "PTO request approved for Alex Chen | 06/10/2026 - 06/12/2026"
+          }
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires leavesphere.admin permission or workspace.super_admin
+        - Requires valid API key or bearer token in compat mode
+        - Requires `leavesphere.smtp` to be configured
+        - Sends the approved LeaveSphere status template sample
+        - `toEmail` defaults to `hai@theautoadagency.com`
+    """
+    try:
+        recipient_email = str(toEmail or "").strip() or LEAVESPHERE_EMAIL_PREVIEW_TEST_RECIPIENT
+        if "@" not in recipient_email:
+            raise ValueError("toEmail must be a valid email address")
+        return send_leave_sphere_status_preview_email(recipient_email=recipient_email)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except (SmtpSendError, OSError) as exc:
+        raise HTTPException(status_code=502, detail=str(exc)) from exc
 
 
 @router.get("/workspace")
@@ -308,6 +354,7 @@ def review_leave_management_request_route(
         - The transaction must already exist
         - Admin review bypasses direct-manager validation
         - `approverNote` is required when `action` is `reject` or `cancel`
+        - When `leavesphere.smtp` is configured, the affected employee receives a status email using the LeaveSphere template
         - Mutation responses may return `workspacePatch` instead of a full `workspace` when the server can patch a cached snapshot
     """
     try:
