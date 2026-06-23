@@ -22,6 +22,7 @@ export type LeaveSphereQuickApprovalLoadResult = {
   preview: LeaveSphereQuickApprovalPreview | null;
   handledDecision: LeaveSphereQuickApprovalDecision | null;
   handledNote: string | null;
+  handledAt?: string | null;
   canAct: boolean;
   recipientRole: "manager" | "admin" | null;
   recipientEmail: string | null;
@@ -419,6 +420,7 @@ export async function loadLeaveSphereQuickApproval(token: string): Promise<Leave
   const state = normalizeViewState(body?.state ?? body?.tokenState ?? body?.status);
   const handledDecision = normalizeDecision(body?.decision ?? body?.handledDecision);
   const handledNote = asString(body?.handledNote) || asString(body?.approverNote) || null;
+  const handledAt = asString(body?.handledAt) || asString(body?.usedAt) || null;
   const preview = parsePreview(body);
   const canAct = normalizeCanAct(body?.canAct);
   const recipientRole = (() => {
@@ -439,6 +441,7 @@ export async function loadLeaveSphereQuickApproval(token: string): Promise<Leave
     preview,
     handledDecision,
     handledNote,
+    handledAt,
     canAct,
     recipientRole,
     recipientEmail,
@@ -469,6 +472,7 @@ export async function refreshLeaveSphereQuickApproval(token: string): Promise<Le
   const state = normalizeViewState(body?.state ?? body?.tokenState ?? body?.status);
   const handledDecision = normalizeDecision(body?.decision ?? body?.handledDecision);
   const handledNote = asString(body?.handledNote) || asString(body?.approverNote) || null;
+  const handledAt = asString(body?.handledAt) || asString(body?.usedAt) || null;
   const preview = parsePreview(body);
   const canAct = normalizeCanAct(body?.canAct);
   const recipientRole = (() => {
@@ -489,6 +493,7 @@ export async function refreshLeaveSphereQuickApproval(token: string): Promise<Le
     preview,
     handledDecision,
     handledNote,
+    handledAt,
     canAct,
     recipientRole,
     recipientEmail,

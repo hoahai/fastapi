@@ -9,6 +9,7 @@ from apps.leavesphere.api.v1.helpers.dbQueries import (
     reject_pending_pto_request,
     update_pto_transaction,
 )
+from shared.tenant import get_tenant_id
 
 def finalize_pending_pto_action(
     *,
@@ -108,6 +109,16 @@ def finalize_pending_pto_action(
             admin_note=approver_note,
             note_label_override=note_label_override,
         )
+
+    tenant_id = str(get_tenant_id() or "").strip()
+    if tenant_id:
+        from apps.leavesphere.api.v1.helpers.quickApproval import (
+            clear_quick_approval_refresh_cache,
+            clear_quick_approval_transaction_cache,
+        )
+
+        clear_quick_approval_refresh_cache(tenant_id=tenant_id, request_id=normalized_id)
+        clear_quick_approval_transaction_cache(tenant_id=tenant_id, request_id=normalized_id)
 
     return {
         "id": normalized_id,

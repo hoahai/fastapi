@@ -43,11 +43,11 @@ def load_quick_approval_route(token: str, debug: bool = False, refresh: bool = F
     Example response:
         {
           "meta": {"timestamp": "2026-06-22T10:00:00+07:00", "duration_ms": 2},
-          "data": {
-            "state": "ready",
-            "preview": {
-              "requestId": "pto-123",
-              "employeeName": "Alex Chen",
+            "data": {
+              "state": "ready",
+              "preview": {
+                "requestId": "pto-123",
+                "employeeName": "Alex Chen",
               "pictureUrl": "https://example.com/avatars/alex-chen.jpg",
               "ptoTypeCode": "VAC",
               "ptoTypeLabel": "Vacation",
@@ -56,11 +56,12 @@ def load_quick_approval_route(token: str, debug: bool = False, refresh: bool = F
             "hoursRequested": 24,
             "reason": "Family trip",
             "currentStatus": "pending"
-          },
-            "handledDecision": null,
-            "message": null,
-            "recipientRole": "manager",
-            "recipientName": "Marco Camacho",
+              },
+              "handledDecision": null,
+              "handledAt": null,
+              "message": null,
+              "recipientRole": "manager",
+              "recipientName": "Marco Camacho",
             "recipientPictureUrl": "https://example.com/avatars/marco-camacho.jpg"
           }
         }

@@ -36,6 +36,7 @@ _ROLE_PRIORITY = {_ROLE_MANAGER: 0, _ROLE_ADMIN: 1}
 _CONTACT_CACHE_BUCKET = "leavesphere_quick_approval"
 _CONTACT_CACHE_TTL_SECONDS = 900
 _REFRESH_CACHE_TTL_SECONDS = 900
+_TRANSACTION_CACHE_TTL_SECONDS = 900
 
 
 @dataclass(frozen=True)
@@ -223,6 +224,55 @@ def _clear_quick_approval_refresh_cache(*, tenant_id: str, request_id: str) -> i
         cache_key_prefix=f"refresh::{_normalize_text(request_id)}::",
         tenant_id=tenant_id,
     )
+
+
+def clear_quick_approval_refresh_cache(*, tenant_id: str, request_id: str) -> int:
+    return _clear_quick_approval_refresh_cache(tenant_id=tenant_id, request_id=request_id)
+
+
+def _build_transaction_cache_key(*, request_id: str) -> str:
+    return f"transaction::{_normalize_text(request_id)}"
+
+
+def _read_quick_approval_transaction_cache(*, tenant_id: str, request_id: str) -> dict[str, object] | None:
+    cache_key = _build_transaction_cache_key(request_id=request_id)
+    value, found = get_tenant_shared_cache_value(
+        bucket=_CONTACT_CACHE_BUCKET,
+        cache_key=cache_key,
+        ttl_seconds=_TRANSACTION_CACHE_TTL_SECONDS,
+        tenant_id=tenant_id,
+    )
+    if not found or not isinstance(value, dict):
+        return None
+    return value
+
+
+def _write_quick_approval_transaction_cache(
+    *,
+    tenant_id: str,
+    request_id: str,
+    value: dict[str, object],
+) -> None:
+    cache_key = _build_transaction_cache_key(request_id=request_id)
+    cache_value = deepcopy(value)
+    set_tenant_shared_cache_value(
+        bucket=_CONTACT_CACHE_BUCKET,
+        cache_key=cache_key,
+        value=cache_value,
+        tenant_id=tenant_id,
+    )
+
+
+def _clear_quick_approval_transaction_cache(*, tenant_id: str, request_id: str) -> int:
+    return delete_tenant_shared_cache_values_by_prefix(
+        bucket=_CONTACT_CACHE_BUCKET,
+        cache_key_prefix=f"transaction::{_normalize_text(request_id)}",
+        tenant_id=tenant_id,
+    )
+
+
+def clear_quick_approval_transaction_cache(*, tenant_id: str, request_id: str) -> int:
+    return _clear_quick_approval_transaction_cache(tenant_id=tenant_id, request_id=request_id)
 
 
 def _parse_iso_datetime(value: object | None) -> datetime | None:
@@ -924,12 +974,53 @@ def _grant_state(row: dict[str, object]) -> tuple[str, str | None]:
     return "ready", None
 
 
-def _current_transaction(*, transaction_id: str) -> dict | None:
+def _current_transaction(*, tenant_id: str | None, transaction_id: str) -> dict | None:
+    normalized_tenant_id = _normalize_text(tenant_id)
+    normalized_transaction_id = _normalize_text(transaction_id)
+    if normalized_tenant_id:
+        cached_transaction = _read_quick_approval_transaction_cache(
+            tenant_id=normalized_tenant_id,
+            request_id=normalized_transaction_id,
+        )
+        if cached_transaction is not None:
+            return cached_transaction
     rows = get_pto_transactions(transaction_id=transaction_id)
     if not rows:
         return None
     row = rows[0]
-    return row if isinstance(row, dict) else None
+    if not isinstance(row, dict):
+        return None
+    if normalized_tenant_id:
+        _write_quick_approval_transaction_cache(
+            tenant_id=normalized_tenant_id,
+            request_id=normalized_transaction_id,
+            value=row,
+        )
+    return row
+
+
+def _hydrate_recipient_contact(
+    *,
+    tenant_id: str,
+    recipient_role: str,
+    recipient_employee_id: str | None,
+    recipient_name: str | None,
+    recipient_picture_url: str | None,
+) -> tuple[str | None, str | None]:
+    if recipient_role != _ROLE_MANAGER:
+        return recipient_name, recipient_picture_url
+    normalized_employee_id = _normalize_text(recipient_employee_id)
+    if not normalized_employee_id:
+        return recipient_name, recipient_picture_url
+    if recipient_name and recipient_picture_url:
+        return recipient_name, recipient_picture_url
+    contact = _load_employee_contact(tenant_id=tenant_id, employee_id=normalized_employee_id)
+    if not contact:
+        return recipient_name, recipient_picture_url
+    return (
+        recipient_name or _normalize_text(contact.get("employeeName")) or None,
+        recipient_picture_url or _normalize_text(contact.get("pictureUrl")) or None,
+    )
 
 
 def _to_preview(*, tenant_id: str | None, transaction: dict, hydrate_contact: bool = False) -> dict[str, object]:
@@ -1019,7 +1110,9 @@ def load_quick_approval_context(*, token: str, debug: bool = False, refresh: boo
         recipient_email = _normalize_text(grant.get("recipient_email")).lower() or None
         recipient_name = _normalize_text(grant.get("recipient_name")) or _normalize_text(claims.get("recipient_name")) or None
         recipient_picture_url = _normalize_text(grant.get("recipient_picture_url")) or _normalize_text(claims.get("recipient_picture_url")) or None
+        recipient_employee_id = _normalize_text(grant.get("recipient_employee_id")) or None
         grant_jti = _normalize_text(grant.get("jti"))
+        handled_at = _normalize_text(grant.get("used_at")) or None
         if debug_trace is not None:
             debug_trace["grant_state"] = state
             debug_trace["request_id"] = request_id
@@ -1031,7 +1124,7 @@ def load_quick_approval_context(*, token: str, debug: bool = False, refresh: boo
                 request_id=request_id,
                 recipient_role=recipient_role,
                 recipient_email=recipient_email,
-                recipient_employee_id=_normalize_text(grant.get("recipient_employee_id")) or None,
+                recipient_employee_id=recipient_employee_id,
                 grant_jti=grant_jti,
             )
             if cached_refresh is not None:
@@ -1040,6 +1133,41 @@ def load_quick_approval_context(*, token: str, debug: bool = False, refresh: boo
                 cached_response["recipientEmail"] = cached_response.get("recipientEmail") or recipient_email
                 cached_response["recipientName"] = cached_response.get("recipientName") or recipient_name
                 cached_response["recipientPictureUrl"] = cached_response.get("recipientPictureUrl") or recipient_picture_url
+                cached_response["recipientName"], cached_response["recipientPictureUrl"] = _hydrate_recipient_contact(
+                    tenant_id=tenant_id,
+                    recipient_role=recipient_role,
+                    recipient_employee_id=recipient_employee_id,
+                    recipient_name=_normalize_text(cached_response.get("recipientName")) or recipient_name,
+                    recipient_picture_url=_normalize_text(cached_response.get("recipientPictureUrl")) or recipient_picture_url,
+                )
+                if debug_trace is not None:
+                    debug_trace["reason"] = "refresh_cache_hit"
+                    debug_trace["cache_hit"] = True
+                    debug_trace["preview_source"] = "refresh_cache"
+                    cached_response["debugTrace"] = debug_trace
+                return cached_response
+        if refresh and state == "already_handled" and grant_jti and recipient_email:
+            cached_refresh = _read_quick_approval_refresh_cache(
+                tenant_id=tenant_id,
+                request_id=request_id,
+                recipient_role=recipient_role,
+                recipient_email=recipient_email,
+                recipient_employee_id=recipient_employee_id,
+                grant_jti=grant_jti,
+            )
+            if cached_refresh is not None:
+                cached_response = deepcopy(cached_refresh)
+                cached_response["recipientRole"] = cached_response.get("recipientRole") or recipient_role or None
+                cached_response["recipientEmail"] = cached_response.get("recipientEmail") or recipient_email
+                cached_response["recipientName"] = cached_response.get("recipientName") or recipient_name
+                cached_response["recipientPictureUrl"] = cached_response.get("recipientPictureUrl") or recipient_picture_url
+                cached_response["recipientName"], cached_response["recipientPictureUrl"] = _hydrate_recipient_contact(
+                    tenant_id=tenant_id,
+                    recipient_role=recipient_role,
+                    recipient_employee_id=recipient_employee_id,
+                    recipient_name=_normalize_text(cached_response.get("recipientName")) or recipient_name,
+                    recipient_picture_url=_normalize_text(cached_response.get("recipientPictureUrl")) or recipient_picture_url,
+                )
                 if debug_trace is not None:
                     debug_trace["reason"] = "refresh_cache_hit"
                     debug_trace["cache_hit"] = True
@@ -1051,9 +1179,10 @@ def load_quick_approval_context(*, token: str, debug: bool = False, refresh: boo
         if not refresh and state != "ready":
             handled_note = _normalize_text(grant.get("used_reason")) or None
             if state == "already_handled" and not handled_note:
-                transaction = _current_transaction(transaction_id=request_id)
+                transaction = _current_transaction(tenant_id=tenant_id, transaction_id=request_id)
                 if transaction is not None:
                     handled_note = _normalize_text(transaction.get("approverNote")) or None
+                    handled_at = handled_at or _normalize_text(transaction.get("dateUpdated")) or None
                     if debug_trace is not None:
                         debug_trace["handled_note_source"] = "live_request"
             elif state == "already_handled" and debug_trace is not None:
@@ -1065,6 +1194,7 @@ def load_quick_approval_context(*, token: str, debug: bool = False, refresh: boo
                 "preview": None if state == "invalid" else preview,
                 "handledDecision": handled_decision,
                 "handledNote": handled_note,
+                "handledAt": handled_at,
                 "message": (
                     "This quick approval link has expired."
                     if state == "expired"
@@ -1081,6 +1211,16 @@ def load_quick_approval_context(*, token: str, debug: bool = False, refresh: boo
                 debug_trace["reason"] = state
                 debug_trace["preview_source"] = "grant_snapshot"
                 response["debugTrace"] = debug_trace
+            if state == "already_handled" and grant_jti and recipient_email:
+                _write_quick_approval_refresh_cache(
+                    tenant_id=tenant_id,
+                    request_id=request_id,
+                    recipient_role=recipient_role,
+                    recipient_email=recipient_email,
+                    recipient_employee_id=_normalize_text(grant.get("recipient_employee_id")) or None,
+                    grant_jti=grant_jti,
+                    value=response,
+                )
             return response
 
         if not refresh:
@@ -1089,6 +1229,7 @@ def load_quick_approval_context(*, token: str, debug: bool = False, refresh: boo
                 "preview": preview,
                 "handledDecision": None,
                 "handledNote": None,
+                "handledAt": None,
                 "message": None,
                 "recipientRole": recipient_role or None,
                 "recipientEmail": recipient_email,
@@ -1102,7 +1243,7 @@ def load_quick_approval_context(*, token: str, debug: bool = False, refresh: boo
                 response["debugTrace"] = debug_trace
             return response
 
-        transaction = _current_transaction(transaction_id=request_id)
+        transaction = _current_transaction(tenant_id=tenant_id, transaction_id=request_id)
         if transaction is None:
             preview["currentStatus"] = _normalize_text(preview.get("currentStatus")).lower() or "pending"
             response = {
@@ -1110,6 +1251,7 @@ def load_quick_approval_context(*, token: str, debug: bool = False, refresh: boo
                 "preview": preview,
                 "handledDecision": None,
                 "handledNote": None,
+                "handledAt": None,
                 "message": "This quick approval link is valid, but the live request record could not be loaded.",
                 "recipientRole": recipient_role or None,
                 "recipientEmail": recipient_email,
@@ -1126,13 +1268,13 @@ def load_quick_approval_context(*, token: str, debug: bool = False, refresh: boo
         if debug_trace is not None:
             debug_trace["transaction_found"] = True
             debug_trace["transaction_status"] = current_status
-        if recipient_role == _ROLE_MANAGER and (not recipient_name or not recipient_picture_url):
-            recipient_employee_id = _normalize_text(grant.get("recipient_employee_id"))
-            if recipient_employee_id:
-                contact = _load_employee_contact(tenant_id=tenant_id, employee_id=recipient_employee_id)
-                if contact:
-                    recipient_name = recipient_name or _normalize_text(contact.get("employeeName")) or None
-                    recipient_picture_url = recipient_picture_url or _normalize_text(contact.get("pictureUrl")) or None
+        recipient_name, recipient_picture_url = _hydrate_recipient_contact(
+            tenant_id=tenant_id,
+            recipient_role=recipient_role,
+            recipient_employee_id=recipient_employee_id,
+            recipient_name=recipient_name,
+            recipient_picture_url=recipient_picture_url,
+        )
         if current_status != "pending":
             preview = _to_preview(tenant_id=tenant_id, transaction=transaction, hydrate_contact=True)
             preview["currentStatus"] = current_status
@@ -1142,6 +1284,7 @@ def load_quick_approval_context(*, token: str, debug: bool = False, refresh: boo
                 "preview": preview,
                 "handledDecision": handled,
                 "handledNote": _normalize_text(transaction.get("approverNote")) or None,
+                "handledAt": _normalize_text(transaction.get("dateUpdated")) or handled_at,
                 "message": "This request has already been handled.",
                 "recipientRole": recipient_role or None,
                 "recipientEmail": recipient_email,
@@ -1151,6 +1294,16 @@ def load_quick_approval_context(*, token: str, debug: bool = False, refresh: boo
             if debug_trace is not None:
                 debug_trace["reason"] = "transaction_not_pending"
                 response["debugTrace"] = debug_trace
+            if grant_jti and recipient_email:
+                _write_quick_approval_refresh_cache(
+                    tenant_id=tenant_id,
+                    request_id=request_id,
+                    recipient_role=recipient_role,
+                    recipient_email=recipient_email,
+                    recipient_employee_id=recipient_employee_id,
+                    grant_jti=grant_jti,
+                    value=response,
+                )
             return response
 
         if recipient_role == _ROLE_MANAGER:
@@ -1164,6 +1317,7 @@ def load_quick_approval_context(*, token: str, debug: bool = False, refresh: boo
                     "preview": preview,
                     "handledDecision": None,
                     "handledNote": None,
+                    "handledAt": None,
                     "message": "This quick approval link is valid for preview, but the manager assignment could not be verified.",
                     "recipientRole": recipient_role,
                     "recipientEmail": recipient_email,
@@ -1184,6 +1338,7 @@ def load_quick_approval_context(*, token: str, debug: bool = False, refresh: boo
                     "preview": preview,
                     "handledDecision": None,
                     "handledNote": None,
+                    "handledAt": None,
                     "message": "This quick approval link is valid for preview, but this manager is no longer assigned to the request.",
                     "recipientRole": recipient_role,
                     "recipientEmail": recipient_email,
@@ -1205,6 +1360,7 @@ def load_quick_approval_context(*, token: str, debug: bool = False, refresh: boo
             "preview": preview,
             "handledDecision": None,
             "handledNote": None,
+            "handledAt": None,
             "message": None,
             "recipientRole": recipient_role or None,
             "recipientEmail": recipient_email,
@@ -1224,7 +1380,7 @@ def load_quick_approval_context(*, token: str, debug: bool = False, refresh: boo
                 request_id=request_id,
                 recipient_role=recipient_role,
                 recipient_email=recipient_email,
-                recipient_employee_id=_normalize_text(grant.get("recipient_employee_id")) or None,
+                recipient_employee_id=recipient_employee_id,
                 grant_jti=grant_jti,
                 value=response,
             )
@@ -1333,7 +1489,7 @@ def submit_quick_approval_decision(*, token: str, decision: Literal["approved", 
         if state == "already_handled":
             return {"state": "already_handled", "decision": handled_decision, "message": "This request has already been handled."}
 
-        transaction = _current_transaction(transaction_id=request_id)
+        transaction = _current_transaction(tenant_id=tenant_id, transaction_id=request_id)
         if transaction is None:
             return {"state": "invalid", "decision": None, "message": "This quick approval link is invalid."}
         if _normalize_text(transaction.get("status")).lower() != "pending":
