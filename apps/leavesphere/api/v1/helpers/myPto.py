@@ -756,10 +756,7 @@ def create_my_pto_request(*, request, payload: dict) -> dict:
         "description": _normalize_text(payload.get("description")) or None,
         "approverNote": None,
         "approverId": None,
-        "calendarId": _normalize_text(payload.get("calendarId")) or None,
     }
-    if item["calendarId"] == "":
-        item["calendarId"] = None
 
     from apps.leavesphere.api.v1.helpers.ptoTransactions import create_request as create_request_transaction
 

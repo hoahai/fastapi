@@ -4,8 +4,10 @@ from fastapi import HTTPException
 from fastapi.routing import APIRoute
 from starlette.requests import Request
 
+from main import app as root_app
 from apps.leavesphere.api.main import app as leavesphere_app
 from apps.leavesphere.api.v1.router import router as leavesphere_router
+from apps.leavesphere.api.v1.endpoints.publicGoogleCalendar import router as public_google_calendar_router
 from shared.requestValidation import validate_query_params
 
 
@@ -52,6 +54,9 @@ class LeaveSphereRouteContractTests(unittest.TestCase):
             ("POST", "/v1/admin/pto/review"),
             ("POST", "/v1/admin/pto/balances/adjust"),
             ("POST", "/v1/admin/pto/setup"),
+            ("GET", "/v1/admin/google-calendar/oauth/status"),
+            ("GET", "/v1/admin/google-calendar/oauth/url"),
+            ("DELETE", "/v1/admin/google-calendar/oauth/connection"),
             ("GET", "/v1/ui/my-pto/load"),
             ("POST", "/v1/ui/my-pto/requests"),
             ("PUT", "/v1/ui/my-pto/requests"),
@@ -105,6 +110,34 @@ class LeaveSphereRouteContractTests(unittest.TestCase):
         self.assertIn("/v1/admin/pto/review", route_paths)
         self.assertIn("/v1/admin/pto/balances/adjust", route_paths)
         self.assertIn("/v1/admin/pto/setup", route_paths)
+
+    def test_google_calendar_public_callback_route_is_registered(self):
+        callback_paths = [
+            str(getattr(route, "path", "") or "")
+            for route in leavesphere_app.routes
+            if "/v1/public/google-calendar/oauth" in str(getattr(route, "path", "") or "")
+        ]
+        self.assertIn("/v1/public/google-calendar/oauth/callback", callback_paths)
+
+    def test_google_calendar_public_path_prefix_is_registered(self):
+        public_prefixes = tuple(getattr(leavesphere_app.state, "public_path_prefixes", ()))
+        self.assertIn("/api/leavesphere/v1/public/google-calendar/oauth", public_prefixes)
+
+    def test_root_public_path_prefix_includes_google_calendar_callback(self):
+        public_prefixes = tuple(getattr(root_app.state, "public_path_prefixes", ()))
+        self.assertIn("/api/leavesphere/v1/public/google-calendar/oauth", public_prefixes)
+
+    def test_google_calendar_callback_route_allows_unknown_query_params(self):
+        target_route = None
+        for route in public_google_calendar_router.routes:
+            if isinstance(route, APIRoute) and route.path == "/v1/public/google-calendar/oauth/callback":
+                target_route = route
+                break
+
+        self.assertIsNotNone(target_route)
+        self.assertTrue(
+            getattr(target_route.endpoint, "__allow_unknown_query_params__", False),
+        )
 
     def test_unknown_query_params_are_rejected(self):
         target_route = None

@@ -47,7 +47,6 @@ class LeaveManagementRequestCreateRequest(_LeaveSphereModel):
     description: str | None = None
     year: int | str | None = None
     ptoTypeCode: str | None = None
-    calendarId: str | None = None
     approveImmediately: bool | None = None
 
 
@@ -60,7 +59,6 @@ class LeaveManagementRequestUpdateRequest(_LeaveSphereModel):
     description: str | None = None
     year: int | str | None = None
     ptoTypeCode: str | None = None
-    calendarId: str | None = None
 
 
 class LeaveManagementReviewRequest(_LeaveSphereModel):

@@ -77,11 +77,15 @@ import {
 import {
   adjustLeaveManagementBalance,
   createLeaveManagementRequest,
+  disconnectLeaveManagementGoogleCalendarConnection,
+  loadLeaveManagementGoogleCalendarAuthorizationUrl,
+  loadLeaveManagementGoogleCalendarConnectionStatus,
   loadLeaveManagementWorkspace,
   mergeLeaveManagementWorkspace,
   reviewLeaveManagementRequest,
   updateLeaveManagementRequest,
   updateLeaveManagementSetupData,
+  type LeaveManagementGoogleCalendarConnectionStatus,
   type LeaveManagementEmployee,
   type LeaveManagementTypeConfig,
   type LeaveManagementSetupInput,
@@ -785,6 +789,7 @@ export default function LeaveManagementPage() {
     return `leavesphere:leave-management:${tenant}:${currentUserId}`;
   }, [auth.tenantSlug, currentUserId]);
   const tenantSlug = asString(auth.tenantSlug);
+  const canUseGoogleCalendarAdminApi = canAdmin && auth.status === "authenticated" && Boolean(tenantSlug);
   const canRestorePageState = auth.status === "authenticated" && Boolean(tenantSlug) && Boolean(pageStateUserKey);
   const pageStateScope = useMemo<ScopedPageState | null>(() => {
     if (!canRestorePageState) {
@@ -863,6 +868,10 @@ export default function LeaveManagementPage() {
   const [isSetupModalOpen, setIsSetupModalOpen] = useState(false);
   const [setupForm, setSetupForm] = useState<SetupForm>(EMPTY_SETUP_FORM);
   const [setupError, setSetupError] = useState<string | null>(null);
+  const [googleCalendarConnectionStatus, setGoogleCalendarConnectionStatus] = useState<LeaveManagementGoogleCalendarConnectionStatus | null>(null);
+  const [isGoogleCalendarStatusLoading, setIsGoogleCalendarStatusLoading] = useState(false);
+  const [isGoogleCalendarConnecting, setIsGoogleCalendarConnecting] = useState(false);
+  const [isGoogleCalendarDisconnecting, setIsGoogleCalendarDisconnecting] = useState(false);
   const [draftRecentHistorySearch, setDraftRecentHistorySearch] = useState("");
   const [appliedRecentHistorySearch, setAppliedRecentHistorySearch] = useState("");
   const [scrollY, setScrollY] = useState(0);
@@ -1754,6 +1763,172 @@ export default function LeaveManagementPage() {
   const handleClearRecentHistorySearch = useCallback(() => {
     applyRecentHistorySearchKeyword("");
   }, [applyRecentHistorySearchKeyword]);
+
+  const handleConnectGoogleCalendar = useCallback(async () => {
+    setIsGoogleCalendarConnecting(true);
+    const popup = window.open("", "_blank", "width=640,height=760");
+    if (!popup) {
+      setIsGoogleCalendarConnecting(false);
+      toast.error(
+        "Google Calendar connection failed",
+        "Your browser blocked the sign-in tab. Allow popups for LeaveSphere and try again.",
+      );
+      return;
+    }
+    popup.document.write("<!doctype html><title>LeaveSphere Google Calendar</title><p style=\"font-family:system-ui,sans-serif;padding:24px;color:#0f172a\">Opening Google sign-in...</p>");
+    try {
+      const result = await loadLeaveManagementGoogleCalendarAuthorizationUrl({
+        requestJson,
+      });
+      const authorizationUrl = result.authorizationUrl?.trim();
+      if (!authorizationUrl) {
+        try {
+          popup.close();
+        } catch {
+          // ignore popup close failures
+        }
+        toast.error(
+          "Google Calendar connection failed",
+          "The server did not return an authorization URL. Check the Google Calendar OAuth config and redirect URI.",
+        );
+        return;
+      }
+      if (popup.closed) {
+        toast.error(
+          "Google Calendar connection failed",
+          "The sign-in tab was closed before Google Calendar authorization could start.",
+        );
+        return;
+      }
+      popup.location.assign(authorizationUrl);
+      popup.focus();
+    } catch (error) {
+      try {
+        popup.close();
+      } catch {
+        // ignore popup close failures
+      }
+      const message = error instanceof Error ? error.message : "Unable to start Google Calendar OAuth.";
+      toast.error("Google Calendar connection failed", message);
+    } finally {
+      setIsGoogleCalendarConnecting(false);
+    }
+  }, [requestJson, toast]);
+
+  const handleDisconnectGoogleCalendar = useCallback(async () => {
+    setIsGoogleCalendarDisconnecting(true);
+    try {
+      const result = await disconnectLeaveManagementGoogleCalendarConnection({
+        requestJson,
+      });
+      setGoogleCalendarConnectionStatus({
+        connected: false,
+        connectedAt: null,
+        lastAuthorizedAt: null,
+        scopes: [],
+      });
+      if (result.revocationError) {
+        toast.info(
+          "Google Calendar disconnected",
+          `Stored credentials were removed, but remote revocation reported: ${result.revocationError}`,
+        );
+      } else {
+        toast.success("Google Calendar disconnected", "Stored calendar credentials were revoked for LeaveSphere.");
+      }
+    } finally {
+      setIsGoogleCalendarDisconnecting(false);
+    }
+  }, [requestJson, toast]);
+
+  const refreshGoogleCalendarConnectionStatus = useCallback(async () => {
+    if (!canUseGoogleCalendarAdminApi) {
+      setGoogleCalendarConnectionStatus(null);
+      return;
+    }
+    setIsGoogleCalendarStatusLoading(true);
+    try {
+      const status = await loadLeaveManagementGoogleCalendarConnectionStatus({
+        requestJson,
+      });
+      setGoogleCalendarConnectionStatus(status);
+    } catch {
+      setGoogleCalendarConnectionStatus(null);
+    } finally {
+      setIsGoogleCalendarStatusLoading(false);
+    }
+  }, [canUseGoogleCalendarAdminApi, requestJson]);
+
+  useEffect(() => {
+    if (!canUseGoogleCalendarAdminApi) {
+      return;
+    }
+    const handleMessage = (event: MessageEvent) => {
+      if (event.origin !== window.location.origin) {
+        return;
+      }
+      const data = event.data;
+      if (!data || typeof data !== "object") {
+        return;
+      }
+      const record = data as Record<string, unknown>;
+      if (record.type !== "leavesphere-google-calendar-oauth") {
+        return;
+      }
+      void refreshGoogleCalendarConnectionStatus();
+      const status = String(record.status || "").trim().toLowerCase();
+      const message = String(record.message || "").trim();
+      if (status === "connected") {
+        toast.success("Google Calendar connected", message || "LeaveSphere can now create and update calendar events.");
+        return;
+      }
+      if (status === "error") {
+        toast.error("Google Calendar connection failed", message || "Unable to complete Google Calendar connection.");
+      }
+    };
+    window.addEventListener("message", handleMessage);
+    return () => {
+      window.removeEventListener("message", handleMessage);
+    };
+  }, [canUseGoogleCalendarAdminApi, refreshGoogleCalendarConnectionStatus, toast]);
+
+  useEffect(() => {
+    if (!canUseGoogleCalendarAdminApi) {
+      return;
+    }
+    void refreshGoogleCalendarConnectionStatus();
+  }, [canUseGoogleCalendarAdminApi, refreshGoogleCalendarConnectionStatus]);
+
+  useEffect(() => {
+    if (!canUseGoogleCalendarAdminApi) {
+      return;
+    }
+    const searchParams = new URLSearchParams(window.location.search);
+    const calendarStatus = asString(searchParams.get("google_calendar"));
+    const calendarError = asString(searchParams.get("google_calendar_error"));
+    if (!calendarStatus && !calendarError) {
+      return;
+    }
+
+    if (calendarStatus === "connected") {
+      toast.success("Google Calendar connected", "LeaveSphere can now create and update calendar events.");
+    } else if (calendarStatus === "disconnected") {
+      toast.success("Google Calendar disconnected", "LeaveSphere no longer has calendar access.");
+    }
+
+    if (calendarError) {
+      toast.error("Google Calendar connection failed", calendarError);
+    }
+
+    searchParams.delete("google_calendar");
+    searchParams.delete("google_calendar_error");
+    const nextQuery = searchParams.toString();
+    window.history.replaceState(
+      {},
+      "",
+      `${window.location.pathname}${nextQuery ? `?${nextQuery}` : ""}${window.location.hash || ""}`,
+    );
+    void refreshGoogleCalendarConnectionStatus();
+  }, [canUseGoogleCalendarAdminApi, refreshGoogleCalendarConnectionStatus, toast]);
 
   useEffect(() => {
     const normalizedDraft = asString(draftRecentHistorySearch);
@@ -2750,8 +2925,78 @@ export default function LeaveManagementPage() {
   };
 
   const renderSetupTab = () => {
+    const googleCalendarConnected = Boolean(googleCalendarConnectionStatus?.connected);
+    const googleCalendarScopes = (googleCalendarConnectionStatus?.scopes ?? []).filter(Boolean);
     return (
       <div className="grid gap-4 xl:grid-cols-2">
+        <SectionCard
+          title="Google Calendar"
+          description="Connect the approval flow to a shared workspace calendar."
+          actions={(
+            <div className="flex flex-wrap items-center gap-2">
+              <Button
+                variant="outline"
+                onClick={() => void handleConnectGoogleCalendar()}
+                disabled={isGoogleCalendarStatusLoading || isGoogleCalendarConnecting || isGoogleCalendarDisconnecting}
+              >
+                <CalendarDays className="size-4" />
+                {googleCalendarConnected ? "Reconnect" : "Connect"}
+              </Button>
+              <Button
+                variant="outline"
+                onClick={() => void handleDisconnectGoogleCalendar()}
+                disabled={!googleCalendarConnected || isGoogleCalendarStatusLoading || isGoogleCalendarConnecting || isGoogleCalendarDisconnecting}
+              >
+                Disconnect
+              </Button>
+            </div>
+          )}
+          contentClassName="space-y-3"
+        >
+          <div className="rounded-xl border border-blue-100 bg-white p-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Connection status</p>
+                <p className={`mt-1 text-sm font-medium ${googleCalendarConnected ? "text-emerald-700" : "text-slate-700"}`}>
+                  {isGoogleCalendarStatusLoading
+                    ? "Checking connection..."
+                    : googleCalendarConnected
+                      ? "Connected"
+                      : "Not connected"}
+                </p>
+              </div>
+              <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
+                googleCalendarConnected
+                  ? "bg-emerald-50 text-emerald-700"
+                  : "bg-slate-100 text-slate-600"
+              }`}>
+                {googleCalendarConnected ? "Active" : "Disconnected"}
+              </span>
+            </div>
+            {googleCalendarConnectionStatus?.connectedAt ? (
+              <p className="mt-3 text-xs text-slate-500">
+                Connected at: {googleCalendarConnectionStatus.connectedAt}
+              </p>
+            ) : null}
+            {googleCalendarScopes.length > 0 ? (
+              <p className="mt-2 text-xs text-slate-500">
+                Scopes: {googleCalendarScopes.join(", ")}
+              </p>
+            ) : null}
+          </div>
+          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">How sync works</p>
+            <ul className="mt-2 space-y-1.5 text-sm text-slate-700">
+              <li>The Google OAuth refresh token is stored in Supabase for this tenant.</li>
+              <li>The shared Google Calendar ID comes from tenant config <span className="font-mono text-[0.95em]">google_calendar.ggCalendarId</span>.</li>
+              <li>LeaveSphere stores the event id for the connected Google Calendar on the PTO row as <span className="font-mono text-[0.95em]">calendarId</span> so updates and deletes stay linked.</li>
+            </ul>
+          </div>
+          <p className="text-sm text-slate-600">
+            LeaveSphere uses OAuth to create and update calendar events after an approval is submitted.
+          </p>
+        </SectionCard>
+
         <SectionCard
           title="Setup Data"
           description="PTO types, actions, employees, managers, and holidays"

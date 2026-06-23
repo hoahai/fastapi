@@ -34,7 +34,6 @@ class MyPtoRequestCreateRequest(_LeaveSphereModel):
     hours: float | int | str
     description: str | None = None
     year: int | str
-    calendarId: str | None = None
     ptoTypeCode: str | None = None
     transactionId: str | None = None
 
@@ -47,7 +46,6 @@ class MyPtoRequestUpdateRequest(_LeaveSphereModel):
     hours: float | int | str
     description: str | None = None
     year: int | str
-    calendarId: str | None = None
     ptoTypeCode: str | None = None
 
 

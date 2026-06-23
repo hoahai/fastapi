@@ -25,6 +25,94 @@ def _build_in_clause(column: str, values: list[object]) -> tuple[str, tuple[obje
     return f" WHERE {column} IN ({placeholders})", tuple(active)
 
 
+def _build_pto_transaction_select_clause() -> str:
+    columns = [
+        "dateCreated",
+        "dateUpdated",
+        "id",
+        "employeeId",
+        "ptoTypeCode",
+        "ptoActionCode",
+        "hours",
+        "year",
+        "startDate",
+        "endDate",
+        "status",
+        "description",
+        "approverNote",
+        "approverId",
+        "calendarId",
+    ]
+    return ", ".join(columns)
+
+
+def _build_pto_transaction_insert_query(item: dict) -> tuple[str, tuple[object, ...]]:
+    tables = get_db_tables()
+    columns = [
+        "id",
+        "employeeId",
+        "ptoTypeCode",
+        "ptoActionCode",
+        "hours",
+        "year",
+        "startDate",
+        "endDate",
+        "status",
+        "description",
+        "approverNote",
+        "approverId",
+        "calendarId",
+    ]
+    params: list[object] = [
+        item["id"],
+        item["employeeId"],
+        item["ptoTypeCode"],
+        item["ptoActionCode"],
+        item["hours"],
+        item["year"],
+        item.get("startDate"),
+        item.get("endDate"),
+        item["status"],
+        item.get("description"),
+        item.get("approverNote"),
+        item.get("approverId"),
+        item.get("calendarId"),
+    ]
+    placeholders = ", ".join(["%s"] * len(columns))
+    query = f"INSERT INTO {tables['PTOTRANSACTIONS']} (" + ", ".join(columns) + f") VALUES ({placeholders})"
+    return query, tuple(params)
+
+
+def _build_pto_transaction_update_query(*, updates: dict) -> tuple[str, tuple[object, ...]]:
+    tables = get_db_tables()
+    fields: list[str] = []
+    params: list[object] = []
+    for key in (
+        "employeeId",
+        "ptoTypeCode",
+        "ptoActionCode",
+        "hours",
+        "year",
+        "startDate",
+        "endDate",
+        "status",
+        "description",
+        "approverNote",
+        "approverId",
+        "calendarId",
+    ):
+        if key not in updates:
+            continue
+        fields.append(f"{key} = %s")
+        params.append(updates[key])
+    if not fields:
+        return "", tuple()
+    fields.append("dateUpdated = %s")
+    params.append(datetime.utcnow())
+    query = f"UPDATE {tables['PTOTRANSACTIONS']} SET " + ", ".join(fields)
+    return query, tuple(params)
+
+
 def get_employees(*, employee_id: str | None = None) -> list[dict]:
     tables = get_db_tables()
     where, params = _build_where_clauses([("id = %s", employee_id)])
@@ -335,11 +423,9 @@ def get_pto_transactions(
             else:
                 where = employee_where
                 params = employee_params
+    select_clause = _build_pto_transaction_select_clause()
     query = (
-        "SELECT "
-        "dateCreated, dateUpdated, id, employeeId, ptoTypeCode, ptoActionCode, "
-        "hours, year, startDate, endDate, status, description, approverNote, "
-        "approverId, calendarId "
+        f"SELECT {select_clause} "
         f"FROM {tables['PTOTRANSACTIONS']}{where} "
         "ORDER BY year DESC, startDate DESC, dateCreated DESC"
     )
@@ -347,59 +433,22 @@ def get_pto_transactions(
 
 
 def insert_pto_transaction(item: dict) -> int:
-    tables = get_db_tables()
-    query = (
-        f"INSERT INTO {tables['PTOTRANSACTIONS']} ("
-        "id, employeeId, ptoTypeCode, ptoActionCode, hours, year, startDate, endDate, "
-        "status, description, approverNote, approverId, calendarId"
-        ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
-    )
-    params = (
-        item["id"],
-        item["employeeId"],
-        item["ptoTypeCode"],
-        item["ptoActionCode"],
-        item["hours"],
-        item["year"],
-        item.get("startDate"),
-        item.get("endDate"),
-        item["status"],
-        item.get("description"),
-        item.get("approverNote"),
-        item.get("approverId"),
-        item.get("calendarId"),
-    )
+    query, params = _build_pto_transaction_insert_query(item)
     return execute_write(query, params)
 
 
+def execute_pto_transaction_insert(cursor, item: dict) -> int:
+    query, params = _build_pto_transaction_insert_query(item)
+    cursor.execute(query, params)
+    return int(cursor.rowcount or 0)
+
+
 def update_pto_transaction(*, transaction_id: str, updates: dict) -> int:
-    tables = get_db_tables()
-    fields: list[str] = []
-    params: list[object] = []
-    for key in (
-        "employeeId",
-        "ptoTypeCode",
-        "ptoActionCode",
-        "hours",
-        "year",
-        "startDate",
-        "endDate",
-        "status",
-        "description",
-        "approverNote",
-        "approverId",
-        "calendarId",
-    ):
-        if key not in updates:
-            continue
-        fields.append(f"{key} = %s")
-        params.append(updates[key])
-    if not fields:
+    query, params = _build_pto_transaction_update_query(updates=updates)
+    if not query:
         return 0
-    fields.append("dateUpdated = %s")
-    params.append(datetime.utcnow())
-    params.append(transaction_id)
-    query = f"UPDATE {tables['PTOTRANSACTIONS']} SET " + ", ".join(fields) + " WHERE id = %s"
+    query = f"{query} WHERE id = %s"
+    params = params + (transaction_id,)
     return execute_write(query, tuple(params))
 
 
@@ -437,28 +486,7 @@ def create_pto_request_transaction(*, item: dict, requested_hours: Decimal) -> i
         if available - requested_hours < 0:
             raise ValueError("Requested hours exceed available balance")
 
-        cursor.execute(
-            f"INSERT INTO {tables['PTOTRANSACTIONS']} ("
-            "id, employeeId, ptoTypeCode, ptoActionCode, hours, year, startDate, endDate, "
-            "status, description, approverNote, approverId, calendarId"
-            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (
-                item["id"],
-                item["employeeId"],
-                item["ptoTypeCode"],
-                item["ptoActionCode"],
-                item["hours"],
-                item["year"],
-                item.get("startDate"),
-                item.get("endDate"),
-                item["status"],
-                item.get("description"),
-                item.get("approverNote"),
-                item.get("approverId"),
-                item.get("calendarId"),
-            ),
-        )
-        return int(cursor.rowcount or 0)
+        return execute_pto_transaction_insert(cursor, item)
 
     return int(run_transaction(_work) or 0)
 

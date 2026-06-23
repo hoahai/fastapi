@@ -43,7 +43,6 @@ class PTOAdjustmentCreateRequest(_LeaveSphereModel):
     approverNote: str | None = None
     startDate: str | None = None
     endDate: str | None = None
-    calendarId: str | None = None
 
 
 class PTORequestCreateRequest(_LeaveSphereModel):
@@ -56,7 +55,6 @@ class PTORequestCreateRequest(_LeaveSphereModel):
     endDate: str | None = None
     description: str | None = None
     approverNote: str | None = None
-    calendarId: str | None = None
 
 
 class PTORequestDecisionRequest(_LeaveSphereModel):

@@ -7,6 +7,7 @@ from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
 from apps.leavesphere.api.v1.helpers.dbQueries import (
+    execute_pto_transaction_insert,
     get_employee_managers,
     get_employees,
     get_employees_by_ids,
@@ -59,6 +60,7 @@ from apps.leavesphere.api.v1.helpers.ptoWorkspaceShared import (
     resolve_pto_type_code_from_catalog,
 )
 from apps.leavesphere.api.v1.helpers.approvalWorkflow import finalize_pending_pto_action
+from apps.leavesphere.api.v1.helpers.googleCalendarSync import sync_leave_sphere_google_calendar_event
 from apps.leavesphere.api.v1.helpers.readCache import clear_leave_sphere_read_cache
 from apps.leavesphere.api.v1.helpers.ptoActions import create_pto_action, modify_pto_action
 from apps.leavesphere.api.v1.helpers.notification_emails import (
@@ -1432,7 +1434,6 @@ def _create_immediate_approved_request(
     end_date: str | None,
     description: str | None,
     approver_id: str | None,
-    calendar_id: str | None,
 ) -> tuple[str, int]:
     transaction_id = str(uuid4())
 
@@ -1461,28 +1462,23 @@ def _create_immediate_approved_request(
         if available_after_approval < 0:
             raise ValueError("Cannot approve request because available balance is below zero")
 
-        cursor.execute(
-            f"INSERT INTO {tables['PTOTRANSACTIONS']} ("
-            "id, employeeId, ptoTypeCode, ptoActionCode, hours, year, startDate, endDate, "
-            "status, description, approverNote, approverId, calendarId"
-            ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
-            (
-                transaction_id,
-                employee_id,
-                pto_type_code,
-                pto_action_code,
-                requested_hours.quantize(Decimal("0.01")),
-                year,
-                start_date,
-                end_date,
-                "Approved",
-                description,
-                None,
-                approver_id,
-                calendar_id,
-            ),
+        return execute_pto_transaction_insert(
+            cursor,
+            {
+                "id": transaction_id,
+                "employeeId": employee_id,
+                "ptoTypeCode": pto_type_code,
+                "ptoActionCode": pto_action_code,
+                "hours": requested_hours.quantize(Decimal("0.01")),
+                "year": year,
+                "startDate": start_date,
+                "endDate": end_date,
+                "status": "Approved",
+                "description": description,
+                "approverNote": None,
+                "approverId": approver_id,
+            },
         )
-        return int(cursor.rowcount or 0)
 
     inserted = int(run_transaction(_work) or 0)
     return transaction_id, inserted
@@ -1525,9 +1521,6 @@ def create_leave_management_request(*, request, payload: dict) -> dict:
 
     year = _resolve_request_year(payload)
     description = _normalize_text(payload.get("description")) or None
-    calendar_id = _normalize_text(payload.get("calendarId")) or None
-    if calendar_id and len(calendar_id) > 30:
-        raise ValueError("calendarId must be <= 30 characters")
 
     approve_immediately = bool(payload.get("approveImmediately"))
     if approve_immediately:
@@ -1541,7 +1534,6 @@ def create_leave_management_request(*, request, payload: dict) -> dict:
             end_date=end_date or None,
             description=description,
             approver_id=current_employee_id,
-            calendar_id=calendar_id,
         )
     else:
         created_request = create_request(
@@ -1555,7 +1547,6 @@ def create_leave_management_request(*, request, payload: dict) -> dict:
                 "endDate": end_date or None,
                 "description": description,
                 "approverNote": None,
-                "calendarId": calendar_id,
             }
         )
         created_request_id = str(created_request.get("id") or "").strip()
@@ -1600,8 +1591,14 @@ def create_leave_management_request(*, request, payload: dict) -> dict:
             workspace=workspace,
             request_ids=[created_request_id],
             employee_ids=[employee_id],
-            include_current_balances=_normalize_text(employee_id) == _normalize_text(workspace.get("currentUserId")),
-        )
+                include_current_balances=_normalize_text(employee_id) == _normalize_text(workspace.get("currentUserId")),
+            )
+
+    if approve_immediately:
+        try:
+            sync_leave_sphere_google_calendar_event(transaction_id=created_request_id)
+        except Exception:
+            pass
 
     if not approve_immediately:
         access = get_tenant_access(request)
@@ -1725,11 +1722,16 @@ def update_leave_management_request(*, request, payload: dict) -> dict:
             request_ids=[transaction_id],
             employee_ids=[_normalize_text(transaction.get("employeeId"))],
             include_current_balances=_normalize_text(transaction.get("employeeId")) == _normalize_text(workspace.get("currentUserId")),
-        )
+            )
     response = {
         "source": "network",
         "updated": updated,
     }
+    if _normalize_text(transaction.get("status")).lower() == "approved":
+        try:
+            sync_leave_sphere_google_calendar_event(transaction_id=transaction_id)
+        except Exception:
+            pass
     if workspace_patch is not None:
         response["workspacePatch"] = workspace_patch
     else:
@@ -2043,7 +2045,6 @@ def _seed_employee_opening_balances(*, employee_id: str, region: str, year: int,
             "description": "Opening PTO balance load",
             "approverNote": None,
             "approverId": None,
-            "calendarId": None,
         }
         insert_pto_transaction(transaction)
         transactions.append(transaction)

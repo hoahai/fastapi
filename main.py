@@ -49,6 +49,7 @@ app.state.public_path_prefixes = {
     "/fe/assets/",
     "/auth/",
     "/api/leavesphere/v1/public/approval",
+    "/api/leavesphere/v1/public/google-calendar/oauth",
     "/public/opssphere/advWebsiteReport/reports/cta",
 }
 app.state.tenant_validator_registry = [

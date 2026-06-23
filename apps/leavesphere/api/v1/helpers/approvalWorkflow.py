@@ -9,6 +9,7 @@ from apps.leavesphere.api.v1.helpers.dbQueries import (
     reject_pending_pto_request,
     update_pto_transaction,
 )
+from apps.leavesphere.api.v1.helpers.googleCalendarSync import sync_leave_sphere_google_calendar_event
 from shared.tenant import get_tenant_id
 
 def finalize_pending_pto_action(
@@ -100,6 +101,16 @@ def finalize_pending_pto_action(
         if not updated:
             raise ValueError("PTO transaction not found")
 
+    calendar_sync = None
+    try:
+        calendar_sync = sync_leave_sphere_google_calendar_event(transaction_id=normalized_id)
+    except Exception as exc:  # pragma: no cover - defensive; approval flow must not fail on calendar sync
+        calendar_sync = {
+            "synced": False,
+            "reason": str(exc),
+            "transactionId": normalized_id,
+        }
+
     if send_status_email and isinstance(current_transaction, dict):
         from apps.leavesphere.api.v1.helpers.notification_emails import send_leave_sphere_status_email
 
@@ -124,4 +135,5 @@ def finalize_pending_pto_action(
         "id": normalized_id,
         "status": return_status,
         "updated": updated,
+        "calendarSync": calendar_sync,
     }

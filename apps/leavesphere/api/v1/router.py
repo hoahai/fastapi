@@ -4,6 +4,7 @@ from apps.leavesphere.api.v1.endpoints import (
     leaveManagement,
     employeeManagers,
     employees,
+    googleCalendar,
     ptoActions,
     ptoTransactions,
     ptoTypes,
@@ -21,4 +22,5 @@ router.include_router(ptoTypes.router, tags=["leavesphere"])
 router.include_router(ptoActions.router, tags=["leavesphere"])
 router.include_router(ptoTransactions.router, tags=["leavesphere"])
 router.include_router(leaveManagement.router, tags=["leavesphere"])
+router.include_router(googleCalendar.router, tags=["leavesphere"])
 router.include_router(my_pto_ui_router, tags=["leavesphere"])

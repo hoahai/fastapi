@@ -74,6 +74,26 @@ export type LeaveManagementMutationResult = {
   createdRequestId?: string | null;
 };
 
+export type LeaveManagementGoogleCalendarConnectionStatus = {
+  connected: boolean;
+  connectedAt?: string | null;
+  lastAuthorizedAt?: string | null;
+  scopes?: string[];
+};
+
+export type LeaveManagementGoogleCalendarAuthorizationResult = {
+  authorizationUrl: string;
+  redirectUri?: string | null;
+  scopes?: string[];
+  connection?: LeaveManagementGoogleCalendarConnectionStatus | null;
+};
+
+export type LeaveManagementGoogleCalendarDisconnectResult = LeaveManagementGoogleCalendarConnectionStatus & {
+  removed?: number;
+  revokedRemote?: boolean;
+  revocationError?: string | null;
+};
+
 export type LeaveManagementCreateRequestInput = {
   employeeId: string;
   type: LeaveSpherePtoType;
@@ -100,7 +120,6 @@ export type LeaveManagementUpdateRequestInput = {
   description: string;
   year?: number | null;
   ptoTypeCode?: string | null;
-  calendarId?: string | null;
 };
 
 export type LeaveManagementAdjustBalanceInput = {
@@ -826,5 +845,77 @@ export async function updateLeaveManagementSetupData(params: SetupArgs): Promise
   }
   return {
     workspace,
+  };
+}
+
+export async function loadLeaveManagementGoogleCalendarConnectionStatus(params: {
+  requestJson: RequestJson;
+}): Promise<LeaveManagementGoogleCalendarConnectionStatus> {
+  const response = await params.requestJson("/api/leavesphere/v1/admin/google-calendar/oauth/status", {
+    method: "GET",
+    successToast: false,
+    errorToast: false,
+  });
+  const data = unwrapEnvelope(response);
+  if (!isRecord(data)) {
+    throw new Error("Unable to load Google Calendar connection status.");
+  }
+  return {
+    connected: Boolean(data.connected),
+    connectedAt: asString(data.connectedAt) || null,
+    lastAuthorizedAt: asString(data.lastAuthorizedAt) || null,
+    scopes: Array.isArray(data.scopes) ? data.scopes.map((item) => asString(item)).filter(Boolean) : undefined,
+  };
+}
+
+export async function loadLeaveManagementGoogleCalendarAuthorizationUrl(params: {
+  requestJson: RequestJson;
+}): Promise<LeaveManagementGoogleCalendarAuthorizationResult> {
+  const response = await params.requestJson("/api/leavesphere/v1/admin/google-calendar/oauth/url", {
+    method: "GET",
+    successToast: false,
+    errorToast: false,
+  });
+  const data = unwrapEnvelope(response);
+  if (!isRecord(data) || typeof data.authorizationUrl !== "string") {
+    throw new Error("Unable to create Google Calendar authorization URL.");
+  }
+  return {
+    authorizationUrl: data.authorizationUrl,
+    redirectUri: asString(data.redirectUri) || null,
+    scopes: Array.isArray(data.scopes) ? data.scopes.map((item) => asString(item)).filter(Boolean) : undefined,
+    connection: isRecord(data.connection)
+      ? {
+          connected: Boolean(data.connection.connected),
+          connectedAt: asString(data.connection.connectedAt) || null,
+          lastAuthorizedAt: asString(data.connection.lastAuthorizedAt) || null,
+          scopes: Array.isArray(data.connection.scopes)
+            ? data.connection.scopes.map((item) => asString(item)).filter(Boolean)
+            : undefined,
+        }
+      : null,
+  };
+}
+
+export async function disconnectLeaveManagementGoogleCalendarConnection(params: {
+  requestJson: RequestJson;
+}): Promise<LeaveManagementGoogleCalendarDisconnectResult> {
+  const response = await params.requestJson("/api/leavesphere/v1/admin/google-calendar/oauth/connection", {
+    method: "DELETE",
+    successToast: false,
+    errorToast: false,
+  });
+  const data = unwrapEnvelope(response);
+  if (!isRecord(data)) {
+    throw new Error("Unable to disconnect Google Calendar.");
+  }
+  return {
+    connected: Boolean(data.connected),
+    connectedAt: asString(data.connectedAt) || null,
+    lastAuthorizedAt: asString(data.lastAuthorizedAt) || null,
+    scopes: Array.isArray(data.scopes) ? data.scopes.map((item) => asString(item)).filter(Boolean) : undefined,
+    removed: typeof data.removed === "number" ? data.removed : asNumber(data.removed),
+    revokedRemote: Boolean(data.revokedRemote),
+    revocationError: asString(data.revocationError) || null,
   };
 }

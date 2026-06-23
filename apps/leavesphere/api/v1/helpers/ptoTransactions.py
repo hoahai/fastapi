@@ -163,7 +163,6 @@ def create_adjustment(payload: dict) -> dict:
         "description": (str(payload.get("description") or "").strip() or None),
         "approverNote": (str(payload.get("approverNote") or "").strip() or None),
         "approverId": (str(payload.get("approverId") or "").strip() or None),
-        "calendarId": (str(payload.get("calendarId") or "").strip() or None),
     }
     if item["year"] is None:
         raise ValueError("year is required")
@@ -171,8 +170,6 @@ def create_adjustment(payload: dict) -> dict:
         raise ValueError("description must be <= 255 characters")
     if item["approverNote"] and len(item["approverNote"]) > 2048:
         raise ValueError("approverNote must be <= 2048 characters")
-    if item["calendarId"] and len(item["calendarId"]) > 30:
-        raise ValueError("calendarId must be <= 30 characters")
 
     inserted = insert_pto_transaction(item)
     return {"id": item["id"], "status": item["status"], "inserted": inserted}
@@ -215,7 +212,6 @@ def create_request(payload: dict) -> dict:
         "description": (str(payload.get("description") or "").strip() or None),
         "approverNote": (str(payload.get("approverNote") or "").strip() or None),
         "approverId": None,
-        "calendarId": (str(payload.get("calendarId") or "").strip() or None),
     }
     if item["year"] is None:
         raise ValueError("year is required")
@@ -223,8 +219,6 @@ def create_request(payload: dict) -> dict:
         raise ValueError("description must be <= 255 characters")
     if item["approverNote"] and len(item["approverNote"]) > 2048:
         raise ValueError("approverNote must be <= 2048 characters")
-    if item["calendarId"] and len(item["calendarId"]) > 30:
-        raise ValueError("calendarId must be <= 30 characters")
 
     inserted = create_pto_request_transaction(item=item, requested_hours=requested_hours)
     return {"id": item["id"], "status": item["status"], "inserted": inserted}
