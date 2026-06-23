@@ -7,8 +7,6 @@ from decimal import Decimal
 import re
 
 from apps.leavesphere.api.v1.helpers.dbQueries import (
-    approve_pending_pto_request,
-    cancel_pending_pto_transaction,
     get_db_tables,
     get_employee_managers,
     get_employees_by_email,
@@ -16,7 +14,6 @@ from apps.leavesphere.api.v1.helpers.dbQueries import (
     get_employees_by_ids,
     get_holidays,
     get_pto_transactions,
-    reject_pending_pto_request,
     update_pto_transaction,
 )
 from apps.leavesphere.api.v1.helpers.config import (
@@ -38,6 +35,7 @@ from apps.leavesphere.api.v1.helpers.ptoWorkspaceShared import (
     load_leave_sphere_pto_workspace_catalogs,
     resolve_pto_type_code_from_catalog,
 )
+from apps.leavesphere.api.v1.helpers.approvalWorkflow import finalize_pending_pto_action
 from apps.leavesphere.api.v1.helpers.notification_emails import (
     send_leave_sphere_approval_email,
     send_leave_sphere_confirmation_email,
@@ -1016,68 +1014,17 @@ def cancel_my_pto_request(*, request, transaction_id: str) -> dict:
         raise ValueError("Only future PTO requests can be canceled")
 
     year = int(transaction.get("year") or date.today().year)
-
-    if status == "pending":
-        canceled = cancel_pending_pto_transaction(transaction_id=transaction_id)
-        if canceled == 0:
-            raise ValueError("PTO transaction not found")
-        def _apply_cancel(cached_workspace: dict) -> bool:
-            old_row = _find_my_pto_request_row(cached_workspace, transaction_id)
-            new_row = {
-                **(old_row or {}),
-                "status": "canceled",
-            }
-            _upsert_my_pto_request_row(
-                workspace=cached_workspace,
-                request_row=new_row,
-            )
-            _apply_my_pto_request_balance_delta(
-                workspace=cached_workspace,
-                old_row=old_row,
-                new_row=new_row,
-            )
-            return True
-
-        workspace = _apply_my_pto_workspace_mutation_from_cache(
-            request=request,
-            year=year,
-            mutate_workspace=_apply_cancel,
-        )
-        workspace_patch = None
-        if workspace is not None:
-            workspace_patch = _build_my_pto_workspace_patch(
-                workspace=workspace,
-                request_ids=[transaction_id],
-                include_balances=status == "pending" and _normalize_text(transaction.get("employeeId")) == _normalize_text(workspace.get("currentUserId")),
-            )
-        if workspace is None:
-            workspace = load_my_pto_workspace(request=request, year=year)
-            workspace_patch = _build_my_pto_workspace_patch(
-                workspace=workspace,
-                request_ids=[transaction_id],
-                include_balances=status == "pending" and _normalize_text(transaction.get("employeeId")) == _normalize_text(workspace.get("currentUserId")),
-            )
-        response = {
-            "source": "network",
-            "id": transaction_id,
-            "status": "Canceled",
-            "updated": canceled,
-        }
-        if workspace_patch is not None:
-            response["workspacePatch"] = workspace_patch
-        else:
-            response["workspace"] = workspace
-        return response
-
-    updated = update_pto_transaction(
+    finalized = finalize_pending_pto_action(
         transaction_id=transaction_id,
-        updates={
-            "status": "Canceled",
-            "approverId": None,
-        },
+        action="canceled",
+        approver_id=None,
+        approver_note=None,
+        transaction=transaction,
+        send_status_email=True,
+        note_label_override="Approver note / reason",
     )
-    if updated == 0:
-        raise ValueError("PTO transaction not found")
+    updated = finalized.get("updated")
+
     def _apply_cancel_approved(cached_workspace: dict) -> bool:
         old_row = _find_my_pto_request_row(cached_workspace, transaction_id)
         new_row = {
@@ -1164,12 +1111,16 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
         if status != "pending":
             raise ValueError("Only Pending PTO transactions can be approved or rejected")
         if action == "approve":
-            updated = approve_pending_pto_request(
+            finalized = finalize_pending_pto_action(
                 transaction_id=transaction_id,
+                action="approved",
                 approver_id=current_employee_id if current_employee_id else None,
-                approverNote=approver_note,
+                approver_note=approver_note,
+                transaction=transaction,
+                send_status_email=True,
+                note_label_override="Approver note / reason",
             )
-
+            updated = finalized.get("updated")
             def _apply_approve(cached_workspace: dict) -> bool:
                 old_row = _find_my_pto_request_row(cached_workspace, transaction_id)
                 new_row = {
@@ -1207,19 +1158,18 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
                 response["workspacePatch"] = workspace_patch
             else:
                 response["workspace"] = workspace
-            send_leave_sphere_status_email(
-                transaction=transaction,
-                status="approved",
-                admin_note=approver_note,
-            )
             return response
 
-        updated = reject_pending_pto_request(
+        finalized = finalize_pending_pto_action(
             transaction_id=transaction_id,
+            action="rejected",
             approver_id=current_employee_id if current_employee_id else None,
-            approverNote=approver_note,
+            approver_note=approver_note,
+            transaction=transaction,
+            send_status_email=True,
+            note_label_override="Approver note / reason",
         )
-
+        updated = finalized.get("updated")
         def _apply_reject(cached_workspace: dict) -> bool:
             old_row = _find_my_pto_request_row(cached_workspace, transaction_id)
             new_row = {
@@ -1262,11 +1212,6 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
             response["workspacePatch"] = workspace_patch
         else:
             response["workspace"] = workspace
-        send_leave_sphere_status_email(
-            transaction=transaction,
-            status="rejected",
-            admin_note=approver_note,
-        )
         return response
 
     if action == "cancel":
@@ -1274,14 +1219,16 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
             raise ValueError("Only Pending, Approved, or Rejected PTO transactions can be canceled")
         if not _is_before_start_date(start_date=_to_date_string(transaction.get("startDate"))):
             raise ValueError("Only future PTO requests can be canceled")
-        updated = update_pto_transaction(
+        finalized = finalize_pending_pto_action(
             transaction_id=transaction_id,
-            updates={
-                "status": "Canceled",
-                "approverId": None,
-                "approverNote": approver_note,
-            },
+            action="canceled",
+            approver_id=None,
+            approver_note=approver_note,
+            transaction=transaction,
+            send_status_email=True,
+            note_label_override="Approver note / reason",
         )
+        updated = finalized.get("updated")
 
         def _apply_cancel(cached_workspace: dict) -> bool:
             old_row = _find_my_pto_request_row(cached_workspace, transaction_id)
@@ -1325,11 +1272,6 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
             response["workspacePatch"] = workspace_patch
         else:
             response["workspace"] = workspace
-        send_leave_sphere_status_email(
-            transaction=transaction,
-            status="canceled",
-            admin_note=approver_note,
-        )
         return response
 
     if action == "revert":
@@ -1337,13 +1279,16 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
             raise ValueError("Only Approved, Rejected, or Canceled PTO transactions can be reverted")
         if not _is_before_start_date(start_date=_to_date_string(transaction.get("startDate"))):
             raise ValueError("Only future PTO requests can be reverted")
-        updated = update_pto_transaction(
+        finalized = finalize_pending_pto_action(
             transaction_id=transaction_id,
-            updates={
-                "status": "Pending",
-                "approverId": None,
-            },
+            action="reverted",
+            approver_id=None,
+            approver_note=approver_note,
+            transaction=transaction,
+            send_status_email=True,
+            note_label_override="Approver note / reason",
         )
+        updated = finalized.get("updated")
 
         def _apply_revert(cached_workspace: dict) -> bool:
             old_row = _find_my_pto_request_row(cached_workspace, transaction_id)
@@ -1381,11 +1326,6 @@ def review_my_pto_request(*, request, payload: dict) -> dict:
             response["workspacePatch"] = workspace_patch
         else:
             response["workspace"] = workspace
-        send_leave_sphere_status_email(
-            transaction=transaction,
-            status="updated",
-            admin_note=approver_note,
-        )
         return response
 
     raise ValueError("Unsupported action")

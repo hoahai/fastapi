@@ -1,4 +1,4 @@
-import { useState, type ReactNode } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { UserRound } from "lucide-react";
 
 type LeaveSpherePtoEmployeeHeaderProps = {
@@ -22,6 +22,10 @@ export function LeaveSpherePtoEmployeeHeader({
 }: LeaveSpherePtoEmployeeHeaderProps) {
   const [imageError, setImageError] = useState(false);
   const showPicture = Boolean(pictureUrl) && !imageError;
+
+  useEffect(() => {
+    setImageError(false);
+  }, [pictureUrl]);
 
   return (
     <div className={`flex items-center gap-2 ${className ?? ""}`.trim()}>

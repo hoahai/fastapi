@@ -58,13 +58,13 @@ from apps.leavesphere.api.v1.helpers.ptoWorkspaceShared import (
     load_leave_sphere_pto_workspace_catalogs,
     resolve_pto_type_code_from_catalog,
 )
+from apps.leavesphere.api.v1.helpers.approvalWorkflow import finalize_pending_pto_action
 from apps.leavesphere.api.v1.helpers.readCache import clear_leave_sphere_read_cache
 from apps.leavesphere.api.v1.helpers.ptoActions import create_pto_action, modify_pto_action
 from apps.leavesphere.api.v1.helpers.notification_emails import (
     send_leave_sphere_approval_email,
     send_leave_sphere_confirmation_email,
     send_leave_sphere_reminder_email,
-    send_leave_sphere_status_email,
 )
 from apps.leavesphere.api.v1.helpers.quickApproval import resolve_quick_approval_delivery
 from apps.leavesphere.api.v1.helpers.ptoTypes import create_pto_type, modify_pto_type
@@ -1741,16 +1741,6 @@ def update_leave_management_request(*, request, payload: dict) -> dict:
             response["workspacePatch"] = {"requests": [request_patch_row]}
         else:
             response["workspace"] = workspace
-    send_leave_sphere_status_email(
-        transaction=transaction,
-        status={
-            "Approved": "approved",
-            "Rejected": "rejected",
-            "Canceled": "canceled",
-            "Pending": "updated",
-        }.get(str(result.get("status") or "").capitalize(), "updated"),
-        admin_note=approver_note,
-    )
     return response
 
 
@@ -1787,28 +1777,29 @@ def review_leave_management_request(*, request, payload: dict) -> dict:
             raise ValueError("Only Pending, Approved, or Rejected PTO transactions can be canceled")
         if not _is_before_start_date(start_date=_to_date_string(transaction.get("startDate"))):
             raise ValueError("Only future PTO requests can be canceled")
-        updated = update_pto_transaction(
+        result = finalize_pending_pto_action(
             transaction_id=transaction_id,
-            updates={
-                "status": "Canceled",
-                "approverId": None,
-                "approverNote": approver_note,
-            },
+            action="canceled",
+            approver_id=None,
+            approver_note=approver_note,
+            transaction=transaction,
+            send_status_email=True,
+            note_label_override="Approver note / reason",
         )
-        result = {"updated": updated, "status": "Canceled"}
     elif action == "revert":
         if _normalize_text(transaction.get("status")).lower() not in {"approved", "rejected", "canceled"}:
             raise ValueError("Only Approved, Rejected, or Canceled PTO transactions can be reverted")
         if not _is_before_start_date(start_date=_to_date_string(transaction.get("startDate"))):
             raise ValueError("Only future PTO requests can be reverted")
-        updated = update_pto_transaction(
+        result = finalize_pending_pto_action(
             transaction_id=transaction_id,
-            updates={
-                "status": "Pending",
-                "approverId": None,
-            },
+            action="reverted",
+            approver_id=None,
+            approver_note=approver_note,
+            transaction=transaction,
+            send_status_email=True,
+            note_label_override="Approver note / reason",
         )
-        result = {"updated": updated, "status": "Pending"}
     else:
         raise ValueError("action must be approve, reject, cancel, or revert")
 

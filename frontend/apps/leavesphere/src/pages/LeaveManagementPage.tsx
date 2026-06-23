@@ -104,9 +104,9 @@ import {
 } from "@leavesphere/lib/ptoCalendar";
 import { getPtoRequestActionConfig } from "@leavesphere/lib/ptoRequestActionConfig";
 import {
-  getLeaveSphereReviewActionConfirmCopy,
-  type LeaveSphereReviewAction,
-} from "@leavesphere/lib/reviewActionConfirm";
+  getLeaveSphereApprovalActionConfirmCopy,
+  type LeaveSphereApprovalAction as LeaveSphereReviewAction,
+} from "@leavesphere/lib/approvalActionConfirm";
 import { LEAVESPHERE_TEAM_REGION_OPTIONS } from "@leavesphere/lib/ptoTypes";
 import type { LeaveSpherePtoRequest, LeaveSpherePtoType, LeaveSphereTeamRegion } from "@leavesphere/lib/ptoTypes";
 import type { LeaveSpherePtoBalance } from "@leavesphere/lib/ptoTypes";
@@ -1274,9 +1274,10 @@ export default function LeaveManagementPage() {
     [selectedRequest, todayIsoDate],
   );
   const pendingReviewActionCopy = useMemo(
-    () => (pendingReviewAction ? getLeaveSphereReviewActionConfirmCopy(pendingReviewAction, "admin") : null),
+    () => (pendingReviewAction ? getLeaveSphereApprovalActionConfirmCopy(pendingReviewAction, "admin") : null),
     [pendingReviewAction],
   );
+  const pendingReviewActionLabel = pendingReviewActionCopy?.noteLabel ?? "Approver note / reason";
   const pendingReviewActionRequiresNote = Boolean(pendingReviewActionCopy?.noteRequired);
   const selectedHoliday = useMemo(
     () => (workspaceForYear?.holidays ?? []).find((item) => item.id === selectedHolidayId) || null,
@@ -3253,7 +3254,7 @@ export default function LeaveManagementPage() {
         }}
         note={
           pendingReviewAction ? {
-            label: "Admin note / reason",
+            label: pendingReviewActionLabel,
             value: reviewNote,
             onChange: setReviewNote,
             placeholder: "Add a note or reason for this decision",

@@ -344,6 +344,7 @@ def build_leave_sphere_notification_email(
     recipient_name: str | None = None,
     manager_name: str | None = None,
     admin_note: str | None = None,
+    note_label_override: str | None = None,
     note_avatar_url: str | None = None,
     quick_approval_url: str | None = None,
     update_summary: list[str] | None = None,
@@ -391,6 +392,7 @@ def build_leave_sphere_notification_email(
         manager_name=normalized_manager_name,
         reason=normalized_reason,
         admin_note=normalized_admin_note,
+        note_label_override=normalize_text(note_label_override) or None,
     )
 
     html_body = _build_html_email(
@@ -424,6 +426,7 @@ def build_leave_sphere_notification_email(
         submitted_at=normalized_submitted_at,
         manager_name=normalized_manager_name,
         admin_note=normalized_admin_note,
+        note_label=note_label,
         update_summary=normalized_update_summary,
         quick_approval_url=quick_approval_url if normalized_kind == "approval" else None,
         spec=spec,
@@ -505,6 +508,7 @@ def build_leave_sphere_status_email(
     reason: str | None = None,
     submitted_at: str | None = None,
     admin_note: str | None = None,
+    note_label_override: str | None = None,
     approver_picture_url: str | None = None,
     update_summary: list[str] | None = None,
 ) -> LeaveSphereNotificationEmail:
@@ -520,6 +524,7 @@ def build_leave_sphere_status_email(
         submitted_at=submitted_at,
         recipient_name=employee_name,
         admin_note=admin_note,
+        note_label_override=note_label_override,
         note_avatar_url=approver_picture_url,
         update_summary=update_summary,
     )
@@ -607,6 +612,7 @@ def send_leave_sphere_status_email(
     transaction: dict,
     status: Literal["approved", "rejected", "canceled", "updated"],
     admin_note: str | None = None,
+    note_label_override: str | None = None,
     approver_picture_url: str | None = None,
     update_summary: list[str] | None = None,
 ) -> bool:
@@ -646,6 +652,7 @@ def send_leave_sphere_status_email(
         reason=reason,
         submitted_at=submitted_at,
         admin_note=admin_note,
+        note_label_override=note_label_override,
         approver_picture_url=approver_picture_url,
         update_summary=update_summary,
     )
@@ -1700,6 +1707,7 @@ def _build_text_body(
     submitted_at: str,
     manager_name: str,
     admin_note: str,
+    note_label: str | None,
     update_summary: list[str],
     quick_approval_url: str | None,
     spec: dict[str, str],
@@ -1727,7 +1735,7 @@ def _build_text_body(
         lines.append(f"- {reason}")
     if kind in {"approved", "rejected", "canceled", "updated"} and admin_note:
         lines.append("")
-        lines.append("Admin Note:")
+        lines.append(f"{note_label or 'Admin Note'}:")
         lines.append(f"- {admin_note}")
     if update_summary and kind not in {"approved", "updated"}:
         lines.append("")
@@ -1747,6 +1755,7 @@ def _resolve_note_block(
     manager_name: str,
     reason: str,
     admin_note: str,
+    note_label_override: str | None = None,
 ) -> tuple[str, str, str, str, str]:
     if kind == "confirmation":
         return "request_note", "REQUEST NOTE", employee_name, _initials(employee_name), ""
@@ -1754,8 +1763,8 @@ def _resolve_note_block(
         return "approval_note", "QUICK APPROVAL NOTE", "", "", ""
     if kind in {"approved", "rejected", "canceled", "updated"}:
         body = admin_note or ""
-        return "admin_note", "ADMIN NOTE", "LeaveSphere HR", _initials("LeaveSphere HR"), body
-    return "admin_note", "ADMIN NOTE", "LeaveSphere HR", _initials("LeaveSphere HR"), admin_note or ""
+        return "admin_note", note_label_override or "ADMIN NOTE", "LeaveSphere HR", _initials("LeaveSphere HR"), body
+    return "admin_note", note_label_override or "ADMIN NOTE", "LeaveSphere HR", _initials("LeaveSphere HR"), admin_note or ""
 
 
 def _initials(value: str) -> str:

@@ -224,6 +224,7 @@ def cancel_request_route(
         - Requires leavesphere.editor permission (or higher)
         - Only Pending transactions can be canceled
         - Approved/Rejected/Canceled transactions cannot be canceled
+        - When `leavesphere.smtp` is configured, the affected employee receives a status email using the LeaveSphere template
         - Legacy API key compat behavior remains unchanged
     """
     try:

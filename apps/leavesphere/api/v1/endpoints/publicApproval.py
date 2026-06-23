@@ -48,18 +48,20 @@ def load_quick_approval_route(token: str, debug: bool = False, refresh: bool = F
             "preview": {
               "requestId": "pto-123",
               "employeeName": "Alex Chen",
+              "pictureUrl": "https://example.com/avatars/alex-chen.jpg",
               "ptoTypeCode": "VAC",
               "ptoTypeLabel": "Vacation",
-              "startDate": "2026-06-10",
-              "endDate": "2026-06-12",
-              "hoursRequested": 24,
-              "daysRequested": 3,
-              "reason": "Family trip",
-              "currentStatus": "pending"
-            },
+            "startDate": "2026-06-10",
+            "endDate": "2026-06-12",
+            "hoursRequested": 24,
+            "reason": "Family trip",
+            "currentStatus": "pending"
+          },
             "handledDecision": null,
             "message": null,
-            "recipientRole": "manager"
+            "recipientRole": "manager",
+            "recipientName": "Marco Camacho",
+            "recipientPictureUrl": "https://example.com/avatars/marco-camacho.jpg"
           }
         }
 
@@ -68,6 +70,7 @@ def load_quick_approval_route(token: str, debug: bool = False, refresh: bool = F
         - Token must be valid, signed, and unexpired
         - Token is bound to a specific tenant, request, and recipient
         - `refresh=true` re-checks the live request after the initial snapshot render
+        - Background refresh responses may be served from a tenant-scoped cache for up to 15 minutes
         - When `debug=true`, the response includes a `debugTrace` object
     """
     return load_quick_approval_context(token=token, debug=debug, refresh=refresh)

@@ -100,9 +100,9 @@ import {
 import { formatLeaveSpherePtoStatusLabel, getLeaveSpherePtoRequestSurfaceClassName } from "@leavesphere/lib/ptoStatus";
 import { getPtoRequestActionConfig } from "@leavesphere/lib/ptoRequestActionConfig";
 import {
-  getLeaveSphereReviewActionConfirmCopy,
-  type LeaveSphereReviewAction,
-} from "@leavesphere/lib/reviewActionConfirm";
+  getLeaveSphereApprovalActionConfirmCopy,
+  type LeaveSphereApprovalAction as LeaveSphereReviewAction,
+} from "@leavesphere/lib/approvalActionConfirm";
 import {
   readLeaveSpherePtoWorkspaceCacheSnapshot,
   syncLeaveSpherePtoWorkspaceCache,
@@ -782,9 +782,10 @@ export default function LeaveSphereMyPtoPage() {
   );
   const canSaveReviewNote = Boolean(selectedReviewRequestActionConfig?.canSubmit);
   const pendingReviewActionCopy = useMemo(
-    () => (pendingReviewAction ? getLeaveSphereReviewActionConfirmCopy(pendingReviewAction, "manager") : null),
+    () => (pendingReviewAction ? getLeaveSphereApprovalActionConfirmCopy(pendingReviewAction, "manager") : null),
     [pendingReviewAction],
   );
+  const pendingReviewActionLabel = pendingReviewActionCopy?.noteLabel ?? "Approver note / reason";
   const pendingReviewActionRequiresNote = Boolean(pendingReviewActionCopy?.noteRequired);
   const submissionDeadline = workspaceForYear?.lastSubmissionDate ?? workspace?.lastSubmissionDate ?? null;
   const submissionDeadlineError = useMemo(
@@ -1995,7 +1996,7 @@ export default function LeaveSphereMyPtoPage() {
           void handleConfirmReviewAction();
         }}
         note={pendingReviewAction === "revert" ? undefined : {
-          label: "Manager note / reason",
+          label: pendingReviewActionLabel,
           value: reviewNote,
           onChange: setReviewNote,
           placeholder: "Add a note or reason for this decision",

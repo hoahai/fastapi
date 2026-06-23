@@ -7,12 +7,12 @@ export type LeaveSphereQuickApprovalRequestStatus = "pending" | "approved" | "re
 export type LeaveSphereQuickApprovalPreview = {
   requestId: string | null;
   employeeName: string;
+  pictureUrl: string | null;
   ptoTypeCode: string | null;
   ptoTypeLabel: string;
   startDate: string;
   endDate: string;
   hoursRequested: number | null;
-  daysRequested: number | null;
   reason: string | null;
   currentStatus: LeaveSphereQuickApprovalRequestStatus;
 };
@@ -21,10 +21,12 @@ export type LeaveSphereQuickApprovalLoadResult = {
   state: LeaveSphereQuickApprovalViewState;
   preview: LeaveSphereQuickApprovalPreview | null;
   handledDecision: LeaveSphereQuickApprovalDecision | null;
+  handledNote: string | null;
   canAct: boolean;
   recipientRole: "manager" | "admin" | null;
   recipientEmail: string | null;
   recipientName: string | null;
+  recipientPictureUrl: string | null;
   source: "api" | "mock";
   message: string | null;
 };
@@ -204,12 +206,16 @@ function parsePreview(candidate: Record<string, unknown> | null): LeaveSphereQui
   return {
     requestId: asString(request.requestId) || asString(request.id) || null,
     employeeName,
+    pictureUrl: asString(request.pictureUrl)
+      || asString(request.employeePictureUrl)
+      || asString(request.avatarUrl)
+      || asString(request.avatar_url)
+      || null,
     ptoTypeCode,
     ptoTypeLabel,
     startDate,
     endDate,
     hoursRequested: asNumber(request.hoursRequested) ?? asNumber(request.hours),
-    daysRequested: asNumber(request.daysRequested) ?? asNumber(request.days),
     reason: asString(request.reason) || asString(request.note) || null,
     currentStatus: normalizeRequestStatus(request.currentStatus ?? request.status),
   };
@@ -326,12 +332,12 @@ function buildMockPreview(): LeaveSphereQuickApprovalPreview {
   return {
     requestId: "demo-pto-request-1",
     employeeName: "Jordan Rivera",
+    pictureUrl: null,
     ptoTypeCode: "PTO",
     ptoTypeLabel: "Paid Time Off",
     startDate: "2026-06-18",
     endDate: "2026-06-20",
     hoursRequested: 24,
-    daysRequested: 3,
     reason: "Family travel already booked.",
     currentStatus: "pending",
   };
@@ -345,10 +351,12 @@ async function loadMockDetail(token: string): Promise<LeaveSphereQuickApprovalLo
       state,
       preview: buildMockPreview(),
       handledDecision: null,
+      handledNote: null,
       canAct: true,
       recipientRole: "manager",
       recipientEmail: "manager@example.com",
       recipientName: "Manager",
+      recipientPictureUrl: null,
       source: "mock",
       message: "Preview mode: backend public approval endpoints are not available in this environment.",
     };
@@ -357,10 +365,12 @@ async function loadMockDetail(token: string): Promise<LeaveSphereQuickApprovalLo
     state,
     preview: null,
     handledDecision: state === "already_handled" ? "approved" : null,
+    handledNote: null,
     canAct: false,
     recipientRole: "manager",
     recipientEmail: "manager@example.com",
     recipientName: "Manager",
+    recipientPictureUrl: null,
     source: "mock",
     message: "Preview mode: backend public approval endpoints are not available in this environment.",
   };
@@ -408,6 +418,7 @@ export async function loadLeaveSphereQuickApproval(token: string): Promise<Leave
   const body = unwrapEnvelope(response.payload);
   const state = normalizeViewState(body?.state ?? body?.tokenState ?? body?.status);
   const handledDecision = normalizeDecision(body?.decision ?? body?.handledDecision);
+  const handledNote = asString(body?.handledNote) || asString(body?.approverNote) || null;
   const preview = parsePreview(body);
   const canAct = normalizeCanAct(body?.canAct);
   const recipientRole = (() => {
@@ -419,6 +430,7 @@ export async function loadLeaveSphereQuickApproval(token: string): Promise<Leave
   })();
   const recipientEmail = asString(body?.recipientEmail) || null;
   const recipientName = asString(body?.recipientName) || null;
+  const recipientPictureUrl = asString(body?.recipientPictureUrl) || null;
   if (state === "ready" && !preview) {
     throw new LeaveSphereQuickApprovalError("generic", "The quick approval request data is unavailable.");
   }
@@ -426,10 +438,12 @@ export async function loadLeaveSphereQuickApproval(token: string): Promise<Leave
     state,
     preview,
     handledDecision,
+    handledNote,
     canAct,
     recipientRole,
     recipientEmail,
     recipientName,
+    recipientPictureUrl,
     source: "api",
     message: null,
   };
@@ -454,6 +468,7 @@ export async function refreshLeaveSphereQuickApproval(token: string): Promise<Le
   const body = unwrapEnvelope(response.payload);
   const state = normalizeViewState(body?.state ?? body?.tokenState ?? body?.status);
   const handledDecision = normalizeDecision(body?.decision ?? body?.handledDecision);
+  const handledNote = asString(body?.handledNote) || asString(body?.approverNote) || null;
   const preview = parsePreview(body);
   const canAct = normalizeCanAct(body?.canAct);
   const recipientRole = (() => {
@@ -465,6 +480,7 @@ export async function refreshLeaveSphereQuickApproval(token: string): Promise<Le
   })();
   const recipientEmail = asString(body?.recipientEmail) || null;
   const recipientName = asString(body?.recipientName) || null;
+  const recipientPictureUrl = asString(body?.recipientPictureUrl) || null;
   if (state === "ready" && !preview) {
     throw new LeaveSphereQuickApprovalError("generic", "The quick approval request data is unavailable.");
   }
@@ -472,10 +488,12 @@ export async function refreshLeaveSphereQuickApproval(token: string): Promise<Le
     state,
     preview,
     handledDecision,
+    handledNote,
     canAct,
     recipientRole,
     recipientEmail,
     recipientName,
+    recipientPictureUrl,
     source: "api",
     message: null,
   };

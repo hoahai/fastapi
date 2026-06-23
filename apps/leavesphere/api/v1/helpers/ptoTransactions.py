@@ -5,8 +5,6 @@ from decimal import Decimal, InvalidOperation
 from uuid import uuid4
 
 from apps.leavesphere.api.v1.helpers.dbQueries import (
-    approve_pending_pto_request,
-    cancel_pending_pto_transaction,
     create_pto_request_transaction,
     get_employees,
     get_employees_by_identity_key,
@@ -16,8 +14,8 @@ from apps.leavesphere.api.v1.helpers.dbQueries import (
     get_pto_transactions,
     get_pto_types,
     insert_pto_transaction,
-    reject_pending_pto_request,
 )
+from apps.leavesphere.api.v1.helpers.approvalWorkflow import finalize_pending_pto_action
 from shared.auth.config import get_auth_mode, is_legacy_api_key_fallback_enabled
 from shared.auth.dependencies import get_auth_principal, get_tenant_access
 
@@ -236,8 +234,18 @@ def cancel_request(*, transaction_id: str) -> dict:
     normalized_id = str(transaction_id or "").strip()
     if not normalized_id:
         raise ValueError("transaction_id is required")
-    canceled = cancel_pending_pto_transaction(transaction_id=normalized_id)
-    return {"id": normalized_id, "status": "Canceled", "updated": canceled}
+    transaction = get_pto_transaction(normalized_id)
+    if transaction is None:
+        raise ValueError("PTO transaction not found")
+    return finalize_pending_pto_action(
+        transaction_id=normalized_id,
+        action="canceled",
+        approver_id=None,
+        approver_note=None,
+        transaction=transaction,
+        send_status_email=True,
+        note_label_override="Approver note / reason",
+    )
 
 
 def _normalize_optional_approver_note(value: object | None) -> str | None:
@@ -329,12 +337,15 @@ def approve_request(
         employee_id = str(transaction.get("employeeId") or "").strip()
         _require_direct_manager(employee_id=employee_id, manager_id=str(actor_employee_id or "").strip())
 
-    updated = approve_pending_pto_request(
+    return finalize_pending_pto_action(
         transaction_id=normalized_id,
+        action="approved",
         approver_id=actor_employee_id,
-        approverNote=_normalize_optional_approver_note(approverNote),
+        approver_note=_normalize_optional_approver_note(approverNote),
+        transaction=transaction,
+        send_status_email=True,
+        note_label_override="Approver note / reason",
     )
-    return {"id": normalized_id, "status": "Approved", "updated": updated}
 
 
 def reject_request(
@@ -358,9 +369,12 @@ def reject_request(
         employee_id = str(transaction.get("employeeId") or "").strip()
         _require_direct_manager(employee_id=employee_id, manager_id=str(actor_employee_id or "").strip())
 
-    updated = reject_pending_pto_request(
+    return finalize_pending_pto_action(
         transaction_id=normalized_id,
+        action="rejected",
         approver_id=actor_employee_id,
-        approverNote=_normalize_optional_approver_note(approverNote),
+        approver_note=_normalize_optional_approver_note(approverNote),
+        transaction=transaction,
+        send_status_email=True,
+        note_label_override="Approver note / reason",
     )
-    return {"id": normalized_id, "status": "Rejected", "updated": updated}
