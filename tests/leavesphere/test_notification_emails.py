@@ -384,11 +384,13 @@ class LeaveSphereNotificationEmailTests(unittest.TestCase):
         self.assertIn("Approved after coverage was confirmed.", email.html_body)
 
     @patch("apps.leavesphere.api.v1.helpers.notification_emails.send_smtp_email")
+    @patch("apps.leavesphere.api.v1.helpers.notification_emails.get_action_cc_emails")
     @patch("apps.leavesphere.api.v1.helpers.notification_emails._get_pto_types")
     @patch("apps.leavesphere.api.v1.helpers.notification_emails._get_employees_by_ids")
     @patch("apps.leavesphere.api.v1.helpers.notification_emails.get_app_scoped_env")
-    def test_send_status_email_uses_template_and_smtp(self, get_app_scoped_env, get_employees_by_ids, get_pto_types, send_smtp_email) -> None:
+    def test_send_status_email_uses_template_and_smtp(self, get_app_scoped_env, get_employees_by_ids, get_pto_types, get_action_cc_emails, send_smtp_email) -> None:
         get_app_scoped_env.return_value = "{'host': 'smtp.example.com', 'port': 587, 'from_email': 'noreply@example.com'}"
+        get_action_cc_emails.return_value = ["hr@example.com", "ops@example.com"]
         get_employees_by_ids.return_value = [
             {
                 "id": "emp-1",
@@ -423,16 +425,19 @@ class LeaveSphereNotificationEmailTests(unittest.TestCase):
         send_smtp_email.assert_called_once()
         call_kwargs = send_smtp_email.call_args.kwargs
         self.assertEqual(call_kwargs["to_addresses"], ["alex@example.com"])
+        self.assertEqual(call_kwargs["cc_addresses"], ["hr@example.com", "ops@example.com"])
         self.assertEqual(call_kwargs["subject"], "PTO request approved for Alex Chen | 06/10/2026 - 06/12/2026")
         self.assertIn("PTO Request Approved", call_kwargs["html_body"])
         self.assertIn("Approved after coverage was confirmed.", call_kwargs["html_body"])
 
     @patch("apps.leavesphere.api.v1.helpers.notification_emails.send_smtp_email")
+    @patch("apps.leavesphere.api.v1.helpers.notification_emails.get_action_cc_emails")
     @patch("apps.leavesphere.api.v1.helpers.notification_emails._get_pto_types")
     @patch("apps.leavesphere.api.v1.helpers.notification_emails._get_employees_by_ids")
     @patch("apps.leavesphere.api.v1.helpers.notification_emails.get_app_scoped_env")
-    def test_send_confirmation_email_uses_employee_recipient(self, get_app_scoped_env, get_employees_by_ids, get_pto_types, send_smtp_email) -> None:
+    def test_send_confirmation_email_uses_employee_recipient(self, get_app_scoped_env, get_employees_by_ids, get_pto_types, get_action_cc_emails, send_smtp_email) -> None:
         get_app_scoped_env.return_value = "{'host': 'smtp.example.com', 'port': 587, 'from_email': 'noreply@example.com'}"
+        get_action_cc_emails.return_value = ["hr@example.com", "ops@example.com"]
         get_employees_by_ids.return_value = [
             {
                 "id": "emp-1",
@@ -465,16 +470,19 @@ class LeaveSphereNotificationEmailTests(unittest.TestCase):
         send_smtp_email.assert_called_once()
         call_kwargs = send_smtp_email.call_args.kwargs
         self.assertEqual(call_kwargs["to_addresses"], ["alex@example.com"])
+        self.assertEqual(call_kwargs["cc_addresses"], ["hr@example.com", "ops@example.com"])
         self.assertEqual(call_kwargs["subject"], "PTO request submitted for Alex Chen | 06/10/2026 - 06/12/2026")
         self.assertIn("Confirmation of PTO Request", call_kwargs["html_body"])
 
     @patch("apps.leavesphere.api.v1.helpers.notification_emails.send_smtp_email")
+    @patch("apps.leavesphere.api.v1.helpers.notification_emails.get_action_cc_emails")
     @patch("apps.leavesphere.api.v1.helpers.notification_emails._get_pto_types")
     @patch("apps.leavesphere.api.v1.helpers.notification_emails._get_employees_by_ids")
     @patch("apps.leavesphere.api.v1.helpers.notification_emails._get_employee_managers")
     @patch("apps.leavesphere.api.v1.helpers.notification_emails.get_app_scoped_env")
-    def test_send_approval_email_sends_to_all_managers(self, get_app_scoped_env, get_employee_managers, get_employees_by_ids, get_pto_types, send_smtp_email) -> None:
+    def test_send_approval_email_sends_to_all_managers(self, get_app_scoped_env, get_employee_managers, get_employees_by_ids, get_pto_types, get_action_cc_emails, send_smtp_email) -> None:
         get_app_scoped_env.return_value = "{'host': 'smtp.example.com', 'port': 587, 'from_email': 'noreply@example.com'}"
+        get_action_cc_emails.return_value = ["hr@example.com", "ops@example.com"]
         get_employee_managers.return_value = [
             {"employeeId": "emp-2", "managerId": "mgr-1"},
             {"employeeId": "emp-2", "managerId": "mgr-2"},
@@ -518,6 +526,7 @@ class LeaveSphereNotificationEmailTests(unittest.TestCase):
         self.assertEqual(recipients, ["jordan@example.com", "casey@example.com"])
         for call in send_smtp_email.call_args_list:
             self.assertEqual(call.kwargs["subject"], "New PTO Approval needed for Alex Chen | 06/10/2026 - 06/12/2026")
+            self.assertEqual(call.kwargs["cc_addresses"], ["hr@example.com", "ops@example.com"])
             self.assertIn("PTO Request Needs Your Approval", call.kwargs["html_body"])
             self.assertNotIn("Open Quick Approval", call.kwargs["html_body"])
 

@@ -86,8 +86,6 @@ import {
   updateLeaveManagementRequest,
   updateLeaveManagementSetupData,
   type LeaveManagementGoogleCalendarConnectionStatus,
-  type LeaveManagementEmployee,
-  type LeaveManagementTypeConfig,
   type LeaveManagementSetupInput,
   type LeaveManagementWorkspaceData,
 } from "@leavesphere/lib/leaveManagementApi";
@@ -872,6 +870,7 @@ export default function LeaveManagementPage() {
   const [isGoogleCalendarStatusLoading, setIsGoogleCalendarStatusLoading] = useState(false);
   const [isGoogleCalendarConnecting, setIsGoogleCalendarConnecting] = useState(false);
   const [isGoogleCalendarDisconnecting, setIsGoogleCalendarDisconnecting] = useState(false);
+  const [isGoogleCalendarDisconnectConfirmOpen, setIsGoogleCalendarDisconnectConfirmOpen] = useState(false);
   const [draftRecentHistorySearch, setDraftRecentHistorySearch] = useState("");
   const [appliedRecentHistorySearch, setAppliedRecentHistorySearch] = useState("");
   const [scrollY, setScrollY] = useState(0);
@@ -1837,8 +1836,34 @@ export default function LeaveManagementPage() {
       }
     } finally {
       setIsGoogleCalendarDisconnecting(false);
+      setIsGoogleCalendarDisconnectConfirmOpen(false);
     }
   }, [requestJson, toast]);
+
+  const handleGoogleCalendarCardActivate = useCallback(() => {
+    if (isGoogleCalendarStatusLoading || isGoogleCalendarConnecting || isGoogleCalendarDisconnecting) {
+      return;
+    }
+    if (Boolean(googleCalendarConnectionStatus?.connected)) {
+      setIsGoogleCalendarDisconnectConfirmOpen(true);
+      return;
+    }
+    void handleConnectGoogleCalendar();
+  }, [
+    googleCalendarConnectionStatus?.connected,
+    handleConnectGoogleCalendar,
+    isGoogleCalendarConnecting,
+    isGoogleCalendarDisconnecting,
+    isGoogleCalendarStatusLoading,
+  ]);
+
+  const handleGoogleCalendarCardKeyDown = useCallback((event: React.KeyboardEvent<HTMLElement>) => {
+    if (event.key !== "Enter" && event.key !== " ") {
+      return;
+    }
+    event.preventDefault();
+    handleGoogleCalendarCardActivate();
+  }, [handleGoogleCalendarCardActivate]);
 
   const refreshGoogleCalendarConnectionStatus = useCallback(async () => {
     if (!canUseGoogleCalendarAdminApi) {
@@ -2926,38 +2951,66 @@ export default function LeaveManagementPage() {
 
   const renderSetupTab = () => {
     const googleCalendarConnected = Boolean(googleCalendarConnectionStatus?.connected);
-    const googleCalendarScopes = (googleCalendarConnectionStatus?.scopes ?? []).filter(Boolean);
+    const googleCalendarStatusTone = isGoogleCalendarStatusLoading
+      ? "border-blue-200 bg-blue-50/70"
+      : googleCalendarConnected
+        ? "border-emerald-200 bg-emerald-50/80"
+        : "border-amber-200 bg-amber-50/80";
+    const googleCalendarStatusPillTone = isGoogleCalendarStatusLoading
+      ? "bg-blue-100 text-blue-700"
+      : googleCalendarConnected
+        ? "bg-emerald-100 text-emerald-700"
+        : "bg-amber-100 text-amber-700";
+    const googleCalendarHeaderBadgeTone = isGoogleCalendarStatusLoading
+      ? "border-blue-200 bg-blue-50 text-blue-800"
+      : googleCalendarConnected
+        ? "border-emerald-200 bg-emerald-50 text-emerald-800"
+        : "border-amber-200 bg-amber-50 text-amber-800";
+    const googleCalendarCardHint = isGoogleCalendarStatusLoading
+      ? "Checking connection..."
+      : googleCalendarConnected
+        ? "Click to disconnect."
+        : "Click to connect.";
     return (
-      <div className="grid gap-4 xl:grid-cols-2">
+      <div className="grid gap-4">
         <SectionCard
-          title="Google Calendar"
-          description="Connect the approval flow to a shared workspace calendar."
-          actions={(
-            <div className="flex flex-wrap items-center gap-2">
-              <Button
-                variant="outline"
-                onClick={() => void handleConnectGoogleCalendar()}
-                disabled={isGoogleCalendarStatusLoading || isGoogleCalendarConnecting || isGoogleCalendarDisconnecting}
-              >
-                <CalendarDays className="size-4" />
-                {googleCalendarConnected ? "Reconnect" : "Connect"}
-              </Button>
-              <Button
-                variant="outline"
-                onClick={() => void handleDisconnectGoogleCalendar()}
-                disabled={!googleCalendarConnected || isGoogleCalendarStatusLoading || isGoogleCalendarConnecting || isGoogleCalendarDisconnecting}
-              >
-                Disconnect
-              </Button>
-            </div>
+          title={(
+            <span className="inline-flex flex-wrap items-center gap-2">
+              <span>Google Calendar</span>
+              <span className={`inline-flex items-center rounded-full border px-2.5 py-0.5 text-[11px] font-semibold tracking-[0.02em] ${googleCalendarHeaderBadgeTone}`}>
+                {isGoogleCalendarStatusLoading
+                  ? "Loading"
+                  : googleCalendarConnected
+                    ? "Connected"
+                    : "Disconnected"}
+              </span>
+            </span>
           )}
+          description="Connect the approval flow to a shared workspace calendar."
+          onClick={handleGoogleCalendarCardActivate}
+          onKeyDown={handleGoogleCalendarCardKeyDown}
+          role="button"
+          tabIndex={0}
+          aria-disabled={isGoogleCalendarStatusLoading || isGoogleCalendarConnecting || isGoogleCalendarDisconnecting}
+          className={[
+            "transition-all duration-200 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300",
+            isGoogleCalendarStatusLoading || isGoogleCalendarConnecting || isGoogleCalendarDisconnecting
+              ? "cursor-not-allowed opacity-75"
+              : "cursor-pointer hover:-translate-y-0.5",
+          ].join(" ")}
           contentClassName="space-y-3"
         >
-          <div className="rounded-xl border border-blue-100 bg-white p-3">
+          <div className={`rounded-xl border p-3 ${googleCalendarStatusTone}`}>
             <div className="flex flex-wrap items-center justify-between gap-3">
               <div>
-                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Connection status</p>
-                <p className={`mt-1 text-sm font-medium ${googleCalendarConnected ? "text-emerald-700" : "text-slate-700"}`}>
+                <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-600">Connection status</p>
+                <p className={`mt-1 text-sm font-medium ${
+                  isGoogleCalendarStatusLoading
+                    ? "text-blue-800"
+                    : googleCalendarConnected
+                      ? "text-emerald-800"
+                      : "text-amber-800"
+                }`}>
                   {isGoogleCalendarStatusLoading
                     ? "Checking connection..."
                     : googleCalendarConnected
@@ -2965,111 +3018,26 @@ export default function LeaveManagementPage() {
                       : "Not connected"}
                 </p>
               </div>
-              <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${
-                googleCalendarConnected
-                  ? "bg-emerald-50 text-emerald-700"
-                  : "bg-slate-100 text-slate-600"
-              }`}>
-                {googleCalendarConnected ? "Active" : "Disconnected"}
+              <span className={`inline-flex rounded-full px-2.5 py-1 text-xs font-semibold ${googleCalendarStatusPillTone}`}>
+                {isGoogleCalendarStatusLoading
+                  ? "Loading"
+                  : googleCalendarConnected
+                    ? "Active"
+                    : "Disconnected"}
               </span>
             </div>
             {googleCalendarConnectionStatus?.connectedAt ? (
-              <p className="mt-3 text-xs text-slate-500">
+              <p className="mt-3 text-xs text-slate-600">
                 Connected at: {googleCalendarConnectionStatus.connectedAt}
               </p>
             ) : null}
-            {googleCalendarScopes.length > 0 ? (
-              <p className="mt-2 text-xs text-slate-500">
-                Scopes: {googleCalendarScopes.join(", ")}
-              </p>
-            ) : null}
-          </div>
-          <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">How sync works</p>
-            <ul className="mt-2 space-y-1.5 text-sm text-slate-700">
-              <li>The Google OAuth refresh token is stored in Supabase for this tenant.</li>
-              <li>The shared Google Calendar ID comes from tenant config <span className="font-mono text-[0.95em]">google_calendar.ggCalendarId</span>.</li>
-              <li>LeaveSphere stores the event id for the connected Google Calendar on the PTO row as <span className="font-mono text-[0.95em]">calendarId</span> so updates and deletes stay linked.</li>
-            </ul>
+            <p className="mt-3 text-xs font-medium text-slate-600">
+              {googleCalendarCardHint}
+            </p>
           </div>
           <p className="text-sm text-slate-600">
             LeaveSphere uses OAuth to create and update calendar events after an approval is submitted.
           </p>
-        </SectionCard>
-
-        <SectionCard
-          title="Setup Data"
-          description="PTO types, actions, employees, managers, and holidays"
-          actions={(
-            <Button
-              variant="outline"
-              onClick={() => {
-                setSetupError(null);
-                setSetupForm({
-                  ...EMPTY_SETUP_FORM,
-                  managerId: workspaceForYear?.currentUserId || currentUserId,
-                });
-                setIsSetupModalOpen(true);
-              }}
-            >
-              <Settings2 className="size-4" />
-              Edit Setup
-            </Button>
-          )}
-          contentClassName="space-y-3"
-        >
-          <div className="rounded-xl border border-blue-100 bg-white p-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">PTO types</p>
-            <div className="mt-2 flex flex-wrap gap-2">
-              {(workspaceForYear?.ptoTypes ?? []).map((item: LeaveManagementTypeConfig) => (
-                <span key={item.code} className="inline-flex rounded-full border border-blue-200 bg-blue-50 px-2 py-0.5 text-xs font-medium text-blue-700">
-                  {item.label}
-                </span>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-xl border border-blue-100 bg-white p-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">PTO actions</p>
-            <ul className="mt-2 space-y-2 text-sm text-slate-700">
-              {(workspaceForYear?.ptoActions ?? []).slice(0, 4).map((item) => (
-                <li key={item.code} className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2">
-                  <p className="font-medium text-slate-800">{item.label}</p>
-                  <p className="text-xs text-slate-600">{item.detail || "-"}</p>
-                </li>
-              ))}
-            </ul>
-          </div>
-        </SectionCard>
-
-        <SectionCard
-          title="Employees / Managers / Holidays"
-          description="Current manager mapping and holiday list"
-          contentClassName="space-y-3"
-        >
-          <div className="rounded-xl border border-blue-100 bg-white p-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Employees</p>
-            <ul className="mt-2 max-h-44 space-y-2 overflow-y-auto pr-1 text-sm text-slate-700">
-              {(workspaceForYear?.employees ?? []).map((item: LeaveManagementEmployee) => (
-                <li key={item.employeeId} className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2">
-                  <p className="font-medium text-slate-800">{item.employeeName}</p>
-                  <p className="text-xs text-slate-600">{item.title} · Team: {item.teamRegion} · Manager: {item.managerName}</p>
-                </li>
-              ))}
-            </ul>
-          </div>
-
-          <div className="rounded-xl border border-blue-100 bg-white p-3">
-            <p className="text-xs font-semibold uppercase tracking-[0.08em] text-slate-500">Holidays</p>
-            <ul className="mt-2 max-h-40 space-y-2 overflow-y-auto pr-1 text-sm text-slate-700">
-              {(workspaceForYear?.holidays ?? []).map((item) => (
-                <li key={item.id} className="rounded-lg border border-slate-200 bg-slate-50 px-2.5 py-2">
-                  <p className="font-medium text-slate-800">{item.name} ({item.teamRegion})</p>
-                  <p className="text-xs text-slate-600">{formatDateLabel(item.date, tenantTimeZone)}</p>
-                </li>
-              ))}
-            </ul>
-          </div>
         </SectionCard>
       </div>
     );
@@ -3660,6 +3628,18 @@ export default function LeaveManagementPage() {
           } : undefined}
         />
       ) : null}
+
+      <ConfirmDialog
+        open={isGoogleCalendarDisconnectConfirmOpen}
+        title="Disconnect Google Calendar?"
+        description="LeaveSphere will remove the stored Google Calendar credentials for this tenant. Future approved requests will stop syncing until you connect again."
+        confirmLabel={isGoogleCalendarDisconnecting ? "Disconnecting..." : "Disconnect"}
+        cancelLabel="Keep connected"
+        onCancel={() => setIsGoogleCalendarDisconnectConfirmOpen(false)}
+        onConfirm={() => {
+          void handleDisconnectGoogleCalendar();
+        }}
+      />
 
       <Dialog open={isSetupModalOpen} onOpenChange={setIsSetupModalOpen}>
         <DialogContent className="flex max-h-[90vh] max-w-2xl flex-col overflow-hidden rounded-xl bg-white p-6">

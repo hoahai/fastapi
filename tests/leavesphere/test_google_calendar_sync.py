@@ -48,7 +48,8 @@ class LeaveSphereGoogleCalendarSyncTests(unittest.TestCase):
         self.assertEqual(result["operation"], "created")
         create_event.assert_called_once()
         self.assertEqual(create_event.call_args.kwargs["calendar_id"], "shared-cal")
-        self.assertEqual(create_event.call_args.kwargs["event"]["summary"], "LeaveSphere: Alex Chen - Vacation")
+        self.assertEqual(create_event.call_args.kwargs["event"]["summary"], "LeaveSphere: Alex Chen OOO")
+        self.assertEqual(create_event.call_args.kwargs["event"]["description"], "Vacation: Family trip")
         self.assertEqual(create_event.call_args.kwargs["event"]["start"], {"date": "2026-06-10"})
         self.assertEqual(create_event.call_args.kwargs["event"]["end"], {"date": "2026-06-13"})
         update_pto_transaction_mock.assert_called_once_with(

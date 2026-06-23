@@ -44,6 +44,7 @@ _DB_KEY_ALIASES = {
 
 _EMPLOYEE_EMAIL_MAP_CONFIG_KEY = "EMPLOYEE_EMAIL_MAP"
 _REMINDER_CC_CONFIG_KEY = "REMINDERCC"
+_ACTION_CC_CONFIG_KEY = "ACTIONCC"
 _LAST_SUBMISSION_DATE_CONFIG_KEY = "LASTSUBMISSIONDATE"
 _LAST_SUBMISSION_DATE_RE = re.compile(
     r"^(?P<month>0?[1-9]|1[0-2])-(?P<day>0?[1-9]|[12]\d|3[01])$"
@@ -208,8 +209,21 @@ def _parse_email_list_value(value: object | None, *, config_key: str) -> list[st
 
 
 def get_reminder_cc_emails() -> list[str]:
+    """Return reminder email CC recipients from `leavesphere.reminderCC`.
+
+    Reminder CCs are only applied to manager reminder emails.
+    """
     raw = _get_scoped_env(_REMINDER_CC_CONFIG_KEY)
     return _parse_email_list_value(raw, config_key=_REMINDER_CC_CONFIG_KEY)
+
+
+def get_action_cc_emails() -> list[str]:
+    """Return action email CC recipients from `leavesphere.actionCC`.
+
+    Action CCs are applied to request confirmation, approval, and status emails.
+    """
+    raw = _get_scoped_env(_ACTION_CC_CONFIG_KEY)
+    return _parse_email_list_value(raw, config_key=_ACTION_CC_CONFIG_KEY)
 
 
 def get_last_submission_date() -> str | None:
@@ -279,6 +293,7 @@ def validate_tenant_config(tenant_id: str | None = None) -> None:
                 get_db_tables()
                 get_employee_email_map()
                 get_reminder_cc_emails()
+                get_action_cc_emails()
                 get_last_submission_date()
             except TenantConfigValidationError as exc:
                 missing.extend(exc.missing)

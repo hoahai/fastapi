@@ -151,6 +151,20 @@ Confirmed actions:
 - now shows all request statuses (pending, approved, rejected, cancelled) plus holidays
 - status chip tone is mapped via `mapLeaveSpherePtoStatusToChipTone`
 
+## Email CC Config
+
+LeaveSphere supports two optional tenant email CC lists:
+
+- `leavesphere.actionCC`
+  - applied to action emails:
+    - confirmation
+    - approval
+    - status updates
+- `leavesphere.reminderCC`
+  - applied only to manager reminder emails
+
+Both keys accept a string, list, or YAML array of email addresses. Duplicate addresses are removed after normalization.
+
 ## Current Style Conventions
 
 - request-detail summary card uses neutral slate background with status chip at top-right

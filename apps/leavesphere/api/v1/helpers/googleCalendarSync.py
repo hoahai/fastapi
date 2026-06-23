@@ -58,8 +58,7 @@ def _build_event_dates(transaction: dict) -> tuple[dict[str, str] | None, dict[s
 
 def _build_event_summary(*, employee_name: str, pto_type_name: str) -> str:
     employee_label = _normalize_text(employee_name) or "Employee"
-    pto_label = _normalize_text(pto_type_name) or "Leave"
-    return f"LeaveSphere: {employee_label} - {pto_label}"
+    return f"LeaveSphere: {employee_label} OOO"
 
 
 def _build_event_body(*, transaction: dict, employee_name: str, pto_type_name: str) -> dict[str, object] | None:
@@ -67,20 +66,15 @@ def _build_event_body(*, transaction: dict, employee_name: str, pto_type_name: s
     if start is None or end is None:
         return None
 
-    description_parts = [
-        f"Request ID: {_normalize_text(transaction.get('id'))}",
-        f"Employee: {employee_name}",
-        f"PTO Type: {pto_type_name}",
-        f"Hours: {_normalize_text(transaction.get('hours'))}",
-    ]
     transaction_description = _normalize_text(transaction.get("description"))
+    pto_label = _normalize_text(pto_type_name) or "Leave"
+    description = pto_label
     if transaction_description:
-        description_parts.append("")
-        description_parts.append(transaction_description)
+        description = f"{pto_label}: {transaction_description}"
 
     return {
         "summary": _build_event_summary(employee_name=employee_name, pto_type_name=pto_type_name),
-        "description": "\n".join(description_parts),
+        "description": description,
         "start": start,
         "end": end,
     }

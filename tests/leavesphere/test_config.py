@@ -80,6 +80,17 @@ class LeaveSphereConfigTests(unittest.TestCase):
                 ["hr@example.com", "ops@example.com"],
             )
 
+    def test_get_action_cc_emails_parses_and_deduplicates(self):
+        with patch.object(
+            config,
+            "get_app_scoped_env",
+            return_value="['HR@example.com', 'ops@example.com', 'hr@example.com']",
+        ):
+            self.assertEqual(
+                config.get_action_cc_emails(),
+                ["hr@example.com", "ops@example.com"],
+            )
+
     def test_validate_tenant_config_rejects_invalid_employee_email_map(self):
         with patch.object(config, "get_tenant_id", return_value="taaa"), patch.object(
             config, "_has_leavesphere_config", return_value=True
