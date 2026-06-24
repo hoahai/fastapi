@@ -19,6 +19,7 @@ import {
   SHIFTZY_SCHEDULES_CHILD_ICON,
   LEAVESPHERE_MY_PTO_CHILD_ICON,
   LEAVESPHERE_LEAVE_MANAGEMENT_CHILD_ICON,
+  LEAVESPHERE_EMPLOYEES_CHILD_ICON,
   TRADSPHERE_CONTACTS_CHILD_ICON,
   TRADSPHERE_ESTNUMS_CHILD_ICON,
   TRADSPHERE_HOME_CHILD_ICON,
@@ -897,6 +898,9 @@ function SidebarChildItem({ child, currentPath, tenantSlug, activeTenantSlug, ac
   if (child.route === "/leavesphere/leave-management" && !hasAppAdminAccess(accessProfile, "leavesphere")) {
     return null;
   }
+  if (child.route === "/leavesphere/employees" && !hasAppAdminAccess(accessProfile, "leavesphere")) {
+    return null;
+  }
   const hasPageAccess = child.route.endsWith("/admin")
     ? true
     : !normalizedTenantSlug || !appCode
@@ -932,6 +936,8 @@ function SidebarChildItem({ child, currentPath, tenantSlug, activeTenantSlug, ac
               ? LEAVESPHERE_MY_PTO_CHILD_ICON
             : child.route === "/leavesphere/leave-management"
               ? LEAVESPHERE_LEAVE_MANAGEMENT_CHILD_ICON
+            : child.route === "/leavesphere/employees"
+              ? LEAVESPHERE_EMPLOYEES_CHILD_ICON
           : TRADSPHERE_HOME_CHILD_ICON;
 
   return (

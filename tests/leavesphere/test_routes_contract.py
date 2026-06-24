@@ -26,6 +26,8 @@ class LeaveSphereRouteContractTests(unittest.TestCase):
             ("GET", "/v1/employees/{employee_id}"),
             ("POST", "/v1/employees"),
             ("PUT", "/v1/employees/{employee_id}"),
+            ("POST", "/v1/employees/{employee_id}/activate"),
+            ("POST", "/v1/employees/{employee_id}/deactivate"),
             ("GET", "/v1/employeeManagers"),
             ("GET", "/v1/employeeManagers/{id}"),
             ("POST", "/v1/employeeManagers"),
@@ -57,6 +59,7 @@ class LeaveSphereRouteContractTests(unittest.TestCase):
             ("GET", "/v1/admin/google-calendar/oauth/status"),
             ("GET", "/v1/admin/google-calendar/oauth/url"),
             ("DELETE", "/v1/admin/google-calendar/oauth/connection"),
+            ("GET", "/v1/ui/employees/load"),
             ("GET", "/v1/ui/my-pto/load"),
             ("POST", "/v1/ui/my-pto/requests"),
             ("PUT", "/v1/ui/my-pto/requests"),
@@ -67,6 +70,7 @@ class LeaveSphereRouteContractTests(unittest.TestCase):
             self.assertIn(route_key, actual_routes)
 
         self.assertNotIn(("DELETE", "/v1/employees/{employee_id}"), actual_routes)
+        self.assertNotIn(("POST", "/v1/employees/{employee_id}/archive"), actual_routes)
         self.assertNotIn(("DELETE", "/v1/ptoTypes/{code}"), actual_routes)
         self.assertNotIn(("DELETE", "/v1/ptoActions/{code}"), actual_routes)
 

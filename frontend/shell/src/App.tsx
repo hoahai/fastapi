@@ -21,6 +21,7 @@ const ShiftzyEmployeesPage = lazy(() => import("@shiftzy/pages/ShiftzyEmployeesP
 const ShiftzySchedulePage = lazy(() => import("@shiftzy/pages/ShiftzySchedulePage"));
 const LeaveSphereMyPtoPage = lazy(() => import("@leavesphere/pages/MyPtoPage"));
 const LeaveSphereLeaveManagementPage = lazy(() => import("@leavesphere/pages/LeaveManagementPage"));
+const LeaveSphereEmployeeManagementPage = lazy(() => import("@leavesphere/pages/EmployeeManagementPage"));
 const LeaveSphereQuickApprovalPage = lazy(() => import("@leavesphere/pages/QuickApprovalPage"));
 const AdminUsersPage = lazy(() => import("@shell/pages/AdminUsersPage"));
 const AppScopedAdminPage = lazy(() => import("@shell/pages/AppScopedAdminPage"));
@@ -278,6 +279,9 @@ function toScrollStorageKey(route: string): string {
   }
   if (route === "/leavesphere/leave-management") {
     return "leavesphere.leave-management.scrollY";
+  }
+  if (route === "/leavesphere/employees") {
+    return "leavesphere.employees.scrollY";
   }
   if (route === "/admin/users") {
     return "workspace.admin.users.scrollY";
@@ -580,6 +584,7 @@ function App() {
       "/shiftzy/employees",
       "/leavesphere/home",
       "/leavesphere/leave-management",
+      "/leavesphere/employees",
     ]);
   }, []);
   const scopedAdminAppCode = useMemo(() => parseScopedAdminRoute(frontendPath), [frontendPath]);
@@ -742,6 +747,15 @@ function App() {
                 <RequireAppPageRoute appCode="leavesphere" route="/leavesphere/leave-management" fallback={<RedirectToHome />}>
                   <Suspense fallback={<RouteChunkFallback />}>
                     <LeaveSphereLeaveManagementPage />
+                  </Suspense>
+                </RequireAppPageRoute>
+              </RequireAppAdmin>
+            ) : null}
+            {frontendPath === "/leavesphere/employees" ? (
+              <RequireAppAdmin appCode="leavesphere" fallback={<RedirectToHome />}>
+                <RequireAppPageRoute appCode="leavesphere" route="/leavesphere/employees" fallback={<RedirectToHome />}>
+                  <Suspense fallback={<RouteChunkFallback />}>
+                    <LeaveSphereEmployeeManagementPage />
                   </Suspense>
                 </RequireAppPageRoute>
               </RequireAppAdmin>

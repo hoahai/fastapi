@@ -22,6 +22,7 @@ const APP_PAGE_CATALOG: Record<string, AppPageDefinition[]> = {
   leavesphere: [
     { key: "leavesphere_home", label: "My PTO / Manager PTO", route: "/leavesphere/home" },
     { key: "leavesphere_leave_management", label: "Leave Management", route: "/leavesphere/leave-management" },
+    { key: "leavesphere_employees", label: "Employee Management", route: "/leavesphere/employees" },
   ],
 };
 

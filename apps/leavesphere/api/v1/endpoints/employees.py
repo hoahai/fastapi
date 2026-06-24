@@ -4,7 +4,9 @@ from fastapi import APIRouter, Body, Depends, HTTPException, Request
 from pydantic import BaseModel
 
 from apps.leavesphere.api.v1.helpers.employees import (
+    activate_employee,
     create_employee,
+    deactivate_employee,
     get_employee,
     list_employees,
     modify_employee,
@@ -186,6 +188,86 @@ def update_employee_route(
             employee_id=employee_id,
             payload=payload.model_dump(exclude_unset=True) if hasattr(payload, "model_dump") else payload.dict(exclude_unset=True),
         )
+        invalidate_leave_sphere_workspace_caches()
+        return result
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if detail == "Employee not found" else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.post("/{employee_id}/activate")
+def activate_employee_route(
+    employee_id: str,
+    _: None = Depends(require_leavesphere_admin),
+):
+    """
+    Activate one employee row.
+
+    Example request:
+        POST /api/leavesphere/v1/employees/13f6b22f-0a86-43b8-946d-cbba67642e8b/activate
+
+    Example response:
+        {
+          "meta": {"timestamp": "2026-05-29T10:00:00+07:00", "duration_ms": 2},
+          "data": {
+            "updated": 1,
+            "employee": {
+              "id": "13f6b22f-0a86-43b8-946d-cbba67642e8b",
+              "firstName": "Alex",
+              "lastName": "Chen",
+              "email": "alex@example.com",
+              "active": 1
+            }
+          }
+        }
+
+    Requirements:
+        - Requires leavesphere.admin permission (or workspace.super_admin)
+        - Sets `active` to `1`
+    """
+    try:
+        result = activate_employee(employee_id)
+        invalidate_leave_sphere_workspace_caches()
+        return result
+    except ValueError as exc:
+        detail = str(exc)
+        status_code = 404 if detail == "Employee not found" else 400
+        raise HTTPException(status_code=status_code, detail=detail) from exc
+
+
+@router.post("/{employee_id}/deactivate")
+def deactivate_employee_route(
+    employee_id: str,
+    _: None = Depends(require_leavesphere_admin),
+):
+    """
+    Deactivate one employee row.
+
+    Example request:
+        POST /api/leavesphere/v1/employees/13f6b22f-0a86-43b8-946d-cbba67642e8b/deactivate
+
+    Example response:
+        {
+          "meta": {"timestamp": "2026-05-29T10:00:00+07:00", "duration_ms": 2},
+          "data": {
+            "updated": 1,
+            "employee": {
+              "id": "13f6b22f-0a86-43b8-946d-cbba67642e8b",
+              "firstName": "Alex",
+              "lastName": "Chen",
+              "email": "alex@example.com",
+              "active": 0
+            }
+          }
+        }
+
+    Requirements:
+        - Requires leavesphere.admin permission (or workspace.super_admin)
+        - Sets `active` to `0`
+    """
+    try:
+        result = deactivate_employee(employee_id)
         invalidate_leave_sphere_workspace_caches()
         return result
     except ValueError as exc:

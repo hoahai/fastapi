@@ -1,0 +1,1435 @@
+import { useEffect, useMemo, useRef, useState } from "react";
+import {
+  PencilLine,
+  Plus,
+  RefreshCw,
+  Search,
+  UserCheck,
+  UserX,
+  Users,
+  X,
+} from "lucide-react";
+
+import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
+import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
+import { SectionCard } from "@shared/components/layout/SectionCard";
+import { Section, SectionHeader } from "@shared/components";
+import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
+import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
+import { Button } from "@tradsphere/components/ui/button";
+import { AppDropdown, type AppDropdownOption } from "@tradsphere/components/ui/app-dropdown";
+import {
+  Dialog,
+  DialogClose,
+  DialogContent,
+  DialogDescription,
+  DialogHeader,
+  DialogTitle,
+} from "@tradsphere/components/ui/dialog";
+import { Input } from "@tradsphere/components/ui/input";
+import { ConfirmDialog } from "@tradsphere/components/ui/confirm-dialog";
+import { UnsavedChangesDialog } from "@tradsphere/components/ui/unsaved-changes-dialog";
+import { useApiRequest } from "@shared/hooks/useApiRequest";
+import { useOnlineStatus } from "@shared/hooks/useOnlineStatus";
+import { shouldProtectFrontendAuth } from "@shared/auth/guards";
+import { hasAppAdminAccess } from "@shared/auth/permissions";
+import { useAuth } from "@shared/auth/useAuth";
+import { PageBanner } from "@shell/components/layout/PageBanner";
+import { ActionIconButton } from "@tradsphere/components/dashboard/ActionIconButton";
+import { ModalCloseButton, ModalFooter, ModalHeaderRow, ModalShell, FormRow } from "@shared/components";
+import { cn } from "@shared/components/utils/cn";
+import { DEFAULT_TIME_ZONE, formatDateInTimeZone } from "@shared/utils/time";
+import {
+  activateLeaveSphereEmployeeManagementEmployee,
+  createLeaveSphereEmployeeManagementEmployee,
+  deactivateLeaveSphereEmployeeManagementEmployee,
+  extractLeaveSphereEmployeeManagementCreatedEmployeeId,
+  extractLeaveSphereEmployeeManagementEmployeeFromPayload,
+  loadLeaveSphereEmployeeManagementWorkspace,
+  normalizeLeaveSphereEmployeeManagementEmployee,
+  normalizeLeaveSphereEmployeeManagementForm,
+  normalizeLeaveSphereEmployeeManagementWorkspace,
+  updateLeaveSphereEmployeeManagementEmployee,
+  sortLeaveSphereEmployeeManagementEmployees,
+  type LeaveSphereEmployeeManagementEmployee,
+  type LeaveSphereEmployeeManagementFormState,
+  type LeaveSphereEmployeeManagementWorkspace,
+} from "@leavesphere/lib/employeeManagementApi";
+import {
+  LEAVESPHERE_EMPLOYEE_MANAGEMENT_PAGE_CODE,
+  buildLeaveSphereEmployeeManagementWorkspaceCacheKey,
+  readLeaveSphereEmployeeManagementWorkspaceCacheSnapshot,
+  syncLeaveSphereEmployeeManagementWorkspaceCache,
+  type LeaveSphereEmployeeManagementWorkspaceCacheContext,
+} from "@leavesphere/lib/employeeManagementCache";
+
+type EmployeeMode = "create" | "edit";
+
+type CacheStatus = {
+  source: "cache" | "network";
+  fetchedAt: number;
+};
+
+type EmployeeStatusFilter = "" | "active" | "inactive";
+type EmployeeRegionFilter = "" | "US" | "Mexico" | "Philippines";
+type EmployeeSearchCriteria = {
+  nameOrTitle: string;
+  email: string;
+  statusFilter: EmployeeStatusFilter;
+  regionFilter: EmployeeRegionFilter;
+};
+
+type EmployeeModalProps = {
+  open: boolean;
+  mode: EmployeeMode;
+  employee: LeaveSphereEmployeeManagementEmployee | null;
+  canEdit: boolean;
+  onOpenChange: (open: boolean) => void;
+  onSubmit: (payload: { mode: EmployeeMode; id: string | null; form: LeaveSphereEmployeeManagementFormState }) => Promise<void>;
+};
+
+const EMPLOYEE_REGION_OPTIONS: AppDropdownOption[] = [
+  { value: "US", label: "U.S." },
+  { value: "Mexico", label: "Mexico" },
+  { value: "Philippines", label: "Philippines" },
+];
+
+const EMPLOYEE_STATUS_OPTIONS: AppDropdownOption[] = [
+  { value: "", label: "" },
+  { value: "active", label: "Active" },
+  { value: "inactive", label: "Inactive" },
+];
+
+const EMPLOYEE_REGION_FILTER_OPTIONS: AppDropdownOption[] = [
+  { value: "", label: "" },
+  { value: "US", label: "U.S." },
+  { value: "Mexico", label: "Mexico" },
+  { value: "Philippines", label: "Philippines" },
+];
+
+const DEFAULT_SEARCH_CRITERIA: EmployeeSearchCriteria = {
+  nameOrTitle: "",
+  email: "",
+  statusFilter: "active",
+  regionFilter: "",
+};
+
+const EMPTY_SEARCH_CRITERIA: EmployeeSearchCriteria = {
+  nameOrTitle: "",
+  email: "",
+  statusFilter: "",
+  regionFilter: "",
+};
+
+const EMPTY_FORM: LeaveSphereEmployeeManagementFormState = {
+  identityKey: "",
+  firstName: "",
+  lastName: "",
+  email: "",
+  phone: "",
+  dob: "",
+  pictureUrl: "",
+  region: "US",
+  startDate: "",
+  title: "",
+  isAE: false,
+  active: true,
+};
+
+function asString(value: unknown): string {
+  if (typeof value === "string") {
+    return value.trim();
+  }
+  if (typeof value === "number" && Number.isFinite(value)) {
+    return String(value);
+  }
+  return "";
+}
+
+function formatRelativeTime(timestamp: number): string {
+  const ageMs = Math.max(0, Date.now() - timestamp);
+  if (ageMs < 60_000) {
+    return "just now";
+  }
+  const minutes = Math.floor(ageMs / 60_000);
+  if (minutes < 60) {
+    return `${minutes} min ago`;
+  }
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) {
+    return `${hours} hr ago`;
+  }
+  const days = Math.floor(hours / 24);
+  return `${days} day${days === 1 ? "" : "s"} ago`;
+}
+
+function buildEmployeeFullName(employee: LeaveSphereEmployeeManagementEmployee): string {
+  return [employee.firstName, employee.lastName].filter(Boolean).join(" ").trim() || employee.email;
+}
+
+function buildEmployeeNameOrTitleSearchText(employee: LeaveSphereEmployeeManagementEmployee): string {
+  return [
+    employee.firstName,
+    employee.lastName,
+    buildEmployeeFullName(employee),
+    employee.title,
+  ]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+}
+
+function normalizeEmployeeForm(employee: LeaveSphereEmployeeManagementEmployee | null): LeaveSphereEmployeeManagementFormState {
+  if (!employee) {
+    return { ...EMPTY_FORM };
+  }
+  return {
+    identityKey: employee.identityKey,
+    firstName: employee.firstName,
+    lastName: employee.lastName,
+    email: employee.email,
+    phone: employee.phone ?? "",
+    dob: employee.dob ?? "",
+    pictureUrl: employee.pictureUrl ?? "",
+    region: employee.region,
+    startDate: employee.startDate ?? "",
+    title: employee.title ?? "",
+    isAE: employee.isAE,
+    active: employee.active,
+  };
+}
+
+function formsEqual(left: LeaveSphereEmployeeManagementFormState, right: LeaveSphereEmployeeManagementFormState): boolean {
+  return JSON.stringify(normalizeLeaveSphereEmployeeManagementForm(left)) === JSON.stringify(normalizeLeaveSphereEmployeeManagementForm(right));
+}
+
+function validateEmail(value: string): string | null {
+  const email = asString(value).toLowerCase();
+  if (!email) {
+    return "Email is required.";
+  }
+  const valid = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(email);
+  return valid ? null : "Email must be valid.";
+}
+
+function validateOptionalEmail(value: string): string | null {
+  const email = asString(value).toLowerCase();
+  if (!email) {
+    return null;
+  }
+  const valid = /^[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9-]+(?:\.[A-Za-z0-9-]+)+$/.test(email);
+  return valid ? null : "Email must be valid.";
+}
+
+function validateIsoDate(value: string, field: string): string | null {
+  const text = asString(value);
+  if (!text) {
+    return null;
+  }
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(text)) {
+    return `${field} must be a date.`;
+  }
+  return null;
+}
+
+function validateForm(form: LeaveSphereEmployeeManagementFormState): {
+  identityKey: string | null;
+  firstName: string | null;
+  lastName: string | null;
+  email: string | null;
+  phone: string | null;
+  dob: string | null;
+  pictureUrl: string | null;
+  startDate: string | null;
+} {
+  const identityKey = asString(form.identityKey);
+  const firstName = asString(form.firstName);
+  const lastName = asString(form.lastName);
+  const phone = asString(form.phone);
+  const pictureUrl = asString(form.pictureUrl);
+  return {
+    identityKey: !identityKey ? "Identity key is required." : identityKey.length > 36 ? "Identity key must be 36 characters or fewer." : null,
+    firstName: !firstName ? "First name is required." : null,
+    lastName: !lastName ? "Last name is required." : null,
+    email: validateEmail(form.email),
+    phone: phone.length > 20 ? "Phone must be 20 characters or fewer." : null,
+    dob: validateIsoDate(form.dob, "Date of birth"),
+    pictureUrl: pictureUrl.length > 2048 ? "Picture URL must be 2048 characters or fewer." : null,
+    startDate: validateIsoDate(form.startDate, "Start date"),
+  };
+}
+
+function isFormValid(errors: ReturnType<typeof validateForm>): boolean {
+  return Object.values(errors).every((item) => item === null);
+}
+
+function buildEmployeeStatusLabel(employee: LeaveSphereEmployeeManagementEmployee): string {
+  return employee.active ? "Active" : "Inactive";
+}
+
+function buildEmployeeRegionLabel(region: string): string {
+  if (region === "US") {
+    return "U.S.";
+  }
+  return region;
+}
+
+function hasEmployeeSearchCriteria(criteria: EmployeeSearchCriteria): boolean {
+  return Boolean(criteria.nameOrTitle.trim()) || Boolean(criteria.email.trim()) || Boolean(criteria.statusFilter) || Boolean(criteria.regionFilter);
+}
+
+function getEmptyMessage(
+  hasSearched: boolean,
+  hasFilters: boolean,
+  hasEmployees: boolean,
+  hasMatches: boolean,
+): { title: string; description: string } {
+  if (!hasSearched) {
+    return {
+      title: "Search employees",
+      description: "Select a search criterion, then click Search to load matching employees.",
+    };
+  }
+  if (!hasMatches && hasFilters) {
+    return {
+      title: "No matches",
+      description: "No employees matched the current search criteria. Adjust the criteria and search again.",
+    };
+  }
+  if (!hasEmployees) {
+    return {
+      title: "No employees yet",
+      description: "Add the first employee record to start managing the LeaveSphere workspace.",
+    };
+  }
+  if (hasFilters) {
+    return {
+      title: "No matches",
+      description: "No employees match the current filters. Clear the filters to see the full list.",
+    };
+  }
+  return {
+    title: "No employees found",
+    description: "The workspace did not return any employee rows.",
+  };
+}
+
+function toEmployeeCardStatusClass(active: boolean): string {
+  return active
+    ? "border-emerald-200 bg-emerald-50/80 text-emerald-800"
+    : "border-slate-300 bg-slate-100/90 text-slate-700";
+}
+
+function normalizeStatusFilterValue(value: string): EmployeeStatusFilter {
+  if (value === "" || value === "active" || value === "inactive") {
+    return value;
+  }
+  return "active";
+}
+
+function normalizeRegionFilterValue(value: string): EmployeeRegionFilter {
+  if (value === "US" || value === "Mexico" || value === "Philippines") {
+    return value;
+  }
+  return "";
+}
+
+function EmployeeManagementModal({
+  open,
+  mode,
+  employee,
+  canEdit,
+  onOpenChange,
+  onSubmit,
+}: EmployeeModalProps) {
+  const [form, setForm] = useState<LeaveSphereEmployeeManagementFormState>(() => normalizeEmployeeForm(employee));
+  const [baseline, setBaseline] = useState<LeaveSphereEmployeeManagementFormState>(() => normalizeEmployeeForm(employee));
+  const [isSubmitting, setIsSubmitting] = useState(false);
+  const [submitError, setSubmitError] = useState<string | null>(null);
+  const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState(() => validateForm(normalizeEmployeeForm(employee)));
+  const hasUnsavedChanges = useMemo(() => !formsEqual(form, baseline), [baseline, form]);
+  const formIsValid = useMemo(() => isFormValid(fieldErrors), [fieldErrors]);
+  const canSubmit = canEdit && hasUnsavedChanges && formIsValid && !isSubmitting;
+
+  useEffect(() => {
+    if (!open) {
+      setForm(normalizeEmployeeForm(null));
+      setBaseline(normalizeEmployeeForm(null));
+      setIsSubmitting(false);
+      setSubmitError(null);
+      setIsDiscardDialogOpen(false);
+      setFieldErrors(validateForm(normalizeEmployeeForm(null)));
+      return;
+    }
+
+    const nextForm = normalizeEmployeeForm(employee);
+    setForm(nextForm);
+    setBaseline(nextForm);
+    setSubmitError(null);
+    setIsSubmitting(false);
+    setIsDiscardDialogOpen(false);
+    setFieldErrors(validateForm(nextForm));
+  }, [employee, open]);
+
+  function updateForm<K extends keyof LeaveSphereEmployeeManagementFormState>(
+    field: K,
+    value: LeaveSphereEmployeeManagementFormState[K],
+  ) {
+    const next = {
+      ...form,
+      [field]: value,
+    };
+    setForm(next);
+    setFieldErrors(validateForm(next));
+    if (submitError) {
+      setSubmitError(null);
+    }
+  }
+
+  function handleDialogOpenChange(nextOpen: boolean) {
+    if (nextOpen) {
+      onOpenChange(true);
+      return;
+    }
+    if (isSubmitting) {
+      return;
+    }
+    if (hasUnsavedChanges) {
+      setIsDiscardDialogOpen(true);
+      return;
+    }
+    onOpenChange(false);
+  }
+
+  async function handleSubmit() {
+    if (!canSubmit) {
+      return;
+    }
+
+    setSubmitError(null);
+    setIsSubmitting(true);
+    try {
+      await onSubmit({
+        mode,
+        id: employee?.id ?? null,
+        form: normalizeLeaveSphereEmployeeManagementForm(form),
+      });
+      onOpenChange(false);
+    } catch (error) {
+      setSubmitError(error instanceof Error && error.message.trim() ? error.message.trim() : "Could not save employee.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  }
+
+  const errors = fieldErrors;
+
+  return (
+    <>
+      <Dialog open={open} onOpenChange={handleDialogOpenChange}>
+        <DialogContent
+          className="max-h-[92vh] w-[min(94vw,860px)] max-w-none overflow-hidden rounded-[1.6rem] bg-white px-7 py-6"
+          onInteractOutside={(event) => {
+            const target = event.target;
+            if (target instanceof Element && target.closest("[data-app-dropdown-root='true'], [data-app-dropdown-menu='true']")) {
+              event.preventDefault();
+              return;
+            }
+            if (isSubmitting || hasUnsavedChanges) {
+              event.preventDefault();
+            }
+          }}
+        >
+          <ModalShell busy={isSubmitting} busyMessage={mode === "create" ? "Creating employee..." : "Saving employee..."} className="min-h-0 flex-1">
+            <ModalHeaderRow
+              actions={(
+                <DialogClose asChild aria-label="Close employee modal">
+                  <ModalCloseButton icon={<X className="size-4" />} />
+                </DialogClose>
+              )}
+            >
+              <DialogHeader>
+                <DialogTitle>{mode === "create" ? "Add Employee" : "Edit Employee"}</DialogTitle>
+                <DialogDescription>
+                  {mode === "create"
+                    ? "Add a LeaveSphere employee record and make it available for PTO workflows."
+                    : "Update the employee profile and account status."}
+                </DialogDescription>
+              </DialogHeader>
+            </ModalHeaderRow>
+
+            <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
+              <div className="grid gap-4 md:grid-cols-2">
+                <div className="space-y-4">
+                  <FormRow label={<>Identity Key<span className="ml-1 text-rose-600">*</span></>}>
+                    <Input
+                      value={form.identityKey}
+                      onChange={(event) => updateForm("identityKey", event.target.value)}
+                      disabled={isSubmitting || !canEdit}
+                      maxLength={36}
+                      autoComplete="off"
+                    />
+                  </FormRow>
+                  {errors.identityKey ? <p className="text-sm text-rose-600">{errors.identityKey}</p> : null}
+
+                  <FormRow label={<>First Name<span className="ml-1 text-rose-600">*</span></>}>
+                    <Input
+                      value={form.firstName}
+                      onChange={(event) => updateForm("firstName", event.target.value)}
+                      disabled={isSubmitting || !canEdit}
+                      maxLength={255}
+                      autoComplete="off"
+                    />
+                  </FormRow>
+                  {errors.firstName ? <p className="text-sm text-rose-600">{errors.firstName}</p> : null}
+
+                  <FormRow label={<>Last Name<span className="ml-1 text-rose-600">*</span></>}>
+                    <Input
+                      value={form.lastName}
+                      onChange={(event) => updateForm("lastName", event.target.value)}
+                      disabled={isSubmitting || !canEdit}
+                      maxLength={255}
+                      autoComplete="off"
+                    />
+                  </FormRow>
+                  {errors.lastName ? <p className="text-sm text-rose-600">{errors.lastName}</p> : null}
+
+                  <FormRow label={<>Email<span className="ml-1 text-rose-600">*</span></>}>
+                    <Input
+                      value={form.email}
+                      onChange={(event) => updateForm("email", event.target.value)}
+                      disabled={isSubmitting || !canEdit}
+                      maxLength={255}
+                      autoComplete="off"
+                      spellCheck={false}
+                      inputMode="email"
+                    />
+                  </FormRow>
+                  {errors.email ? <p className="text-sm text-rose-600">{errors.email}</p> : null}
+
+                  <FormRow label="Phone">
+                    <Input
+                      value={form.phone}
+                      onChange={(event) => updateForm("phone", event.target.value)}
+                      disabled={isSubmitting || !canEdit}
+                      maxLength={20}
+                      autoComplete="off"
+                      inputMode="tel"
+                    />
+                  </FormRow>
+                  {errors.phone ? <p className="text-sm text-rose-600">{errors.phone}</p> : null}
+
+                  <FormRow label="Date of Birth">
+                    <Input
+                      type="date"
+                      value={form.dob}
+                      onChange={(event) => updateForm("dob", event.target.value)}
+                      disabled={isSubmitting || !canEdit}
+                    />
+                  </FormRow>
+                  {errors.dob ? <p className="text-sm text-rose-600">{errors.dob}</p> : null}
+                </div>
+
+                <div className="space-y-4">
+                  <FormRow label="Picture URL">
+                    <Input
+                      value={form.pictureUrl}
+                      onChange={(event) => updateForm("pictureUrl", event.target.value)}
+                      disabled={isSubmitting || !canEdit}
+                      maxLength={2048}
+                      autoComplete="off"
+                      spellCheck={false}
+                    />
+                  </FormRow>
+                  {errors.pictureUrl ? <p className="text-sm text-rose-600">{errors.pictureUrl}</p> : null}
+
+                  <FormRow label="Region">
+                    <AppDropdown
+                      value={form.region || "US"}
+                      options={EMPLOYEE_REGION_OPTIONS}
+                      onValueChange={(value) => updateForm("region", value as LeaveSphereEmployeeManagementFormState["region"])}
+                      searchable={false}
+                      allowCustomValue={false}
+                      ariaLabel="Employee region"
+                      placeholder="Select region"
+                      disabled={isSubmitting || !canEdit}
+                    />
+                  </FormRow>
+
+                  <FormRow label="Start Date">
+                    <Input
+                      type="date"
+                      value={form.startDate}
+                      onChange={(event) => updateForm("startDate", event.target.value)}
+                      disabled={isSubmitting || !canEdit}
+                    />
+                  </FormRow>
+                  {errors.startDate ? <p className="text-sm text-rose-600">{errors.startDate}</p> : null}
+
+                  <FormRow label="Title">
+                    <Input
+                      value={form.title}
+                      onChange={(event) => updateForm("title", event.target.value)}
+                      disabled={isSubmitting || !canEdit}
+                      maxLength={255}
+                      autoComplete="off"
+                    />
+                  </FormRow>
+
+                  <FormRow label="Active">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={form.active}
+                      aria-label="Active"
+                      onClick={() => updateForm("active", !form.active)}
+                      disabled={isSubmitting || !canEdit}
+                      aria-disabled={isSubmitting || !canEdit}
+                      className={cn(
+                        "inline-flex h-10 w-fit items-center gap-3 px-1 py-2 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                        form.active ? "text-emerald-700" : "text-slate-600",
+                      )}
+                    >
+                      <span className={cn("relative inline-flex h-5 w-9 items-center rounded-full transition", form.active ? "bg-emerald-500" : "bg-slate-300")}>
+                        <span className={cn("inline-block h-4 w-4 rounded-full bg-white shadow transition", form.active ? "translate-x-[18px]" : "translate-x-[2px]")} />
+                      </span>
+                    </button>
+                  </FormRow>
+
+                  <FormRow label="AE Status">
+                    <button
+                      type="button"
+                      role="switch"
+                      aria-checked={form.isAE}
+                      aria-label="AE status"
+                      onClick={() => updateForm("isAE", !form.isAE)}
+                      disabled={isSubmitting || !canEdit}
+                      aria-disabled={isSubmitting || !canEdit}
+                      className={cn(
+                        "inline-flex h-10 w-fit items-center gap-3 px-1 py-2 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                        form.isAE ? "text-blue-700" : "text-slate-600",
+                      )}
+                    >
+                      <span className={cn("relative inline-flex h-5 w-9 items-center rounded-full transition", form.isAE ? "bg-blue-500" : "bg-slate-300")}>
+                        <span className={cn("inline-block h-4 w-4 rounded-full bg-white shadow transition", form.isAE ? "translate-x-[18px]" : "translate-x-[2px]")} />
+                      </span>
+                    </button>
+                  </FormRow>
+                </div>
+              </div>
+
+              {submitError ? <p className="mt-4 text-sm text-rose-600">{submitError}</p> : null}
+            </div>
+
+            <ModalFooter className="mt-4 flex-col gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
+              <span className="text-xs text-slate-500">
+                Required fields are validated before save.
+              </span>
+              <div className="flex items-center gap-2">
+                {canEdit && hasUnsavedChanges ? (
+                  <Button
+                    variant="outline"
+                    onClick={() => {
+                      const next = baseline;
+                      setForm(next);
+                      setFieldErrors(validateForm(next));
+                      setSubmitError(null);
+                    }}
+                    disabled={isSubmitting}
+                  >
+                    Revert
+                  </Button>
+                ) : null}
+                <Button onClick={handleSubmit} disabled={!canSubmit}>
+                  {isSubmitting ? (
+                    <>
+                      <RefreshCw className="size-4 animate-spin" />
+                      Saving...
+                    </>
+                  ) : (
+                    "Save Employee"
+                  )}
+                </Button>
+              </div>
+            </ModalFooter>
+          </ModalShell>
+        </DialogContent>
+      </Dialog>
+
+      <UnsavedChangesDialog
+        open={isDiscardDialogOpen}
+        onKeepEditing={() => setIsDiscardDialogOpen(false)}
+        onDiscardChanges={() => {
+          setIsDiscardDialogOpen(false);
+          onOpenChange(false);
+        }}
+      />
+    </>
+  );
+}
+
+function EmployeeCard({
+  employee,
+  disabled,
+  canActivate,
+  canDeactivate,
+  canEdit,
+  onEdit,
+  onToggleActive,
+}: {
+  employee: LeaveSphereEmployeeManagementEmployee;
+  disabled?: boolean;
+  canActivate: boolean;
+  canDeactivate: boolean;
+  canEdit: boolean;
+  onEdit: (employee: LeaveSphereEmployeeManagementEmployee) => void;
+  onToggleActive: (employee: LeaveSphereEmployeeManagementEmployee, nextActive: boolean) => void;
+}) {
+  return (
+    <article
+      role="button"
+      tabIndex={disabled ? -1 : 0}
+      onClick={() => {
+        if (!disabled && canEdit) {
+          onEdit(employee);
+        }
+      }}
+      onKeyDown={(event) => {
+        if (disabled || !canEdit) {
+          return;
+        }
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onEdit(employee);
+        }
+      }}
+      className={cn(
+        "space-y-4 rounded-[1.25rem] border p-4 shadow-[0_18px_30px_-24px_rgba(37,99,235,0.42)] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
+        disabled ? "cursor-default" : "cursor-pointer",
+        employee.active
+          ? "border-blue-100/90 bg-white hover:-translate-y-0.5 hover:border-blue-200"
+          : "border-slate-200 bg-slate-50/90 hover:border-slate-300",
+      )}
+    >
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0 space-y-1">
+          <p className="truncate text-base font-semibold tracking-[-0.01em] text-slate-900">{buildEmployeeFullName(employee)}</p>
+          <p className="break-all text-sm text-slate-700">{employee.email}</p>
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          <ActionIconButton
+            icon={<PencilLine />}
+            tooltip="Edit employee"
+            onClick={(event) => {
+              event.stopPropagation();
+              onEdit(employee);
+            }}
+            disabled={disabled || !canEdit}
+          />
+          {employee.active && canDeactivate ? (
+            <ActionIconButton
+              icon={<UserX />}
+              tooltip="Deactivate employee"
+              onClick={(event) => {
+                event.stopPropagation();
+                onToggleActive(employee, false);
+              }}
+              disabled={disabled}
+            />
+          ) : null}
+          {!employee.active && canActivate ? (
+            <ActionIconButton
+              icon={<UserCheck />}
+              tooltip="Activate employee"
+              onClick={(event) => {
+                event.stopPropagation();
+                onToggleActive(employee, true);
+              }}
+              disabled={disabled}
+            />
+          ) : null}
+        </div>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        <span className={cn("inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium", toEmployeeCardStatusClass(employee.active))}>
+          {buildEmployeeStatusLabel(employee)}
+        </span>
+        <span className="inline-flex items-center rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
+          {buildEmployeeRegionLabel(employee.region)}
+        </span>
+        {employee.isAE ? (
+          <span className="inline-flex items-center rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-xs font-medium text-violet-700">
+            AE
+          </span>
+        ) : null}
+      </div>
+
+      <div className="grid gap-2 text-sm text-slate-700 sm:grid-cols-2">
+        <EmployeeMeta label="Identity Key" value={employee.identityKey} />
+        <EmployeeMeta label="Title" value={employee.title} />
+        <EmployeeMeta label="Phone" value={employee.phone} />
+        <EmployeeMeta
+          label="Start Date"
+          value={employee.startDate ? formatDateInTimeZone(employee.startDate, DEFAULT_TIME_ZONE, { month: "short", day: "numeric", year: "numeric" }) : ""}
+        />
+        <EmployeeMeta
+          label="Date of Birth"
+          value={employee.dob ? formatDateInTimeZone(employee.dob, DEFAULT_TIME_ZONE, { month: "short", day: "numeric", year: "numeric" }) : ""}
+        />
+      </div>
+    </article>
+  );
+}
+
+function EmployeeMeta({ label, value }: { label: string; value: string | null | undefined }) {
+  const display = asString(value) || "-";
+  return (
+    <p className="truncate">
+      <span className="text-slate-500">{label}: </span>
+      <span className="text-slate-800">{display}</span>
+    </p>
+  );
+}
+
+function EmptyEmployeesPanel({
+  hasSearched,
+  hasFilters,
+  hasEmployees,
+  hasMatches,
+  onClearFilters,
+}: {
+  hasSearched: boolean;
+  hasFilters: boolean;
+  hasEmployees: boolean;
+  hasMatches: boolean;
+  onClearFilters: () => void;
+}) {
+  const message = getEmptyMessage(hasSearched, hasFilters, hasEmployees, hasMatches);
+
+  return (
+    <div className="rounded-[1.35rem] border border-dashed border-blue-200/90 bg-gradient-to-b from-blue-50/45 to-white px-6 py-11 text-center">
+      <div className="mx-auto flex max-w-xl flex-col items-center gap-3">
+        <div className="inline-flex size-14 items-center justify-center rounded-full border border-blue-100 bg-blue-50 text-blue-700">
+          {hasEmployees ? <Search className="size-7" /> : <Users className="size-7" />}
+        </div>
+        <div className="space-y-1">
+          <p className="text-base font-semibold text-slate-900">{message.title}</p>
+          <p className="text-sm leading-6 text-slate-600">{message.description}</p>
+        </div>
+        {hasFilters ? (
+          <Button variant="outline" onClick={onClearFilters}>
+            Clear filters
+          </Button>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function buildWorkspaceFromPatch(
+  currentWorkspace: LeaveSphereEmployeeManagementWorkspace | null,
+  nextEmployee: LeaveSphereEmployeeManagementEmployee,
+): LeaveSphereEmployeeManagementWorkspace {
+  if (!currentWorkspace) {
+    const activeEmployees = nextEmployee.active ? 1 : 0;
+    return {
+      pageCode: LEAVESPHERE_EMPLOYEE_MANAGEMENT_PAGE_CODE,
+      pageTitle: "Employee Management",
+      summary: {
+        totalEmployees: 1,
+        activeEmployees,
+        inactiveEmployees: 1 - activeEmployees,
+      },
+      capabilities: {
+        canCreate: true,
+        canUpdate: true,
+        canActivate: true,
+        canDeactivate: true,
+        canArchive: false,
+      },
+      employees: [nextEmployee],
+    };
+  }
+
+  const withoutCurrent = currentWorkspace.employees.filter((employee) => employee.id !== nextEmployee.id);
+  const nextEmployees = sortLeaveSphereEmployeeManagementEmployees([...withoutCurrent, nextEmployee]);
+  const activeEmployees = nextEmployees.filter((employee) => employee.active).length;
+  return {
+    ...currentWorkspace,
+    employees: nextEmployees,
+    summary: {
+      totalEmployees: nextEmployees.length,
+      activeEmployees,
+      inactiveEmployees: nextEmployees.length - activeEmployees,
+    },
+  };
+}
+
+export default function EmployeeManagementPage() {
+  const { requestJson } = useApiRequest();
+  const { isOnline } = useOnlineStatus();
+  const auth = useAuth();
+  const cacheContext = useMemo<LeaveSphereEmployeeManagementWorkspaceCacheContext>(
+    () => ({
+      tenantSlug: auth.tenantSlug || "",
+      userKey: auth.user?.id || auth.user?.email || "",
+    }),
+    [auth.tenantSlug, auth.user?.email, auth.user?.id],
+  );
+  const cacheKey = useMemo(() => buildLeaveSphereEmployeeManagementWorkspaceCacheKey(cacheContext), [cacheContext]);
+  const canManage = useMemo(() => {
+    if (!shouldProtectFrontendAuth()) {
+      return true;
+    }
+    return hasAppAdminAccess(auth.accessProfile, "leavesphere");
+  }, [auth.accessProfile]);
+
+  const [workspace, setWorkspace] = useState<LeaveSphereEmployeeManagementWorkspace | null>(null);
+  const workspaceRef = useRef<LeaveSphereEmployeeManagementWorkspace | null>(null);
+  const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null);
+  const [isLoading, setIsLoading] = useState(true);
+  const [isRefreshing, setIsRefreshing] = useState(false);
+  const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
+  const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const requestTokenRef = useRef(0);
+
+  const [searchDraft, setSearchDraft] = useState<EmployeeSearchCriteria>({ ...DEFAULT_SEARCH_CRITERIA });
+  const [searchCriteria, setSearchCriteria] = useState<EmployeeSearchCriteria>({ ...DEFAULT_SEARCH_CRITERIA });
+  const [hasSearched, setHasSearched] = useState(false);
+  const [searchEmailTouched, setSearchEmailTouched] = useState(false);
+  const [searchEmailError, setSearchEmailError] = useState<string | null>(null);
+
+  const [isModalOpen, setIsModalOpen] = useState(false);
+  const [modalMode, setModalMode] = useState<EmployeeMode>("create");
+  const [modalEmployee, setModalEmployee] = useState<LeaveSphereEmployeeManagementEmployee | null>(null);
+  const [pendingAction, setPendingAction] = useState<{ employee: LeaveSphereEmployeeManagementEmployee; nextActive: boolean } | null>(null);
+  const [isMutationInFlight, setIsMutationInFlight] = useState(false);
+
+  useEffect(() => {
+    workspaceRef.current = workspace;
+  }, [workspace]);
+
+  function commitWorkspace(nextWorkspace: LeaveSphereEmployeeManagementWorkspace | null, source: "cache" | "network") {
+    workspaceRef.current = nextWorkspace;
+    setWorkspace(nextWorkspace);
+    if (!nextWorkspace) {
+      return;
+    }
+    setHasSearched(true);
+    const fetchedAt = Date.now();
+    setCacheStatus({ source, fetchedAt });
+    syncLeaveSphereEmployeeManagementWorkspaceCache(cacheContext, nextWorkspace, { source, fetchedAt });
+  }
+
+  async function refreshWorkspace(freshData: boolean): Promise<void> {
+    const requestToken = ++requestTokenRef.current;
+    const snapshot = readLeaveSphereEmployeeManagementWorkspaceCacheSnapshot(cacheContext);
+    const cachedWorkspace = snapshot?.data ? normalizeLeaveSphereEmployeeManagementWorkspace(snapshot.data) : null;
+
+    if (cachedWorkspace) {
+      commitWorkspace(cachedWorkspace, "cache");
+      setErrorMessage(null);
+      setRefreshMessage(null);
+    }
+
+    if (!isOnline) {
+      if (cachedWorkspace) {
+        setRefreshMessage("You're offline. Showing cached employees.");
+      } else {
+        setErrorMessage("You're offline. Connect to the internet to load employees.");
+      }
+      setIsLoading(false);
+      setIsRefreshing(false);
+      return;
+    }
+
+    if (cachedWorkspace) {
+      setIsRefreshing(true);
+    } else {
+      setIsLoading(true);
+    }
+
+    try {
+      const nextWorkspace = await loadLeaveSphereEmployeeManagementWorkspace({
+        requestJson,
+        freshData,
+      });
+      if (requestToken !== requestTokenRef.current) {
+        return;
+      }
+      commitWorkspace(nextWorkspace, "network");
+      setRefreshMessage(null);
+      setErrorMessage(null);
+    } catch (error) {
+      if (requestToken !== requestTokenRef.current) {
+        return;
+      }
+      if (workspaceRef.current || cachedWorkspace) {
+        setRefreshMessage("Showing cached employees. Could not refresh.");
+        setErrorMessage(null);
+      } else {
+        setErrorMessage(error instanceof Error && error.message.trim() ? error.message.trim() : "Could not load employees.");
+      }
+    } finally {
+      if (requestToken === requestTokenRef.current) {
+        setIsLoading(false);
+        setIsRefreshing(false);
+      }
+    }
+  }
+
+  useEffect(() => {
+    setWorkspace(null);
+    setCacheStatus(null);
+    setRefreshMessage(null);
+    setErrorMessage(null);
+    setIsLoading(false);
+    setIsRefreshing(false);
+    setSearchDraft({ ...DEFAULT_SEARCH_CRITERIA });
+    setSearchCriteria({ ...DEFAULT_SEARCH_CRITERIA });
+    setHasSearched(false);
+    setSearchEmailTouched(false);
+    setSearchEmailError(null);
+  }, [cacheKey]);
+
+  const allEmployees = workspace?.employees ?? [];
+  const filteredEmployees = useMemo(() => {
+    if (!hasSearched || !workspace) {
+      return [];
+    }
+    const normalizedNameOrTitle = searchCriteria.nameOrTitle.trim().toLowerCase();
+    const normalizedEmail = searchCriteria.email.trim().toLowerCase();
+    return sortLeaveSphereEmployeeManagementEmployees(
+      allEmployees.filter((employee) => {
+        if (searchCriteria.statusFilter === "active" && !employee.active) {
+          return false;
+        }
+        if (searchCriteria.statusFilter === "inactive" && employee.active) {
+          return false;
+        }
+        if (searchCriteria.regionFilter && employee.region !== searchCriteria.regionFilter) {
+          return false;
+        }
+        if (normalizedNameOrTitle) {
+          const nameOrTitleText = buildEmployeeNameOrTitleSearchText(employee);
+          if (!nameOrTitleText.includes(normalizedNameOrTitle)) {
+            return false;
+          }
+        }
+        if (normalizedEmail) {
+          if (!employee.email.toLowerCase().includes(normalizedEmail)) {
+            return false;
+          }
+        }
+        return true;
+      }),
+    );
+  }, [allEmployees, hasSearched, searchCriteria.email, searchCriteria.nameOrTitle, searchCriteria.regionFilter, searchCriteria.statusFilter, workspace]);
+
+  const hasFilters = hasEmployeeSearchCriteria(searchCriteria);
+  const hasDraftFilters = hasEmployeeSearchCriteria(searchDraft);
+  const hasEmployees = allEmployees.length > 0;
+  const hasMatches = Boolean(workspace && filteredEmployees.length > 0);
+  const searchResultText = !hasSearched
+    ? "Search by one or more fields. Results load only after you click Search."
+    : workspace
+      ? filteredEmployees.length === 0
+        ? "No employees matched your search."
+        : `${filteredEmployees.length} employee${filteredEmployees.length === 1 ? "" : "s"} found.`
+      : "Searching employees...";
+  const pageMessages: StackMessage[] = [];
+  if (refreshMessage) {
+    pageMessages.push({
+      id: "employee-refresh",
+      variant: refreshMessage.toLowerCase().includes("offline") ? "info" : "warning",
+      message: refreshMessage,
+    });
+  }
+  if (errorMessage) {
+    pageMessages.push({
+      id: "employee-error",
+      variant: "error",
+      message: errorMessage,
+    });
+  }
+
+  const cacheStatusText = isRefreshing
+    ? "Refreshing employees..."
+    : !isOnline && cacheStatus
+      ? `Offline. Showing cached employees from ${formatRelativeTime(cacheStatus.fetchedAt)}.`
+      : cacheStatus
+        ? `Data source: ${cacheStatus.source}. Last updated ${formatRelativeTime(cacheStatus.fetchedAt)}.`
+        : "No cached employees yet";
+
+  function resetSearchCriteria() {
+    ++requestTokenRef.current;
+    setWorkspace(null);
+    setCacheStatus(null);
+    setRefreshMessage(null);
+    setErrorMessage(null);
+    setIsLoading(false);
+    setIsRefreshing(false);
+    setSearchDraft({ ...EMPTY_SEARCH_CRITERIA });
+    setSearchCriteria({ ...EMPTY_SEARCH_CRITERIA });
+    setHasSearched(false);
+    setSearchEmailTouched(false);
+    setSearchEmailError(null);
+  }
+
+  function handleSearch() {
+    if (!hasDraftFilters) {
+      return;
+    }
+    const nextEmailError = validateOptionalEmail(searchDraft.email);
+    setSearchEmailTouched(true);
+    setSearchEmailError(nextEmailError);
+    if (nextEmailError) {
+      return;
+    }
+    setSearchCriteria({ ...searchDraft });
+    setHasSearched(true);
+    void refreshWorkspace(false);
+  }
+
+  function handleSearchEmailBlur() {
+    setSearchEmailTouched(true);
+    setSearchEmailError(validateOptionalEmail(searchDraft.email));
+  }
+
+  function openCreateModal() {
+    if (!canManage) {
+      return;
+    }
+    setModalMode("create");
+    setModalEmployee(null);
+    setIsModalOpen(true);
+  }
+
+  function openEditModal(employee: LeaveSphereEmployeeManagementEmployee) {
+    setModalMode("edit");
+    setModalEmployee(employee);
+    setIsModalOpen(true);
+  }
+
+  function startToggleEmployeeActive(employee: LeaveSphereEmployeeManagementEmployee, nextActive: boolean) {
+    setPendingAction({ employee, nextActive });
+  }
+
+  function updateWorkspaceWithEmployee(nextEmployee: LeaveSphereEmployeeManagementEmployee) {
+    const currentWorkspace = workspaceRef.current;
+    const nextWorkspace = buildWorkspaceFromPatch(currentWorkspace, nextEmployee);
+    commitWorkspace(nextWorkspace, "cache");
+  }
+
+  async function handleEmployeeSubmit(payload: { mode: EmployeeMode; id: string | null; form: LeaveSphereEmployeeManagementFormState }) {
+    setIsMutationInFlight(true);
+    try {
+      if (payload.mode === "create") {
+        const response = await createLeaveSphereEmployeeManagementEmployee({
+          requestJson,
+          payload: payload.form,
+        });
+        const createdId = extractLeaveSphereEmployeeManagementCreatedEmployeeId(response);
+        const createdEmployee = normalizeLeaveSphereEmployeeManagementEmployee({
+          id: createdId || `temp-${Date.now()}`,
+          identityKey: payload.form.identityKey,
+          firstName: payload.form.firstName,
+          lastName: payload.form.lastName,
+          email: payload.form.email,
+          phone: payload.form.phone || null,
+          dob: payload.form.dob || null,
+          pictureUrl: payload.form.pictureUrl || null,
+          region: payload.form.region || "US",
+          startDate: payload.form.startDate || null,
+          title: payload.form.title || null,
+          isAE: payload.form.isAE,
+          active: payload.form.active,
+        });
+        if (createdEmployee) {
+          updateWorkspaceWithEmployee(createdEmployee);
+        }
+      } else {
+        if (!payload.id) {
+          throw new Error("Missing employee id.");
+        }
+        const response = await updateLeaveSphereEmployeeManagementEmployee({
+          requestJson,
+          employeeId: payload.id,
+          payload: payload.form,
+        });
+        const responseEmployee = extractLeaveSphereEmployeeManagementEmployeeFromPayload(response);
+        const nextEmployee = responseEmployee || normalizeLeaveSphereEmployeeManagementEmployee({
+          id: payload.id,
+          identityKey: payload.form.identityKey,
+          firstName: payload.form.firstName,
+          lastName: payload.form.lastName,
+          email: payload.form.email,
+          phone: payload.form.phone || null,
+          dob: payload.form.dob || null,
+          pictureUrl: payload.form.pictureUrl || null,
+          region: payload.form.region || "US",
+          startDate: payload.form.startDate || null,
+          title: payload.form.title || null,
+          isAE: payload.form.isAE,
+          active: payload.form.active,
+        });
+        if (nextEmployee) {
+          updateWorkspaceWithEmployee(nextEmployee);
+        }
+      }
+      void refreshWorkspace(true);
+    } finally {
+      setIsMutationInFlight(false);
+    }
+  }
+
+  async function handleLifecycleAction(): Promise<void> {
+    const target = pendingAction;
+    if (!target) {
+      return;
+    }
+    setPendingAction(null);
+    setIsMutationInFlight(true);
+    try {
+      const response = target.nextActive
+        ? await activateLeaveSphereEmployeeManagementEmployee({
+            requestJson,
+            employeeId: target.employee.id,
+          })
+        : await deactivateLeaveSphereEmployeeManagementEmployee({
+            requestJson,
+            employeeId: target.employee.id,
+          });
+      const nextEmployee = extractLeaveSphereEmployeeManagementEmployeeFromPayload(response) || {
+        ...target.employee,
+        active: target.nextActive,
+      };
+      if (nextEmployee) {
+        updateWorkspaceWithEmployee(nextEmployee);
+      }
+      void refreshWorkspace(true);
+    } finally {
+      setIsMutationInFlight(false);
+    }
+  }
+
+  return (
+    <AppPageLayout
+      className="pb-5"
+      pageMessages={<PageMessageStack messages={pageMessages} />}
+      banner={(
+        <PageBanner
+          gradientVariant="workspace"
+          eyebrow="LeaveSphere"
+          title="Employees"
+          description="Manage employee records, activate or deactivate accounts, and keep the LeaveSphere workspace current."
+          action={(
+            <Button onClick={openCreateModal} disabled={!canManage}>
+              <Plus className="size-4" />
+              Add Employee
+            </Button>
+          )}
+        />
+      )}
+      footer={workspace || cacheStatus ? (
+        <PageCacheFooter
+          text={cacheStatusText}
+          onRefresh={() => {
+            void refreshWorkspace(true);
+          }}
+          disabled={isLoading || isRefreshing || !isOnline}
+          refreshing={isRefreshing}
+          refreshLabel="Refresh employees"
+          tooltipText={isOnline ? "Click to refresh the employee workspace" : "Offline. Reconnect to refresh employees."}
+          containerClassName="w-full"
+        />
+      ) : null}
+    >
+      <Section className="rounded-[1.45rem] border border-blue-100/90 bg-white/95 p-5 shadow-soft">
+        <SectionHeader
+          title="Employees Search"
+          description="Select search criteria, then click Search to load matching employees."
+        />
+
+        <form
+          className="space-y-5 px-1.5"
+          onSubmit={(event) => {
+            event.preventDefault();
+            handleSearch();
+          }}
+        >
+          <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2 xl:grid-cols-4">
+            <label className="block min-w-0">
+              <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                Name or title
+              </span>
+              <div className="relative">
+                <Input
+                  value={searchDraft.nameOrTitle}
+                  onChange={(event) => setSearchDraft((current) => ({ ...current, nameOrTitle: event.target.value }))}
+                  placeholder="Search name or title"
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="pl-10"
+                />
+                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
+              </div>
+            </label>
+
+            <label className="block min-w-0">
+              <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                Email
+              </span>
+              <Input
+                value={searchDraft.email}
+                onChange={(event) => setSearchDraft((current) => ({ ...current, email: event.target.value }))}
+                onBlur={handleSearchEmailBlur}
+                placeholder="Search email"
+                autoComplete="off"
+                spellCheck={false}
+                inputMode="email"
+              />
+              {searchEmailTouched && searchEmailError ? <p className="mt-1.5 text-xs text-rose-600">{searchEmailError}</p> : null}
+            </label>
+
+            <label className="block min-w-0">
+              <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                Region
+              </span>
+              <AppDropdown
+                value={searchDraft.regionFilter}
+                options={EMPLOYEE_REGION_FILTER_OPTIONS}
+                onValueChange={(value) => setSearchDraft((current) => ({ ...current, regionFilter: normalizeRegionFilterValue(value) }))}
+                searchable={false}
+                allowCustomValue={false}
+                ariaLabel="Employee region filter"
+                placeholder=""
+              />
+            </label>
+
+            <label className="block min-w-0">
+              <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                Status
+              </span>
+              <AppDropdown
+                value={searchDraft.statusFilter}
+                options={EMPLOYEE_STATUS_OPTIONS}
+                onValueChange={(value) => setSearchDraft((current) => ({ ...current, statusFilter: normalizeStatusFilterValue(value) }))}
+                searchable={false}
+                allowCustomValue={false}
+                ariaLabel="Employee status filter"
+                placeholder=""
+              />
+            </label>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-100/70 bg-blue-50/40 px-3 py-2">
+            <p className="text-xs font-medium text-slate-500">{searchResultText}</p>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {hasDraftFilters ? (
+                <Button variant="outline" type="button" onClick={resetSearchCriteria} disabled={isLoading || isRefreshing}>
+                  Clear
+                </Button>
+              ) : null}
+              {hasDraftFilters ? (
+                <Button type="submit" disabled={Boolean(searchEmailError) || isLoading || isRefreshing}>
+                  <Search className="size-4" />
+                  Search
+                </Button>
+              ) : null}
+            </div>
+          </div>
+        </form>
+      </Section>
+
+      <div className="relative">
+        <SectionCard
+          title="Employees"
+          description={
+            workspace && hasSearched
+              ? `${filteredEmployees.length} of ${workspace.summary.totalEmployees} employees shown.`
+              : "Search results will appear after you run a search."
+          }
+          actions={(
+            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+              {workspace ? (
+                <>
+                  <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700">
+                    {workspace.summary.activeEmployees} active
+                  </span>
+                  <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 font-medium text-slate-700">
+                    {workspace.summary.inactiveEmployees} inactive
+                  </span>
+                </>
+              ) : null}
+            </div>
+          )}
+          contentClassName="space-y-4"
+        >
+          {workspace && filteredEmployees.length > 0 ? (
+            <div className="grid gap-4 xl:grid-cols-2">
+              {filteredEmployees.map((employee) => (
+                <EmployeeCard
+                  key={employee.id}
+                  employee={employee}
+                  disabled={isLoading || isRefreshing || isMutationInFlight}
+                  canActivate={Boolean(workspace.capabilities.canActivate)}
+                  canDeactivate={Boolean(workspace.capabilities.canDeactivate)}
+                  canEdit={Boolean(workspace.capabilities.canUpdate)}
+                  onEdit={openEditModal}
+                  onToggleActive={startToggleEmployeeActive}
+                />
+              ))}
+            </div>
+          ) : (
+            <EmptyEmployeesPanel
+              hasSearched={hasSearched}
+              hasFilters={hasFilters}
+              hasEmployees={hasEmployees}
+              hasMatches={hasMatches}
+              onClearFilters={resetSearchCriteria}
+            />
+          )}
+
+          <SectionLoadingLayer
+            active={Boolean(isRefreshing && workspace)}
+            message="Refreshing employees..."
+          />
+        </SectionCard>
+      </div>
+
+      <EmployeeManagementModal
+        open={isModalOpen}
+        mode={modalMode}
+        employee={modalEmployee}
+        canEdit={canManage && Boolean(workspace?.capabilities.canUpdate)}
+        onOpenChange={setIsModalOpen}
+        onSubmit={handleEmployeeSubmit}
+      />
+
+      <ConfirmDialog
+        open={Boolean(pendingAction)}
+        title={pendingAction?.nextActive ? "Activate employee?" : "Deactivate employee?"}
+        description={
+          pendingAction?.nextActive
+            ? `Activate ${pendingAction ? buildEmployeeFullName(pendingAction.employee) : "this employee"} so they can participate in PTO workflows.`
+            : `Deactivate ${pendingAction ? buildEmployeeFullName(pendingAction.employee) : "this employee"} to pause PTO activity.`
+        }
+        confirmLabel={pendingAction?.nextActive ? "Activate" : "Deactivate"}
+        cancelLabel="Cancel"
+        onConfirm={() => {
+          void handleLifecycleAction();
+        }}
+        onCancel={() => setPendingAction(null)}
+      />
+
+      <PageLoadingLayer
+        active={Boolean(isLoading && !workspace)}
+        message="Loading employees..."
+      />
+    </AppPageLayout>
+  );
+}

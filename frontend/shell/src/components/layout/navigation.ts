@@ -106,6 +106,12 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
         route: "/leavesphere/leave-management",
         available: true,
       },
+      {
+        id: "leavesphere-employees",
+        label: "Employees",
+        route: "/leavesphere/employees",
+        available: true,
+      },
     ],
   },
   {
@@ -175,3 +181,4 @@ export const SHIFTZY_SCHEDULES_CHILD_ICON = CalendarClock;
 export const SHIFTZY_ACCOUNTS_CHILD_ICON = Users;
 export const LEAVESPHERE_MY_PTO_CHILD_ICON = Plane;
 export const LEAVESPHERE_LEAVE_MANAGEMENT_CHILD_ICON = Users;
+export const LEAVESPHERE_EMPLOYEES_CHILD_ICON = UserCheck;
