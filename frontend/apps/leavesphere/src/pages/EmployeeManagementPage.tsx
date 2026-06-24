@@ -53,18 +53,23 @@ import {
 import {
   activateLeaveSphereEmployeeManagementEmployee,
   createLeaveSphereEmployeeManagementEmployee,
+  createLeaveSphereEmployeeManagementManager,
   deactivateLeaveSphereEmployeeManagementEmployee,
+  deleteLeaveSphereEmployeeManagementManager,
   extractLeaveSphereEmployeeManagementCreatedEmployeeId,
   extractLeaveSphereEmployeeManagementEmployeeFromPayload,
   loadLeaveSphereEmployeeManagementWorkspace,
+  loadLeaveSphereEmployeeManagementManagers,
   normalizeLeaveSphereEmployeeManagementEmployee,
   normalizeLeaveSphereEmployeeManagementForm,
   normalizeLeaveSphereEmployeeManagementWorkspace,
   updateLeaveSphereEmployeeManagementEmployee,
   uploadLeaveSphereEmployeeManagementPicture,
   sortLeaveSphereEmployeeManagementEmployees,
+  type LeaveSphereEmployeeManagementManager,
   type LeaveSphereEmployeeManagementEmployee,
   type LeaveSphereEmployeeManagementFormState,
+  type LeaveSphereEmployeeManagementRequestJson,
   type LeaveSphereEmployeeManagementWorkspace,
 } from "@leavesphere/lib/employeeManagementApi";
 import {
@@ -110,6 +115,8 @@ type EmployeeModalProps = {
   employee: LeaveSphereEmployeeManagementEmployee | null;
   canEdit: boolean;
   onOpenChange: (open: boolean) => void;
+  requestJson: LeaveSphereEmployeeManagementRequestJson;
+  employeeOptions: AppDropdownOption[];
   onUploadPicture: (file: File) => Promise<string>;
   onSubmit: (payload: { mode: EmployeeMode; id: string | null; form: LeaveSphereEmployeeManagementFormState }) => Promise<void>;
 };
@@ -160,6 +167,7 @@ const EMPTY_FORM: LeaveSphereEmployeeManagementFormState = {
   title: "",
   isAE: false,
   active: true,
+  managerIds: [],
 };
 
 const LEAVESPHERE_APP_CODE = "leavesphere";
@@ -233,6 +241,23 @@ function buildEmployeeNameOrTitleSearchText(employee: LeaveSphereEmployeeManagem
     .toLowerCase();
 }
 
+function buildEmployeeOptionLabel(employee: LeaveSphereEmployeeManagementEmployee): string {
+  const name = buildEmployeeFullName(employee);
+  const title = asString(employee.title);
+  return title ? `${name} · ${title}` : name;
+}
+
+function buildEmployeeOptions(employees: LeaveSphereEmployeeManagementEmployee[], excludeEmployeeId?: string | null): AppDropdownOption[] {
+  return sortLeaveSphereEmployeeManagementEmployees(employees)
+    .filter((employee) => employee.id !== excludeEmployeeId)
+    .map((employee) => ({
+      value: employee.id,
+      label: buildEmployeeOptionLabel(employee),
+      keywords: [buildEmployeeFullName(employee), employee.email, employee.title || ""].filter(Boolean).join(" "),
+      muted: !employee.active,
+    }));
+}
+
 function normalizeEmployeeForm(employee: LeaveSphereEmployeeManagementEmployee | null): LeaveSphereEmployeeManagementFormState {
   if (!employee) {
     return {
@@ -253,6 +278,7 @@ function normalizeEmployeeForm(employee: LeaveSphereEmployeeManagementEmployee |
     title: employee.title ?? "",
     isAE: employee.isAE,
     active: employee.active,
+    managerIds: [],
   };
 }
 
@@ -297,6 +323,24 @@ function buildEmployeePictureAttachmentFromFile(file: File, pictureUrl: string):
     meta: `${asString(file.type) || "Unknown type"} • ${formatFileSize(file.size)}`,
     previewSrc: pictureUrl,
   };
+}
+
+function normalizeManagerIds(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const item of value) {
+    const candidate = asString(item);
+    if (!candidate || seen.has(candidate)) {
+      continue;
+    }
+    seen.add(candidate);
+    normalized.push(candidate);
+  }
+  normalized.sort((left, right) => left.localeCompare(right));
+  return normalized;
 }
 
 function normalizeEmployeeSearchCriteria(value: unknown, fallback: EmployeeSearchCriteria): EmployeeSearchCriteria {
@@ -504,6 +548,8 @@ function EmployeeManagementModal({
   employee,
   canEdit,
   onOpenChange,
+  requestJson,
+  employeeOptions,
   onUploadPicture,
   onSubmit,
 }: EmployeeModalProps) {
@@ -517,11 +563,17 @@ function EmployeeManagementModal({
   const [isPictureUploading, setIsPictureUploading] = useState(false);
   const [pictureUploadError, setPictureUploadError] = useState<string | null>(null);
   const [pictureAttachment, setPictureAttachment] = useState<EmployeePictureAttachment | null>(() => buildEmployeePictureAttachment(employee));
+  const [isManagersLoading, setIsManagersLoading] = useState(false);
+  const [managerLoadError, setManagerLoadError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState(() => validateForm(normalizeEmployeeForm(employee)));
   const pictureFileInputRef = useRef<HTMLInputElement | null>(null);
+  const managerOptions = useMemo(
+    () => employeeOptions.filter((option) => option.value !== employee?.id),
+    [employee?.id, employeeOptions],
+  );
   const hasUnsavedChanges = useMemo(() => !formsEqual(form, baseline), [baseline, form]);
   const formIsValid = useMemo(() => isFormValid(fieldErrors), [fieldErrors]);
-  const canSubmit = canEdit && hasUnsavedChanges && formIsValid && !isSubmitting;
+  const canSubmit = canEdit && hasUnsavedChanges && formIsValid && !isSubmitting && !isManagersLoading && !managerLoadError;
   const picturePreviewSrc = pictureAttachment?.previewSrc || asString(form.pictureUrl);
   const hasPicturePreview = Boolean(picturePreviewSrc) && !picturePreviewError;
 
@@ -537,6 +589,8 @@ function EmployeeManagementModal({
       setIsPictureUploading(false);
       setPictureUploadError(null);
       setPictureAttachment(null);
+      setIsManagersLoading(false);
+      setManagerLoadError(null);
       if (pictureFileInputRef.current) {
         pictureFileInputRef.current.value = "";
       }
@@ -555,11 +609,57 @@ function EmployeeManagementModal({
     setIsPictureUploading(false);
     setPictureUploadError(null);
     setPictureAttachment(buildEmployeePictureAttachment(employee));
+    setIsManagersLoading(mode === "edit" && Boolean(employee?.id));
+    setManagerLoadError(null);
     if (pictureFileInputRef.current) {
       pictureFileInputRef.current.value = "";
     }
     setFieldErrors(validateForm(nextForm));
-  }, [employee, open]);
+  }, [employee, mode, open]);
+
+  useEffect(() => {
+    let cancelled = false;
+    if (!open || mode !== "edit" || !employee?.id) {
+      return () => {
+        cancelled = true;
+      };
+    }
+
+    setIsManagersLoading(true);
+    setManagerLoadError(null);
+
+    void (async () => {
+      try {
+        const mappings = await loadLeaveSphereEmployeeManagementManagers({
+          requestJson,
+          employeeId: employee.id,
+        });
+        if (cancelled) {
+          return;
+        }
+        const nextManagerIds = normalizeManagerIds(
+          mappings
+            .map((item) => item.managerId)
+            .filter((managerId) => managerId && managerId !== employee.id),
+        );
+        setForm((current) => ({ ...current, managerIds: nextManagerIds }));
+        setBaseline((current) => ({ ...current, managerIds: nextManagerIds }));
+      } catch (error) {
+        if (cancelled) {
+          return;
+        }
+        setManagerLoadError(error instanceof Error && error.message.trim() ? error.message.trim() : "Could not load managers.");
+      } finally {
+        if (!cancelled) {
+          setIsManagersLoading(false);
+        }
+      }
+    })();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [employee?.id, mode, open, requestJson]);
 
   useEffect(() => {
     setPicturePreviewError(false);
@@ -695,7 +795,7 @@ function EmployeeManagementModal({
     <>
       <Dialog open={open} onOpenChange={handleDialogOpenChange}>
         <DialogContent
-          className="max-h-[92vh] w-[min(94vw,860px)] max-w-none overflow-hidden rounded-[1.6rem] bg-white px-7 py-6"
+          className="max-h-[92vh] w-[min(96vw,1080px)] max-w-none overflow-hidden rounded-[1.6rem] bg-white px-7 py-6"
           onInteractOutside={(event) => {
             const target = event.target;
             if (target instanceof Element && target.closest("[data-app-dropdown-root='true'], [data-app-dropdown-menu='true']")) {
@@ -726,225 +826,286 @@ function EmployeeManagementModal({
             </ModalHeaderRow>
 
             <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
-              <div className="grid gap-4 md:grid-cols-2">
-                <div className="space-y-4">
-                  <FormRow label={<>First Name<span className="ml-1 text-rose-600">*</span></>}>
-                    <Input
-                      value={form.firstName}
-                      onChange={(event) => updateForm("firstName", event.target.value)}
-                      disabled={isSubmitting || !canEdit}
-                      maxLength={255}
-                      autoComplete="off"
-                    />
-                  </FormRow>
-                  {errors.firstName ? <p className="text-sm text-rose-600">{errors.firstName}</p> : null}
-
-                  <FormRow label={<>Last Name<span className="ml-1 text-rose-600">*</span></>}>
-                    <Input
-                      value={form.lastName}
-                      onChange={(event) => updateForm("lastName", event.target.value)}
-                      disabled={isSubmitting || !canEdit}
-                      maxLength={255}
-                      autoComplete="off"
-                    />
-                  </FormRow>
-                  {errors.lastName ? <p className="text-sm text-rose-600">{errors.lastName}</p> : null}
-
-                  <FormRow label={<>Email<span className="ml-1 text-rose-600">*</span></>}>
-                    <Input
-                      value={form.email}
-                      onChange={(event) => updateForm("email", event.target.value)}
-                      disabled={isSubmitting || !canEdit}
-                      maxLength={255}
-                      autoComplete="off"
-                      spellCheck={false}
-                      inputMode="email"
-                    />
-                  </FormRow>
-                  {errors.email ? <p className="text-sm text-rose-600">{errors.email}</p> : null}
-
-                  <FormRow label="Phone">
-                    <Input
-                      value={form.phone}
-                      onChange={(event) => updateForm("phone", event.target.value)}
-                      disabled={isSubmitting || !canEdit}
-                      maxLength={20}
-                      autoComplete="off"
-                      inputMode="tel"
-                    />
-                  </FormRow>
-                  {errors.phone ? <p className="text-sm text-rose-600">{errors.phone}</p> : null}
-
-                  <FormRow label="Date of Birth">
-                    <DateInputField
-                      id="employee-dob"
-                      value={form.dob}
-                      onChange={(value) => updateForm("dob", value)}
-                      disabled={isSubmitting || !canEdit}
-                      label="date of birth"
-                    />
-                  </FormRow>
-                  {errors.dob ? <p className="text-sm text-rose-600">{errors.dob}</p> : null}
-                </div>
-
-                <div className="space-y-4">
-                  <FormRow label="Profile Picture">
-                    <div className="space-y-3" onPaste={(event) => { void handlePicturePaste(event); }}>
-                      <input
-                        ref={pictureFileInputRef}
-                        type="file"
-                        accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
-                        className="hidden"
-                        onChange={(event) => {
-                          void handlePictureFileChange(event.target.files);
-                        }}
-                        disabled={isSubmitting || !canEdit || isPictureUploading}
-                      />
-                      <button
-                        type="button"
-                        className={cn(
-                          "flex w-full items-center justify-center gap-2 rounded-lg border border-dashed px-3 py-4 text-sm transition",
-                          isSubmitting || !canEdit || isPictureUploading
-                            ? "cursor-not-allowed border-blue-100 bg-blue-50/20 text-slate-400"
-                            : "cursor-pointer border-blue-200 bg-blue-50/30 text-slate-700 hover:border-blue-300 hover:bg-blue-50/50",
-                        )}
-                        onClick={openPicturePicker}
-                        disabled={isSubmitting || !canEdit || isPictureUploading}
-                      >
-                        <UploadCloud className="size-4 text-blue-600" />
-                        Select image(s) or paste screenshot
-                      </button>
-
-                      {pictureAttachment ? (
-                        <div className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs">
-                          <div className="flex min-w-0 items-center gap-3">
-                            {hasPicturePreview ? (
-                              <button
-                                type="button"
-                                className="flex h-12 w-12 shrink-0 cursor-zoom-in items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-slate-50"
-                                onClick={() => setIsPicturePreviewOpen(true)}
-                                disabled={isSubmitting || !canEdit}
-                                aria-label="Preview profile picture"
-                              >
-                                <img
-                                  src={picturePreviewSrc}
-                                  alt={pictureAttachment.name}
-                                  className="h-full w-full object-cover"
-                                  loading="lazy"
-                                  onError={() => setPicturePreviewError(true)}
-                                />
-                              </button>
-                            ) : (
-                              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-500">
-                                <UserRound className="size-4" aria-hidden="true" />
-                              </div>
-                            )}
-                            <div className="min-w-0">
-                              <p className="truncate font-medium text-slate-800">{pictureAttachment.name}</p>
-                              <p className="text-slate-500">{pictureAttachment.meta}</p>
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            className="inline-flex size-6 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-70"
-                            onClick={() => {
-                              updateForm("pictureUrl", "");
-                              setPictureAttachment(null);
-                              setPicturePreviewError(false);
-                              setPictureUploadError(null);
-                              if (pictureFileInputRef.current) {
-                                pictureFileInputRef.current.value = "";
-                              }
+              <div className="space-y-7">
+                <Section className="space-y-4">
+                  <SectionHeader
+                    title="Personal Information"
+                    description="Core contact details, profile image, and account status."
+                  />
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <FormRow label={<>First Name<span className="ml-1 text-rose-600">*</span></>}>
+                        <Input
+                          value={form.firstName}
+                          onChange={(event) => updateForm("firstName", event.target.value)}
+                          disabled={isSubmitting || !canEdit}
+                          maxLength={255}
+                          autoComplete="off"
+                        />
+                      </FormRow>
+                      {errors.firstName ? <p className="text-sm text-rose-600">{errors.firstName}</p> : null}
+                    </div>
+                    <div className="space-y-1.5">
+                      <FormRow label={<>Last Name<span className="ml-1 text-rose-600">*</span></>}>
+                        <Input
+                          value={form.lastName}
+                          onChange={(event) => updateForm("lastName", event.target.value)}
+                          disabled={isSubmitting || !canEdit}
+                          maxLength={255}
+                          autoComplete="off"
+                        />
+                      </FormRow>
+                      {errors.lastName ? <p className="text-sm text-rose-600">{errors.lastName}</p> : null}
+                    </div>
+                    <div className="space-y-1.5">
+                      <FormRow label={<>Email<span className="ml-1 text-rose-600">*</span></>}>
+                        <Input
+                          value={form.email}
+                          onChange={(event) => updateForm("email", event.target.value)}
+                          disabled={isSubmitting || !canEdit}
+                          maxLength={255}
+                          autoComplete="off"
+                          spellCheck={false}
+                          inputMode="email"
+                        />
+                      </FormRow>
+                      {errors.email ? <p className="text-sm text-rose-600">{errors.email}</p> : null}
+                    </div>
+                    <div className="space-y-1.5">
+                      <FormRow label="Phone">
+                        <Input
+                          value={form.phone}
+                          onChange={(event) => updateForm("phone", event.target.value)}
+                          disabled={isSubmitting || !canEdit}
+                          maxLength={20}
+                          autoComplete="off"
+                          inputMode="tel"
+                        />
+                      </FormRow>
+                      {errors.phone ? <p className="text-sm text-rose-600">{errors.phone}</p> : null}
+                    </div>
+                    <div className="space-y-1.5">
+                      <FormRow label="Birthday">
+                        <DateInputField
+                          id="employee-dob"
+                          value={form.dob}
+                          onChange={(value) => updateForm("dob", value)}
+                          disabled={isSubmitting || !canEdit}
+                          label="birthday"
+                        />
+                      </FormRow>
+                      {errors.dob ? <p className="text-sm text-rose-600">{errors.dob}</p> : null}
+                    </div>
+                    <div className="space-y-1.5">
+                      <FormRow label="Active">
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={form.active}
+                          aria-label="Active"
+                          onClick={() => updateForm("active", !form.active)}
+                          disabled={isSubmitting || !canEdit}
+                          aria-disabled={isSubmitting || !canEdit}
+                          className={cn(
+                            "inline-flex h-10 w-fit items-center gap-3 px-1 py-2 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                            form.active ? "text-emerald-700" : "text-slate-600",
+                          )}
+                        >
+                          <span className={cn("relative inline-flex h-5 w-9 items-center rounded-full transition", form.active ? "bg-emerald-500" : "bg-slate-300")}>
+                            <span className={cn("inline-block h-4 w-4 rounded-full bg-white shadow transition", form.active ? "translate-x-[18px]" : "translate-x-[2px]")} />
+                          </span>
+                        </button>
+                      </FormRow>
+                    </div>
+                    <div className="lg:col-span-2">
+                      <FormRow label="Profile Picture" alignStart>
+                        <div className="space-y-3" onPaste={(event) => { void handlePicturePaste(event); }}>
+                          <input
+                            ref={pictureFileInputRef}
+                            type="file"
+                            accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
+                            className="hidden"
+                            onChange={(event) => {
+                              void handlePictureFileChange(event.target.files);
                             }}
                             disabled={isSubmitting || !canEdit || isPictureUploading}
-                            aria-label="Remove profile picture"
+                          />
+                          <button
+                            type="button"
+                            className={cn(
+                              "flex w-full items-center justify-center gap-2 rounded-lg border border-dashed px-3 py-4 text-sm transition",
+                              isSubmitting || !canEdit || isPictureUploading
+                                ? "cursor-not-allowed border-blue-100 bg-blue-50/20 text-slate-400"
+                                : "cursor-pointer border-blue-200 bg-blue-50/30 text-slate-700 hover:border-blue-300 hover:bg-blue-50/50",
+                            )}
+                            onClick={openPicturePicker}
+                            disabled={isSubmitting || !canEdit || isPictureUploading}
                           >
-                            <Trash2 className="size-4" aria-hidden="true" />
+                            <UploadCloud className="size-4 text-blue-600" />
+                            Select image(s) or paste screenshot
                           </button>
-                        </div>
-                      ) : null}
 
-                      <p className="text-xs text-slate-500">PNG, JPG, JPEG, or WEBP. Up to 10 MB.</p>
-                      {isPictureUploading ? <p className="text-xs text-slate-500">Uploading picture...</p> : null}
-                      {pictureUploadError ? <p className="text-sm text-rose-600">{pictureUploadError}</p> : null}
-                      {errors.pictureUrl ? <p className="text-sm text-rose-600">{errors.pictureUrl}</p> : null}
+                          {pictureAttachment ? (
+                            <div className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs">
+                              <div className="flex min-w-0 items-center gap-3">
+                                {hasPicturePreview ? (
+                                  <button
+                                    type="button"
+                                    className="flex h-12 w-12 shrink-0 cursor-zoom-in items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-slate-50"
+                                    onClick={() => setIsPicturePreviewOpen(true)}
+                                    disabled={isSubmitting || !canEdit}
+                                    aria-label="Preview profile picture"
+                                  >
+                                    <img
+                                      src={picturePreviewSrc}
+                                      alt={pictureAttachment.name}
+                                      className="h-full w-full object-cover"
+                                      loading="lazy"
+                                      onError={() => setPicturePreviewError(true)}
+                                    />
+                                  </button>
+                                ) : (
+                                  <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-500">
+                                    <UserRound className="size-4" aria-hidden="true" />
+                                  </div>
+                                )}
+                                <div className="min-w-0">
+                                  <p className="truncate font-medium text-slate-800">{pictureAttachment.name}</p>
+                                  <p className="text-slate-500">{pictureAttachment.meta}</p>
+                                </div>
+                              </div>
+                              <button
+                                type="button"
+                                className="inline-flex size-6 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-70"
+                                onClick={() => {
+                                  updateForm("pictureUrl", "");
+                                  setPictureAttachment(null);
+                                  setPicturePreviewError(false);
+                                  setPictureUploadError(null);
+                                  if (pictureFileInputRef.current) {
+                                    pictureFileInputRef.current.value = "";
+                                  }
+                                }}
+                                disabled={isSubmitting || !canEdit || isPictureUploading}
+                                aria-label="Remove profile picture"
+                              >
+                                <Trash2 className="size-4" aria-hidden="true" />
+                              </button>
+                            </div>
+                          ) : null}
+
+                          <p className="text-xs text-slate-500">PNG, JPG, JPEG, or WEBP. Up to 10 MB.</p>
+                          {isPictureUploading ? <p className="text-xs text-slate-500">Uploading picture...</p> : null}
+                          {pictureUploadError ? <p className="text-sm text-rose-600">{pictureUploadError}</p> : null}
+                          {errors.pictureUrl ? <p className="text-sm text-rose-600">{errors.pictureUrl}</p> : null}
+                        </div>
+                      </FormRow>
+                    </div>
+                  </div>
+                </Section>
+
+                <Section className="space-y-4">
+                  <SectionHeader
+                    title="Company Information"
+                    description="Employment details used throughout LeaveSphere."
+                  />
+                  <div className="grid gap-4 lg:grid-cols-2">
+                    <div className="space-y-1.5">
+                      <FormRow label="Title">
+                        <Input
+                          value={form.title}
+                          onChange={(event) => updateForm("title", event.target.value)}
+                          disabled={isSubmitting || !canEdit}
+                          maxLength={255}
+                          autoComplete="off"
+                        />
+                      </FormRow>
+                    </div>
+                    <div className="space-y-1.5">
+                      <FormRow label="Start Date">
+                        <DateInputField
+                          id="employee-start-date"
+                          value={form.startDate}
+                          onChange={(value) => updateForm("startDate", value)}
+                          disabled={isSubmitting || !canEdit}
+                          label="start date"
+                        />
+                      </FormRow>
+                      {errors.startDate ? <p className="text-sm text-rose-600">{errors.startDate}</p> : null}
+                    </div>
+                    <div className="space-y-1.5">
+                      <FormRow label="Region">
+                        <AppDropdown
+                          value={form.region || "US"}
+                          options={EMPLOYEE_REGION_OPTIONS}
+                          onValueChange={(value) => updateForm("region", value as LeaveSphereEmployeeManagementFormState["region"])}
+                          searchable={false}
+                          allowCustomValue={false}
+                          ariaLabel="Employee region"
+                          placeholder="Select region"
+                          disabled={isSubmitting || !canEdit}
+                        />
+                      </FormRow>
+                    </div>
+                    <div className="space-y-1.5">
+                      <FormRow label="isAE">
+                        <button
+                          type="button"
+                          role="switch"
+                          aria-checked={form.isAE}
+                          aria-label="AE status"
+                          onClick={() => updateForm("isAE", !form.isAE)}
+                          disabled={isSubmitting || !canEdit}
+                          aria-disabled={isSubmitting || !canEdit}
+                          className={cn(
+                            "inline-flex h-10 w-fit items-center gap-3 px-1 py-2 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                            form.isAE ? "text-blue-700" : "text-slate-600",
+                          )}
+                        >
+                          <span className={cn("relative inline-flex h-5 w-9 items-center rounded-full transition", form.isAE ? "bg-blue-500" : "bg-slate-300")}>
+                            <span className={cn("inline-block h-4 w-4 rounded-full bg-white shadow transition", form.isAE ? "translate-x-[18px]" : "translate-x-[2px]")} />
+                          </span>
+                        </button>
+                      </FormRow>
+                    </div>
+                  </div>
+                </Section>
+
+                <Section className="space-y-4">
+                  <SectionHeader
+                    title="Relationship"
+                    description="Pick one or more managers for this employee."
+                  />
+                  <FormRow label="Managers" alignStart>
+                    <div className="space-y-2">
+                      <AppDropdown
+                        value=""
+                        values={form.managerIds}
+                        onValueChange={() => {}}
+                        onValuesChange={(values) => updateForm("managerIds", normalizeManagerIds(values))}
+                        options={managerOptions}
+                        multiple
+                        searchable
+                        allowCustomValue={false}
+                        ariaLabel="Employee managers"
+                        placeholder={managerOptions.length ? "Select managers" : "No other employees available"}
+                        disabled={isSubmitting || !canEdit || isManagersLoading || Boolean(managerLoadError) || !form.active || managerOptions.length === 0}
+                      />
+                      <p className="text-xs leading-5 text-slate-500">
+                        The current employee is excluded. Inactive employees are shown muted.
+                      </p>
+                      {!form.active ? (
+                        <p className="text-xs leading-5 text-slate-500">
+                          Activate this employee to edit manager assignments.
+                        </p>
+                      ) : null}
+                      {isManagersLoading ? (
+                        <p className="text-xs leading-5 text-slate-500">Loading manager assignments...</p>
+                      ) : null}
+                      {managerLoadError ? <p className="text-sm text-rose-600">{managerLoadError}</p> : null}
                     </div>
                   </FormRow>
-
-                  <FormRow label="Region">
-                    <AppDropdown
-                      value={form.region || "US"}
-                      options={EMPLOYEE_REGION_OPTIONS}
-                      onValueChange={(value) => updateForm("region", value as LeaveSphereEmployeeManagementFormState["region"])}
-                      searchable={false}
-                      allowCustomValue={false}
-                      ariaLabel="Employee region"
-                      placeholder="Select region"
-                      disabled={isSubmitting || !canEdit}
-                    />
-                  </FormRow>
-
-                  <FormRow label="Start Date">
-                    <DateInputField
-                      id="employee-start-date"
-                      value={form.startDate}
-                      onChange={(value) => updateForm("startDate", value)}
-                      disabled={isSubmitting || !canEdit}
-                      label="start date"
-                    />
-                  </FormRow>
-                  {errors.startDate ? <p className="text-sm text-rose-600">{errors.startDate}</p> : null}
-
-                  <FormRow label="Title">
-                    <Input
-                      value={form.title}
-                      onChange={(event) => updateForm("title", event.target.value)}
-                      disabled={isSubmitting || !canEdit}
-                      maxLength={255}
-                      autoComplete="off"
-                    />
-                  </FormRow>
-
-                  <FormRow label="Active">
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={form.active}
-                      aria-label="Active"
-                      onClick={() => updateForm("active", !form.active)}
-                      disabled={isSubmitting || !canEdit}
-                      aria-disabled={isSubmitting || !canEdit}
-                      className={cn(
-                        "inline-flex h-10 w-fit items-center gap-3 px-1 py-2 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                        form.active ? "text-emerald-700" : "text-slate-600",
-                      )}
-                    >
-                      <span className={cn("relative inline-flex h-5 w-9 items-center rounded-full transition", form.active ? "bg-emerald-500" : "bg-slate-300")}>
-                        <span className={cn("inline-block h-4 w-4 rounded-full bg-white shadow transition", form.active ? "translate-x-[18px]" : "translate-x-[2px]")} />
-                      </span>
-                    </button>
-                  </FormRow>
-
-                  <FormRow label="AE Status">
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={form.isAE}
-                      aria-label="AE status"
-                      onClick={() => updateForm("isAE", !form.isAE)}
-                      disabled={isSubmitting || !canEdit}
-                      aria-disabled={isSubmitting || !canEdit}
-                      className={cn(
-                        "inline-flex h-10 w-fit items-center gap-3 px-1 py-2 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                        form.isAE ? "text-blue-700" : "text-slate-600",
-                      )}
-                    >
-                      <span className={cn("relative inline-flex h-5 w-9 items-center rounded-full transition", form.isAE ? "bg-blue-500" : "bg-slate-300")}>
-                        <span className={cn("inline-block h-4 w-4 rounded-full bg-white shadow transition", form.isAE ? "translate-x-[18px]" : "translate-x-[2px]")} />
-                      </span>
-                    </button>
-                  </FormRow>
-                </div>
+                </Section>
               </div>
 
               {submitError ? <p className="mt-4 text-sm text-rose-600">{submitError}</p> : null}
@@ -1463,6 +1624,7 @@ export default function EmployeeManagementPage() {
   ]);
 
   const allEmployees = workspace?.employees ?? [];
+  const employeeOptions = useMemo(() => buildEmployeeOptions(allEmployees), [allEmployees]);
   const filteredEmployees = useMemo(() => {
     if (!hasSearched || !workspace) {
       return [];
@@ -1634,9 +1796,71 @@ export default function EmployeeManagementPage() {
     commitWorkspace(nextWorkspace, "cache");
   }
 
+  async function syncEmployeeManagers(employeeId: string, nextManagerIds: string[], employeeActive: boolean): Promise<void> {
+    if (!employeeActive) {
+      return;
+    }
+
+    const normalizedEmployeeId = asString(employeeId);
+    const normalizedNextManagerIds = normalizeManagerIds(
+      nextManagerIds.filter((managerId) => asString(managerId) && asString(managerId) !== normalizedEmployeeId),
+    );
+    const activeEmployeeIds = new Set(
+      allEmployees
+        .filter((employee) => employee.active)
+        .map((employee) => employee.id),
+    );
+    const invalidManagerIds = normalizedNextManagerIds.filter((managerId) => !activeEmployeeIds.has(managerId));
+    if (invalidManagerIds.length) {
+      throw new Error("Managers must be active employees.");
+    }
+
+    const currentMappings = await loadLeaveSphereEmployeeManagementManagers({
+      requestJson,
+      employeeId: normalizedEmployeeId,
+    });
+    const currentMappingByManagerId = new Map<string, LeaveSphereEmployeeManagementManager>(
+      currentMappings.map((mapping) => [mapping.managerId, mapping]),
+    );
+    const currentManagerIds = new Set(currentMappings.map((mapping) => mapping.managerId));
+    const removedMappings = currentMappings.filter((mapping) => !normalizedNextManagerIds.includes(mapping.managerId));
+    const addedManagerIds = normalizedNextManagerIds.filter((managerId) => !currentManagerIds.has(managerId));
+
+    for (const mapping of removedMappings) {
+      await deleteLeaveSphereEmployeeManagementManager({
+        requestJson,
+        mappingId: mapping.id,
+      });
+    }
+
+    for (const managerId of addedManagerIds) {
+      if (currentMappingByManagerId.has(managerId)) {
+        continue;
+      }
+      await createLeaveSphereEmployeeManagementManager({
+        requestJson,
+        employeeId: normalizedEmployeeId,
+        managerId,
+      });
+    }
+  }
+
   async function handleEmployeeSubmit(payload: { mode: EmployeeMode; id: string | null; form: LeaveSphereEmployeeManagementFormState }) {
     setIsMutationInFlight(true);
     try {
+      if (payload.form.active) {
+        const employeeLookup = new Map(allEmployees.map((employee) => [employee.id, employee]));
+        const invalidManagerIds = normalizeManagerIds(payload.form.managerIds).filter((managerId) => {
+          if (!managerId || managerId === payload.id) {
+            return false;
+          }
+          return !employeeLookup.get(managerId)?.active;
+        });
+        if (invalidManagerIds.length) {
+          throw new Error("Managers must be active employees.");
+        }
+      }
+
       if (payload.mode === "create") {
         const response = await createLeaveSphereEmployeeManagementEmployee({
           requestJson,
@@ -1660,6 +1884,9 @@ export default function EmployeeManagementPage() {
         });
         if (createdEmployee) {
           updateWorkspaceWithEmployee(createdEmployee);
+          if (createdId) {
+            await syncEmployeeManagers(createdId, payload.form.managerIds, payload.form.active);
+          }
         }
       } else {
         if (!payload.id) {
@@ -1689,6 +1916,7 @@ export default function EmployeeManagementPage() {
         if (nextEmployee) {
           updateWorkspaceWithEmployee(nextEmployee);
         }
+        await syncEmployeeManagers(payload.id, payload.form.managerIds, payload.form.active);
       }
       void refreshWorkspace("network-only");
     } finally {
@@ -1943,6 +2171,8 @@ export default function EmployeeManagementPage() {
         employee={modalEmployee}
         canEdit={canManage && Boolean(workspace?.capabilities.canUpdate)}
         onOpenChange={setIsModalOpen}
+        requestJson={requestJson}
+        employeeOptions={employeeOptions}
         onUploadPicture={handlePictureUpload}
         onSubmit={handleEmployeeSubmit}
       />

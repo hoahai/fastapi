@@ -1,6 +1,14 @@
 import type { ApiRequestOptions } from "@shared/hooks/useApiRequest";
 import { normalizeLeaveSphereTeamRegion, type LeaveSphereTeamRegion } from "@leavesphere/lib/ptoTypes";
 
+export type LeaveSphereEmployeeManagementRequestJson = (url: string, options?: ApiRequestOptions) => Promise<unknown>;
+
+export type LeaveSphereEmployeeManagementManager = {
+  id: string;
+  employeeId: string;
+  managerId: string;
+};
+
 export type LeaveSphereEmployeeManagementEmployee = {
   id: string;
   identityKey: string;
@@ -54,6 +62,7 @@ export type LeaveSphereEmployeeManagementFormState = {
   title: string;
   isAE: boolean;
   active: boolean;
+  managerIds: string[];
 };
 
 export type LeaveSphereEmployeeManagementSubmitPayload = {
@@ -115,6 +124,41 @@ function normalizeDate(value: unknown): string | null {
     return null;
   }
   return text.slice(0, 10);
+}
+
+function normalizeStringList(value: unknown): string[] {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const seen = new Set<string>();
+  const normalized: string[] = [];
+  for (const item of value) {
+    const candidate = asString(item);
+    if (!candidate || seen.has(candidate)) {
+      continue;
+    }
+    seen.add(candidate);
+    normalized.push(candidate);
+  }
+  normalized.sort((left, right) => left.localeCompare(right));
+  return normalized;
+}
+
+function normalizeEmployeeManager(value: unknown): LeaveSphereEmployeeManagementManager | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+  const id = asString(value.id);
+  const employeeId = asString(value.employeeId);
+  const managerId = asString(value.managerId);
+  if (!id || !employeeId || !managerId) {
+    return null;
+  }
+  return {
+    id,
+    employeeId,
+    managerId,
+  };
 }
 
 export function normalizeLeaveSphereEmployeeManagementEmployee(
@@ -245,6 +289,7 @@ export function normalizeLeaveSphereEmployeeManagementForm(
     title: asString(form.title),
     isAE: Boolean(form.isAE),
     active: Boolean(form.active),
+    managerIds: normalizeStringList(form.managerIds),
   };
 }
 
@@ -266,6 +311,66 @@ export function buildLeaveSphereEmployeeManagementMutationPayload(
     isAE: normalized.isAE,
     active: normalized.active,
   };
+}
+
+export async function loadLeaveSphereEmployeeManagementManagers(
+  params: {
+    requestJson: LeaveSphereEmployeeManagementRequestJson;
+    employeeId?: string | null;
+    managerId?: string | null;
+  },
+): Promise<LeaveSphereEmployeeManagementManager[]> {
+  const query = new URLSearchParams();
+  const employeeId = asString(params.employeeId);
+  const managerId = asString(params.managerId);
+  if (employeeId) {
+    query.set("employeeId", employeeId);
+  }
+  if (managerId) {
+    query.set("managerId", managerId);
+  }
+  const url = query.toString()
+    ? `/api/leavesphere/v1/employeeManagers?${query.toString()}`
+    : "/api/leavesphere/v1/employeeManagers";
+  const payload = await params.requestJson(url, {
+    errorToast: false,
+  });
+  const data = unwrapEnvelope(payload);
+  if (!Array.isArray(data)) {
+    return [];
+  }
+  return data
+    .map((item) => normalizeEmployeeManager(item))
+    .filter((item): item is LeaveSphereEmployeeManagementManager => item !== null);
+}
+
+export async function createLeaveSphereEmployeeManagementManager(
+  params: {
+    requestJson: LeaveSphereEmployeeManagementRequestJson;
+    employeeId: string;
+    managerId: string;
+  },
+): Promise<unknown> {
+  return params.requestJson("/api/leavesphere/v1/employeeManagers", {
+    method: "POST",
+    body: {
+      employeeId: asString(params.employeeId),
+      managerId: asString(params.managerId),
+    },
+    errorToast: false,
+  });
+}
+
+export async function deleteLeaveSphereEmployeeManagementManager(
+  params: {
+    requestJson: LeaveSphereEmployeeManagementRequestJson;
+    mappingId: string;
+  },
+): Promise<unknown> {
+  return params.requestJson(`/api/leavesphere/v1/employeeManagers/${encodeURIComponent(asString(params.mappingId))}`, {
+    method: "DELETE",
+    errorToast: false,
+  });
 }
 
 export async function uploadLeaveSphereEmployeeManagementPicture(
