@@ -14,6 +14,10 @@ export type AppDropdownOption = {
   muted?: boolean;
 };
 
+function formatOptionLabel(option: AppDropdownOption): string {
+  return option.muted ? `${option.label} (inactive)` : option.label;
+}
+
 interface AppDropdownProps {
   value: string;
   options: AppDropdownOption[];
@@ -251,9 +255,9 @@ export function AppDropdown({
     ? selectedOptions.length === 0
       ? placeholder
       : selectedOptions.length <= 2
-        ? selectedOptions.map((option) => option.label).join(", ")
-        : `${selectedOptions[0]?.label || ""}, +${selectedOptions.length - 1}`
-    : (selectedOption?.label || value || placeholder);
+        ? selectedOptions.map((option) => formatOptionLabel(option)).join(", ")
+        : `${formatOptionLabel(selectedOptions[0] as AppDropdownOption)}, +${selectedOptions.length - 1}`
+    : (selectedOption ? formatOptionLabel(selectedOption) : (value || placeholder));
   const isTriggerMuted = !multiple && Boolean(selectedOption?.muted);
 
   return (
@@ -351,13 +355,20 @@ export function AppDropdown({
                             >
                               {option.label}
                             </span>
-                            <Check
-                              className={cn(
-                                isSelected ? "text-blue-700" : "text-blue-600",
-                                isCompact ? "size-3.5" : "size-4",
-                                isSelected ? "opacity-100" : "opacity-0",
-                              )}
-                            />
+                            <div className="ml-2 flex items-center gap-1.5">
+                              {isMuted ? (
+                                <span className="shrink-0 rounded-full border border-slate-200 bg-slate-100 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-500">
+                                  Inactive
+                                </span>
+                              ) : null}
+                              <Check
+                                className={cn(
+                                  isSelected ? "text-blue-700" : "text-blue-600",
+                                  isCompact ? "size-3.5" : "size-4",
+                                  isSelected ? "opacity-100" : "opacity-0",
+                                )}
+                              />
+                            </div>
                           </button>
                         </li>
                       );
