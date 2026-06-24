@@ -268,6 +268,30 @@ export function buildLeaveSphereEmployeeManagementMutationPayload(
   };
 }
 
+export async function uploadLeaveSphereEmployeeManagementPicture(
+  params: {
+    requestJson: RequestJson;
+    file: File;
+  },
+): Promise<string> {
+  const formData = new FormData();
+  formData.append("file", params.file);
+  const payload = await params.requestJson("/api/leavesphere/v1/employees/picture/upload", {
+    method: "POST",
+    body: formData,
+    errorToast: false,
+  });
+  const data = unwrapEnvelope(payload);
+  if (!isRecord(data)) {
+    throw new Error("Could not upload picture.");
+  }
+  const pictureUrl = asString(data.pictureUrl);
+  if (!pictureUrl) {
+    throw new Error("Could not upload picture.");
+  }
+  return pictureUrl;
+}
+
 type RequestJson = (url: string, options?: ApiRequestOptions) => Promise<unknown>;
 
 function buildLoadUrl(freshData: boolean): string {

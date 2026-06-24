@@ -1,13 +1,15 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type ClipboardEvent } from "react";
 import {
   Plus,
   ChevronDown,
   RefreshCw,
+  UploadCloud,
   Search,
   UserCheck,
   UserRound,
   UserX,
   Users,
+  Trash2,
   X,
 } from "lucide-react";
 
@@ -59,6 +61,7 @@ import {
   normalizeLeaveSphereEmployeeManagementForm,
   normalizeLeaveSphereEmployeeManagementWorkspace,
   updateLeaveSphereEmployeeManagementEmployee,
+  uploadLeaveSphereEmployeeManagementPicture,
   sortLeaveSphereEmployeeManagementEmployees,
   type LeaveSphereEmployeeManagementEmployee,
   type LeaveSphereEmployeeManagementFormState,
@@ -74,6 +77,11 @@ import {
 
 type EmployeeMode = "create" | "edit";
 type EmployeeGroupOpenState = Record<string, boolean>;
+type EmployeePictureAttachment = {
+  name: string;
+  meta: string;
+  previewSrc: string;
+};
 
 type CacheStatus = {
   source: "cache" | "network";
@@ -102,6 +110,7 @@ type EmployeeModalProps = {
   employee: LeaveSphereEmployeeManagementEmployee | null;
   canEdit: boolean;
   onOpenChange: (open: boolean) => void;
+  onUploadPicture: (file: File) => Promise<string>;
   onSubmit: (payload: { mode: EmployeeMode; id: string | null; form: LeaveSphereEmployeeManagementFormState }) => Promise<void>;
 };
 
@@ -194,6 +203,20 @@ function formatRelativeTime(timestamp: number): string {
   return `${days} day${days === 1 ? "" : "s"} ago`;
 }
 
+function formatFileSize(bytes: number): string {
+  if (!Number.isFinite(bytes) || bytes <= 0) {
+    return "0 B";
+  }
+  if (bytes < 1024) {
+    return `${bytes} B`;
+  }
+  const kilobytes = bytes / 1024;
+  if (kilobytes < 1024) {
+    return `${kilobytes.toFixed(1)} KB`;
+  }
+  return `${(kilobytes / 1024).toFixed(1)} MB`;
+}
+
 function buildEmployeeFullName(employee: LeaveSphereEmployeeManagementEmployee): string {
   return [employee.firstName, employee.lastName].filter(Boolean).join(" ").trim() || employee.email;
 }
@@ -230,6 +253,49 @@ function normalizeEmployeeForm(employee: LeaveSphereEmployeeManagementEmployee |
     title: employee.title ?? "",
     isAE: employee.isAE,
     active: employee.active,
+  };
+}
+
+function getFileNameFromUrl(url: string): string {
+  const text = asString(url);
+  if (!text) {
+    return "Profile picture";
+  }
+  const fallback = "Profile picture";
+  const decode = (value: string) => {
+    try {
+      return decodeURIComponent(value);
+    } catch {
+      return value;
+    }
+  };
+  try {
+    const parsed = new URL(text);
+    const segments = parsed.pathname.split("/").filter(Boolean);
+    return decode(segments[segments.length - 1] || fallback);
+  } catch {
+    const segments = text.split("/").filter(Boolean);
+    return decode(segments[segments.length - 1] || fallback);
+  }
+}
+
+function buildEmployeePictureAttachment(employee: LeaveSphereEmployeeManagementEmployee | null): EmployeePictureAttachment | null {
+  const pictureUrl = asString(employee?.pictureUrl);
+  if (!pictureUrl) {
+    return null;
+  }
+  return {
+    name: getFileNameFromUrl(pictureUrl),
+    meta: "Stored image",
+    previewSrc: pictureUrl,
+  };
+}
+
+function buildEmployeePictureAttachmentFromFile(file: File, pictureUrl: string): EmployeePictureAttachment {
+  return {
+    name: asString(file.name) || "profile-picture",
+    meta: `${asString(file.type) || "Unknown type"} • ${formatFileSize(file.size)}`,
+    previewSrc: pictureUrl,
   };
 }
 
@@ -438,6 +504,7 @@ function EmployeeManagementModal({
   employee,
   canEdit,
   onOpenChange,
+  onUploadPicture,
   onSubmit,
 }: EmployeeModalProps) {
   const [form, setForm] = useState<LeaveSphereEmployeeManagementFormState>(() => normalizeEmployeeForm(employee));
@@ -447,25 +514,15 @@ function EmployeeManagementModal({
   const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false);
   const [isPicturePreviewOpen, setIsPicturePreviewOpen] = useState(false);
   const [picturePreviewError, setPicturePreviewError] = useState(false);
+  const [isPictureUploading, setIsPictureUploading] = useState(false);
+  const [pictureUploadError, setPictureUploadError] = useState<string | null>(null);
+  const [pictureAttachment, setPictureAttachment] = useState<EmployeePictureAttachment | null>(() => buildEmployeePictureAttachment(employee));
   const [fieldErrors, setFieldErrors] = useState(() => validateForm(normalizeEmployeeForm(employee)));
+  const pictureFileInputRef = useRef<HTMLInputElement | null>(null);
   const hasUnsavedChanges = useMemo(() => !formsEqual(form, baseline), [baseline, form]);
   const formIsValid = useMemo(() => isFormValid(fieldErrors), [fieldErrors]);
   const canSubmit = canEdit && hasUnsavedChanges && formIsValid && !isSubmitting;
-  const picturePreviewSrc = useMemo(() => {
-    const pictureUrl = asString(form.pictureUrl);
-    if (!pictureUrl) {
-      return "";
-    }
-    try {
-      const parsed = new URL(pictureUrl);
-      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
-        return "";
-      }
-      return pictureUrl;
-    } catch {
-      return "";
-    }
-  }, [form.pictureUrl]);
+  const picturePreviewSrc = pictureAttachment?.previewSrc || asString(form.pictureUrl);
   const hasPicturePreview = Boolean(picturePreviewSrc) && !picturePreviewError;
 
   useEffect(() => {
@@ -477,6 +534,12 @@ function EmployeeManagementModal({
       setIsDiscardDialogOpen(false);
       setIsPicturePreviewOpen(false);
       setPicturePreviewError(false);
+      setIsPictureUploading(false);
+      setPictureUploadError(null);
+      setPictureAttachment(null);
+      if (pictureFileInputRef.current) {
+        pictureFileInputRef.current.value = "";
+      }
       setFieldErrors(validateForm(normalizeEmployeeForm(null)));
       return;
     }
@@ -489,6 +552,12 @@ function EmployeeManagementModal({
     setIsDiscardDialogOpen(false);
     setIsPicturePreviewOpen(false);
     setPicturePreviewError(false);
+    setIsPictureUploading(false);
+    setPictureUploadError(null);
+    setPictureAttachment(buildEmployeePictureAttachment(employee));
+    if (pictureFileInputRef.current) {
+      pictureFileInputRef.current.value = "";
+    }
     setFieldErrors(validateForm(nextForm));
   }, [employee, open]);
 
@@ -514,12 +583,82 @@ function EmployeeManagementModal({
     }
   }
 
+  function openPicturePicker() {
+    if (isSubmitting || isPictureUploading || !canEdit) {
+      return;
+    }
+    setPictureUploadError(null);
+    if (pictureFileInputRef.current) {
+      pictureFileInputRef.current.value = "";
+      pictureFileInputRef.current.click();
+    }
+  }
+
+  async function processPictureFile(file: File) {
+    if (isSubmitting || isPictureUploading || !canEdit) {
+      return;
+    }
+
+    const normalizedMimeType = asString(file.type).toLowerCase();
+    const normalizedFileName = asString(file.name).toLowerCase();
+    const validByMimeType = normalizedMimeType.startsWith("image/");
+    const validByExtension = (
+      normalizedFileName.endsWith(".png")
+      || normalizedFileName.endsWith(".jpg")
+      || normalizedFileName.endsWith(".jpeg")
+      || normalizedFileName.endsWith(".webp")
+    );
+    if (!validByMimeType && !validByExtension) {
+      setPictureUploadError("Only PNG, JPG, JPEG, and WEBP files are allowed.");
+      return;
+    }
+
+    setIsPictureUploading(true);
+    setPictureUploadError(null);
+    setPicturePreviewError(false);
+    try {
+      const pictureUrl = await onUploadPicture(file);
+      updateForm("pictureUrl", pictureUrl);
+      setPictureAttachment(buildEmployeePictureAttachmentFromFile(file, pictureUrl));
+    } catch (error) {
+      setPictureUploadError(error instanceof Error && error.message.trim() ? error.message.trim() : "Could not upload picture.");
+    } finally {
+      setIsPictureUploading(false);
+    }
+  }
+
+  async function handlePictureFileChange(fileList: FileList | null) {
+    const file = fileList?.[0] ?? null;
+    if (pictureFileInputRef.current) {
+      pictureFileInputRef.current.value = "";
+    }
+    if (!file) {
+      return;
+    }
+    await processPictureFile(file);
+  }
+
+  async function handlePicturePaste(event: ClipboardEvent<HTMLDivElement>) {
+    if (isSubmitting || isPictureUploading || !canEdit) {
+      return;
+    }
+    const clipboardFiles = Array.from(event.clipboardData?.items ?? [])
+      .filter((item) => item.kind === "file")
+      .map((item) => item.getAsFile())
+      .filter((file): file is File => file instanceof File);
+    if (!clipboardFiles.length) {
+      return;
+    }
+    event.preventDefault();
+    await processPictureFile(clipboardFiles[0]);
+  }
+
   function handleDialogOpenChange(nextOpen: boolean) {
     if (nextOpen) {
       onOpenChange(true);
       return;
     }
-    if (isSubmitting) {
+    if (isSubmitting || isPictureUploading) {
       return;
     }
     if (hasUnsavedChanges) {
@@ -563,7 +702,7 @@ function EmployeeManagementModal({
               event.preventDefault();
               return;
             }
-            if (isSubmitting || hasUnsavedChanges) {
+            if (isSubmitting || isPictureUploading || hasUnsavedChanges) {
               event.preventDefault();
             }
           }}
@@ -649,52 +788,88 @@ function EmployeeManagementModal({
                 </div>
 
                 <div className="space-y-4">
-                  <FormRow label="Picture URL">
-                    <div className="space-y-3">
-                      <Input
-                        value={form.pictureUrl}
-                        onChange={(event) => updateForm("pictureUrl", event.target.value)}
-                        disabled={isSubmitting || !canEdit}
-                        maxLength={2048}
-                        autoComplete="off"
-                        spellCheck={false}
+                  <FormRow label="Profile Picture">
+                    <div className="space-y-3" onPaste={(event) => { void handlePicturePaste(event); }}>
+                      <input
+                        ref={pictureFileInputRef}
+                        type="file"
+                        accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
+                        className="hidden"
+                        onChange={(event) => {
+                          void handlePictureFileChange(event.target.files);
+                        }}
+                        disabled={isSubmitting || !canEdit || isPictureUploading}
                       />
-                      {picturePreviewSrc ? (
-                        <div className="space-y-2">
-                          <div className="relative h-36 overflow-hidden rounded-xl border border-slate-200 bg-slate-50/80">
+                      <button
+                        type="button"
+                        className={cn(
+                          "flex w-full items-center justify-center gap-2 rounded-lg border border-dashed px-3 py-4 text-sm transition",
+                          isSubmitting || !canEdit || isPictureUploading
+                            ? "cursor-not-allowed border-blue-100 bg-blue-50/20 text-slate-400"
+                            : "cursor-pointer border-blue-200 bg-blue-50/30 text-slate-700 hover:border-blue-300 hover:bg-blue-50/50",
+                        )}
+                        onClick={openPicturePicker}
+                        disabled={isSubmitting || !canEdit || isPictureUploading}
+                      >
+                        <UploadCloud className="size-4 text-blue-600" />
+                        Select image(s) or paste screenshot
+                      </button>
+
+                      {pictureAttachment ? (
+                        <div className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs">
+                          <div className="flex min-w-0 items-center gap-3">
                             {hasPicturePreview ? (
                               <button
                                 type="button"
-                                className="flex h-full w-full cursor-zoom-in items-center justify-center overflow-hidden p-4"
+                                className="flex h-12 w-12 shrink-0 cursor-zoom-in items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-slate-50"
                                 onClick={() => setIsPicturePreviewOpen(true)}
                                 disabled={isSubmitting || !canEdit}
-                                aria-label="Open picture preview"
+                                aria-label="Preview profile picture"
                               >
                                 <img
                                   src={picturePreviewSrc}
-                                  alt={`${asString(form.firstName) || "Employee"} picture preview`}
-                                  className="block h-auto max-h-full w-auto max-w-full object-contain object-center"
+                                  alt={pictureAttachment.name}
+                                  className="h-full w-full object-cover"
                                   loading="lazy"
                                   onError={() => setPicturePreviewError(true)}
                                 />
                               </button>
                             ) : (
-                              <div className="flex h-full w-full items-center justify-center p-4 text-center text-sm text-slate-500">
-                                <div className="flex flex-col items-center gap-2">
-                                  <UserRound className="size-5" />
-                                  <span>Picture preview unavailable</span>
-                                </div>
+                              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-500">
+                                <UserRound className="size-4" aria-hidden="true" />
                               </div>
                             )}
+                            <div className="min-w-0">
+                              <p className="truncate font-medium text-slate-800">{pictureAttachment.name}</p>
+                              <p className="text-slate-500">{pictureAttachment.meta}</p>
+                            </div>
                           </div>
-                          <p className="text-xs text-slate-500">
-                            Click the picture to open a larger preview.
-                          </p>
+                          <button
+                            type="button"
+                            className="inline-flex size-6 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-70"
+                            onClick={() => {
+                              updateForm("pictureUrl", "");
+                              setPictureAttachment(null);
+                              setPicturePreviewError(false);
+                              setPictureUploadError(null);
+                              if (pictureFileInputRef.current) {
+                                pictureFileInputRef.current.value = "";
+                              }
+                            }}
+                            disabled={isSubmitting || !canEdit || isPictureUploading}
+                            aria-label="Remove profile picture"
+                          >
+                            <Trash2 className="size-4" aria-hidden="true" />
+                          </button>
                         </div>
                       ) : null}
+
+                      <p className="text-xs text-slate-500">PNG, JPG, JPEG, or WEBP. Up to 10 MB.</p>
+                      {isPictureUploading ? <p className="text-xs text-slate-500">Uploading picture...</p> : null}
+                      {pictureUploadError ? <p className="text-sm text-rose-600">{pictureUploadError}</p> : null}
+                      {errors.pictureUrl ? <p className="text-sm text-rose-600">{errors.pictureUrl}</p> : null}
                     </div>
                   </FormRow>
-                  {errors.pictureUrl ? <p className="text-sm text-rose-600">{errors.pictureUrl}</p> : null}
 
                   <FormRow label="Region">
                     <AppDropdown
@@ -1521,6 +1696,13 @@ export default function EmployeeManagementPage() {
     }
   }
 
+  async function handlePictureUpload(file: File): Promise<string> {
+    return uploadLeaveSphereEmployeeManagementPicture({
+      requestJson,
+      file,
+    });
+  }
+
   async function handleLifecycleAction(): Promise<void> {
     const target = pendingAction;
     if (!target) {
@@ -1761,6 +1943,7 @@ export default function EmployeeManagementPage() {
         employee={modalEmployee}
         canEdit={canManage && Boolean(workspace?.capabilities.canUpdate)}
         onOpenChange={setIsModalOpen}
+        onUploadPicture={handlePictureUpload}
         onSubmit={handleEmployeeSubmit}
       />
 

@@ -8,6 +8,13 @@ from apps.leavesphere.api.v1.helpers.dbQueries import (
     update_employee,
 )
 from apps.leavesphere.api.v1.helpers.readCache import read_leave_sphere_read_cache, write_leave_sphere_read_cache
+from shared.storage import (
+    StorageUploadInput,
+    StorageValidationError,
+    upload_file,
+    validate_attachment_payload,
+)
+from shared.tenant import get_tenant_id
 
 _VALID_REGIONS = {"US", "MEXICO", "PHILIPPINES"}
 _EMPLOYEE_MANAGEMENT_WORKSPACE_NAMESPACE = "employee-management:workspace"
@@ -179,6 +186,46 @@ def modify_employee(*, employee_id: str, payload: dict) -> dict:
             raise ValueError(friendly) from exc
         raise
     return {"updated": updated}
+
+
+def upload_employee_picture(
+    *,
+    filename: str,
+    mime_type: str,
+    file_bytes: bytes,
+    uploaded_by: str | None = None,
+) -> dict:
+    tenant_slug = str(get_tenant_id() or "").strip().lower()
+    if not tenant_slug:
+        raise ValueError("Missing tenant context")
+
+    normalized_name, normalized_mime, _ = validate_attachment_payload(
+        file_bytes=file_bytes,
+        filename=filename,
+        mime_type=mime_type,
+    )
+    if not normalized_mime.startswith("image/"):
+        raise StorageValidationError("Only PNG, JPG, JPEG, and WEBP files are allowed")
+
+    stored_asset = upload_file(
+        payload=StorageUploadInput(
+            app_name="LeaveSphere",
+            tenant_slug=tenant_slug,
+            owner_entity_type="employee_picture",
+            owner_entity_id="profile",
+            uploaded_by=str(uploaded_by or "").strip() or None,
+            file_bytes=file_bytes,
+            original_filename=normalized_name,
+            mime_type=normalized_mime,
+            storage_key=f"employee-picture-{uuid4()}",
+        )
+    )
+    return {
+        "pictureUrl": stored_asset.access_url,
+        "fileName": stored_asset.original_filename,
+        "mimeType": stored_asset.mime_type,
+        "storageProvider": stored_asset.storage_provider,
+    }
 
 
 def _build_employee_management_workspace(employees: list[dict]) -> dict:

@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, HTTPException, Request
+from fastapi import APIRouter, Body, Depends, File, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
 from apps.leavesphere.api.v1.helpers.employees import (
@@ -10,9 +10,11 @@ from apps.leavesphere.api.v1.helpers.employees import (
     get_employee,
     list_employees,
     modify_employee,
+    upload_employee_picture,
 )
 from apps.leavesphere.api.v1.helpers.workspaceCache import invalidate_leave_sphere_workspace_caches
 from apps.leavesphere.api.v1.permissions import require_leavesphere_admin
+from shared.storage import StorageConfigError, StorageUploadError, StorageValidationError
 
 router = APIRouter(prefix="/employees")
 
@@ -59,6 +61,60 @@ class EmployeeUpdateRequest(_LeaveSphereModel):
     title: str | None = None
     isAE: bool | int | str | None = None
     active: bool | int | str | None = None
+
+
+@router.post("/picture/upload")
+async def upload_employee_picture_route(
+    request: Request,
+    file: UploadFile = File(..., alias="file"),
+    _: None = Depends(require_leavesphere_admin),
+):
+    """
+    Upload one employee profile picture and return the stored image URL.
+
+    Example request:
+        POST /api/leavesphere/v1/employees/picture/upload
+        Content-Type: multipart/form-data
+        form-data:
+          file=@"/path/to/profile-picture.png"
+
+    Example response:
+        {
+          "meta": {"timestamp": "2026-06-25T00:00:00+07:00", "duration_ms": 2},
+          "data": {
+            "pictureUrl": "https://res.cloudinary.com/.../employee-picture.png",
+            "fileName": "profile-picture.png",
+            "mimeType": "image/png",
+            "storageProvider": "cloudinary"
+          }
+        }
+
+    Requirements:
+        - Requires X-Tenant-Id header
+        - Requires leavesphere.admin permission (or workspace.super_admin)
+        - file is required
+        - Only PNG, JPG, JPEG, and WEBP files are allowed
+        - File size limits are validated on backend
+    """
+    try:
+        principal = getattr(request.state, "auth_principal", None)
+        uploaded_by = None
+        if principal is not None:
+            uploaded_by = str(getattr(principal, "user_id", "") or getattr(principal, "email", "") or "").strip() or None
+        file_bytes = await file.read()
+        result = upload_employee_picture(
+            filename=str(file.filename or ""),
+            mime_type=str(file.content_type or ""),
+            file_bytes=file_bytes,
+            uploaded_by=uploaded_by,
+        )
+        return result
+    except (StorageValidationError, ValueError) as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+    except StorageConfigError:
+        raise HTTPException(status_code=500, detail="Storage provider is not configured")
+    except StorageUploadError:
+        raise HTTPException(status_code=502, detail="File upload failed")
 
 
 @router.get("")
