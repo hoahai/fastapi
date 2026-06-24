@@ -1,10 +1,11 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import {
-  PencilLine,
   Plus,
+  ChevronDown,
   RefreshCw,
   Search,
   UserCheck,
+  UserRound,
   UserX,
   Users,
   X,
@@ -15,7 +16,7 @@ import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { SectionCard } from "@shared/components/layout/SectionCard";
 import { Section, SectionHeader } from "@shared/components";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
-import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
+import { SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { Button } from "@tradsphere/components/ui/button";
 import { AppDropdown, type AppDropdownOption } from "@tradsphere/components/ui/app-dropdown";
 import {
@@ -38,7 +39,14 @@ import { PageBanner } from "@shell/components/layout/PageBanner";
 import { ActionIconButton } from "@tradsphere/components/dashboard/ActionIconButton";
 import { ModalCloseButton, ModalFooter, ModalHeaderRow, ModalShell, FormRow } from "@shared/components";
 import { cn } from "@shared/components/utils/cn";
-import { DEFAULT_TIME_ZONE, formatDateInTimeZone } from "@shared/utils/time";
+import {
+  buildScopedPageStateStorageKey,
+  readScopedPageState,
+  shouldFetchNetwork,
+  writeScopedPageState,
+  type CachePolicy,
+  type ScopedPageState,
+} from "@shared/cache";
 import {
   activateLeaveSphereEmployeeManagementEmployee,
   createLeaveSphereEmployeeManagementEmployee,
@@ -64,6 +72,7 @@ import {
 } from "@leavesphere/lib/employeeManagementCache";
 
 type EmployeeMode = "create" | "edit";
+type EmployeeGroupOpenState = Record<string, boolean>;
 
 type CacheStatus = {
   source: "cache" | "network";
@@ -77,6 +86,13 @@ type EmployeeSearchCriteria = {
   email: string;
   statusFilter: EmployeeStatusFilter;
   regionFilter: EmployeeRegionFilter;
+};
+
+type PersistedEmployeeManagementPageState = {
+  searchDraft: EmployeeSearchCriteria;
+  searchCriteria: EmployeeSearchCriteria;
+  hasSearched: boolean;
+  groupOpenState: EmployeeGroupOpenState;
 };
 
 type EmployeeModalProps = {
@@ -110,7 +126,7 @@ const EMPLOYEE_REGION_FILTER_OPTIONS: AppDropdownOption[] = [
 const DEFAULT_SEARCH_CRITERIA: EmployeeSearchCriteria = {
   nameOrTitle: "",
   email: "",
-  statusFilter: "active",
+  statusFilter: "",
   regionFilter: "",
 };
 
@@ -136,6 +152,8 @@ const EMPTY_FORM: LeaveSphereEmployeeManagementFormState = {
   active: true,
 };
 
+const LEAVESPHERE_APP_CODE = "leavesphere";
+
 function asString(value: unknown): string {
   if (typeof value === "string") {
     return value.trim();
@@ -144,6 +162,10 @@ function asString(value: unknown): string {
     return String(value);
   }
   return "";
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === "object" && value !== null && !Array.isArray(value);
 }
 
 function formatRelativeTime(timestamp: number): string {
@@ -196,6 +218,18 @@ function normalizeEmployeeForm(employee: LeaveSphereEmployeeManagementEmployee |
     title: employee.title ?? "",
     isAE: employee.isAE,
     active: employee.active,
+  };
+}
+
+function normalizeEmployeeSearchCriteria(value: unknown, fallback: EmployeeSearchCriteria): EmployeeSearchCriteria {
+  if (!isRecord(value)) {
+    return { ...fallback };
+  }
+  return {
+    nameOrTitle: asString(value.nameOrTitle),
+    email: asString(value.email),
+    statusFilter: coerceEmployeeStatusFilter(asString(value.statusFilter), fallback.statusFilter),
+    regionFilter: coerceEmployeeRegionFilter(asString(value.regionFilter), fallback.regionFilter),
   };
 }
 
@@ -272,6 +306,61 @@ function buildEmployeeRegionLabel(region: string): string {
     return "U.S.";
   }
   return region;
+}
+
+function coerceEmployeeStatusFilter(value: string, fallback: EmployeeStatusFilter): EmployeeStatusFilter {
+  if (value === "" || value === "active" || value === "inactive") {
+    return value;
+  }
+  return fallback;
+}
+
+function coerceEmployeeRegionFilter(value: string, fallback: EmployeeRegionFilter): EmployeeRegionFilter {
+  if (value === "" || value === "US" || value === "Mexico" || value === "Philippines") {
+    return value;
+  }
+  return fallback;
+}
+
+function getEmployeeRegionSortOrder(region: string): number {
+  if (region === "US") {
+    return 0;
+  }
+  if (region === "Mexico") {
+    return 1;
+  }
+  if (region === "Philippines") {
+    return 2;
+  }
+  return 3;
+}
+
+function isPersistedEmployeeManagementPageState(value: unknown): value is PersistedEmployeeManagementPageState {
+  if (!isRecord(value)) {
+    return false;
+  }
+  if (typeof value.hasSearched !== "boolean") {
+    return false;
+  }
+  if (!isRecord(value.searchDraft) || !isRecord(value.searchCriteria) || !isRecord(value.groupOpenState)) {
+    return false;
+  }
+
+  const searchDraft = value.searchDraft;
+  const searchCriteria = value.searchCriteria;
+  const groupOpenState = value.groupOpenState;
+
+  return (
+    typeof searchDraft.nameOrTitle === "string" &&
+    typeof searchDraft.email === "string" &&
+    typeof searchDraft.statusFilter === "string" &&
+    typeof searchDraft.regionFilter === "string" &&
+    typeof searchCriteria.nameOrTitle === "string" &&
+    typeof searchCriteria.email === "string" &&
+    typeof searchCriteria.statusFilter === "string" &&
+    typeof searchCriteria.regionFilter === "string" &&
+    Object.values(groupOpenState).every((item) => typeof item === "boolean")
+  );
 }
 
 function hasEmployeeSearchCriteria(criteria: EmployeeSearchCriteria): boolean {
@@ -686,6 +775,16 @@ function EmployeeCard({
   onEdit: (employee: LeaveSphereEmployeeManagementEmployee) => void;
   onToggleActive: (employee: LeaveSphereEmployeeManagementEmployee, nextActive: boolean) => void;
 }) {
+  const [imageError, setImageError] = useState(false);
+  const employeeName = buildEmployeeFullName(employee);
+  const employeeTitle = asString(employee.title) || "Title not set";
+  const employeeInitials = buildEmployeeInitials(employee);
+  const showPicture = Boolean(employee.pictureUrl) && !imageError;
+
+  useEffect(() => {
+    setImageError(false);
+  }, [employee.pictureUrl]);
+
   return (
     <article
       role="button"
@@ -705,29 +804,52 @@ function EmployeeCard({
         }
       }}
       className={cn(
-        "space-y-4 rounded-[1.25rem] border p-4 shadow-[0_18px_30px_-24px_rgba(37,99,235,0.42)] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
+        "space-y-4 rounded-[1.35rem] border p-5 shadow-[0_18px_30px_-24px_rgba(37,99,235,0.42)] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
         disabled ? "cursor-default" : "cursor-pointer",
         employee.active
-          ? "border-blue-100/90 bg-white hover:-translate-y-0.5 hover:border-blue-200"
-          : "border-slate-200 bg-slate-50/90 hover:border-slate-300",
+          ? "border-blue-100/90 bg-white hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-[0_20px_34px_-24px_rgba(37,99,235,0.5)]"
+          : "border-slate-200 bg-slate-50/90 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-[0_18px_28px_-26px_rgba(15,23,42,0.22)]",
       )}
     >
-      <div className="flex items-start justify-between gap-3">
-        <div className="min-w-0 space-y-1">
-          <p className="truncate text-base font-semibold tracking-[-0.01em] text-slate-900">{buildEmployeeFullName(employee)}</p>
-          <p className="break-all text-sm text-slate-700">{employee.email}</p>
+      <div className="flex items-start justify-between gap-4">
+        <div className="flex min-w-0 gap-4">
+          <span className="inline-flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-full border border-blue-100 bg-gradient-to-br from-blue-50 to-white text-blue-700 shadow-[0_10px_20px_-16px_rgba(37,99,235,0.55)]">
+            {showPicture ? (
+              <img
+                src={employee.pictureUrl || undefined}
+                alt={employeeName}
+                className="size-full object-cover"
+                loading="lazy"
+                onError={() => setImageError(true)}
+              />
+            ) : employeeInitials ? (
+              <span className="text-sm font-semibold tracking-[0.08em]">{employeeInitials}</span>
+            ) : (
+              <UserRound className="size-7" />
+            )}
+          </span>
+
+          <div className="min-w-0 pt-0.5">
+            <p className="truncate text-lg font-semibold tracking-[-0.02em] text-slate-900">{employeeName}</p>
+            <p className="truncate text-sm text-slate-500">{employeeTitle}</p>
+
+            <div className="mt-3 flex flex-wrap items-center gap-2">
+              <span className={cn("inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium", toEmployeeCardStatusClass(employee.active))}>
+                {buildEmployeeStatusLabel(employee)}
+              </span>
+              <span className="inline-flex items-center rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
+                {buildEmployeeRegionLabel(employee.region)}
+              </span>
+              {employee.isAE ? (
+                <span className="inline-flex items-center rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-xs font-medium text-violet-700">
+                  AE
+                </span>
+              ) : null}
+            </div>
+          </div>
         </div>
 
         <div className="flex items-center gap-1.5">
-          <ActionIconButton
-            icon={<PencilLine />}
-            tooltip="Edit employee"
-            onClick={(event) => {
-              event.stopPropagation();
-              onEdit(employee);
-            }}
-            disabled={disabled || !canEdit}
-          />
           {employee.active && canDeactivate ? (
             <ActionIconButton
               icon={<UserX />}
@@ -752,46 +874,28 @@ function EmployeeCard({
           ) : null}
         </div>
       </div>
-
-      <div className="flex flex-wrap items-center gap-2">
-        <span className={cn("inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium", toEmployeeCardStatusClass(employee.active))}>
-          {buildEmployeeStatusLabel(employee)}
-        </span>
-        <span className="inline-flex items-center rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-medium text-blue-700">
-          {buildEmployeeRegionLabel(employee.region)}
-        </span>
-        {employee.isAE ? (
-          <span className="inline-flex items-center rounded-full border border-violet-200 bg-violet-50 px-2.5 py-1 text-xs font-medium text-violet-700">
-            AE
-          </span>
-        ) : null}
-      </div>
-
-      <div className="grid gap-2 text-sm text-slate-700 sm:grid-cols-2">
-        <EmployeeMeta label="Identity Key" value={employee.identityKey} />
-        <EmployeeMeta label="Title" value={employee.title} />
-        <EmployeeMeta label="Phone" value={employee.phone} />
-        <EmployeeMeta
-          label="Start Date"
-          value={employee.startDate ? formatDateInTimeZone(employee.startDate, DEFAULT_TIME_ZONE, { month: "short", day: "numeric", year: "numeric" }) : ""}
-        />
-        <EmployeeMeta
-          label="Date of Birth"
-          value={employee.dob ? formatDateInTimeZone(employee.dob, DEFAULT_TIME_ZONE, { month: "short", day: "numeric", year: "numeric" }) : ""}
-        />
-      </div>
     </article>
   );
 }
 
-function EmployeeMeta({ label, value }: { label: string; value: string | null | undefined }) {
-  const display = asString(value) || "-";
-  return (
-    <p className="truncate">
-      <span className="text-slate-500">{label}: </span>
-      <span className="text-slate-800">{display}</span>
-    </p>
-  );
+function buildEmployeeInitials(employee: LeaveSphereEmployeeManagementEmployee): string {
+  return buildEmployeeInitialsFromName(buildEmployeeFullName(employee));
+}
+
+function buildEmployeeInitialsFromName(name: string): string {
+  const parts = asString(name)
+    .split(/\s+/)
+    .filter(Boolean);
+
+  if (parts.length === 0) {
+    return "";
+  }
+
+  if (parts.length === 1) {
+    return parts[0].slice(0, 2).toUpperCase();
+  }
+
+  return `${parts[0][0]}${parts[parts.length - 1][0]}`.toUpperCase();
 }
 
 function EmptyEmployeesPanel({
@@ -872,6 +976,8 @@ export default function EmployeeManagementPage() {
   const { requestJson } = useApiRequest();
   const { isOnline } = useOnlineStatus();
   const auth = useAuth();
+  const pageStateUserKey = asString(auth.user?.id || auth.user?.email);
+  const tenantSlug = asString(auth.tenantSlug);
   const cacheContext = useMemo<LeaveSphereEmployeeManagementWorkspaceCacheContext>(
     () => ({
       tenantSlug: auth.tenantSlug || "",
@@ -886,6 +992,24 @@ export default function EmployeeManagementPage() {
     }
     return hasAppAdminAccess(auth.accessProfile, "leavesphere");
   }, [auth.accessProfile]);
+  const canRestorePageState = auth.status === "authenticated" && Boolean(tenantSlug) && Boolean(pageStateUserKey);
+  const pageStateScope = useMemo<ScopedPageState | null>(() => {
+    if (!canRestorePageState) {
+      return null;
+    }
+    return {
+      userKey: pageStateUserKey,
+      tenantSlug,
+      appCode: LEAVESPHERE_APP_CODE,
+      pageCode: LEAVESPHERE_EMPLOYEE_MANAGEMENT_PAGE_CODE,
+    };
+  }, [canRestorePageState, pageStateUserKey, tenantSlug]);
+  const pageStateStorageKey = useMemo(() => {
+    if (!pageStateScope) {
+      return null;
+    }
+    return buildScopedPageStateStorageKey(pageStateScope);
+  }, [pageStateScope]);
 
   const [workspace, setWorkspace] = useState<LeaveSphereEmployeeManagementWorkspace | null>(null);
   const workspaceRef = useRef<LeaveSphereEmployeeManagementWorkspace | null>(null);
@@ -901,12 +1025,15 @@ export default function EmployeeManagementPage() {
   const [hasSearched, setHasSearched] = useState(false);
   const [searchEmailTouched, setSearchEmailTouched] = useState(false);
   const [searchEmailError, setSearchEmailError] = useState<string | null>(null);
+  const [employeeGroupOpenState, setEmployeeGroupOpenState] = useState<EmployeeGroupOpenState>({});
+  const [hasHydratedPageState, setHasHydratedPageState] = useState(false);
 
   const [isModalOpen, setIsModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<EmployeeMode>("create");
   const [modalEmployee, setModalEmployee] = useState<LeaveSphereEmployeeManagementEmployee | null>(null);
   const [pendingAction, setPendingAction] = useState<{ employee: LeaveSphereEmployeeManagementEmployee; nextActive: boolean } | null>(null);
   const [isMutationInFlight, setIsMutationInFlight] = useState(false);
+  const hydratedPageStateScopeRef = useRef<string | null>(null);
 
   useEffect(() => {
     workspaceRef.current = workspace;
@@ -924,15 +1051,22 @@ export default function EmployeeManagementPage() {
     syncLeaveSphereEmployeeManagementWorkspaceCache(cacheContext, nextWorkspace, { source, fetchedAt });
   }
 
-  async function refreshWorkspace(freshData: boolean): Promise<void> {
+  async function refreshWorkspace(policy: CachePolicy): Promise<void> {
     const requestToken = ++requestTokenRef.current;
     const snapshot = readLeaveSphereEmployeeManagementWorkspaceCacheSnapshot(cacheContext);
     const cachedWorkspace = snapshot?.data ? normalizeLeaveSphereEmployeeManagementWorkspace(snapshot.data) : null;
+    const shouldFetch = shouldFetchNetwork(policy, snapshot);
 
     if (cachedWorkspace) {
       commitWorkspace(cachedWorkspace, "cache");
       setErrorMessage(null);
       setRefreshMessage(null);
+    }
+
+    if (!shouldFetch) {
+      setIsLoading(false);
+      setIsRefreshing(false);
+      return;
     }
 
     if (!isOnline) {
@@ -950,12 +1084,14 @@ export default function EmployeeManagementPage() {
       setIsRefreshing(true);
     } else {
       setIsLoading(true);
+      setRefreshMessage(null);
+      setErrorMessage(null);
     }
 
     try {
       const nextWorkspace = await loadLeaveSphereEmployeeManagementWorkspace({
         requestJson,
-        freshData,
+        freshData: policy === "network-only",
       });
       if (requestToken !== requestTokenRef.current) {
         return;
@@ -993,7 +1129,67 @@ export default function EmployeeManagementPage() {
     setHasSearched(false);
     setSearchEmailTouched(false);
     setSearchEmailError(null);
+    setEmployeeGroupOpenState({});
+    hydratedPageStateScopeRef.current = null;
+    setHasHydratedPageState(false);
   }, [cacheKey]);
+
+  useEffect(() => {
+    if (!canRestorePageState || !pageStateScope || !pageStateStorageKey) {
+      hydratedPageStateScopeRef.current = null;
+      setHasHydratedPageState(false);
+      return;
+    }
+    if (hydratedPageStateScopeRef.current === pageStateStorageKey) {
+      setHasHydratedPageState(true);
+      return;
+    }
+
+    hydratedPageStateScopeRef.current = pageStateStorageKey;
+    const persisted = readScopedPageState<PersistedEmployeeManagementPageState>(pageStateScope, isPersistedEmployeeManagementPageState);
+    if (persisted) {
+      setSearchDraft(normalizeEmployeeSearchCriteria(persisted.searchDraft, DEFAULT_SEARCH_CRITERIA));
+      setSearchCriteria(normalizeEmployeeSearchCriteria(persisted.searchCriteria, DEFAULT_SEARCH_CRITERIA));
+      setHasSearched(persisted.hasSearched);
+      setEmployeeGroupOpenState(persisted.groupOpenState);
+    }
+
+    setHasHydratedPageState(true);
+  }, [canRestorePageState, pageStateScope, pageStateStorageKey]);
+
+  useEffect(() => {
+    if (!hasHydratedPageState) {
+      return;
+    }
+    void refreshWorkspace("cache-first");
+  }, [hasHydratedPageState]);
+
+  useEffect(() => {
+    if (
+      !canRestorePageState ||
+      !hasHydratedPageState ||
+      !pageStateScope ||
+      !pageStateStorageKey ||
+      hydratedPageStateScopeRef.current !== pageStateStorageKey
+    ) {
+      return;
+    }
+    writeScopedPageState<PersistedEmployeeManagementPageState>(pageStateScope, {
+      searchDraft,
+      searchCriteria,
+      hasSearched,
+      groupOpenState: employeeGroupOpenState,
+    });
+  }, [
+    canRestorePageState,
+    employeeGroupOpenState,
+    hasHydratedPageState,
+    hasSearched,
+    pageStateScope,
+    pageStateStorageKey,
+    searchCriteria,
+    searchDraft,
+  ]);
 
   const allEmployees = workspace?.employees ?? [];
   const filteredEmployees = useMemo(() => {
@@ -1033,6 +1229,47 @@ export default function EmployeeManagementPage() {
   const hasDraftFilters = hasEmployeeSearchCriteria(searchDraft);
   const hasEmployees = allEmployees.length > 0;
   const hasMatches = Boolean(workspace && filteredEmployees.length > 0);
+  const employeeResultGroups = useMemo(() => {
+    const grouped = new Map<string, LeaveSphereEmployeeManagementEmployee[]>();
+    for (const employee of filteredEmployees) {
+      const key = asString(employee.region) || "Other";
+      const current = grouped.get(key) ?? [];
+      current.push(employee);
+      grouped.set(key, current);
+    }
+
+    return Array.from(grouped.entries())
+      .map(([key, items]) => ({
+        key,
+        label: buildEmployeeRegionLabel(key),
+        items,
+      }))
+      .sort((left, right) => {
+        const leftOrder = getEmployeeRegionSortOrder(left.key);
+        const rightOrder = getEmployeeRegionSortOrder(right.key);
+        if (leftOrder !== rightOrder) {
+          return leftOrder - rightOrder;
+        }
+        return left.label.localeCompare(right.label);
+      });
+  }, [filteredEmployees]);
+
+  useEffect(() => {
+    if (!employeeResultGroups.length) {
+      return;
+    }
+    setEmployeeGroupOpenState((current) => {
+      let changed = false;
+      const next = { ...current };
+      for (const group of employeeResultGroups) {
+        if (next[group.key] === undefined) {
+          next[group.key] = true;
+          changed = true;
+        }
+      }
+      return changed ? next : current;
+    });
+  }, [employeeResultGroups]);
   const searchResultText = !hasSearched
     ? "Search by one or more fields. Results load only after you click Search."
     : workspace
@@ -1091,7 +1328,9 @@ export default function EmployeeManagementPage() {
     }
     setSearchCriteria({ ...searchDraft });
     setHasSearched(true);
-    void refreshWorkspace(false);
+    if (!workspaceRef.current) {
+      void refreshWorkspace("cache-first");
+    }
   }
 
   function handleSearchEmailBlur() {
@@ -1180,7 +1419,7 @@ export default function EmployeeManagementPage() {
           updateWorkspaceWithEmployee(nextEmployee);
         }
       }
-      void refreshWorkspace(true);
+      void refreshWorkspace("network-only");
     } finally {
       setIsMutationInFlight(false);
     }
@@ -1210,7 +1449,7 @@ export default function EmployeeManagementPage() {
       if (nextEmployee) {
         updateWorkspaceWithEmployee(nextEmployee);
       }
-      void refreshWorkspace(true);
+      void refreshWorkspace("network-only");
     } finally {
       setIsMutationInFlight(false);
     }
@@ -1238,7 +1477,7 @@ export default function EmployeeManagementPage() {
         <PageCacheFooter
           text={cacheStatusText}
           onRefresh={() => {
-            void refreshWorkspace(true);
+            void refreshWorkspace("network-only");
           }}
           disabled={isLoading || isRefreshing || !isOnline}
           refreshing={isRefreshing}
@@ -1347,41 +1586,60 @@ export default function EmployeeManagementPage() {
 
       <div className="relative">
         <SectionCard
-          title="Employees"
+          title="Results"
           description={
             workspace && hasSearched
               ? `${filteredEmployees.length} of ${workspace.summary.totalEmployees} employees shown.`
               : "Search results will appear after you run a search."
           }
-          actions={(
-            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
-              {workspace ? (
-                <>
-                  <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700">
-                    {workspace.summary.activeEmployees} active
-                  </span>
-                  <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 font-medium text-slate-700">
-                    {workspace.summary.inactiveEmployees} inactive
-                  </span>
-                </>
-              ) : null}
-            </div>
-          )}
           contentClassName="space-y-4"
         >
           {workspace && filteredEmployees.length > 0 ? (
-            <div className="grid gap-4 xl:grid-cols-2">
-              {filteredEmployees.map((employee) => (
-                <EmployeeCard
-                  key={employee.id}
-                  employee={employee}
-                  disabled={isLoading || isRefreshing || isMutationInFlight}
-                  canActivate={Boolean(workspace.capabilities.canActivate)}
-                  canDeactivate={Boolean(workspace.capabilities.canDeactivate)}
-                  canEdit={Boolean(workspace.capabilities.canUpdate)}
-                  onEdit={openEditModal}
-                  onToggleActive={startToggleEmployeeActive}
-                />
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700">
+                  {workspace.summary.activeEmployees} active
+                </span>
+                <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 font-medium text-slate-700">
+                  {workspace.summary.inactiveEmployees} inactive
+                </span>
+              </div>
+
+              {employeeResultGroups.map((group) => (
+                <details
+                  key={group.key}
+                  open={employeeGroupOpenState[group.key] ?? true}
+                  onToggle={(event) => {
+                    const nextOpen = event.currentTarget.open;
+                    setEmployeeGroupOpenState((current) => ({ ...current, [group.key]: nextOpen }));
+                  }}
+                  className="group overflow-hidden rounded-2xl border border-blue-100/90 bg-slate-50/75 shadow-[0_18px_30px_-26px_rgba(37,99,235,0.5)]"
+                >
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-2 border-b border-blue-100/90 bg-gradient-to-r from-blue-50/85 to-indigo-50/45 px-4 py-3.5">
+                    <p className="text-sm font-semibold uppercase tracking-[0.12em] text-blue-800">{group.label}</p>
+                    <span className="inline-flex items-center gap-2 text-slate-500" aria-hidden="true">
+                      <span className="text-xs">{group.items.length} employees</span>
+                      <ChevronDown className="size-4 transition-transform group-open:rotate-180" />
+                    </span>
+                  </summary>
+
+                  <div className="p-3">
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                      {group.items.map((employee) => (
+                        <EmployeeCard
+                          key={employee.id}
+                          employee={employee}
+                          disabled={isLoading || isRefreshing || isMutationInFlight}
+                          canActivate={Boolean(workspace.capabilities.canActivate)}
+                          canDeactivate={Boolean(workspace.capabilities.canDeactivate)}
+                          canEdit={Boolean(workspace.capabilities.canUpdate)}
+                          onEdit={openEditModal}
+                          onToggleActive={startToggleEmployeeActive}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                </details>
               ))}
             </div>
           ) : (
@@ -1426,10 +1684,6 @@ export default function EmployeeManagementPage() {
         onCancel={() => setPendingAction(null)}
       />
 
-      <PageLoadingLayer
-        active={Boolean(isLoading && !workspace)}
-        message="Loading employees..."
-      />
     </AppPageLayout>
   );
 }
