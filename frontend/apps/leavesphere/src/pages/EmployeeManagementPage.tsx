@@ -17,6 +17,7 @@ import { SectionCard } from "@shared/components/layout/SectionCard";
 import { Section, SectionHeader } from "@shared/components";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
+import { DateInputField } from "@tradsphere/components/dashboard/FlightDateRangeField";
 import { Button } from "@tradsphere/components/ui/button";
 import { AppDropdown, type AppDropdownOption } from "@tradsphere/components/ui/app-dropdown";
 import {
@@ -154,6 +155,14 @@ const EMPTY_FORM: LeaveSphereEmployeeManagementFormState = {
 
 const LEAVESPHERE_APP_CODE = "leavesphere";
 
+function getTodayIsoDate(): string {
+  const today = new Date();
+  const year = today.getFullYear();
+  const month = String(today.getMonth() + 1).padStart(2, "0");
+  const day = String(today.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 function asString(value: unknown): string {
   if (typeof value === "string") {
     return value.trim();
@@ -203,7 +212,10 @@ function buildEmployeeNameOrTitleSearchText(employee: LeaveSphereEmployeeManagem
 
 function normalizeEmployeeForm(employee: LeaveSphereEmployeeManagementEmployee | null): LeaveSphereEmployeeManagementFormState {
   if (!employee) {
-    return { ...EMPTY_FORM };
+    return {
+      ...EMPTY_FORM,
+      startDate: getTodayIsoDate(),
+    };
   }
   return {
     identityKey: employee.identityKey,
@@ -267,7 +279,6 @@ function validateIsoDate(value: string, field: string): string | null {
 }
 
 function validateForm(form: LeaveSphereEmployeeManagementFormState): {
-  identityKey: string | null;
   firstName: string | null;
   lastName: string | null;
   email: string | null;
@@ -276,13 +287,11 @@ function validateForm(form: LeaveSphereEmployeeManagementFormState): {
   pictureUrl: string | null;
   startDate: string | null;
 } {
-  const identityKey = asString(form.identityKey);
   const firstName = asString(form.firstName);
   const lastName = asString(form.lastName);
   const phone = asString(form.phone);
   const pictureUrl = asString(form.pictureUrl);
   return {
-    identityKey: !identityKey ? "Identity key is required." : identityKey.length > 36 ? "Identity key must be 36 characters or fewer." : null,
     firstName: !firstName ? "First name is required." : null,
     lastName: !lastName ? "Last name is required." : null,
     email: validateEmail(form.email),
@@ -551,17 +560,6 @@ function EmployeeManagementModal({
             <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
               <div className="grid gap-4 md:grid-cols-2">
                 <div className="space-y-4">
-                  <FormRow label={<>Identity Key<span className="ml-1 text-rose-600">*</span></>}>
-                    <Input
-                      value={form.identityKey}
-                      onChange={(event) => updateForm("identityKey", event.target.value)}
-                      disabled={isSubmitting || !canEdit}
-                      maxLength={36}
-                      autoComplete="off"
-                    />
-                  </FormRow>
-                  {errors.identityKey ? <p className="text-sm text-rose-600">{errors.identityKey}</p> : null}
-
                   <FormRow label={<>First Name<span className="ml-1 text-rose-600">*</span></>}>
                     <Input
                       value={form.firstName}
@@ -610,11 +608,12 @@ function EmployeeManagementModal({
                   {errors.phone ? <p className="text-sm text-rose-600">{errors.phone}</p> : null}
 
                   <FormRow label="Date of Birth">
-                    <Input
-                      type="date"
+                    <DateInputField
+                      id="employee-dob"
                       value={form.dob}
-                      onChange={(event) => updateForm("dob", event.target.value)}
+                      onChange={(value) => updateForm("dob", value)}
                       disabled={isSubmitting || !canEdit}
+                      label="date of birth"
                     />
                   </FormRow>
                   {errors.dob ? <p className="text-sm text-rose-600">{errors.dob}</p> : null}
@@ -647,11 +646,12 @@ function EmployeeManagementModal({
                   </FormRow>
 
                   <FormRow label="Start Date">
-                    <Input
-                      type="date"
+                    <DateInputField
+                      id="employee-start-date"
                       value={form.startDate}
-                      onChange={(event) => updateForm("startDate", event.target.value)}
+                      onChange={(value) => updateForm("startDate", value)}
                       disabled={isSubmitting || !canEdit}
+                      label="start date"
                     />
                   </FormRow>
                   {errors.startDate ? <p className="text-sm text-rose-600">{errors.startDate}</p> : null}

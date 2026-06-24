@@ -108,9 +108,10 @@ def create_employee(payload: dict) -> dict:
     if not isinstance(payload, dict):
         raise ValueError("Payload must be an object")
 
+    identity_key = _normalize_optional_text(payload.get("identityKey"), field="identityKey", max_length=36) or str(uuid4())
     item = {
         "id": str(payload.get("id") or "").strip() or str(uuid4()),
-        "identityKey": _normalize_required_text(payload.get("identityKey"), field="identityKey", max_length=36),
+        "identityKey": identity_key,
         "firstName": _normalize_required_text(payload.get("firstName"), field="firstName"),
         "lastName": _normalize_required_text(payload.get("lastName"), field="lastName"),
         "email": _normalize_required_text(payload.get("email"), field="email"),

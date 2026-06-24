@@ -1,3 +1,4 @@
+import { createPortal } from "react-dom";
 import { useEffect, useMemo, useRef, useState, type CSSProperties } from "react";
 import { CalendarDays } from "lucide-react";
 
@@ -12,6 +13,7 @@ const CALENDAR_POPUP_WIDTH_PX = 312;
 const CALENDAR_POPUP_EDGE_PADDING_PX = 12;
 const CALENDAR_POPUP_OFFSET_PX = 8;
 const CALENDAR_POPUP_MIN_HEIGHT_PX = 240;
+const CALENDAR_POPUP_Z_INDEX = 90;
 export const FLIGHT_DATE_PICKER_POPOVER_SELECTOR = '[data-flight-date-picker-popover="true"]';
 
 const CHICAGO_DATE_PARTS_FORMATTER = new Intl.DateTimeFormat("en-US", {
@@ -233,23 +235,32 @@ export function DateInputField({
       const availableAbove = rect.top - CALENDAR_POPUP_EDGE_PADDING_PX;
       const preferAbove = availableBelow < CALENDAR_POPUP_MIN_HEIGHT_PX && availableAbove > availableBelow;
       const availableSpace = preferAbove ? availableAbove : availableBelow;
-      const resolvedMaxHeight = Math.max(
-        CALENDAR_POPUP_MIN_HEIGHT_PX,
-        Math.min(440, availableSpace - CALENDAR_POPUP_OFFSET_PX),
-      );
       const resolvedWidth = Math.min(
         CALENDAR_POPUP_WIDTH_PX,
         Math.max(0, window.innerWidth - (CALENDAR_POPUP_EDGE_PADDING_PX * 2)),
       );
+      const resolvedMaxHeight = Math.max(
+        CALENDAR_POPUP_MIN_HEIGHT_PX,
+        Math.min(440, availableSpace - CALENDAR_POPUP_OFFSET_PX),
+      );
+      const resolvedLeft = Math.min(
+        Math.max(rect.left, CALENDAR_POPUP_EDGE_PADDING_PX),
+        Math.max(
+          CALENDAR_POPUP_EDGE_PADDING_PX,
+          window.innerWidth - CALENDAR_POPUP_EDGE_PADDING_PX - resolvedWidth,
+        ),
+      );
+      const resolvedTop = preferAbove
+        ? Math.max(CALENDAR_POPUP_EDGE_PADDING_PX, rect.top - resolvedMaxHeight - CALENDAR_POPUP_OFFSET_PX)
+        : rect.bottom + CALENDAR_POPUP_OFFSET_PX;
 
       setCalendarPopoverMaxHeight(resolvedMaxHeight);
       setCalendarPopoverStyle({
-        position: "absolute",
-        left: 0,
-        top: preferAbove ? undefined : "calc(100% + 8px)",
-        bottom: preferAbove ? "calc(100% + 8px)" : undefined,
+        position: "fixed",
+        left: resolvedLeft,
+        top: resolvedTop,
         width: resolvedWidth,
-        zIndex: 90,
+        zIndex: CALENDAR_POPUP_Z_INDEX,
       });
     }
 
@@ -350,7 +361,7 @@ export function DateInputField({
       </button>
 
       {isCalendarOpen && calendarPopoverStyle && typeof document !== "undefined"
-        ? (
+        ? createPortal(
             <div
               ref={calendarPopoverRef}
               data-flight-date-picker-popover="true"
@@ -422,6 +433,8 @@ export function DateInputField({
                 </div>
               </div>
             </div>
+          ,
+            document.body,
           )
         : null}
     </div>

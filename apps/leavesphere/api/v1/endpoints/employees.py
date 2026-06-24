@@ -32,7 +32,7 @@ except ImportError:
 
 class EmployeeCreateRequest(_LeaveSphereModel):
     id: str | None = None
-    identityKey: str
+    identityKey: str | None = None
     firstName: str
     lastName: str
     email: str
@@ -133,7 +133,6 @@ def create_employee_route(
     Example request:
         POST /api/leavesphere/v1/employees
         {
-          "identityKey": "218f1519-f95d-4d88-ac4c-df6a8cbf45c1",
           "firstName": "Alex",
           "lastName": "Chen",
           "email": "alex@example.com",
@@ -150,6 +149,7 @@ def create_employee_route(
     Requirements:
         - Requires leavesphere.admin permission (or workspace.super_admin)
         - Legacy API key compat behavior remains unchanged
+        - identityKey is generated automatically when omitted
     """
     try:
         result = create_employee(payload.model_dump() if hasattr(payload, "model_dump") else payload.dict())
