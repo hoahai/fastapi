@@ -445,10 +445,28 @@ function EmployeeManagementModal({
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false);
+  const [isPicturePreviewOpen, setIsPicturePreviewOpen] = useState(false);
+  const [picturePreviewError, setPicturePreviewError] = useState(false);
   const [fieldErrors, setFieldErrors] = useState(() => validateForm(normalizeEmployeeForm(employee)));
   const hasUnsavedChanges = useMemo(() => !formsEqual(form, baseline), [baseline, form]);
   const formIsValid = useMemo(() => isFormValid(fieldErrors), [fieldErrors]);
   const canSubmit = canEdit && hasUnsavedChanges && formIsValid && !isSubmitting;
+  const picturePreviewSrc = useMemo(() => {
+    const pictureUrl = asString(form.pictureUrl);
+    if (!pictureUrl) {
+      return "";
+    }
+    try {
+      const parsed = new URL(pictureUrl);
+      if (parsed.protocol !== "http:" && parsed.protocol !== "https:") {
+        return "";
+      }
+      return pictureUrl;
+    } catch {
+      return "";
+    }
+  }, [form.pictureUrl]);
+  const hasPicturePreview = Boolean(picturePreviewSrc) && !picturePreviewError;
 
   useEffect(() => {
     if (!open) {
@@ -457,6 +475,8 @@ function EmployeeManagementModal({
       setIsSubmitting(false);
       setSubmitError(null);
       setIsDiscardDialogOpen(false);
+      setIsPicturePreviewOpen(false);
+      setPicturePreviewError(false);
       setFieldErrors(validateForm(normalizeEmployeeForm(null)));
       return;
     }
@@ -467,8 +487,17 @@ function EmployeeManagementModal({
     setSubmitError(null);
     setIsSubmitting(false);
     setIsDiscardDialogOpen(false);
+    setIsPicturePreviewOpen(false);
+    setPicturePreviewError(false);
     setFieldErrors(validateForm(nextForm));
   }, [employee, open]);
+
+  useEffect(() => {
+    setPicturePreviewError(false);
+    if (!picturePreviewSrc) {
+      setIsPicturePreviewOpen(false);
+    }
+  }, [picturePreviewSrc]);
 
   function updateForm<K extends keyof LeaveSphereEmployeeManagementFormState>(
     field: K,
@@ -621,14 +650,49 @@ function EmployeeManagementModal({
 
                 <div className="space-y-4">
                   <FormRow label="Picture URL">
-                    <Input
-                      value={form.pictureUrl}
-                      onChange={(event) => updateForm("pictureUrl", event.target.value)}
-                      disabled={isSubmitting || !canEdit}
-                      maxLength={2048}
-                      autoComplete="off"
-                      spellCheck={false}
-                    />
+                    <div className="space-y-3">
+                      <Input
+                        value={form.pictureUrl}
+                        onChange={(event) => updateForm("pictureUrl", event.target.value)}
+                        disabled={isSubmitting || !canEdit}
+                        maxLength={2048}
+                        autoComplete="off"
+                        spellCheck={false}
+                      />
+                      {picturePreviewSrc ? (
+                        <div className="space-y-2">
+                          <div className="relative h-36 overflow-hidden rounded-xl border border-slate-200 bg-slate-50/80">
+                            {hasPicturePreview ? (
+                              <button
+                                type="button"
+                                className="flex h-full w-full cursor-zoom-in items-center justify-center overflow-hidden p-4"
+                                onClick={() => setIsPicturePreviewOpen(true)}
+                                disabled={isSubmitting || !canEdit}
+                                aria-label="Open picture preview"
+                              >
+                                <img
+                                  src={picturePreviewSrc}
+                                  alt={`${asString(form.firstName) || "Employee"} picture preview`}
+                                  className="block h-auto max-h-full w-auto max-w-full object-contain object-center"
+                                  loading="lazy"
+                                  onError={() => setPicturePreviewError(true)}
+                                />
+                              </button>
+                            ) : (
+                              <div className="flex h-full w-full items-center justify-center p-4 text-center text-sm text-slate-500">
+                                <div className="flex flex-col items-center gap-2">
+                                  <UserRound className="size-5" />
+                                  <span>Picture preview unavailable</span>
+                                </div>
+                              </div>
+                            )}
+                          </div>
+                          <p className="text-xs text-slate-500">
+                            Click the picture to open a larger preview.
+                          </p>
+                        </div>
+                      ) : null}
+                    </div>
                   </FormRow>
                   {errors.pictureUrl ? <p className="text-sm text-rose-600">{errors.pictureUrl}</p> : null}
 
@@ -754,6 +818,38 @@ function EmployeeManagementModal({
           onOpenChange(false);
         }}
       />
+
+      <Dialog open={isPicturePreviewOpen} onOpenChange={setIsPicturePreviewOpen}>
+        <DialogContent
+          className="w-[calc(100vw-2.5rem)] max-w-3xl border-none bg-transparent p-0 shadow-none"
+          aria-describedby={undefined}
+        >
+          <div className="relative flex w-full items-center justify-center overflow-hidden rounded-2xl bg-white px-6 pb-6 pt-14 shadow-2xl sm:px-8 sm:pb-8 sm:pt-16">
+            <DialogClose asChild aria-label="Close picture preview">
+              <ModalCloseButton
+                icon={<X className="size-4" />}
+                className="absolute right-0 top-0 z-10 rounded-md bg-slate-900/85 p-1.5 text-white transition-colors hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+              />
+            </DialogClose>
+            {hasPicturePreview ? (
+              <img
+                src={picturePreviewSrc}
+                alt={`${asString(form.firstName) || "Employee"} picture enlarged`}
+                className="mx-auto block h-auto max-h-[70vh] w-auto max-w-full object-contain"
+                loading="lazy"
+                onError={() => setPicturePreviewError(true)}
+              />
+            ) : (
+              <div className="flex min-h-[18rem] w-full items-center justify-center text-center text-slate-500">
+                <div className="flex flex-col items-center gap-2">
+                  <UserRound className="size-8" />
+                  <p className="text-sm font-medium">Picture preview unavailable</p>
+                </div>
+              </div>
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
     </>
   );
 }
