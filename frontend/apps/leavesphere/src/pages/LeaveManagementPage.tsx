@@ -2388,7 +2388,7 @@ export default function LeaveManagementPage() {
       } else if (action === "cancel") {
         toast.success("Request cancelled", "Employee request status was updated to cancelled.");
       } else {
-        toast.success("Decision reverted", "Request status was changed back to pending.");
+        toast.success("Decision reverted to pending", "Request status was changed back to pending.");
       }
     } catch {
       toast.error("Decision failed", "Unable to update request decision right now.");
@@ -3419,7 +3419,7 @@ export default function LeaveManagementPage() {
                 }}
                 disabled={isMutating}
               >
-                Revert
+                Revert to pending
               </Button>
             ) : null}
             {selectedRequestActionConfig?.canCancel ? (
@@ -3428,7 +3428,7 @@ export default function LeaveManagementPage() {
                 onClick={() => setPendingReviewAction("cancel")}
                 disabled={isMutating}
               >
-                Cancel
+                Cancel request
               </Button>
             ) : null}
             {selectedRequestActionConfig?.canReject ? (
@@ -3438,7 +3438,7 @@ export default function LeaveManagementPage() {
                 onClick={() => setPendingReviewAction("reject")}
                 disabled={isMutating}
               >
-                Reject
+                Reject request
               </Button>
             ) : null}
             {selectedRequestActionConfig?.canApprove ? (
@@ -3448,7 +3448,7 @@ export default function LeaveManagementPage() {
                 onClick={() => setPendingReviewAction("approve")}
                 disabled={isMutating}
               >
-                Approve
+                Approve request
               </Button>
             ) : null}
           </>

@@ -16,7 +16,7 @@ import { Input } from "@tradsphere/components/ui/input";
 import { Textarea } from "@tradsphere/components/ui/textarea";
 import { UnsavedChangesDialog } from "@tradsphere/components/ui/unsaved-changes-dialog";
 import { LeaveSpherePtoStatusChip } from "@leavesphere/components/PtoStatusChip";
-import { ModalActionFooter, ModalCloseButton, ModalHeaderRow, ModalShell } from "@shared/components";
+import { ModalCloseButton, ModalHeaderRow, ModalShell } from "@shared/components";
 import { useCommittedTextField, useGuardedModalDialog, useModalDraftState } from "@shared/hooks";
 import { formatLeaveSpherePtoStatusLabel } from "@leavesphere/lib/ptoStatus";
 
@@ -413,12 +413,6 @@ export function LeaveSpherePtoRequestDetailModal({
           {descriptionField}
         </div>
       </div>
-
-      {extraContent ? (
-        <div className="border-t border-slate-200 pt-3">
-          {extraContent}
-        </div>
-      ) : null}
     </div>
   ) : (
     <div className="space-y-4">
@@ -438,10 +432,39 @@ export function LeaveSpherePtoRequestDetailModal({
           {requestStatusChip}
         </div>
       ) : null}
-
-      {extraContent}
     </div>
   );
+  const editControlsBlock = (mode !== "create" && hasUnsavedChanges) || shouldShowSubmitButton ? (
+    <div className="mt-6 flex flex-wrap items-center justify-end gap-2">
+      {mode !== "create" && hasUnsavedChanges ? (
+        <Button variant="outline" onClick={handleRevertChanges} disabled={saving}>
+          Reset changes
+        </Button>
+      ) : null}
+      {shouldShowSubmitButton ? (
+        <Button onClick={() => void handleSave()} disabled={saving || !canSave}>
+          {saving ? "Saving..." : saveLabel}
+        </Button>
+      ) : null}
+    </div>
+  ) : null;
+  const extraContentBlock = extraContent ? (
+    <div className="mt-6 border-t border-slate-200 pt-3">
+      {extraContent}
+    </div>
+  ) : null;
+  const requestActionsBlock = footerActions ? (
+    <div className="mt-6 border-t border-slate-200 pt-3">
+      <div className="space-y-2">
+        <span className="text-[11px] font-semibold uppercase tracking-wide text-slate-500">
+          Request actions
+        </span>
+        <div className="flex flex-wrap justify-end gap-2">
+          {footerActions}
+        </div>
+      </div>
+    </div>
+  ) : null;
 
   async function handleSave() {
     if (!submitHandler) {
@@ -542,21 +565,9 @@ export function LeaveSpherePtoRequestDetailModal({
             </div>
           ) : null}
 
-          <ModalActionFooter className="mt-6 gap-2">
-            {footerActions}
-            <div className="flex items-center gap-2">
-              {mode !== "create" && hasUnsavedChanges ? (
-                <Button variant="outline" onClick={handleRevertChanges} disabled={saving}>
-                  Revert
-                </Button>
-              ) : null}
-              {shouldShowSubmitButton ? (
-                <Button onClick={() => void handleSave()} disabled={saving || !canSave}>
-                  {saving ? "Saving..." : saveLabel}
-                </Button>
-              ) : null}
-            </div>
-          </ModalActionFooter>
+          {editControlsBlock}
+          {extraContentBlock}
+          {requestActionsBlock}
         </ModalShell>
       </DialogContent>
 

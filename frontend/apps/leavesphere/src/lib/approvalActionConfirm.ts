@@ -49,11 +49,11 @@ export function getLeaveSphereApprovalActionConfirmCopy(
   }
 
   return {
-    title: "Revert PTO decision?",
-    description: "This will revert the PTO request back to pending and record the approver note.",
-    confirmLabel: "Revert",
+    title: "Revert PTO request to pending?",
+    description: "This will revert the PTO request to pending and record the approver note.",
+    confirmLabel: "Revert to pending",
     noteRequired: false,
-    noteHelpText: "Optional. Add a reason for reverting this decision.",
+    noteHelpText: "Optional. Add a reason for reverting this request to pending.",
     noteLabel: "Approver note / reason",
   };
 }

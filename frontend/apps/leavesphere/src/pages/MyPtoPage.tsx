@@ -1325,7 +1325,7 @@ export default function LeaveSphereMyPtoPage() {
       } else if (action === "cancel") {
         toast.success("Request cancelled", "Employee request status was updated to cancelled.");
       } else {
-        toast.success("Decision reverted", "Request status was changed back to pending.");
+        toast.success("Decision reverted to pending", "Request status was changed back to pending.");
       }
     } catch {
       toast.error("Decision failed", "Unable to save this manager decision right now.");
@@ -1949,7 +1949,7 @@ export default function LeaveSphereMyPtoPage() {
                 onClick={() => setPendingReviewAction("cancel")}
                 disabled={isReviewing}
               >
-                Cancel
+                Cancel request
               </Button>
             ) : null}
             {selectedReviewRequestActionConfig?.canRevert ? (
@@ -1958,7 +1958,7 @@ export default function LeaveSphereMyPtoPage() {
                 onClick={() => setPendingReviewAction("revert")}
                 disabled={isReviewing}
               >
-                Revert
+                Revert to pending
               </Button>
             ) : null}
             {selectedReviewRequestActionConfig?.canReject ? (
@@ -1968,7 +1968,7 @@ export default function LeaveSphereMyPtoPage() {
                 onClick={() => setPendingReviewAction("reject")}
                 disabled={isReviewing}
               >
-                Reject
+                Reject request
               </Button>
             ) : null}
             {selectedReviewRequestActionConfig?.canApprove ? (
@@ -1978,7 +1978,7 @@ export default function LeaveSphereMyPtoPage() {
                 onClick={() => setPendingReviewAction("approve")}
                 disabled={isReviewing}
               >
-                Approve
+                Approve request
               </Button>
             ) : null}
           </>
