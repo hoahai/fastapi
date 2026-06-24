@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ClipboardEvent } from "react";
 import {
-  Plus,
   ChevronDown,
   RefreshCw,
   UploadCloud,
@@ -318,15 +317,16 @@ function getFileNameFromUrl(url: string): string {
   }
 }
 
-function buildEmployeePictureAttachment(employee: LeaveSphereEmployeeManagementEmployee | null): EmployeePictureAttachment | null {
-  const pictureUrl = asString(employee?.pictureUrl);
-  if (!pictureUrl) {
+
+function buildEmployeePictureAttachmentFromPictureUrl(pictureUrl: string): EmployeePictureAttachment | null {
+  const normalizedPictureUrl = asString(pictureUrl);
+  if (!normalizedPictureUrl) {
     return null;
   }
   return {
-    name: getFileNameFromUrl(pictureUrl),
+    name: getFileNameFromUrl(normalizedPictureUrl),
     meta: "Stored image",
-    previewSrc: pictureUrl,
+    previewSrc: normalizedPictureUrl,
   };
 }
 
@@ -627,28 +627,43 @@ function EmployeeManagementModal({
   const [picturePreviewError, setPicturePreviewError] = useState(false);
   const [isPictureUploading, setIsPictureUploading] = useState(false);
   const [pictureUploadError, setPictureUploadError] = useState<string | null>(null);
-  const [pictureAttachment, setPictureAttachment] = useState<EmployeePictureAttachment | null>(() => buildEmployeePictureAttachment(employee));
+  const [pictureDraftFile, setPictureDraftFile] = useState<File | null>(null);
+  const [pictureDraftObjectUrl, setPictureDraftObjectUrl] = useState<string | null>(null);
   const [isManagersLoading, setIsManagersLoading] = useState(false);
   const [managerLoadError, setManagerLoadError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState(() => createEmptyFieldErrors());
   const pictureFileInputRef = useRef<HTMLInputElement | null>(null);
+  const originalPictureUrlRef = useRef<string>(asString(employee?.pictureUrl));
   const managerOptions = useMemo(
     () => employeeOptions.filter((option) => (
       option.value !== employee?.id && (!option.muted || form.managerIds.includes(option.value))
     )),
     [employee?.id, employeeOptions, form.managerIds],
   );
-  const hasUnsavedChanges = useMemo(() => !formsEqual(form, baseline), [baseline, form]);
+  const pictureAttachment = useMemo(() => {
+    if (pictureDraftFile && pictureDraftObjectUrl) {
+      return buildEmployeePictureAttachmentFromFile(pictureDraftFile, pictureDraftObjectUrl);
+    }
+    return buildEmployeePictureAttachmentFromPictureUrl(asString(form.pictureUrl) || originalPictureUrlRef.current);
+  }, [form.pictureUrl, pictureDraftFile, pictureDraftObjectUrl]);
+  const hasUnsavedChanges = useMemo(() => !formsEqual(form, baseline) || Boolean(pictureDraftFile), [baseline, form, pictureDraftFile]);
   const currentFormErrors = useMemo(() => validateForm(form), [form]);
   const formIsValid = useMemo(() => isFormValid(currentFormErrors), [currentFormErrors]);
   const canSubmit = canEdit && hasUnsavedChanges && formIsValid && !isSubmitting && !isManagersLoading && !managerLoadError;
   const showPrimaryAction = canEdit && hasUnsavedChanges && formIsValid && !isManagersLoading && !managerLoadError;
   const primaryActionLabel = mode === "create" ? "Create Employee" : "Save Changes";
-  const picturePreviewSrc = pictureAttachment?.previewSrc || asString(form.pictureUrl);
+  const picturePreviewSrc = pictureAttachment?.previewSrc || asString(form.pictureUrl) || originalPictureUrlRef.current;
   const hasPicturePreview = Boolean(picturePreviewSrc) && !picturePreviewError;
 
   useEffect(() => {
+    return () => {
+      clearPictureDraftAttachment();
+    };
+  }, [pictureDraftObjectUrl]);
+
+  useEffect(() => {
     if (!open) {
+      originalPictureUrlRef.current = "";
       setForm(normalizeEmployeeForm(null));
       setBaseline(normalizeEmployeeForm(null));
       setIsSubmitting(false);
@@ -658,7 +673,7 @@ function EmployeeManagementModal({
       setPicturePreviewError(false);
       setIsPictureUploading(false);
       setPictureUploadError(null);
-      setPictureAttachment(null);
+      clearPictureDraftAttachment();
       setIsManagersLoading(false);
       setManagerLoadError(null);
       if (pictureFileInputRef.current) {
@@ -669,6 +684,7 @@ function EmployeeManagementModal({
     }
 
     const nextForm = normalizeEmployeeForm(employee);
+    originalPictureUrlRef.current = nextForm.pictureUrl;
     setForm(nextForm);
     setBaseline(nextForm);
     setSubmitError(null);
@@ -678,7 +694,7 @@ function EmployeeManagementModal({
     setPicturePreviewError(false);
     setIsPictureUploading(false);
     setPictureUploadError(null);
-    setPictureAttachment(buildEmployeePictureAttachment(employee));
+    clearPictureDraftAttachment();
     setIsManagersLoading(mode === "edit" && Boolean(employee?.id));
     setManagerLoadError(null);
     if (pictureFileInputRef.current) {
@@ -808,6 +824,14 @@ function EmployeeManagementModal({
     }
   }
 
+  function clearPictureDraftAttachment() {
+    if (pictureDraftObjectUrl) {
+      URL.revokeObjectURL(pictureDraftObjectUrl);
+    }
+    setPictureDraftFile(null);
+    setPictureDraftObjectUrl(null);
+  }
+
   async function processPictureFile(file: File) {
     if (isSubmitting || isPictureUploading || !canEdit) {
       return;
@@ -827,18 +851,12 @@ function EmployeeManagementModal({
       return;
     }
 
-    setIsPictureUploading(true);
     setPictureUploadError(null);
     setPicturePreviewError(false);
-    try {
-      const pictureUrl = await onUploadPicture(file);
-      updateForm("pictureUrl", pictureUrl);
-      setPictureAttachment(buildEmployeePictureAttachmentFromFile(file, pictureUrl));
-    } catch (error) {
-      setPictureUploadError(error instanceof Error && error.message.trim() ? error.message.trim() : "Could not upload picture.");
-    } finally {
-      setIsPictureUploading(false);
-    }
+    clearPictureDraftAttachment();
+    const nextObjectUrl = URL.createObjectURL(file);
+    setPictureDraftFile(file);
+    setPictureDraftObjectUrl(nextObjectUrl);
   }
 
   async function handlePictureFileChange(fileList: FileList | null) {
@@ -867,6 +885,17 @@ function EmployeeManagementModal({
     await processPictureFile(clipboardFiles[0]);
   }
 
+  function restoreOriginalPictureAttachment() {
+    const originalPictureUrl = originalPictureUrlRef.current;
+    clearPictureDraftAttachment();
+    setForm((current) => ({
+      ...current,
+      pictureUrl: originalPictureUrl,
+    }));
+    setPicturePreviewError(false);
+    setPictureUploadError(null);
+  }
+
   function handleDialogOpenChange(nextOpen: boolean) {
     if (nextOpen) {
       onOpenChange(true);
@@ -891,10 +920,27 @@ function EmployeeManagementModal({
     setSubmitError(null);
     setIsSubmitting(true);
     try {
+      let nextForm = form;
+      if (pictureDraftFile) {
+        setIsPictureUploading(true);
+        try {
+          const pictureUrl = await onUploadPicture(pictureDraftFile);
+          nextForm = {
+            ...nextForm,
+            pictureUrl,
+          };
+          setForm(nextForm);
+        } catch (error) {
+          setPictureUploadError(error instanceof Error && error.message.trim() ? error.message.trim() : "Could not upload picture.");
+          return;
+        } finally {
+          setIsPictureUploading(false);
+        }
+      }
       await onSubmit({
         mode,
         id: employee?.id ?? null,
-        form: normalizeLeaveSphereEmployeeManagementForm(form),
+        form: normalizeLeaveSphereEmployeeManagementForm(nextForm),
       });
       onOpenChange(false);
     } catch (error) {
@@ -1077,7 +1123,7 @@ function EmployeeManagementModal({
                         disabled={isSubmitting || !canEdit || isPictureUploading}
                       >
                         <UploadCloud className="size-4 text-blue-600" />
-                        Select image(s) or paste screenshot
+                        Select image or paste screenshot
                       </button>
 
                       {pictureAttachment ? (
@@ -1092,6 +1138,7 @@ function EmployeeManagementModal({
                                 aria-label="Preview profile picture"
                               >
                                 <img
+                                  key={picturePreviewSrc || "picture-preview-empty"}
                                   src={picturePreviewSrc}
                                   alt={pictureAttachment.name}
                                   className="h-full w-full object-cover"
@@ -1113,16 +1160,21 @@ function EmployeeManagementModal({
                             type="button"
                             className="inline-flex size-6 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-70"
                             onClick={() => {
-                              updateForm("pictureUrl", "");
-                              setPictureAttachment(null);
-                              setPicturePreviewError(false);
-                              setPictureUploadError(null);
+                              if (pictureDraftFile) {
+                                restoreOriginalPictureAttachment();
+                              } else {
+                                updateForm("pictureUrl", "");
+                                setPictureDraftFile(null);
+                                setPictureDraftObjectUrl(null);
+                                setPicturePreviewError(false);
+                                setPictureUploadError(null);
+                              }
                               if (pictureFileInputRef.current) {
                                 pictureFileInputRef.current.value = "";
                               }
                             }}
                             disabled={isSubmitting || !canEdit || isPictureUploading}
-                            aria-label="Remove profile picture"
+                            aria-label={pictureDraftFile ? "Revert profile picture" : "Remove profile picture"}
                           >
                             <Trash2 className="size-4" aria-hidden="true" />
                           </button>
@@ -1264,6 +1316,7 @@ function EmployeeManagementModal({
                         onClick={() => {
                           const next = baseline;
                           setForm(next);
+                          restoreOriginalPictureAttachment();
                           setFieldErrors(createEmptyFieldErrors());
                           setSubmitError(null);
                         }}
@@ -1297,6 +1350,7 @@ function EmployeeManagementModal({
                       onClick={() => {
                         const next = baseline;
                         setForm(next);
+                        restoreOriginalPictureAttachment();
                         setFieldErrors(createEmptyFieldErrors());
                         setSubmitError(null);
                       }}
@@ -1347,6 +1401,7 @@ function EmployeeManagementModal({
             </DialogClose>
             {hasPicturePreview ? (
               <img
+                key={picturePreviewSrc || "picture-preview-empty-large"}
                 src={picturePreviewSrc}
                 alt={`${asString(form.firstName) || "Employee"} picture enlarged`}
                 className="mx-auto block h-auto max-h-[70vh] w-auto max-w-full object-contain"
@@ -2172,7 +2227,6 @@ export default function EmployeeManagementPage() {
           description="Manage employee records, activate or deactivate accounts, and keep the LeaveSphere workspace current."
           action={(
             <Button onClick={openCreateModal} disabled={!canManage}>
-              <Plus className="size-4" />
               Add Employee
             </Button>
           )}

@@ -365,10 +365,14 @@ export function DateInputField({
             <div
               ref={calendarPopoverRef}
               data-flight-date-picker-popover="true"
-              className="pointer-events-auto rounded-xl border border-slate-200 bg-white p-3 shadow-xl"
+              className="pointer-events-auto relative isolate overflow-hidden rounded-lg border border-slate-200 bg-white/28 p-3 text-slate-900 shadow-xl ring-1 ring-slate-200/60 backdrop-blur-[32px] backdrop-saturate-150"
               style={calendarPopoverStyle}
             >
-              <div className="overflow-auto" style={{ maxHeight: calendarPopoverMaxHeight }}>
+              <div
+                aria-hidden="true"
+                className="pointer-events-none absolute inset-0 bg-[linear-gradient(135deg,rgba(255,255,255,0.94)_0%,rgba(241,248,255,0.72)_24%,rgba(249,250,252,0.62)_58%,rgba(243,247,255,0.5)_100%)]"
+              />
+              <div className="relative z-10 overflow-auto" style={{ maxHeight: calendarPopoverMaxHeight }}>
                 <div className="mb-2 flex items-center justify-between">
                   <button
                     type="button"
