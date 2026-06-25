@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, File, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile
 from pydantic import BaseModel
 
 from apps.leavesphere.api.v1.helpers.employees import (
@@ -66,6 +66,8 @@ class EmployeeUpdateRequest(_LeaveSphereModel):
 @router.post("/picture/upload")
 async def upload_employee_picture_route(
     request: Request,
+    first_name: str = Form(..., alias="firstName"),
+    last_name: str = Form(..., alias="lastName"),
     file: UploadFile = File(..., alias="file"),
     _: None = Depends(require_leavesphere_admin),
 ):
@@ -76,6 +78,8 @@ async def upload_employee_picture_route(
         POST /api/leavesphere/v1/employees/picture/upload
         Content-Type: multipart/form-data
         form-data:
+          firstName="Alex"
+          lastName="Chen"
           file=@"/path/to/profile-picture.png"
 
     Example response:
@@ -92,6 +96,7 @@ async def upload_employee_picture_route(
     Requirements:
         - Requires X-Tenant-Id header
         - Requires leavesphere.admin permission (or workspace.super_admin)
+        - firstName and lastName are required for generated file naming
         - file is required
         - Only PNG, JPG, JPEG, and WEBP files are allowed
         - File size limits are validated on backend
@@ -103,6 +108,8 @@ async def upload_employee_picture_route(
             uploaded_by = str(getattr(principal, "user_id", "") or getattr(principal, "email", "") or "").strip() or None
         file_bytes = await file.read()
         result = upload_employee_picture(
+            first_name=first_name,
+            last_name=last_name,
             filename=str(file.filename or ""),
             mime_type=str(file.content_type or ""),
             file_bytes=file_bytes,

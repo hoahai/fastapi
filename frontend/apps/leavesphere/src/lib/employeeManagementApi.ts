@@ -377,9 +377,13 @@ export async function uploadLeaveSphereEmployeeManagementPicture(
   params: {
     requestJson: RequestJson;
     file: File;
+    firstName: string;
+    lastName: string;
   },
 ): Promise<string> {
   const formData = new FormData();
+  formData.append("firstName", params.firstName);
+  formData.append("lastName", params.lastName);
   formData.append("file", params.file);
   const payload = await params.requestJson("/api/leavesphere/v1/employees/picture/upload", {
     method: "POST",

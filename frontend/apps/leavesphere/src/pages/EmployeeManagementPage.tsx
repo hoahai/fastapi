@@ -126,7 +126,7 @@ type EmployeeModalProps = {
   onOpenChange: (open: boolean) => void;
   requestJson: LeaveSphereEmployeeManagementRequestJson;
   employeeOptions: AppDropdownOption[];
-  onUploadPicture: (file: File) => Promise<string>;
+  onUploadPicture: (file: File, names: { firstName: string; lastName: string }) => Promise<string>;
   onSubmit: (payload: { mode: EmployeeMode; id: string | null; form: LeaveSphereEmployeeManagementFormState }) => Promise<void>;
   detailCacheStatusText?: string | null;
   detailCacheRefreshing?: boolean;
@@ -935,7 +935,10 @@ function EmployeeManagementModal({
       if (pictureDraftFile) {
         setIsPictureUploading(true);
         try {
-          const pictureUrl = await onUploadPicture(pictureDraftFile);
+          const pictureUrl = await onUploadPicture(pictureDraftFile, {
+            firstName: form.firstName,
+            lastName: form.lastName,
+          });
           nextForm = {
             ...nextForm,
             pictureUrl,
@@ -1440,6 +1443,7 @@ function EmployeeCard({
   canActivate,
   canDeactivate,
   canEdit,
+  isDeactivating,
   onEdit,
   onToggleActive,
 }: {
@@ -1448,6 +1452,7 @@ function EmployeeCard({
   canActivate: boolean;
   canDeactivate: boolean;
   canEdit: boolean;
+  isDeactivating?: boolean;
   onEdit: (employee: LeaveSphereEmployeeManagementEmployee) => void;
   onToggleActive: (employee: LeaveSphereEmployeeManagementEmployee, nextActive: boolean) => void;
 }) {
@@ -1480,13 +1485,21 @@ function EmployeeCard({
         }
       }}
       className={cn(
-        "space-y-4 rounded-[1.35rem] border p-5 shadow-[0_18px_30px_-24px_rgba(37,99,235,0.42)] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
+        "relative space-y-4 overflow-hidden rounded-[1.35rem] border p-5 shadow-[0_18px_30px_-24px_rgba(37,99,235,0.42)] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
         disabled ? "cursor-default" : "cursor-pointer",
         employee.active
           ? "border-blue-100/90 bg-white hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-[0_20px_34px_-24px_rgba(37,99,235,0.5)]"
           : "border-slate-200 bg-slate-50/90 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-[0_18px_28px_-26px_rgba(15,23,42,0.22)]",
       )}
     >
+      {isDeactivating ? (
+        <div className="absolute inset-0 z-10 flex items-center justify-center rounded-[1.35rem] bg-white/82 backdrop-blur-[2px]">
+          <div className="inline-flex items-center gap-2 rounded-full border border-amber-200 bg-amber-50 px-3.5 py-2 text-sm font-medium text-amber-800 shadow-sm">
+            <RefreshCw className="size-4 animate-spin" />
+            Inactivating employee...
+          </div>
+        </div>
+      ) : null}
       <div className="flex items-start justify-between gap-4">
         <div className="flex min-w-0 gap-4">
           <span className="inline-flex size-16 shrink-0 items-center justify-center overflow-hidden rounded-full border border-blue-100 bg-gradient-to-br from-blue-50 to-white text-blue-700 shadow-[0_10px_20px_-16px_rgba(37,99,235,0.55)]">
@@ -1714,6 +1727,7 @@ export default function EmployeeManagementPage() {
   const [modalMode, setModalMode] = useState<EmployeeMode>("create");
   const [modalEmployee, setModalEmployee] = useState<LeaveSphereEmployeeManagementEmployee | null>(null);
   const [pendingAction, setPendingAction] = useState<{ employee: LeaveSphereEmployeeManagementEmployee; nextActive: boolean } | null>(null);
+  const [lifecyclePendingEmployeeId, setLifecyclePendingEmployeeId] = useState<string | null>(null);
   const [isMutationInFlight, setIsMutationInFlight] = useState(false);
   const hydratedPageStateScopeRef = useRef<string | null>(null);
 
@@ -2199,20 +2213,22 @@ export default function EmployeeManagementPage() {
     }
   }
 
-  async function handlePictureUpload(file: File): Promise<string> {
+  async function handlePictureUpload(file: File, names: { firstName: string; lastName: string }): Promise<string> {
     return uploadLeaveSphereEmployeeManagementPicture({
       requestJson,
       file,
+      firstName: names.firstName,
+      lastName: names.lastName,
     });
   }
 
-  async function handleLifecycleAction(): Promise<void> {
-    const target = pendingAction;
+  async function handleLifecycleAction(target: { employee: LeaveSphereEmployeeManagementEmployee; nextActive: boolean }): Promise<void> {
     if (!target) {
       return;
     }
-    setPendingAction(null);
+    setErrorMessage(null);
     setIsMutationInFlight(true);
+    setLifecyclePendingEmployeeId(target.nextActive ? null : target.employee.id);
     try {
       const response = target.nextActive
         ? await activateLeaveSphereEmployeeManagementEmployee({
@@ -2231,7 +2247,14 @@ export default function EmployeeManagementPage() {
         updateWorkspaceWithEmployee(nextEmployee);
       }
       void refreshWorkspace("network-only");
+    } catch (error) {
+      setErrorMessage(
+        error instanceof Error && error.message.trim()
+          ? error.message.trim()
+          : `Could not ${target.nextActive ? "activate" : "deactivate"} employee.`,
+      );
     } finally {
+      setLifecyclePendingEmployeeId(null);
       setIsMutationInFlight(false);
     }
   }
@@ -2413,6 +2436,7 @@ export default function EmployeeManagementPage() {
                           canActivate={Boolean(workspace.capabilities.canActivate)}
                           canDeactivate={Boolean(workspace.capabilities.canDeactivate)}
                           canEdit={Boolean(workspace.capabilities.canUpdate)}
+                          isDeactivating={lifecyclePendingEmployeeId === employee.id}
                           onEdit={openEditModal}
                           onToggleActive={startToggleEmployeeActive}
                         />
@@ -2469,7 +2493,12 @@ export default function EmployeeManagementPage() {
         confirmLabel={pendingAction?.nextActive ? "Activate" : "Deactivate"}
         cancelLabel="Cancel"
         onConfirm={() => {
-          void handleLifecycleAction();
+          if (!pendingAction) {
+            return;
+          }
+          const target = pendingAction;
+          setPendingAction(null);
+          void handleLifecycleAction(target);
         }}
         onCancel={() => setPendingAction(null)}
       />

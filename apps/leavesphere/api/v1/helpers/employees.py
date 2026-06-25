@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+from pathlib import Path
+import re
 from uuid import uuid4
 
 from apps.leavesphere.api.v1.helpers.dbQueries import (
@@ -37,6 +39,32 @@ def _normalize_optional_text(value: object, *, field: str, max_length: int) -> s
     if len(text) > max_length:
         raise ValueError(f"{field} must be <= {max_length} characters")
     return text
+
+
+def _normalize_picture_name_part(value: object, *, field: str) -> str:
+    text = _normalize_required_text(value, field=field)
+    text = re.sub(r"\s+", " ", text).strip()
+    text = re.sub(r"[^A-Za-z0-9 ._-]", "", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    if not text:
+        raise ValueError(f"{field} must contain at least one letter or number")
+    return text
+
+
+def _build_employee_picture_storage_names(
+    *,
+    first_name: str,
+    last_name: str,
+    original_filename: str,
+) -> tuple[str, str]:
+    normalized_first_name = _normalize_picture_name_part(first_name, field="firstName")
+    normalized_last_name = _normalize_picture_name_part(last_name, field="lastName")
+    base_name = f"{normalized_first_name} {normalized_last_name}-{uuid4()}"
+
+    extension = Path(str(original_filename or "").strip()).suffix.strip()
+    if extension:
+        return base_name, f"{base_name}{extension}"
+    return base_name, base_name
 
 
 def _normalize_bool(value: object | None, *, field: str, default: int | None = None) -> int:
@@ -190,6 +218,8 @@ def modify_employee(*, employee_id: str, payload: dict) -> dict:
 
 def upload_employee_picture(
     *,
+    first_name: str,
+    last_name: str,
     filename: str,
     mime_type: str,
     file_bytes: bytes,
@@ -206,6 +236,11 @@ def upload_employee_picture(
     )
     if not normalized_mime.startswith("image/"):
         raise StorageValidationError("Only PNG, JPG, JPEG, and WEBP files are allowed")
+    storage_key, stored_file_name = _build_employee_picture_storage_names(
+        first_name=first_name,
+        last_name=last_name,
+        original_filename=normalized_name,
+    )
 
     stored_asset = upload_file(
         payload=StorageUploadInput(
@@ -215,9 +250,9 @@ def upload_employee_picture(
             owner_entity_id="profile",
             uploaded_by=str(uploaded_by or "").strip() or None,
             file_bytes=file_bytes,
-            original_filename=normalized_name,
+            original_filename=stored_file_name,
             mime_type=normalized_mime,
-            storage_key=f"employee-picture-{uuid4()}",
+            storage_key=storage_key,
         )
     )
     return {
