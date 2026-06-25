@@ -206,21 +206,13 @@ type PersistedLeaveManagementPageState = {
   scrollY: number;
 };
 
-type LeaveManagementLoadSnapshot = {
-  tab: AdminTab;
-  calendarMonth: string;
-  selectedRequestId: string | null;
-  selectedHolidayId: string | null;
+type LeaveManagementDraftSnapshot = {
   reviewNote: string;
-  isCreateModalOpen: boolean;
   createForm: CreateRequestForm;
-  isAdjustModalOpen: boolean;
   adjustForm: LeaveSpherePtoLoadHoursFormState;
-  isSetupModalOpen: boolean;
   setupForm: SetupForm;
   draftRecentHistorySearch: string;
   appliedRecentHistorySearch: string;
-  scrollY: number;
 };
 
 const PTO_TYPE_OPTIONS: Array<{ value: LeaveSpherePtoType; label: string }> = [
@@ -346,43 +338,27 @@ function hasBalanceActivity(balance: { totalHours: number; usedHours: number; sc
   return balance.totalHours !== 0 || balance.usedHours !== 0 || balance.scheduledHours !== 0;
 }
 
-function buildLeaveManagementLoadSnapshot(params: {
-  tab: AdminTab;
-  calendarMonth: string;
-  selectedRequestId: string | null;
-  selectedHolidayId: string | null;
+function buildLeaveManagementDraftSnapshot(params: {
   reviewNote: string;
-  isCreateModalOpen: boolean;
   createForm: CreateRequestForm;
-  isAdjustModalOpen: boolean;
   adjustForm: LeaveSpherePtoLoadHoursFormState;
-  isSetupModalOpen: boolean;
   setupForm: SetupForm;
   draftRecentHistorySearch: string;
   appliedRecentHistorySearch: string;
-  scrollY: number;
-}): LeaveManagementLoadSnapshot {
+}): LeaveManagementDraftSnapshot {
   return {
-    tab: params.tab,
-    calendarMonth: params.calendarMonth,
-    selectedRequestId: params.selectedRequestId,
-    selectedHolidayId: params.selectedHolidayId,
     reviewNote: params.reviewNote,
-    isCreateModalOpen: params.isCreateModalOpen,
     createForm: { ...params.createForm },
-    isAdjustModalOpen: params.isAdjustModalOpen,
     adjustForm: { ...params.adjustForm },
-    isSetupModalOpen: params.isSetupModalOpen,
     setupForm: { ...params.setupForm },
     draftRecentHistorySearch: params.draftRecentHistorySearch,
     appliedRecentHistorySearch: params.appliedRecentHistorySearch,
-    scrollY: params.scrollY,
   };
 }
 
 function areLeaveManagementLoadSnapshotsEqual(
-  left: LeaveManagementLoadSnapshot | null,
-  right: LeaveManagementLoadSnapshot | null,
+  left: LeaveManagementDraftSnapshot | null,
+  right: LeaveManagementDraftSnapshot | null,
 ): boolean {
   if (left === right) {
     return true;
@@ -392,14 +368,7 @@ function areLeaveManagementLoadSnapshotsEqual(
   }
 
   return (
-    left.tab === right.tab
-    && left.calendarMonth === right.calendarMonth
-    && left.selectedRequestId === right.selectedRequestId
-    && left.selectedHolidayId === right.selectedHolidayId
-    && left.reviewNote.trim() === right.reviewNote.trim()
-    && left.isCreateModalOpen === right.isCreateModalOpen
-    && left.isAdjustModalOpen === right.isAdjustModalOpen
-    && left.isSetupModalOpen === right.isSetupModalOpen
+    left.reviewNote.trim() === right.reviewNote.trim()
     && JSON.stringify(left.createForm) === JSON.stringify(right.createForm)
     && JSON.stringify(left.adjustForm) === JSON.stringify(right.adjustForm)
     && JSON.stringify(left.setupForm) === JSON.stringify(right.setupForm)
@@ -408,64 +377,39 @@ function areLeaveManagementLoadSnapshotsEqual(
   );
 }
 
-function isLeaveManagementLoadSnapshot(value: unknown): value is LeaveManagementLoadSnapshot {
+function isLeaveManagementLoadSnapshot(value: unknown): value is LeaveManagementDraftSnapshot {
   if (!value || typeof value !== "object") {
     return false;
   }
   const record = value as Record<string, unknown>;
   return (
-    isAdminTab(record.tab)
-    && typeof record.calendarMonth === "string"
-    && (record.selectedRequestId === null || typeof record.selectedRequestId === "string")
-    && (record.selectedHolidayId === null || typeof record.selectedHolidayId === "string")
-    && typeof record.reviewNote === "string"
-    && typeof record.isCreateModalOpen === "boolean"
+    typeof record.reviewNote === "string"
     && isCreateRequestForm(record.createForm)
-    && typeof record.isAdjustModalOpen === "boolean"
     && isAdjustBalanceForm(record.adjustForm)
-    && typeof record.isSetupModalOpen === "boolean"
     && isSetupForm(record.setupForm)
     && typeof record.draftRecentHistorySearch === "string"
     && typeof record.appliedRecentHistorySearch === "string"
-    && typeof record.scrollY === "number"
-    && Number.isFinite(record.scrollY)
   );
 }
 
 function restoreLeaveManagementLoadSnapshot(
-  snapshot: LeaveManagementLoadSnapshot,
+  snapshot: LeaveManagementDraftSnapshot,
   actions: {
-    setTab: (value: AdminTab) => void;
-    setCalendarMonth: (value: string) => void;
-    setSelectedRequestId: (value: string | null) => void;
-    setSelectedHolidayId: (value: string | null) => void;
     setReviewNote: (value: string) => void;
-    setIsCreateModalOpen: (value: boolean) => void;
     setCreateForm: (value: CreateRequestForm) => void;
-    setIsAdjustModalOpen: (value: boolean) => void;
     setAdjustForm: (value: LeaveSpherePtoLoadHoursFormState) => void;
-    setIsSetupModalOpen: (value: boolean) => void;
     setSetupForm: (value: SetupForm) => void;
     setDraftRecentHistorySearch: (value: string) => void;
     setAppliedRecentHistorySearch: (value: string) => void;
-    setScrollY: (value: number) => void;
     setSetupError: (value: string | null) => void;
   },
 ): void {
-  actions.setTab(snapshot.tab === "requests" ? "calendar" : snapshot.tab);
-  actions.setCalendarMonth(snapshot.calendarMonth);
-  actions.setSelectedRequestId(snapshot.selectedRequestId);
-  actions.setSelectedHolidayId(snapshot.selectedHolidayId);
   actions.setReviewNote(snapshot.reviewNote);
-  actions.setIsCreateModalOpen(snapshot.isCreateModalOpen);
   actions.setCreateForm({ ...snapshot.createForm });
-  actions.setIsAdjustModalOpen(snapshot.isAdjustModalOpen);
   actions.setAdjustForm({ ...snapshot.adjustForm });
-  actions.setIsSetupModalOpen(snapshot.isSetupModalOpen);
   actions.setSetupForm({ ...snapshot.setupForm });
   actions.setDraftRecentHistorySearch(snapshot.draftRecentHistorySearch);
   actions.setAppliedRecentHistorySearch(snapshot.appliedRecentHistorySearch);
-  actions.setScrollY(Math.max(0, snapshot.scrollY));
   actions.setSetupError(null);
 }
 
@@ -889,7 +833,7 @@ export default function LeaveManagementPage() {
     captureBaseline: captureLeaveManagementLoadBaseline,
     getBaseline: getLeaveManagementLoadBaseline,
     isDirty: isLeaveManagementLoadDirty,
-  } = useCriteriaBaselineStore<LeaveManagementLoadSnapshot>({
+  } = useCriteriaBaselineStore<LeaveManagementDraftSnapshot>({
     areSnapshotsEqual: areLeaveManagementLoadSnapshotsEqual,
     persistence: {
       scope: pageStateScope,
@@ -1586,76 +1530,44 @@ export default function LeaveManagementPage() {
   }, [cacheStatus, isOnline, isRefreshing, loadedYear]);
 
   const currentLoadSnapshot = useMemo(
-    () => buildLeaveManagementLoadSnapshot({
-      tab,
-      calendarMonth,
-      selectedRequestId,
-      selectedHolidayId,
+    () => buildLeaveManagementDraftSnapshot({
       reviewNote,
-      isCreateModalOpen,
       createForm,
-      isAdjustModalOpen,
       adjustForm,
-      isSetupModalOpen,
       setupForm,
       draftRecentHistorySearch,
       appliedRecentHistorySearch,
-      scrollY,
     }),
     [
       adjustForm,
       appliedRecentHistorySearch,
-      calendarMonth,
       createForm,
       draftRecentHistorySearch,
-      isAdjustModalOpen,
-      isCreateModalOpen,
-      isSetupModalOpen,
       reviewNote,
-      scrollY,
-      selectedHolidayId,
-      selectedRequestId,
       setupForm,
-      tab,
     ],
   );
   const hasUnsavedLoadChanges = useMemo(
     () => Number.isInteger(loadedYear) && isLeaveManagementLoadDirty(loadedYear, currentLoadSnapshot),
     [currentLoadSnapshot, isLeaveManagementLoadDirty, loadedYear],
   );
-  const captureCurrentLoadBaseline = useCallback((year: number, overrides?: Partial<LeaveManagementLoadSnapshot>) => {
-    captureLeaveManagementLoadBaseline(year, buildLeaveManagementLoadSnapshot({
-      tab: overrides?.tab ?? tab,
-      calendarMonth: overrides?.calendarMonth ?? calendarMonth,
-      selectedRequestId: overrides?.selectedRequestId ?? selectedRequestId,
-      selectedHolidayId: overrides?.selectedHolidayId ?? selectedHolidayId,
+  const captureCurrentLoadBaseline = useCallback((year: number, overrides?: Partial<LeaveManagementDraftSnapshot>) => {
+    captureLeaveManagementLoadBaseline(year, buildLeaveManagementDraftSnapshot({
       reviewNote: overrides?.reviewNote ?? reviewNote,
-      isCreateModalOpen: overrides?.isCreateModalOpen ?? isCreateModalOpen,
       createForm: overrides?.createForm ?? createForm,
-      isAdjustModalOpen: overrides?.isAdjustModalOpen ?? isAdjustModalOpen,
       adjustForm: overrides?.adjustForm ?? adjustForm,
-      isSetupModalOpen: overrides?.isSetupModalOpen ?? isSetupModalOpen,
       setupForm: overrides?.setupForm ?? setupForm,
       draftRecentHistorySearch: overrides?.draftRecentHistorySearch ?? draftRecentHistorySearch,
       appliedRecentHistorySearch: overrides?.appliedRecentHistorySearch ?? appliedRecentHistorySearch,
-      scrollY: overrides?.scrollY ?? scrollY,
     }));
   }, [
     adjustForm,
     appliedRecentHistorySearch,
-    calendarMonth,
     captureLeaveManagementLoadBaseline,
     createForm,
     draftRecentHistorySearch,
-    isAdjustModalOpen,
-    isCreateModalOpen,
-    isSetupModalOpen,
     reviewNote,
-    scrollY,
-    selectedHolidayId,
-    selectedRequestId,
     setupForm,
-    tab,
   ]);
 
   const restoreCurrentLoadBaseline = useCallback((year: number) => {
@@ -1664,20 +1576,12 @@ export default function LeaveManagementPage() {
       return false;
     }
     restoreLeaveManagementLoadSnapshot(baseline, {
-      setTab,
-      setCalendarMonth,
-      setSelectedRequestId,
-      setSelectedHolidayId,
       setReviewNote,
-      setIsCreateModalOpen,
       setCreateForm,
-      setIsAdjustModalOpen,
       setAdjustForm,
-      setIsSetupModalOpen,
       setSetupForm,
       setDraftRecentHistorySearch,
       setAppliedRecentHistorySearch,
-      setScrollY,
       setSetupError,
     });
     return true;
@@ -1685,19 +1589,11 @@ export default function LeaveManagementPage() {
     getLeaveManagementLoadBaseline,
     setAdjustForm,
     setAppliedRecentHistorySearch,
-    setCalendarMonth,
     setCreateForm,
     setDraftRecentHistorySearch,
-    setIsAdjustModalOpen,
-    setIsCreateModalOpen,
-    setIsSetupModalOpen,
     setReviewNote,
-    setScrollY,
-    setSelectedHolidayId,
-    setSelectedRequestId,
     setSetupError,
     setSetupForm,
-    setTab,
   ]);
 
   useEffect(() => {
@@ -2124,7 +2020,6 @@ export default function LeaveManagementPage() {
     if (didLoad) {
       applyRecentHistorySearchKeyword("");
       captureCurrentLoadBaseline(parsedYear, {
-        calendarMonth: requestedMonthKey,
         draftRecentHistorySearch: "",
         appliedRecentHistorySearch: "",
       });
