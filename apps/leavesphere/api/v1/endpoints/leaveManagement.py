@@ -6,6 +6,7 @@ from pydantic import BaseModel
 from apps.leavesphere.api.v1.helpers.leaveManagement import (
     adjust_leave_management_balance,
     create_leave_management_request,
+    duplicate_leave_management_load_transactions,
     load_leave_management_workspace,
     review_leave_management_request,
     send_leave_management_pending_approval_reminders,
@@ -77,6 +78,12 @@ class LeaveManagementAdjustRequest(_LeaveSphereModel):
     status: str
     description: str | None = None
     approverNote: str | None = None
+
+
+class LeaveManagementDuplicateBalancesRequest(_LeaveSphereModel):
+    yearFrom: int | str
+    yearTo: int | str
+    employeeIds: list[str] | None = None
 
 
 class LeaveManagementSetupRequest(_LeaveSphereModel):
@@ -503,6 +510,60 @@ def adjust_leave_management_balance_route(
     try:
         body = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
         return adjust_leave_management_balance(request=request, payload=body)
+    except ValueError as exc:
+        raise HTTPException(status_code=400, detail=str(exc)) from exc
+
+
+@router.post("/balances/duplicate")
+def duplicate_leave_management_load_transactions_route(
+    request: Request,
+    payload: LeaveManagementDuplicateBalancesRequest = Body(...),
+):
+    """
+    Duplicate approved LOAD transactions from one year into another year.
+
+    Example request:
+        POST /api/leavesphere/v1/admin/pto/balances/duplicate
+        {
+          "yearFrom": 2025,
+          "yearTo": 2026,
+          "employeeIds": ["emp-123", "emp-456"]
+        }
+
+    Example request (all employees):
+        POST /api/leavesphere/v1/admin/pto/balances/duplicate
+        {
+          "yearFrom": 2025,
+          "yearTo": 2026,
+          "employeeIds": []
+        }
+
+    Example response:
+        {
+          "meta": {"timestamp": "2026-05-29T10:00:00+07:00", "duration_ms": 2},
+          "data": {
+            "workspacePatch": { "...": "changed Leave Management rows only" },
+            "source": "network",
+            "yearFrom": 2025,
+            "yearTo": 2026,
+            "employeeIds": ["emp-123", "emp-456"],
+            "matchedTransactions": 4,
+            "duplicated": 4,
+            "inserted": 4,
+            "skipped": 0
+          }
+        }
+
+    Requirements:
+        - Requires leavesphere.admin permission or workspace.super_admin
+        - `yearFrom` and `yearTo` are required and must be valid years
+        - `employeeIds` is optional; omit it or pass an empty list to duplicate all employees
+        - Only approved LOAD transactions are duplicated
+        - Mutation responses may return `workspacePatch` instead of a full `workspace` when the server can patch a cached snapshot
+    """
+    try:
+        body = payload.model_dump() if hasattr(payload, "model_dump") else payload.dict()
+        return duplicate_leave_management_load_transactions(request=request, payload=body)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

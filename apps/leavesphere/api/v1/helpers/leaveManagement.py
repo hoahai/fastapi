@@ -156,6 +156,23 @@ def _normalize_optional_text(value: object | None) -> str | None:
     return text or None
 
 
+def _normalize_optional_employee_ids(value: object | None) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list):
+        raise ValueError("employeeIds must be an array")
+
+    employee_ids: list[str] = []
+    seen: set[str] = set()
+    for item in value:
+        employee_id = _normalize_text(item)
+        if not employee_id or employee_id in seen:
+            continue
+        seen.add(employee_id)
+        employee_ids.append(employee_id)
+    return employee_ids
+
+
 def _normalize_optional_iso_date(value: object | None) -> str | None:
     text = _normalize_text(value)
     if not text:
@@ -1992,6 +2009,164 @@ def adjust_leave_management_balance(*, request, payload: dict) -> dict:
         "updated": updated,
         "status": "Approved",
     }
+    if workspace_patch is not None:
+        response["workspacePatch"] = workspace_patch
+    else:
+        response["workspace"] = workspace
+    return response
+
+
+def duplicate_leave_management_load_transactions(*, request, payload: dict) -> dict:
+    if not isinstance(payload, dict):
+        raise ValueError("Payload must be an object")
+
+    current_employee = _resolve_current_employee_record(request)
+    current_employee_id = _normalize_text(current_employee.get("id"))
+    if not current_employee_id:
+        raise ValueError("Authenticated user is not mapped to a LeaveSphere employee")
+    current_employee_name = _employee_full_name(current_employee)
+
+    year_from = _normalize_year(payload.get("yearFrom"))
+    year_to = _normalize_year(payload.get("yearTo"))
+    employee_ids = _normalize_optional_employee_ids(payload.get("employeeIds"))
+
+    catalogs = load_leave_sphere_pto_workspace_catalogs()
+    pto_action_by_code = catalogs.pto_action_by_code
+    load_action_code = resolve_action_code(action_catalog=catalogs.pto_actions, include_tokens=LOAD_ACTION_TOKENS) or "LOAD"
+
+    source_rows = get_pto_transactions(year=year_from, employee_ids=employee_ids or None)
+    matched_rows: list[dict] = []
+    for row in source_rows:
+        if not isinstance(row, dict):
+            continue
+        if _normalize_text(row.get("status")).capitalize() != "Approved":
+            continue
+        if not is_load_action_row(row, pto_action_by_code):
+            continue
+        employee_id = _normalize_text(row.get("employeeId"))
+        pto_type_code = _normalize_text(row.get("ptoTypeCode")).upper()
+        if not employee_id or not pto_type_code:
+            continue
+        matched_rows.append(row)
+
+    duplicate_items: list[dict] = []
+    duplicate_transaction_ids: list[str] = []
+    affected_employee_ids: list[str] = []
+    skipped = 0
+    for row in matched_rows:
+        employee_id = _normalize_text(row.get("employeeId"))
+        pto_type_code = _normalize_text(row.get("ptoTypeCode")).upper()
+        try:
+            hours = Decimal(str(row.get("hours") or 0)).copy_abs().quantize(Decimal("0.01"))
+        except (InvalidOperation, ValueError):
+            skipped += 1
+            continue
+        if hours <= 0:
+            skipped += 1
+            continue
+        try:
+            start_date = _normalize_optional_iso_date(row.get("startDate"))
+            end_date = _normalize_optional_iso_date(row.get("endDate"))
+        except ValueError:
+            skipped += 1
+            continue
+
+        transaction_id = str(uuid4())
+        duplicate_items.append(
+            {
+                "id": transaction_id,
+                "employeeId": employee_id,
+                "ptoTypeCode": pto_type_code,
+                "ptoActionCode": load_action_code,
+                "hours": hours,
+                "year": year_to,
+                "startDate": start_date,
+                "endDate": end_date,
+                "status": "Approved",
+                "description": _normalize_optional_text(row.get("description")),
+                "approverNote": _normalize_optional_text(row.get("approverNote")),
+                "approverId": current_employee_id,
+                "calendarId": None,
+            }
+        )
+        duplicate_transaction_ids.append(transaction_id)
+        if employee_id not in affected_employee_ids:
+            affected_employee_ids.append(employee_id)
+
+    response = {
+        "source": "network",
+        "yearFrom": year_from,
+        "yearTo": year_to,
+        "employeeIds": employee_ids,
+        "matchedTransactions": len(matched_rows),
+        "duplicated": 0,
+        "inserted": 0,
+        "skipped": skipped,
+    }
+
+    if not duplicate_items:
+        return response
+
+    def _insert_rows(cursor) -> int:
+        inserted_total = 0
+        for item in duplicate_items:
+            inserted_total += execute_pto_transaction_insert(cursor, item)
+        return inserted_total
+
+    inserted = int(run_transaction(_insert_rows) or 0)
+    response["duplicated"] = inserted
+    response["inserted"] = inserted
+
+    def _mutate_workspace(cached_workspace: dict) -> bool:
+        created_at = date.today().isoformat()
+        for item in duplicate_items:
+            _upsert_leave_management_balance_transaction_row(
+                workspace=cached_workspace,
+                transaction_row={
+                    "id": item["id"],
+                    "employeeId": item["employeeId"],
+                    "ptoTypeCode": item["ptoTypeCode"],
+                    "ptoActionCode": item["ptoActionCode"],
+                    "hours": float(item["hours"]),
+                    "year": year_to,
+                    "status": "Approved",
+                    "description": item["description"],
+                    "approverNote": item["approverNote"],
+                    "approverId": current_employee_id,
+                    "createdAt": created_at,
+                    "createdByName": current_employee_name,
+                },
+            )
+        return True
+
+    workspace = _apply_leave_management_workspace_mutation_from_cache(
+        request=request,
+        year=year_to,
+        mutate_workspace=_mutate_workspace,
+    )
+    workspace_patch = None
+    if workspace is not None:
+        workspace_patch = _build_leave_management_workspace_patch(
+            workspace=workspace,
+            balance_transaction_ids=duplicate_transaction_ids,
+            employee_ids=affected_employee_ids,
+            include_current_balances=current_employee_id in affected_employee_ids,
+        )
+    if workspace is None:
+        workspace = _build_workspace(request=request, year=year_to)
+        _store_cached_workspace_snapshot(
+            request=request,
+            page_code=LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE,
+            year=year_to,
+            workspace=workspace,
+        )
+        workspace_patch = _build_leave_management_workspace_patch(
+            workspace=workspace,
+            balance_transaction_ids=duplicate_transaction_ids,
+            employee_ids=affected_employee_ids,
+            include_current_balances=current_employee_id in affected_employee_ids,
+        )
+
     if workspace_patch is not None:
         response["workspacePatch"] = workspace_patch
     else:

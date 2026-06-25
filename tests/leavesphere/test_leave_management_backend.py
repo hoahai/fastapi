@@ -1094,6 +1094,233 @@ class LeaveManagementBackendTests(unittest.TestCase):
         self.assertEqual(result["workspacePatch"]["balanceTransactions"][0]["approverId"], "emp-admin")
         self.assertEqual(result["workspacePatch"]["balanceTransactions"][0]["description"], "Opening balance load")
 
+    def test_duplicate_leave_management_load_transactions_duplicates_all_load_rows_when_employee_ids_empty(self):
+        request = self._build_request()
+        current_employee = {
+            "id": "emp-admin",
+            "firstName": "Admin",
+            "lastName": "User",
+            "email": "admin@example.com",
+            "title": "Director",
+            "region": "US",
+            "active": 1,
+        }
+        source_rows = [
+            {
+                "id": "load-1",
+                "employeeId": "emp-1",
+                "ptoTypeCode": "VAC",
+                "ptoActionCode": "LOAD",
+                "hours": 40,
+                "year": 2025,
+                "status": "Approved",
+                "dateCreated": "2025-01-01T00:00:00",
+                "dateUpdated": "2025-01-01T00:00:00",
+                "description": "Opening balance",
+                "approverNote": "Opening balance note",
+                "approverId": "emp-admin",
+            },
+            {
+                "id": "request-1",
+                "employeeId": "emp-1",
+                "ptoTypeCode": "VAC",
+                "ptoActionCode": "REQUEST",
+                "hours": 8,
+                "year": 2025,
+                "status": "Approved",
+                "dateCreated": "2025-02-01T00:00:00",
+                "dateUpdated": "2025-02-01T00:00:00",
+                "description": "Vacation request",
+            },
+            {
+                "id": "load-2",
+                "employeeId": "emp-2",
+                "ptoTypeCode": "SICK",
+                "ptoActionCode": "LOAD",
+                "hours": 16,
+                "year": 2025,
+                "status": "Approved",
+                "dateCreated": "2025-01-15T00:00:00",
+                "dateUpdated": "2025-01-15T00:00:00",
+                "description": "Sick opening balance",
+            },
+        ]
+        workspace = {
+            "currentUserId": "emp-admin",
+            "currentUserName": "Admin User",
+        }
+        inserted_items: list[dict] = []
+
+        def _transactions_side_effect(*, year=None, employee_ids=None, **kwargs):
+            self.assertEqual(year, 2025)
+            self.assertIsNone(employee_ids)
+            return source_rows
+
+        def _insert_side_effect(cursor, item):
+            inserted_items.append(item)
+            return 1
+
+        with patch.object(leaveManagement, "_resolve_current_employee_record", return_value=current_employee), patch.object(
+            leaveManagement,
+            "load_leave_sphere_pto_workspace_catalogs",
+            return_value=SimpleNamespace(
+                pto_actions=[{"code": "LOAD", "name": "Load"}],
+                pto_action_by_code={"LOAD": {"code": "LOAD", "name": "Load"}},
+            ),
+        ), patch.object(
+            leaveManagement,
+            "get_pto_transactions",
+            side_effect=_transactions_side_effect,
+        ) as mock_transactions, patch.object(
+            leaveManagement,
+            "execute_pto_transaction_insert",
+            side_effect=_insert_side_effect,
+        ) as mock_insert, patch.object(
+            leaveManagement,
+            "run_transaction",
+            side_effect=lambda work: work(SimpleNamespace()),
+        ) as mock_run_transaction, patch.object(
+            leaveManagement,
+            "_apply_leave_management_workspace_mutation_from_cache",
+            return_value=workspace,
+        ) as mock_apply, patch.object(
+            leaveManagement,
+            "_build_leave_management_workspace_patch",
+            return_value={"balanceTransactions": [{"id": "new-load-1"}, {"id": "new-load-2"}]},
+        ) as mock_build_patch:
+            result = leaveManagement.duplicate_leave_management_load_transactions(
+                request=request,
+                payload={
+                    "yearFrom": 2025,
+                    "yearTo": 2026,
+                    "employeeIds": [],
+                },
+            )
+
+        self.assertEqual(result["source"], "network")
+        self.assertEqual(result["yearFrom"], 2025)
+        self.assertEqual(result["yearTo"], 2026)
+        self.assertEqual(result["employeeIds"], [])
+        self.assertEqual(result["matchedTransactions"], 2)
+        self.assertEqual(result["duplicated"], 2)
+        self.assertEqual(result["inserted"], 2)
+        self.assertEqual(result["skipped"], 0)
+        self.assertIn("workspacePatch", result)
+        mock_transactions.assert_called_once()
+        self.assertEqual(mock_insert.call_count, 2)
+        mock_run_transaction.assert_called_once()
+        mock_apply.assert_called_once()
+        mock_build_patch.assert_called_once()
+
+        inserted_employee_ids = [item["employeeId"] for item in inserted_items]
+        self.assertEqual(inserted_employee_ids, ["emp-1", "emp-2"])
+        self.assertTrue(all(item["year"] == 2026 for item in inserted_items))
+        self.assertTrue(all(item["ptoActionCode"] == "LOAD" for item in inserted_items))
+        self.assertTrue(all(item["approverId"] == "emp-admin" for item in inserted_items))
+        self.assertTrue(all(item["calendarId"] is None for item in inserted_items))
+
+        patch_kwargs = mock_build_patch.call_args.kwargs
+        self.assertEqual(patch_kwargs["balance_transaction_ids"], [item["id"] for item in inserted_items])
+        self.assertEqual(patch_kwargs["employee_ids"], ["emp-1", "emp-2"])
+        self.assertFalse(patch_kwargs["include_current_balances"])
+
+    def test_duplicate_leave_management_load_transactions_filters_employee_ids(self):
+        request = self._build_request()
+        current_employee = {
+            "id": "emp-admin",
+            "firstName": "Admin",
+            "lastName": "User",
+            "email": "admin@example.com",
+            "title": "Director",
+            "region": "US",
+            "active": 1,
+        }
+        source_rows = [
+            {
+                "id": "load-1",
+                "employeeId": "emp-1",
+                "ptoTypeCode": "VAC",
+                "ptoActionCode": "LOAD",
+                "hours": 40,
+                "year": 2025,
+                "status": "Approved",
+                "dateCreated": "2025-01-01T00:00:00",
+                "dateUpdated": "2025-01-01T00:00:00",
+                "description": "Opening balance",
+            },
+            {
+                "id": "load-2",
+                "employeeId": "emp-2",
+                "ptoTypeCode": "SICK",
+                "ptoActionCode": "LOAD",
+                "hours": 16,
+                "year": 2025,
+                "status": "Approved",
+                "dateCreated": "2025-01-15T00:00:00",
+                "dateUpdated": "2025-01-15T00:00:00",
+                "description": "Sick opening balance",
+            },
+        ]
+        workspace = {
+            "currentUserId": "emp-admin",
+            "currentUserName": "Admin User",
+        }
+        inserted_items: list[dict] = []
+
+        def _transactions_side_effect(*, year=None, employee_ids=None, **kwargs):
+            self.assertEqual(year, 2025)
+            self.assertEqual(employee_ids, ["emp-2"])
+            return [row for row in source_rows if row["employeeId"] in set(employee_ids or [])]
+
+        def _insert_side_effect(cursor, item):
+            inserted_items.append(item)
+            return 1
+
+        with patch.object(leaveManagement, "_resolve_current_employee_record", return_value=current_employee), patch.object(
+            leaveManagement,
+            "load_leave_sphere_pto_workspace_catalogs",
+            return_value=SimpleNamespace(
+                pto_actions=[{"code": "LOAD", "name": "Load"}],
+                pto_action_by_code={"LOAD": {"code": "LOAD", "name": "Load"}},
+            ),
+        ), patch.object(
+            leaveManagement,
+            "get_pto_transactions",
+            side_effect=_transactions_side_effect,
+        ), patch.object(
+            leaveManagement,
+            "execute_pto_transaction_insert",
+            side_effect=_insert_side_effect,
+        ), patch.object(
+            leaveManagement,
+            "run_transaction",
+            side_effect=lambda work: work(SimpleNamespace()),
+        ), patch.object(
+            leaveManagement,
+            "_apply_leave_management_workspace_mutation_from_cache",
+            return_value=workspace,
+        ), patch.object(
+            leaveManagement,
+            "_build_leave_management_workspace_patch",
+            return_value={"balanceTransactions": [{"id": "new-load-2"}]},
+        ) as mock_build_patch:
+            result = leaveManagement.duplicate_leave_management_load_transactions(
+                request=request,
+                payload={
+                    "yearFrom": 2025,
+                    "yearTo": 2026,
+                    "employeeIds": ["emp-2"],
+                },
+            )
+
+        self.assertEqual(result["duplicated"], 1)
+        self.assertEqual(result["inserted"], 1)
+        self.assertEqual(result["matchedTransactions"], 1)
+        self.assertEqual(result["employeeIds"], ["emp-2"])
+        self.assertEqual([item["employeeId"] for item in inserted_items], ["emp-2"])
+        self.assertEqual(mock_build_patch.call_args.kwargs["employee_ids"], ["emp-2"])
+        mock_build_patch.assert_called_once()
+
 
 if __name__ == "__main__":
     unittest.main()

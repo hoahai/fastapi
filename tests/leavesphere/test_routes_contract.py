@@ -55,6 +55,7 @@ class LeaveSphereRouteContractTests(unittest.TestCase):
             ("PUT", "/v1/admin/pto/requests"),
             ("POST", "/v1/admin/pto/review"),
             ("POST", "/v1/admin/pto/balances/adjust"),
+            ("POST", "/v1/admin/pto/balances/duplicate"),
             ("POST", "/v1/admin/pto/setup"),
             ("GET", "/v1/admin/google-calendar/oauth/status"),
             ("GET", "/v1/admin/google-calendar/oauth/url"),
@@ -113,6 +114,7 @@ class LeaveSphereRouteContractTests(unittest.TestCase):
         self.assertIn("/v1/admin/pto/requests", route_paths)
         self.assertIn("/v1/admin/pto/review", route_paths)
         self.assertIn("/v1/admin/pto/balances/adjust", route_paths)
+        self.assertIn("/v1/admin/pto/balances/duplicate", route_paths)
         self.assertIn("/v1/admin/pto/setup", route_paths)
 
     def test_google_calendar_public_callback_route_is_registered(self):
