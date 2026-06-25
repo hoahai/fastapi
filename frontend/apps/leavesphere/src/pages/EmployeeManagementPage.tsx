@@ -666,7 +666,9 @@ function EmployeeManagementModal({
 
   useEffect(() => {
     return () => {
-      clearPictureDraftAttachment();
+      if (pictureDraftObjectUrl) {
+        URL.revokeObjectURL(pictureDraftObjectUrl);
+      }
     };
   }, [pictureDraftObjectUrl]);
 
