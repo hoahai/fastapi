@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   CalendarDays,
+  Copy,
   Plus,
   Settings2,
   Users,
@@ -60,6 +61,10 @@ import {
   type LeaveSpherePtoLoadHoursSubmitParams,
 } from "@leavesphere/components/PtoLoadHoursModal";
 import {
+  LeaveSpherePtoDuplicateBalancesModal,
+  type LeaveSpherePtoDuplicateBalancesSubmitParams,
+} from "@leavesphere/components/PtoDuplicateBalancesModal";
+import {
   buildLeaveSpherePtoEmployeeLookup,
   resolveLeaveSpherePtoEmployeeDisplay,
 } from "@leavesphere/lib/ptoEmployeeLookup";
@@ -78,6 +83,7 @@ import {
   adjustLeaveManagementBalance,
   createLeaveManagementRequest,
   disconnectLeaveManagementGoogleCalendarConnection,
+  duplicateLeaveManagementBalances,
   loadLeaveManagementGoogleCalendarAuthorizationUrl,
   loadLeaveManagementGoogleCalendarConnectionStatus,
   loadLeaveManagementWorkspace,
@@ -807,6 +813,7 @@ export default function LeaveManagementPage() {
   } | null>(null);
   const [pendingAdjustAction, setPendingAdjustAction] = useState<"cancel" | null>(null);
 
+  const [isDuplicateBalancesModalOpen, setIsDuplicateBalancesModalOpen] = useState(false);
   const [isSetupModalOpen, setIsSetupModalOpen] = useState(false);
   const [setupForm, setSetupForm] = useState<SetupForm>(EMPTY_SETUP_FORM);
   const [setupError, setSetupError] = useState<string | null>(null);
@@ -1254,6 +1261,12 @@ export default function LeaveManagementPage() {
     () => (workspaceForYear?.employees ?? []).map((item) => ({ value: item.employeeId, label: item.employeeName })),
     [workspaceForYear?.employees],
   );
+  const activeEmployeeOptions = useMemo(
+    () => (workspaceForYear?.employees ?? [])
+      .filter((item) => item.active)
+      .map((item) => ({ value: item.employeeId, label: item.employeeName })),
+    [workspaceForYear?.employees],
+  );
 
   const employeeById = useMemo(
     () => new Map((workspaceForYear?.employees ?? []).map((item) => [item.employeeId, item] as const)),
@@ -1395,6 +1408,31 @@ export default function LeaveManagementPage() {
 
     return requestsByKey;
   }, [loadedYear, resolveBalanceTypeMeta, workspaceForYear?.balanceTransactions]);
+  const duplicateBalancesDefaultEmployeeIds = useMemo(() => {
+    const currentLoadedYear = loadedYear;
+    if (!Number.isInteger(currentLoadedYear)) {
+      return [];
+    }
+    const activeEmployeeIds = new Set(activeEmployeeOptions.map((item) => item.value));
+    const employeeIdsWithLoadTransactions = new Set<string>();
+    for (const transaction of workspaceForYear?.balanceTransactions ?? []) {
+      if (
+        transaction.year !== currentLoadedYear
+        || transaction.status !== "Approved"
+        || transaction.ptoActionCode !== "load_grant"
+      ) {
+        continue;
+      }
+      if (activeEmployeeIds.has(transaction.employeeId)) {
+        employeeIdsWithLoadTransactions.add(transaction.employeeId);
+      }
+    }
+    return activeEmployeeOptions
+      .filter((item) => employeeIdsWithLoadTransactions.has(item.value))
+      .map((item) => item.value);
+  }, [activeEmployeeOptions, loadedYear, workspaceForYear?.balanceTransactions]);
+  const duplicateBalancesDefaultYearTo = loadedYear ?? currentYear;
+  const duplicateBalancesDefaultYearFrom = duplicateBalancesDefaultYearTo - 1;
 
   const getEmployeePtoTypeOptions = useCallback((employeeId: string) => {
     const employeeBalanceRow = (workspaceForYear?.employeeBalances ?? []).find((row) => row.employeeId === employeeId) || null;
@@ -2177,6 +2215,72 @@ export default function LeaveManagementPage() {
     setIsAdjustModalOpen(true);
   }, [employeeOptions, getEmployeePtoTypeOptions, resolveAdjustLoadRequests]);
 
+  const openDuplicateBalancesModal = useCallback(() => {
+    if (!workspaceForYear || !Number.isInteger(loadedYear)) {
+      return;
+    }
+    setIsDuplicateBalancesModalOpen(true);
+  }, [loadedYear, workspaceForYear]);
+
+  const closeDuplicateBalancesModal = useCallback(() => {
+    setIsDuplicateBalancesModalOpen(false);
+  }, []);
+
+  const handleDuplicateBalances = useCallback(async ({
+    yearFrom,
+    yearTo,
+    employeeIds,
+  }: LeaveSpherePtoDuplicateBalancesSubmitParams) => {
+    const currentLoadedYear = loadedYear;
+    if (!Number.isInteger(yearFrom) || !Number.isInteger(yearTo) || !Number.isInteger(currentLoadedYear)) {
+      return false;
+    }
+    setIsMutating(true);
+    try {
+      const result = await duplicateLeaveManagementBalances({
+        requestJson,
+        workspaceKey: leaveManagementWorkspaceKey,
+        currentUserId,
+        currentUserName,
+        currentWorkspace: workspaceRef.current,
+        payload: {
+          yearFrom,
+          yearTo,
+          employeeIds,
+        },
+      });
+      if (yearTo !== currentLoadedYear) {
+        setCalendarMonth(buildMonthKeyForYear(currentMonthKey, yearTo) || `${yearTo}-01`);
+        loadedRequestMonthKeysRef.current = new Set();
+      }
+      commitWorkspace(result.workspace, "network", yearTo);
+      const employeeLabel = employeeIds.length === 0
+        ? "all employees"
+        : `${employeeIds.length} employee${employeeIds.length === 1 ? "" : "s"}`;
+      toast.success(
+        "Balances duplicated",
+        `Approved LOAD transactions from ${yearFrom} were duplicated to ${yearTo} for ${employeeLabel}.`,
+      );
+      closeDuplicateBalancesModal();
+      return true;
+    } catch {
+      toast.error("Duplicate failed", "Unable to duplicate PTO balances right now.");
+      return false;
+    } finally {
+      setIsMutating(false);
+    }
+  }, [
+    commitWorkspace,
+    currentMonthKey,
+    currentUserId,
+    currentUserName,
+    closeDuplicateBalancesModal,
+    loadedYear,
+    requestJson,
+    toast,
+    leaveManagementWorkspaceKey,
+  ]);
+
   const handlePromptCreateRequest = useCallback(async ({ payload }: {
     requestId: string | null;
     payload: {
@@ -2716,14 +2820,22 @@ export default function LeaveManagementPage() {
         title="Employee PTO Balances"
         description="Only employees with PTO activity in the loaded year are shown."
         actions={(
-          <ActionIconButton
-            tooltip="Load PTO Hours"
-            onClick={() => {
-              openLoadHoursModal({ mode: "create" });
-            }}
-            disabled={!workspaceForYear}
-            icon={<Plus />}
-          />
+          <>
+            <ActionIconButton
+              tooltip="Duplicate Balances"
+              onClick={openDuplicateBalancesModal}
+              disabled={!workspaceForYear}
+              icon={<Copy />}
+            />
+            <ActionIconButton
+              tooltip="Load PTO Hours"
+              onClick={() => {
+                openLoadHoursModal({ mode: "create" });
+              }}
+              disabled={!workspaceForYear}
+              icon={<Plus />}
+            />
+          </>
         )}
       >
         {visibleBalanceRows.length === 0 ? (
@@ -3494,9 +3606,23 @@ export default function LeaveManagementPage() {
             }}
             disabled={isMutating}
           >
-            Cancel
+            Cancel Transaction
           </Button>
         ) : null}
+      />
+
+      <LeaveSpherePtoDuplicateBalancesModal
+        open={isDuplicateBalancesModalOpen}
+        title="Duplicate Balances"
+        description="Copy approved LOAD transactions from one year to another for selected employees."
+        employeeOptions={activeEmployeeOptions}
+        defaultEmployeeIds={duplicateBalancesDefaultEmployeeIds}
+        defaultYearFrom={duplicateBalancesDefaultYearFrom}
+        defaultYearTo={duplicateBalancesDefaultYearTo}
+        onOpenChange={setIsDuplicateBalancesModalOpen}
+        onClose={closeDuplicateBalancesModal}
+        onSubmit={handleDuplicateBalances}
+        saving={isMutating}
       />
 
       {pendingAdjustActionCopy ? (

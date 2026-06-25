@@ -201,6 +201,14 @@ type AdjustBalanceArgs = BaseArgs & {
   payload: LeaveManagementAdjustBalanceInput;
 };
 
+type DuplicateBalancesArgs = BaseArgs & {
+  payload: {
+    yearFrom: number;
+    yearTo: number;
+    employeeIds: string[];
+  };
+};
+
 type SetupArgs = BaseArgs & {
   payload: LeaveManagementSetupInput;
 };
@@ -818,6 +826,22 @@ export async function reviewLeaveManagementRequest(params: ReviewRequestArgs): P
 
 export async function adjustLeaveManagementBalance(params: AdjustBalanceArgs): Promise<LeaveManagementMutationResult> {
   const response = await params.requestJson("/api/leavesphere/v1/admin/pto/balances/adjust", {
+    method: "POST",
+    body: params.payload,
+    successToast: false,
+    errorToast: false,
+  });
+  const workspace = resolveWorkspaceFromMutationResponse(response, params.currentWorkspace);
+  if (!workspace) {
+    throw new Error("Unable to normalize LeaveSphere admin workspace response.");
+  }
+  return {
+    workspace,
+  };
+}
+
+export async function duplicateLeaveManagementBalances(params: DuplicateBalancesArgs): Promise<LeaveManagementMutationResult> {
+  const response = await params.requestJson("/api/leavesphere/v1/admin/pto/balances/duplicate", {
     method: "POST",
     body: params.payload,
     successToast: false,

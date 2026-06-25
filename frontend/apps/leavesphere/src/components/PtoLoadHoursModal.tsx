@@ -239,6 +239,7 @@ export function LeaveSpherePtoLoadHoursModal({
 
   const normalizedDescription = normalizeOptionalValue(form.description);
   const normalizedSaveNote = normalizeOptionalValue(saveNote);
+  const isEditMode = mode === "edit";
 
   const submitValidationError = useMemo(() => {
     if (!form.employeeId) {
@@ -247,21 +248,20 @@ export function LeaveSpherePtoLoadHoursModal({
     if (!isPositiveOrZeroNumber(form.hours)) {
       return "Hours must be zero or greater.";
     }
-    if (!normalizedDescription) {
+    if (!isEditMode && !normalizedDescription) {
       return "Description is required.";
     }
     if (!Number.isInteger(year ?? NaN)) {
       return "Load a year before recording PTO hours.";
     }
-    if (mode === "edit" && !form.transactionId) {
+    if (isEditMode && !form.transactionId) {
       return "Select a load request to adjust.";
     }
     return null;
-  }, [form.employeeId, form.hours, form.transactionId, mode, normalizedDescription, year]);
+  }, [form.employeeId, form.hours, form.transactionId, isEditMode, normalizedDescription, year]);
 
   const canSave = Boolean(onSubmit && !submitValidationError && hasFormChanges);
   const shouldShowSubmitButton = Boolean(canSave || saving);
-  const isEditMode = mode === "edit";
   const submitButtonLabel = saveLabel ?? (isEditMode ? "Save changes" : "Load Hours");
   const saveConfirmCopy = {
     title: isEditMode ? "Save PTO Hours?" : "Load PTO Hours?",
