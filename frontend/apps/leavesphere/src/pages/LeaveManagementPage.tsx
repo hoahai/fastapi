@@ -1943,6 +1943,12 @@ export default function LeaveManagementPage() {
     freshData = false,
   ): Promise<boolean> => {
     const requestToken = ++workspaceLoadRequestTokenRef.current;
+    const currentWorkspace = workspaceRef.current;
+    const shouldMergeMonthOnlyLoad = loadedYear === year
+      && Boolean(options.overlapMonth)
+      && !options.historyStartDate
+      && !options.historyEndDate
+      && currentWorkspace !== null;
     const cacheSnapshot = readLeaveSpherePtoWorkspaceCacheSnapshot<LeaveManagementWorkspaceData>({
       pageCode: LEAVESPHERE_LEAVE_MANAGEMENT_PAGE_CODE,
       tenantSlug,
@@ -1957,7 +1963,10 @@ export default function LeaveManagementPage() {
     const includePending = options.includePending ?? true;
 
     if (shouldUseCache && cachedWorkspace) {
-      commitWorkspace(cachedWorkspace, "cache", year, cacheSnapshot?.fetchedAt ?? Date.now());
+      const nextWorkspace = shouldMergeMonthOnlyLoad
+        ? mergeLeaveManagementWorkspace(currentWorkspace, cachedWorkspace)
+        : cachedWorkspace;
+      commitWorkspace(nextWorkspace, "cache", year, cacheSnapshot?.fetchedAt ?? Date.now());
       recordLoadedRequestMonths(options);
       setRefreshMessage(null);
     }
@@ -2007,7 +2016,10 @@ export default function LeaveManagementPage() {
       if (requestToken !== workspaceLoadRequestTokenRef.current) {
         return false;
       }
-      commitWorkspace(result.workspace, "network", year, Date.now());
+      const nextWorkspace = shouldMergeMonthOnlyLoad
+        ? mergeLeaveManagementWorkspace(currentWorkspace, result.workspace)
+        : result.workspace;
+      commitWorkspace(nextWorkspace, "network", year, Date.now());
       recordLoadedRequestMonths(options);
       setRefreshMessage(result.refreshMessage);
       return true;
@@ -2016,7 +2028,10 @@ export default function LeaveManagementPage() {
         return false;
       }
       if (hasCachedWorkspace && cachedWorkspace) {
-        commitWorkspace(cachedWorkspace, "cache", year, cacheSnapshot?.fetchedAt ?? Date.now());
+        const nextWorkspace = shouldMergeMonthOnlyLoad
+          ? mergeLeaveManagementWorkspace(currentWorkspace, cachedWorkspace)
+          : cachedWorkspace;
+        commitWorkspace(nextWorkspace, "cache", year, cacheSnapshot?.fetchedAt ?? Date.now());
         recordLoadedRequestMonths(options);
         setRefreshMessage("Showing cached Leave Management workspace. Could not refresh.");
         return true;
