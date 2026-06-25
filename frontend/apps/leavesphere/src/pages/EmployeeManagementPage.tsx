@@ -546,6 +546,15 @@ function hasEmployeeSearchCriteria(criteria: EmployeeSearchCriteria): boolean {
   return Boolean(criteria.nameOrTitle.trim()) || Boolean(criteria.email.trim()) || Boolean(criteria.statusFilter) || Boolean(criteria.regionFilter);
 }
 
+function areEmployeeSearchCriteriaEqual(left: EmployeeSearchCriteria, right: EmployeeSearchCriteria): boolean {
+  return (
+    left.nameOrTitle.trim() === right.nameOrTitle.trim() &&
+    left.email.trim() === right.email.trim() &&
+    left.statusFilter === right.statusFilter &&
+    left.regionFilter === right.regionFilter
+  );
+}
+
 function getEmptyMessage(
   hasSearched: boolean,
   hasFilters: boolean,
@@ -1998,8 +2007,18 @@ export default function EmployeeManagementPage() {
     if (nextEmailError) {
       return;
     }
-    setSearchCriteria({ ...searchDraft });
+    const nextSearchCriteria = { ...searchDraft };
+    const shouldForceRefresh =
+      Boolean(workspaceRef.current) && areEmployeeSearchCriteriaEqual(nextSearchCriteria, searchCriteria);
+
+    setSearchCriteria(nextSearchCriteria);
     setHasSearched(true);
+
+    if (shouldForceRefresh) {
+      void refreshWorkspace("network-only");
+      return;
+    }
+
     if (!workspaceRef.current) {
       void refreshWorkspace("cache-first");
     }
