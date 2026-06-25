@@ -2156,6 +2156,14 @@ export default function LeaveManagementPage() {
     setIsCreateModalOpen(true);
   }, [employeeOptions, getEmployeePtoTypeOptions, loadedYearDateBounds, resolvePtoHoursForEmployee, todayIsoDate]);
 
+  const closeCreateRequestModal = useCallback(() => {
+    setPendingCreateRequest(null);
+    setIsCreateDecisionDialogOpen(false);
+    setCreateForm(EMPTY_CREATE_FORM);
+    createRequestEmployeeIdRef.current = "";
+    setIsCreateModalOpen(false);
+  }, []);
+
   useEffect(() => {
     if (!isCreateModalOpen) {
       return;
@@ -2335,8 +2343,7 @@ export default function LeaveManagementPage() {
           ? "PTO request was created and approved."
           : "PTO request was created on behalf of the selected employee.",
       );
-      setIsCreateModalOpen(false);
-      setCreateForm(EMPTY_CREATE_FORM);
+      closeCreateRequestModal();
     } catch {
       toast.error(
         approveImmediately ? "Create and approve failed" : "Create failed",
@@ -2355,6 +2362,7 @@ export default function LeaveManagementPage() {
     currentUserName,
     pendingCreateRequest,
     requestJson,
+    closeCreateRequestModal,
     toast,
     leaveManagementWorkspaceKey,
   ]);
@@ -2522,6 +2530,12 @@ export default function LeaveManagementPage() {
     }
   }, [adjustCancelNote, handleCancelAdjustRequest, pendingAdjustAction]);
 
+  const closeSetupModal = useCallback(() => {
+    setIsSetupModalOpen(false);
+    setSetupError(null);
+    setSetupForm(EMPTY_SETUP_FORM);
+  }, []);
+
   const handleSetupSave = useCallback(async () => {
     let payload: LeaveManagementSetupInput | null = null;
     if (setupForm.kind === "pto_type") {
@@ -2603,8 +2617,7 @@ export default function LeaveManagementPage() {
         payload,
       });
       applyWorkspace(result.workspace);
-      setIsSetupModalOpen(false);
-      setSetupForm(EMPTY_SETUP_FORM);
+      closeSetupModal();
       toast.success("Setup saved", "LeaveSphere admin setup data was updated.");
     } catch {
       toast.error("Setup failed", "Unable to update setup data right now.");
@@ -2630,6 +2643,7 @@ export default function LeaveManagementPage() {
     setupForm.title,
     toast,
     workspaceForYear?.currentUserId,
+    closeSetupModal,
     leaveManagementWorkspaceKey,
   ]);
 
@@ -3230,7 +3244,7 @@ export default function LeaveManagementPage() {
         canSubmitOverride={canSubmitCreateRequestWithinBalance}
         saveLabel="Submit request"
         onOpenChange={setIsCreateModalOpen}
-        onClose={() => setIsCreateModalOpen(false)}
+        onClose={closeCreateRequestModal}
         onFormChange={(nextForm) => setCreateForm((current) => ({ ...current, ...nextForm }))}
         onSubmit={handlePromptCreateRequest}
         allowedDateRange={loadedYearDateBounds ?? undefined}
@@ -3662,7 +3676,16 @@ export default function LeaveManagementPage() {
         }}
       />
 
-      <Dialog open={isSetupModalOpen} onOpenChange={setIsSetupModalOpen}>
+      <Dialog
+        open={isSetupModalOpen}
+        onOpenChange={(open) => {
+          if (open) {
+            setIsSetupModalOpen(true);
+            return;
+          }
+          closeSetupModal();
+        }}
+      >
         <DialogContent className="flex max-h-[90vh] max-w-2xl flex-col overflow-hidden rounded-xl bg-white p-6">
           <ModalShell busy={isMutating} busyMessage="Saving setup..." className="min-h-0 flex-1">
             <DialogHeader>
@@ -3811,7 +3834,7 @@ export default function LeaveManagementPage() {
             </div>
 
             <DialogFooter>
-              <Button variant="outline" onClick={() => setIsSetupModalOpen(false)}>
+              <Button variant="outline" onClick={closeSetupModal}>
                 Cancel
               </Button>
               <Button onClick={() => void handleSetupSave()} disabled={isMutating}>Save setup</Button>
