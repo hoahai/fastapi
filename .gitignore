@@ -3,6 +3,8 @@
 # ------------------
 .env
 .env.*
+!.env.example
+!.env.*.example
 secrets/
 
 # ------------------
@@ -12,6 +14,10 @@ __pycache__/
 *.pyc
 *.pyo
 *.pyd
+.pytest_cache/
+.coverage
+htmlcov/
+coverage.xml
 
 # Virtual environments
 .venv/
@@ -35,14 +41,12 @@ dist/
 .idea/
 
 # ------------------
-# Test Files
+# Local/generated data exports
 # ------------------
 output/
 *.xlsx
-*.json
 *.csv
-!package.json
-!frontend/**/*.json
+*.local.json
 
 # ------------------
 # Logs
@@ -51,13 +55,13 @@ logs/
 *.log
 
 # ------------------
-# Catches
+# Caches
 # ------------------
 caches.json.lock
 caches.json.tmp
 
 # ------------------
-# Frontend Build Artifacts
+# Frontend dependencies/build artifacts
 # ------------------
 node_modules/
 *.tsbuildinfo
@@ -65,16 +69,19 @@ static/assets/
 apps/tradsphere/ui_dist/
 
 # ------------------
-# Local Artifacts
+# Local artifacts
 # ------------------
 checkpoints/
 .tasteSkills/
 .codegraph/
+.codex/
 
-# Python / pytest
-.pytest_cache/
-
+# ------------------
 # Local AI skill/reference files
+# ------------------
 .ai/
 
-superbase/*
+# ------------------
+# Supabase local development files
+# ------------------
+supabase/
