@@ -3,11 +3,11 @@ services:
     name: fastapi-gateway
     runtime: python
     healthCheckPath: /ping
-    buildCommand: |
-      pip install -r requirements.txt
-      npm --prefix frontend/shell ci --include=dev
-      npm --prefix frontend/shell run build
-      rm -rf apps/tradsphere/ui_dist
-      mkdir -p apps/tradsphere/ui_dist
-      cp -R frontend/apps/tradsphere/dist/* apps/tradsphere/ui_dist/
+    buildCommand: >
+      pip install -r requirements.txt &&
+      npm_config_production=false npm --prefix frontend/shell ci &&
+      npm --prefix frontend/shell run build &&
+      rm -rf apps/tradsphere/ui_dist &&
+      mkdir -p apps/tradsphere/ui_dist &&
+      cp -R frontend/apps/tradsphere/dist/. apps/tradsphere/ui_dist/
     startCommand: uvicorn main:app --host 0.0.0.0 --port $PORT
