@@ -802,6 +802,10 @@ function buildAccountStatusClass(active: boolean): string {
     : "border-slate-300 bg-slate-100/90 text-slate-700";
 }
 
+function stripRolePrefix(value: string): string {
+  return value.replace(/^(?:AR|AE)\s*:\s*/i, "").trim();
+}
+
 function AccountCard({
   account,
   aeNames,
@@ -824,6 +828,7 @@ function AccountCard({
 
   const showLogo = Boolean(account.logoUrl) && !logoError;
   const logoFallback = (account.name || account.code || "AC").slice(0, 2).toUpperCase();
+  const displayAeNames = aeNames ? stripRolePrefix(aeNames) : "";
 
   return (
     <article
@@ -854,7 +859,7 @@ function AccountCard({
       <div className="flex items-start gap-4">
         <button
           type="button"
-          className="flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-slate-50 to-blue-50 shadow-[0_10px_20px_-16px_rgba(37,99,235,0.45)] ring-1 ring-white/70 transition hover:-translate-y-0.5 hover:shadow-[0_14px_24px_-18px_rgba(37,99,235,0.55)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+          className="flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-slate-50 to-blue-50 shadow-[0_10px_20px_-16px_rgba(37,99,235,0.45)] transition hover:-translate-y-0.5 hover:shadow-[0_14px_24px_-18px_rgba(37,99,235,0.55)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
           onClick={(event) => {
             event.stopPropagation();
             if (showLogo) {
@@ -898,8 +903,8 @@ function AccountCard({
             </span>
           </div>
 
-          {aeNames ? (
-            <p className="mt-3 truncate text-sm text-slate-700">{aeNames}</p>
+          {displayAeNames ? (
+            <p className="mt-3 truncate text-sm text-slate-700">{displayAeNames}</p>
           ) : null}
         </div>
       </div>
