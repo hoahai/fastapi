@@ -8,7 +8,6 @@ from apps.fundsphere.api.v1.helpers.directDbQueries import (
     ConflictError,
     NotFoundError,
     create_account,
-    get_account,
     list_accounts,
     update_account,
 )
@@ -19,6 +18,9 @@ router = APIRouter(prefix="/accounts")
 @router.get("")
 def list_accounts_route(
     code: str | None = Query(None, alias="code"),
+    name: str | None = Query(None, alias="name"),
+    ae_name: str | None = Query(None, alias="aeName"),
+    status: str | None = Query(None, alias="status"),
     active: bool = Query(True),
 ):
     """
@@ -27,11 +29,11 @@ def list_accounts_route(
     Example request:
         GET /api/fundsphere/v1/accounts
 
-    Example request (single account):
-        GET /api/fundsphere/v1/accounts?code=ACME01
+    Example request (code and name filters):
+        GET /api/fundsphere/v1/accounts?code=ACME&name=Acme
 
-    Example request (include inactive accounts):
-        GET /api/fundsphere/v1/accounts?active=false
+    Example request (AE and status filters):
+        GET /api/fundsphere/v1/accounts?aeName=Alex%20Chen&status=inactive
 
     Example response:
         {
@@ -53,19 +55,15 @@ def list_accounts_route(
     Requirements:
         - Requires X-Tenant-Id header
         - Requires valid API key or bearer token in compat mode
-        - code is optional; when present, returns the matching account row
-        - active defaults to true
-        - active=true filters by active accounts only
-        - active=false returns active and inactive rows
+        - code, name, aeName, and status are optional filters
+        - status accepts active, inactive, or all; when omitted, the legacy active flag is used
+        - active=true filters by active accounts only when status is omitted
+        - active=false returns active and inactive rows when status is omitted
+        - aeName requires DB_TABLES.employees to be configured so AE names can be resolved from accountReps
         - Unknown query params are rejected (400)
     """
     try:
-        if code:
-            account = get_account(code=code)
-            if account is None:
-                raise HTTPException(status_code=404, detail="Account not found")
-            return account
-        return list_accounts(code=None, active=active)
+        return list_accounts(code=code, name=name, ae_name=ae_name, status=status, active=active)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

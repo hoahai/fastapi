@@ -15,6 +15,13 @@ export type FundsphereAccount = {
   dateUpdated?: string | null;
 };
 
+export type FundsphereAccountSearchCriteria = {
+  code: string;
+  name: string;
+  aeName: string;
+  statusFilter: "" | "active" | "inactive";
+};
+
 export type FundsphereAccountFormState = {
   code: string;
   name: string;
@@ -134,11 +141,32 @@ function cleanOptionalText(value: string): string | null {
 
 export async function loadFundsphereAccounts(params: {
   requestJson: FundsphereRequestJson;
-  includeInactive?: boolean;
+  criteria?: FundsphereAccountSearchCriteria;
 }): Promise<FundsphereAccount[]> {
-  const payload = await params.requestJson(
-    `/api/fundsphere/v1/accounts?active=${params.includeInactive ? "false" : "true"}`,
-  );
+  const searchParams = new URLSearchParams();
+  const criteria = params.criteria;
+  const code = asString(criteria?.code);
+  const name = asString(criteria?.name);
+  const aeName = asString(criteria?.aeName);
+  const statusFilter = criteria?.statusFilter ?? "active";
+
+  if (code) {
+    searchParams.set("code", code);
+  }
+  if (name) {
+    searchParams.set("name", name);
+  }
+  if (aeName) {
+    searchParams.set("aeName", aeName);
+  }
+  if (statusFilter === "active" || statusFilter === "inactive") {
+    searchParams.set("status", statusFilter);
+  } else {
+    searchParams.set("status", "all");
+  }
+
+  const query = searchParams.toString();
+  const payload = await params.requestJson(query ? `/api/fundsphere/v1/accounts?${query}` : "/api/fundsphere/v1/accounts");
   return normalizeFundsphereAccounts(payload);
 }
 

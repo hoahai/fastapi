@@ -12,34 +12,57 @@ export type FundsphereAccountsCacheContext = {
   userKey: string;
 };
 
+export type FundsphereAccountsCacheCriteria = {
+  code: string;
+  name: string;
+  aeName: string;
+  statusFilter: "" | "active" | "inactive";
+};
+
 function normalizeCachePart(value: string): string {
   const normalized = String(value || "").trim().toLowerCase();
   return normalized || "unknown";
 }
 
-export function buildFundsphereAccountsCacheKey(context: FundsphereAccountsCacheContext): string {
+function normalizeCriteriaPart(value: string): string {
+  const normalized = String(value || "").trim().toLowerCase();
+  return normalized || "all";
+}
+
+export function buildFundsphereAccountsCacheKey(
+  context: FundsphereAccountsCacheContext,
+  criteria?: FundsphereAccountsCacheCriteria | null,
+): string {
   return [
     "accounts",
     FUNDSPHERE_ACCOUNTS_CACHE_VERSION,
     normalizeCachePart(context.tenantSlug),
     normalizeCachePart(context.userKey),
+    normalizeCriteriaPart(criteria?.code ?? ""),
+    normalizeCriteriaPart(criteria?.name ?? ""),
+    normalizeCriteriaPart(criteria?.aeName ?? ""),
+    normalizeCriteriaPart(criteria?.statusFilter ?? "active"),
   ].join(":");
 }
 
-export function readFundsphereAccountsCacheSnapshot(context: FundsphereAccountsCacheContext) {
-  return readBrowserCacheSnapshot<FundsphereAccount[]>(buildFundsphereAccountsCacheKey(context));
+export function readFundsphereAccountsCacheSnapshot(
+  context: FundsphereAccountsCacheContext,
+  criteria?: FundsphereAccountsCacheCriteria | null,
+) {
+  return readBrowserCacheSnapshot<FundsphereAccount[]>(buildFundsphereAccountsCacheKey(context, criteria));
 }
 
 export function writeFundsphereAccountsCache(
   context: FundsphereAccountsCacheContext,
   accounts: FundsphereAccount[],
+  criteria?: FundsphereAccountsCacheCriteria | null,
   options?: {
     source?: "cache" | "network";
     fetchedAt?: number;
   },
 ): void {
   writeBrowserCache(
-    buildFundsphereAccountsCacheKey(context),
+    buildFundsphereAccountsCacheKey(context, criteria),
     accounts,
     FUNDSPHERE_ACCOUNTS_CACHE_TTL_MS,
     {
@@ -53,6 +76,7 @@ export function writeFundsphereAccountsCache(
 export function syncFundsphereAccountsCache(
   context: FundsphereAccountsCacheContext,
   accounts: FundsphereAccount[],
+  criteria?: FundsphereAccountsCacheCriteria | null,
   options?: {
     source?: "cache" | "network";
     fetchedAt?: number;
@@ -61,7 +85,7 @@ export function syncFundsphereAccountsCache(
   changed: boolean;
   previous: FundsphereAccount[] | null;
 } {
-  const snapshot = readFundsphereAccountsCacheSnapshot(context);
+  const snapshot = readFundsphereAccountsCacheSnapshot(context, criteria);
   const previous = snapshot?.data ?? null;
   let changed = true;
   try {
@@ -70,7 +94,7 @@ export function syncFundsphereAccountsCache(
     changed = true;
   }
 
-  writeFundsphereAccountsCache(context, accounts, options);
+  writeFundsphereAccountsCache(context, accounts, criteria, options);
 
   return {
     changed,

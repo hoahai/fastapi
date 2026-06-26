@@ -120,6 +120,70 @@ class FundSphereDirectDbQueryTests(unittest.TestCase):
         self.assertEqual(result["inserted"], 1)
         self.assertTrue(result["id"])
 
+    def test_list_accounts_uses_backend_filters_for_search(self):
+        tables = {
+            "ACCOUNTS": "AccountsTbl",
+            "ACCOUNTREPS": "AccountRepsTbl",
+            "BUDGETCHANGEHISTORIES": "BudgetChangeHistoriesTbl",
+            "BUDGETS": "BudgetsTbl",
+            "DEPARTMENTS": "DepartmentsTbl",
+            "EMPLOYEES": "EmployeesTbl",
+            "SERVICES": "ServicesTbl",
+        }
+        captured: list[tuple[str, tuple[object, ...]]] = []
+
+        def _capture_fetch_all(query, params=()):
+            captured.append((query, params))
+            return [
+                {
+                    "code": "ACME01",
+                    "name": "Acme Media",
+                    "logoUrl": None,
+                    "conseroId": None,
+                    "conseroName": None,
+                    "strataName": None,
+                    "active": 1,
+                    "endDate": None,
+                }
+            ]
+
+        with patch.object(dbq, "get_direct_db_tables", return_value=tables), patch.object(
+            dbq,
+            "fetch_all",
+            side_effect=_capture_fetch_all,
+        ):
+            result = dbq.list_accounts(
+                code="ACME",
+                name="Media",
+                ae_name="Alex Chen",
+                status="inactive",
+            )
+
+        self.assertEqual(result[0]["code"], "ACME01")
+        self.assertEqual(len(captured), 1)
+        query, params = captured[0]
+        self.assertIn("LOWER(a.code) LIKE LOWER(%s)", query)
+        self.assertIn("LOWER(a.name) LIKE LOWER(%s)", query)
+        self.assertIn("EXISTS (", query)
+        self.assertIn("INNER JOIN `EmployeesTbl` e ON e.id = ar.employeeId", query)
+        self.assertIn("a.active = 0", query)
+        self.assertEqual(params, ("%ACME%", "%Media%", "%Alex Chen%"))
+
+    def test_list_accounts_requires_employee_table_for_ae_name_search(self):
+        tables = {
+            "ACCOUNTS": "AccountsTbl",
+            "ACCOUNTREPS": "AccountRepsTbl",
+            "BUDGETCHANGEHISTORIES": "BudgetChangeHistoriesTbl",
+            "BUDGETS": "BudgetsTbl",
+            "DEPARTMENTS": "DepartmentsTbl",
+            "SERVICES": "ServicesTbl",
+        }
+        with patch.object(dbq, "get_direct_db_tables", return_value=tables):
+            with self.assertRaises(ValueError) as ctx:
+                dbq.list_accounts(ae_name="Alex Chen")
+
+        self.assertIn("DB_TABLES.employees is required", str(ctx.exception))
+
 
 if __name__ == "__main__":
     unittest.main()

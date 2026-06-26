@@ -49,6 +49,7 @@ import {
   updateFundsphereAccount,
   type FundsphereAccount,
   type FundsphereAccountFormState,
+  type FundsphereRequestJson,
 } from "@fundsphere/lib/accountsApi";
 import {
   buildFundsphereAccountsCacheKey,
@@ -237,6 +238,47 @@ function normalizeLeaveSphereEmployeeLookup(value: unknown): LeaveSphereEmployee
   return {
     id,
     fullName,
+  };
+}
+
+async function loadFundsphereAccountRepMetadata(requestJson: FundsphereRequestJson): Promise<{
+  accountReps: FundsphereAccountRep[];
+  employeeLookup: Record<string, string>;
+}> {
+  const [accountRepsResult, employeesResult] = await Promise.allSettled([
+    requestJson("/api/fundsphere/v1/accountReps", { errorToast: false }),
+    requestJson("/api/leavesphere/v1/employees", { errorToast: false }),
+  ]);
+
+  const accountReps =
+    accountRepsResult.status === "fulfilled"
+      ? (() => {
+          const payload = unwrapResponseData(accountRepsResult.value);
+          return Array.isArray(payload)
+            ? payload
+              .map((item) => normalizeFundsphereAccountRep(item))
+              .filter((item): item is FundsphereAccountRep => item !== null)
+            : [];
+        })()
+      : [];
+
+  const employeeLookupEntries =
+    employeesResult.status === "fulfilled"
+      ? (() => {
+          const payload = unwrapResponseData(employeesResult.value);
+          return Array.isArray(payload)
+            ? payload
+              .map((item) => normalizeLeaveSphereEmployeeLookup(item))
+              .filter((item): item is LeaveSphereEmployeeLookup => item !== null)
+            : [];
+        })()
+      : [];
+
+  return {
+    accountReps,
+    employeeLookup: Object.fromEntries(
+      employeeLookupEntries.map((item) => [item.id, item.fullName] as const),
+    ),
   };
 }
 
@@ -906,7 +948,11 @@ function FundsphereAccountsPage() {
   const searchCriteria = pageState.searchCriteria;
   const hasSearched = pageState.hasSearched;
 
-  function commitAccounts(nextAccounts: FundsphereAccount[] | null, source: "cache" | "network") {
+  function commitAccounts(
+    nextAccounts: FundsphereAccount[] | null,
+    source: "cache" | "network",
+    criteria: AccountSearchCriteria,
+  ) {
     accountsRef.current = nextAccounts;
     setAccounts(nextAccounts);
     if (!nextAccounts) {
@@ -918,17 +964,17 @@ function FundsphereAccountsPage() {
       ...current,
       hasSearched: true,
     }));
-    syncFundsphereAccountsCache(cacheContext, nextAccounts, { source, fetchedAt });
+    syncFundsphereAccountsCache(cacheContext, nextAccounts, criteria, { source, fetchedAt });
   }
 
-  async function refreshAccounts(policy: CachePolicy): Promise<void> {
+  async function refreshAccounts(policy: CachePolicy, criteria: AccountSearchCriteria = searchCriteria): Promise<void> {
     const requestToken = ++requestTokenRef.current;
-    const snapshot = readFundsphereAccountsCacheSnapshot(cacheContext);
+    const snapshot = readFundsphereAccountsCacheSnapshot(cacheContext, criteria);
     const cachedAccounts = snapshot?.data ? sortAccounts(snapshot.data.map((item) => toUiAccount(item))) : null;
     const shouldFetch = shouldFetchNetwork(policy, snapshot);
 
     if (cachedAccounts) {
-      commitAccounts(cachedAccounts, "cache");
+      commitAccounts(cachedAccounts, "cache", criteria);
       setErrorMessage(null);
       setRefreshMessage(null);
     }
@@ -958,44 +1004,30 @@ function FundsphereAccountsPage() {
       setErrorMessage(null);
     }
 
+    const metadataPromise = loadFundsphereAccountRepMetadata(requestJson);
+    void metadataPromise
+      .then((metadata) => {
+        if (requestToken !== requestTokenRef.current) {
+          return;
+        }
+        setAccountReps(metadata.accountReps);
+        setEmployeeLookup(metadata.employeeLookup);
+      })
+      .catch(() => {
+        // AE search can still use the previous metadata state when refresh fails.
+      });
+
     try {
       const nextAccounts = sortAccounts(
         (await loadFundsphereAccounts({
           requestJson,
-          includeInactive: true,
+          criteria,
         })).map((item) => toUiAccount(item)),
       );
       if (requestToken !== requestTokenRef.current) {
         return;
       }
-      commitAccounts(nextAccounts, "network");
-      const [accountRepsResult, employeesResult] = await Promise.allSettled([
-        requestJson("/api/fundsphere/v1/accountReps", { errorToast: false }),
-        requestJson("/api/leavesphere/v1/employees", { errorToast: false }),
-      ]);
-      if (requestToken !== requestTokenRef.current) {
-        return;
-      }
-      if (accountRepsResult.status === "fulfilled") {
-        const payload = unwrapResponseData(accountRepsResult.value);
-        const reps = Array.isArray(payload)
-          ? payload
-              .map((item) => normalizeFundsphereAccountRep(item))
-              .filter((item): item is FundsphereAccountRep => item !== null)
-          : [];
-        setAccountReps(reps);
-      }
-      if (employeesResult.status === "fulfilled") {
-        const payload = unwrapResponseData(employeesResult.value);
-        const lookupEntries = Array.isArray(payload)
-          ? payload
-              .map((item) => normalizeLeaveSphereEmployeeLookup(item))
-              .filter((item): item is LeaveSphereEmployeeLookup => item !== null)
-          : [];
-        setEmployeeLookup(
-          Object.fromEntries(lookupEntries.map((item) => [item.id, item.fullName] as const)),
-        );
-      }
+      commitAccounts(nextAccounts, "network", criteria);
       setRefreshMessage(null);
       setErrorMessage(null);
     } catch (error) {
@@ -1041,7 +1073,7 @@ function FundsphereAccountsPage() {
     if (!pageStateControls.hydrated) {
       return;
     }
-    void refreshAccounts("cache-first");
+    void refreshAccounts("cache-first", searchCriteria);
   }, [pageStateControls.hydrated, cacheKey]);
 
   const accountRepNamesByAccountCode = useMemo(() => {
@@ -1071,33 +1103,8 @@ function FundsphereAccountsPage() {
     if (!hasSearched || !accounts) {
       return [];
     }
-    const codeQuery = searchCriteria.code.trim().toLowerCase();
-    const nameQuery = searchCriteria.name.trim().toLowerCase();
-    const aeQuery = searchCriteria.aeName.trim().toLowerCase();
-    return sortAccounts(
-      accounts.filter((account) => {
-        if (searchCriteria.statusFilter === "active" && !account.active) {
-          return false;
-        }
-        if (searchCriteria.statusFilter === "inactive" && account.active) {
-          return false;
-        }
-        if (codeQuery && !account.code.toLowerCase().includes(codeQuery)) {
-          return false;
-        }
-        if (nameQuery && !account.name.toLowerCase().includes(nameQuery)) {
-          return false;
-        }
-        if (aeQuery) {
-          const aeNames = accountRepNamesByAccountCode[account.code] ?? "";
-          if (!aeNames.toLowerCase().includes(aeQuery)) {
-            return false;
-          }
-        }
-        return true;
-      }),
-    );
-  }, [accountRepNamesByAccountCode, accounts, hasSearched, searchCriteria.aeName, searchCriteria.code, searchCriteria.name, searchCriteria.statusFilter]);
+    return sortAccounts(accounts);
+  }, [accounts, hasSearched]);
 
   const accountGroups = useMemo(() => buildAccountGroups(filteredAccounts), [filteredAccounts]);
 
@@ -1162,13 +1169,16 @@ function FundsphereAccountsPage() {
     }));
 
     if (shouldForceRefresh) {
-      void refreshAccounts("network-only");
+      void refreshAccounts("network-only", nextSearchCriteria);
       return;
     }
 
     if (!accountsRef.current) {
-      void refreshAccounts("cache-first");
+      void refreshAccounts("cache-first", nextSearchCriteria);
+      return;
     }
+
+    void refreshAccounts("cache-first", nextSearchCriteria);
   }
 
   function resetSearchCriteria() {
@@ -1244,13 +1254,14 @@ function FundsphereAccountsPage() {
       syncFundsphereAccountsCache(
         cacheContext,
         nextAccounts,
+        searchCriteria,
         { source: "network", fetchedAt: Date.now() },
       );
       setPageState((current) => ({
         ...current,
         hasSearched: true,
       }));
-      void refreshAccounts("network-only");
+      void refreshAccounts("network-only", searchCriteria);
     } catch (error) {
       throw error instanceof Error ? error : new Error("Could not save account.");
     } finally {
@@ -1284,7 +1295,7 @@ function FundsphereAccountsPage() {
         <PageCacheFooter
           text={cacheStatusText}
           onRefresh={() => {
-            void refreshAccounts("network-only");
+            void refreshAccounts("network-only", searchCriteria);
           }}
           disabled={!canRefresh}
           refreshing={isRefreshing}

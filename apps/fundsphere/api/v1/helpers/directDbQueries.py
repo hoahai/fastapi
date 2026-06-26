@@ -337,24 +337,65 @@ def _invalidate_service_related_caches() -> None:
 # ============================================================================
 
 
-def list_accounts(*, code: str | None = None, active: bool = True) -> list[dict[str, object]]:
+def _normalize_account_status_filter(status: str | None, active: bool) -> str:
+    status_text = normalize_optional_input_text(status).lower()
+    if status_text in {"active", "inactive", "all"}:
+        return status_text
+    if status_text:
+        raise ValueError("status must be active, inactive, or all")
+    return "active" if active else "all"
+
+
+def list_accounts(
+    *,
+    code: str | None = None,
+    name: str | None = None,
+    ae_name: str | None = None,
+    status: str | None = None,
+    active: bool = True,
+) -> list[dict[str, object]]:
     table = _quote_table_name(_accounts_table())
+    employees_table = _employees_table()
     where_parts: list[str] = []
     params: list[object] = []
 
     code_text = normalize_optional_input_text(code)
     if code_text:
-        where_parts.append("code = %s")
-        params.append(code_text.upper())
+        where_parts.append("LOWER(a.code) LIKE LOWER(%s)")
+        params.append(f"%{code_text}%")
 
-    if active:
-        where_parts.append("active = 1")
+    name_text = normalize_optional_input_text(name)
+    if name_text:
+        where_parts.append("LOWER(a.name) LIKE LOWER(%s)")
+        params.append(f"%{name_text}%")
+
+    ae_name_text = normalize_optional_input_text(ae_name)
+    if ae_name_text:
+        if not employees_table:
+            raise ValueError("DB_TABLES.employees is required for aeName filtering")
+        account_reps_table = _quote_table_name(_account_reps_table())
+        employee_table = _quote_table_name(employees_table)
+        where_parts.append(
+            "EXISTS ("
+            f"SELECT 1 FROM {account_reps_table} ar "
+            f"INNER JOIN {employee_table} e ON e.id = ar.employeeId "
+            "WHERE ar.accountCode = a.code "
+            "AND LOWER(CONCAT_WS(' ', e.firstName, e.lastName)) LIKE LOWER(%s)"
+            ")"
+        )
+        params.append(f"%{ae_name_text}%")
+
+    normalized_status = _normalize_account_status_filter(status, active)
+    if normalized_status == "active":
+        where_parts.append("a.active = 1")
+    elif normalized_status == "inactive":
+        where_parts.append("a.active = 0")
 
     where_sql = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
     query = (
-        "SELECT dateCreated, dateUpdated, code, name, logoUrl, conseroId, "
-        "conseroName, strataName, active, endDate "
-        f"FROM {table}{where_sql} ORDER BY code ASC"
+        "SELECT a.dateCreated, a.dateUpdated, a.code, a.name, a.logoUrl, a.conseroId, "
+        "a.conseroName, a.strataName, a.active, a.endDate "
+        f"FROM {table} a{where_sql} ORDER BY a.code ASC"
     )
     return [_normalize_row(row) for row in fetch_all(query, tuple(params))]
 
