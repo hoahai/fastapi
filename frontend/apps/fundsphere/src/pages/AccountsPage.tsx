@@ -1013,7 +1013,7 @@ function FundsphereAccountsPage() {
     setCacheStatus(null);
     setRefreshMessage(null);
     setErrorMessage(null);
-    setIsLoading(true);
+    setIsLoading(false);
     setIsRefreshing(false);
     setIsModalOpen(false);
     setModalMode("create");
