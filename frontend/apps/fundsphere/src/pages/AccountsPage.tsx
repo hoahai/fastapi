@@ -24,6 +24,7 @@ import { shouldProtectFrontendAuth } from "@shared/auth/guards";
 import { hasAppEditAccess } from "@shared/auth/permissions";
 import { useAuth } from "@shared/auth/useAuth";
 import { cn } from "@shared/components/utils/cn";
+import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 import { PageBanner } from "@shell/components/layout/PageBanner";
 import { Button } from "@tradsphere/components/ui/button";
 import { AppDropdown, type AppDropdownOption } from "@tradsphere/components/ui/app-dropdown";
@@ -815,8 +816,10 @@ function AccountCard({
   onEdit: (account: FundsphereAccount) => void;
 }) {
   const [logoError, setLogoError] = useState(false);
+  const [logoPreviewOpen, setLogoPreviewOpen] = useState(false);
   useEffect(() => {
     setLogoError(false);
+    setLogoPreviewOpen(false);
   }, [account.logoUrl]);
 
   const showLogo = Boolean(account.logoUrl) && !logoError;
@@ -849,7 +852,18 @@ function AccountCard({
       )}
     >
       <div className="flex items-start gap-4">
-        <div className="flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-blue-100/90 bg-gradient-to-br from-slate-50 to-blue-50 ring-1 ring-white/70">
+        <button
+          type="button"
+          className="flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl bg-gradient-to-br from-slate-50 to-blue-50 shadow-[0_10px_20px_-16px_rgba(37,99,235,0.45)] ring-1 ring-white/70 transition hover:-translate-y-0.5 hover:shadow-[0_14px_24px_-18px_rgba(37,99,235,0.55)] focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500"
+          onClick={(event) => {
+            event.stopPropagation();
+            if (showLogo) {
+              setLogoPreviewOpen(true);
+            }
+          }}
+          disabled={!showLogo}
+          aria-label={showLogo ? `Preview ${account.name} logo` : `${account.name} has no logo`}
+        >
           {showLogo ? (
             <img
               src={account.logoUrl ?? undefined}
@@ -863,10 +877,12 @@ function AccountCard({
               {logoFallback}
             </span>
           )}
-        </div>
+        </button>
 
         <div className="min-w-0 flex-1">
-          <p className="truncate text-lg font-semibold tracking-[-0.02em] text-slate-900">{account.name}</p>
+          <TooltipTarget text={account.name}>
+            <p className="truncate text-lg font-semibold tracking-[-0.02em] text-slate-900">{account.name}</p>
+          </TooltipTarget>
 
           <div className="mt-2 flex flex-wrap items-center gap-2">
             <span className="inline-flex items-center rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-blue-800">
@@ -883,13 +899,33 @@ function AccountCard({
           </div>
 
           {aeNames ? (
-            <p className="mt-3 truncate text-sm text-slate-600">
-              <span className="font-medium text-slate-500">AE: </span>
-              <span className="text-slate-800">{aeNames}</span>
-            </p>
+            <p className="mt-3 truncate text-sm text-slate-700">{aeNames}</p>
           ) : null}
         </div>
       </div>
+
+      {showLogo ? (
+        <Dialog open={logoPreviewOpen} onOpenChange={setLogoPreviewOpen}>
+          <DialogContent
+            className="w-[calc(100vw-2.5rem)] max-w-3xl border-none bg-transparent p-0 shadow-none"
+            aria-describedby={undefined}
+          >
+            <div className="relative flex w-full items-center justify-center overflow-hidden rounded-2xl bg-white px-6 pb-6 pt-14 shadow-2xl sm:px-8 sm:pb-8 sm:pt-16">
+              <DialogClose asChild aria-label="Close logo preview">
+                <ModalCloseButton
+                  icon={<X className="size-4" />}
+                  className="absolute right-0 top-0 z-10 rounded-md bg-slate-900/85 p-1.5 text-white transition-colors hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              </DialogClose>
+              <img
+                src={account.logoUrl ?? undefined}
+                alt={`${account.name} logo enlarged`}
+                className="mx-auto block h-auto max-h-[70vh] w-auto max-w-full object-contain"
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
+      ) : null}
     </article>
   );
 }
