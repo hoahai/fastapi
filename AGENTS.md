@@ -1293,6 +1293,7 @@ source .venv/bin/activate
 pip install -r requirements.txt
 
 # 2) Build TradSphere UI
+npm --prefix frontend/shell run build
 npm run install:all
 npm run build:all
 npm run sync-ui:all

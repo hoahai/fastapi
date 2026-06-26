@@ -12,6 +12,7 @@ import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
 import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { SectionCard } from "@shared/components/layout/SectionCard";
 import { Section, SectionHeader } from "@shared/components";
+import { ImageUploadField } from "@shared/components/form/ImageUploadField";
 import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { ModalCloseButton, ModalFooter, ModalHeaderRow, ModalShell } from "@shared/components";
@@ -45,6 +46,7 @@ import {
   createFundsphereAccount,
   loadFundsphereAccounts,
   normalizeFundsphereAccountForm,
+  uploadFundsphereAccountLogo,
   updateFundsphereAccount,
   type FundsphereAccount,
   type FundsphereAccountFormState,
@@ -85,6 +87,7 @@ type AccountModalProps = {
   account: FundsphereAccount | null;
   canEdit: boolean;
   onOpenChange: (open: boolean) => void;
+  onUploadLogo: (file: File, account: { code: string; name: string }) => Promise<string>;
   onSubmit: (payload: {
     mode: AccountMode;
     accountCode: string | null;
@@ -346,13 +349,6 @@ function buildEmptyMessage(params: {
   };
 }
 
-function isValidIsoDate(value: string): boolean {
-  if (!value) {
-    return true;
-  }
-  return /^\d{4}-\d{2}-\d{2}$/.test(value);
-}
-
 function isPersistedAccountsPageState(value: unknown): value is PersistedAccountsPageState {
   if (!isRecord(value)) {
     return false;
@@ -409,7 +405,6 @@ function validateAccountForm(form: FundsphereAccountFormState, mode: AccountMode
   conseroId: string | null;
   conseroName: string | null;
   strataName: string | null;
-  endDate: string | null;
 } {
   const code = asString(form.code).toUpperCase();
   const name = asString(form.name);
@@ -417,7 +412,6 @@ function validateAccountForm(form: FundsphereAccountFormState, mode: AccountMode
   const conseroId = asString(form.conseroId);
   const conseroName = asString(form.conseroName);
   const strataName = asString(form.strataName);
-  const endDate = asString(form.endDate);
 
   return {
     code: mode === "create" && !code ? "Code is required." : code.length > 10 ? "Code must be 10 characters or fewer." : null,
@@ -426,8 +420,26 @@ function validateAccountForm(form: FundsphereAccountFormState, mode: AccountMode
     conseroId: conseroId.length > 10 ? "Consero ID must be 10 characters or fewer." : null,
     conseroName: conseroName.length > 255 ? "Consero name must be 255 characters or fewer." : null,
     strataName: strataName.length > 255 ? "Strata name must be 255 characters or fewer." : null,
-    endDate: !isValidIsoDate(endDate) ? "End date must be a date." : null,
   };
+}
+
+function createEmptyAccountFieldErrors(): ReturnType<typeof validateAccountForm> {
+  return {
+    code: null,
+    name: null,
+    logoUrl: null,
+    conseroId: null,
+    conseroName: null,
+    strataName: null,
+  };
+}
+
+function validateAccountField(
+  field: keyof ReturnType<typeof validateAccountForm>,
+  form: FundsphereAccountFormState,
+  mode: AccountMode,
+): string | null {
+  return validateAccountForm(form, mode)[field];
 }
 
 function AccountModal({
@@ -436,19 +448,51 @@ function AccountModal({
   account,
   canEdit,
   onOpenChange,
+  onUploadLogo,
   onSubmit,
 }: AccountModalProps) {
   const [form, setForm] = useState<FundsphereAccountFormState>(() => toAccountForm(account));
   const [baseline, setBaseline] = useState<FundsphereAccountFormState>(() => toAccountForm(account));
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [isLogoUploading, setIsLogoUploading] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
+  const [logoUploadError, setLogoUploadError] = useState<string | null>(null);
   const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false);
+  const [fieldErrors, setFieldErrors] = useState(() => createEmptyAccountFieldErrors());
+  const [logoPreviewError, setLogoPreviewError] = useState(false);
+  const [logoPreviewOpen, setLogoPreviewOpen] = useState(false);
+  const [logoDraftFile, setLogoDraftFile] = useState<File | null>(null);
+  const [logoDraftObjectUrl, setLogoDraftObjectUrl] = useState<string | null>(null);
 
-  const formErrors = useMemo(() => validateAccountForm(form, mode), [form, mode]);
-  const formIsValid = useMemo(() => Object.values(formErrors).every((item) => item === null), [formErrors]);
-  const hasUnsavedChanges = useMemo(() => JSON.stringify(form) !== JSON.stringify(baseline), [baseline, form]);
-  const canSubmit = canEdit && hasUnsavedChanges && formIsValid && !isSubmitting;
+  const currentFormErrors = useMemo(() => validateAccountForm(form, mode), [form, mode]);
+  const formIsValid = useMemo(() => Object.values(currentFormErrors).every((item) => item === null), [currentFormErrors]);
+  const hasUnsavedChanges = useMemo(() => JSON.stringify(form) !== JSON.stringify(baseline) || Boolean(logoDraftFile), [baseline, form, logoDraftFile]);
+  const canSubmit = canEdit && hasUnsavedChanges && formIsValid && !isSubmitting && !isLogoUploading;
+  const showPrimaryAction = canEdit && hasUnsavedChanges && formIsValid && !isSubmitting && !isLogoUploading;
   const primaryActionLabel = mode === "create" ? "Create Account" : "Save Changes";
+  const logoPreviewSrc = logoDraftObjectUrl || asString(form.logoUrl);
+  const hasLogoPreview = Boolean(logoPreviewSrc) && !logoPreviewError;
+  const logoUploadItem = useMemo(() => {
+    const previewLabel = "Logo preview";
+    const placeholderText = (form.name || form.code || "AC").slice(0, 2).toUpperCase();
+    return {
+      key: logoDraftObjectUrl ? `draft:${logoDraftObjectUrl}` : `logo:${form.code || "new"}`,
+      label: previewLabel,
+      meta: logoDraftFile
+        ? "Previewing selected logo image."
+        : form.logoUrl
+          ? "Preview from the current logo."
+          : "Upload a logo image to preview it.",
+      previewSrc: logoPreviewSrc || null,
+      placeholder: (
+        <span className="text-xs font-semibold uppercase tracking-[0.16em] text-slate-500">
+          {placeholderText}
+        </span>
+      ),
+      previewAriaLabel: "Preview logo",
+      removeAriaLabel: logoDraftFile ? "Revert logo" : "Remove logo",
+    };
+  }, [form.code, form.logoUrl, form.name, logoDraftFile, logoDraftObjectUrl, logoPreviewSrc]);
 
   const codeField = useCommittedTextField<HTMLInputElement>(
     form.code,
@@ -462,12 +506,6 @@ function AccountModal({
   );
   const nameField = useCommittedTextField<HTMLInputElement>(form.name, (value) => {
     setForm((current) => ({ ...current, name: value }));
-    if (submitError) {
-      setSubmitError(null);
-    }
-  });
-  const logoUrlField = useCommittedTextField<HTMLInputElement>(form.logoUrl, (value) => {
-    setForm((current) => ({ ...current, logoUrl: value }));
     if (submitError) {
       setSubmitError(null);
     }
@@ -491,13 +529,44 @@ function AccountModal({
     }
   });
 
+  function markFieldBlurred(
+    field: keyof ReturnType<typeof validateAccountForm>,
+    nextForm: FundsphereAccountFormState = form,
+  ) {
+    setFieldErrors((current) => ({
+      ...current,
+      [field]: validateAccountField(field, nextForm, mode),
+    }));
+  }
+
+  useEffect(() => {
+    return () => {
+      if (logoDraftObjectUrl) {
+        URL.revokeObjectURL(logoDraftObjectUrl);
+      }
+    };
+  }, [logoDraftObjectUrl]);
+
+  useEffect(() => {
+    setLogoPreviewError(false);
+    if (!logoPreviewSrc) {
+      setLogoPreviewOpen(false);
+    }
+  }, [logoPreviewSrc]);
+
   useEffect(() => {
     if (!open) {
       setForm(toAccountForm(null));
       setBaseline(toAccountForm(null));
       setIsSubmitting(false);
+      setIsLogoUploading(false);
       setSubmitError(null);
+      setLogoUploadError(null);
       setIsDiscardDialogOpen(false);
+      setFieldErrors(createEmptyAccountFieldErrors());
+      setLogoPreviewError(false);
+      setLogoPreviewOpen(false);
+      clearLogoDraftAttachment();
       return;
     }
 
@@ -506,7 +575,13 @@ function AccountModal({
     setBaseline(nextForm);
     setSubmitError(null);
     setIsSubmitting(false);
+    setIsLogoUploading(false);
+    setLogoUploadError(null);
     setIsDiscardDialogOpen(false);
+    setFieldErrors(createEmptyAccountFieldErrors());
+    setLogoPreviewError(false);
+    setLogoPreviewOpen(false);
+    clearLogoDraftAttachment();
   }, [account, open]);
 
   function updateForm<K extends keyof FundsphereAccountFormState>(
@@ -517,6 +592,54 @@ function AccountModal({
       ...current,
       [field]: value,
     }));
+    if (submitError) {
+      setSubmitError(null);
+    }
+  }
+
+  function clearLogoDraftAttachment() {
+    if (logoDraftObjectUrl) {
+      URL.revokeObjectURL(logoDraftObjectUrl);
+    }
+    setLogoDraftFile(null);
+    setLogoDraftObjectUrl(null);
+  }
+
+  function restoreOriginalLogoAttachment() {
+    clearLogoDraftAttachment();
+    setForm((current) => ({
+      ...current,
+      logoUrl: baseline.logoUrl,
+    }));
+    setLogoPreviewError(false);
+    setLogoUploadError(null);
+  }
+
+  async function handleLogoFilesSelected(files: File[]) {
+    if (!files.length || isSubmitting || isLogoUploading || !canEdit) {
+      return;
+    }
+    const file = files[0];
+    const normalizedMimeType = asString(file.type).toLowerCase();
+    const normalizedFileName = asString(file.name).toLowerCase();
+    const validByMimeType = normalizedMimeType.startsWith("image/");
+    const validByExtension = (
+      normalizedFileName.endsWith(".png")
+      || normalizedFileName.endsWith(".jpg")
+      || normalizedFileName.endsWith(".jpeg")
+      || normalizedFileName.endsWith(".webp")
+    );
+    if (!validByMimeType && !validByExtension) {
+      setLogoUploadError("Only PNG, JPG, JPEG, and WEBP files are allowed.");
+      return;
+    }
+
+    setLogoUploadError(null);
+    setLogoPreviewError(false);
+    clearLogoDraftAttachment();
+    const nextObjectUrl = URL.createObjectURL(file);
+    setLogoDraftFile(file);
+    setLogoDraftObjectUrl(nextObjectUrl);
     if (submitError) {
       setSubmitError(null);
     }
@@ -534,8 +657,11 @@ function AccountModal({
   }
 
   function restoreBaseline() {
+    clearLogoDraftAttachment();
     setForm(baseline);
     setSubmitError(null);
+    setLogoUploadError(null);
+    setFieldErrors(createEmptyAccountFieldErrors());
   }
 
   function handleDialogOpenChange(nextOpen: boolean) {
@@ -555,25 +681,48 @@ function AccountModal({
 
   async function handleSubmit() {
     if (!canSubmit) {
+      setFieldErrors(currentFormErrors);
       return;
     }
 
     setIsSubmitting(true);
     setSubmitError(null);
     try {
+      let nextForm = {
+        ...form,
+        code: asString(form.code).toUpperCase(),
+        name: asString(form.name),
+        logoUrl: asString(form.logoUrl),
+        conseroId: asString(form.conseroId),
+        conseroName: asString(form.conseroName),
+        strataName: asString(form.strataName),
+      };
+
+      if (logoDraftFile) {
+        setIsLogoUploading(true);
+        try {
+          const logoUrl = await onUploadLogo(logoDraftFile, {
+            code: asString(form.code).toUpperCase(),
+            name: asString(form.name),
+          });
+          nextForm = {
+            ...nextForm,
+            logoUrl,
+          };
+          setForm(nextForm);
+          clearLogoDraftAttachment();
+        } catch (error) {
+          setLogoUploadError(error instanceof Error && error.message.trim() ? error.message.trim() : "Could not upload logo.");
+          return;
+        } finally {
+          setIsLogoUploading(false);
+        }
+      }
+
       await onSubmit({
         mode,
         accountCode: account?.code ?? null,
-        form: {
-          ...form,
-          code: asString(form.code).toUpperCase(),
-          name: asString(form.name),
-          logoUrl: asString(form.logoUrl),
-          conseroId: asString(form.conseroId),
-          conseroName: asString(form.conseroName),
-          strataName: asString(form.strataName),
-          endDate: asString(form.endDate),
-        },
+        form: nextForm,
       });
       onOpenChange(false);
     } catch (error) {
@@ -587,7 +736,7 @@ function AccountModal({
     <>
       <Dialog open={open} onOpenChange={handleDialogOpenChange}>
         <DialogContent
-          className="max-h-[92vh] w-[min(92vw,760px)] max-w-none overflow-hidden rounded-[1.6rem] bg-white px-7 py-6"
+          className="max-h-[92vh] max-w-[620px] overflow-hidden rounded-xl bg-white p-6"
           onInteractOutside={(event) => {
             if (isSubmitting || hasUnsavedChanges) {
               event.preventDefault();
@@ -612,147 +761,176 @@ function AccountModal({
               </DialogHeader>
             </ModalHeaderRow>
 
-            <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
-              <div className="grid grid-cols-1 gap-8">
-                <Section className="space-y-3">
-                  <SectionHeader
-                    title="Identity"
-                    description="Core account information and status."
-                  />
+            <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1 space-y-4">
+              <Section className="space-y-3">
+                <SectionHeader
+                  title="Add Account"
+                  description="Core account information, logo, and status."
+                />
 
-                  <FormRow
-                    label={(
-                      <>
-                        Code<span className="ml-1 text-rose-600">*</span>
-                      </>
-                    )}
-                  >
-                    {mode === "create" ? (
-                      <Input
-                        {...codeField}
-                        disabled={isSubmitting || !canEdit}
-                        maxLength={10}
-                        autoComplete="off"
-                        spellCheck={false}
-                        className="uppercase"
-                      />
-                    ) : (
-                      <ReadOnlyField value={account?.code ?? baseline.code} />
-                    )}
-                  </FormRow>
-                  {formErrors.code ? <p className="text-sm text-rose-600">{formErrors.code}</p> : null}
-
-                  <FormRow
-                    label={(
-                      <>
-                        Name<span className="ml-1 text-rose-600">*</span>
-                      </>
-                    )}
-                  >
+                <FormRow
+                  label={(
+                    <>
+                      Code<span className="ml-1 text-rose-600">*</span>
+                    </>
+                  )}
+                >
+                  {mode === "create" ? (
                     <Input
-                      {...nameField}
-                      disabled={isSubmitting || !canEdit}
-                      maxLength={255}
-                      autoComplete="off"
-                    />
-                  </FormRow>
-                  {formErrors.name ? <p className="text-sm text-rose-600">{formErrors.name}</p> : null}
-
-                  <FormRow label="Active">
-                    <button
-                      type="button"
-                      role="switch"
-                      aria-checked={form.active}
-                      aria-label="Active"
-                      onClick={() => setActive(!form.active)}
-                      disabled={isSubmitting || !canEdit}
-                      aria-disabled={isSubmitting || !canEdit}
-                      className={cn(
-                        "inline-flex h-10 w-fit items-center gap-3 px-1 py-2 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
-                        form.active ? "text-emerald-700" : "text-slate-600",
-                      )}
-                    >
-                      <span className={cn("relative inline-flex h-5 w-9 items-center rounded-full transition", form.active ? "bg-emerald-500" : "bg-slate-300")}>
-                        <span className={cn("inline-block h-4 w-4 rounded-full bg-white shadow transition", form.active ? "translate-x-[18px]" : "translate-x-[2px]")} />
-                      </span>
-                    </button>
-                  </FormRow>
-
-                  <FormRow label="End Date">
-                    <Input
-                      type="date"
-                      value={form.endDate}
-                      onChange={(event) => updateForm("endDate", event.target.value)}
-                      disabled={isSubmitting || !canEdit}
-                      maxLength={10}
-                    />
-                  </FormRow>
-                  {formErrors.endDate ? <p className="text-sm text-rose-600">{formErrors.endDate}</p> : null}
-                  <p className="text-xs leading-5 text-slate-500">
-                    Leave blank for active accounts. Setting an end date is useful when deactivating an account.
-                  </p>
-                </Section>
-
-                <Section className="space-y-3">
-                  <SectionHeader
-                    title="Reference Data"
-                    description="Optional fields used by other FundSphere workflows."
-                  />
-
-                  <FormRow label="Logo URL">
-                    <Input
-                      {...logoUrlField}
-                      disabled={isSubmitting || !canEdit}
-                      maxLength={2048}
-                      autoComplete="off"
-                      spellCheck={false}
-                    />
-                  </FormRow>
-                  {formErrors.logoUrl ? <p className="text-sm text-rose-600">{formErrors.logoUrl}</p> : null}
-
-                  <FormRow label="Consero ID">
-                    <Input
-                      {...conseroIdField}
+                      {...codeField}
+                      onBlur={(event) => {
+                        codeField.onBlur(event);
+                        markFieldBlurred("code", {
+                          ...form,
+                          code: event.target.value.trim().toUpperCase(),
+                        });
+                      }}
                       disabled={isSubmitting || !canEdit}
                       maxLength={10}
                       autoComplete="off"
                       spellCheck={false}
+                      className="uppercase"
                     />
-                  </FormRow>
-                  {formErrors.conseroId ? <p className="text-sm text-rose-600">{formErrors.conseroId}</p> : null}
+                  ) : (
+                    <ReadOnlyField value={account?.code ?? baseline.code} />
+                  )}
+                </FormRow>
+                {fieldErrors.code ? <p className="text-sm text-rose-600">{fieldErrors.code}</p> : null}
 
-                  <FormRow label="Consero Name">
-                    <Input
-                      {...conseroNameField}
-                      disabled={isSubmitting || !canEdit}
-                      maxLength={255}
-                      autoComplete="off"
-                      spellCheck={false}
-                    />
-                  </FormRow>
-                  {formErrors.conseroName ? <p className="text-sm text-rose-600">{formErrors.conseroName}</p> : null}
+                <FormRow
+                  label={(
+                    <>
+                      Name<span className="ml-1 text-rose-600">*</span>
+                    </>
+                  )}
+                >
+                  <Input
+                    {...nameField}
+                    onBlur={(event) => {
+                      nameField.onBlur(event);
+                      markFieldBlurred("name");
+                    }}
+                    disabled={isSubmitting || !canEdit}
+                    maxLength={255}
+                    autoComplete="off"
+                  />
+                </FormRow>
+                {fieldErrors.name ? <p className="text-sm text-rose-600">{fieldErrors.name}</p> : null}
 
-                  <FormRow label="Strata Name">
-                    <Input
-                      {...strataNameField}
-                      disabled={isSubmitting || !canEdit}
-                      maxLength={255}
-                      autoComplete="off"
-                      spellCheck={false}
-                    />
-                  </FormRow>
-                  {formErrors.strataName ? <p className="text-sm text-rose-600">{formErrors.strataName}</p> : null}
-                </Section>
-              </div>
+                <FormRow label="Logo" alignStart>
+                  <ImageUploadField
+                    buttonLabel="Select image or paste screenshot"
+                    helperText="PNG, JPG, JPEG, or WEBP. Up to 10 MB."
+                    items={[logoUploadItem]}
+                    disabled={isSubmitting || !canEdit}
+                    isBusy={isLogoUploading}
+                    onFilesSelected={(files) => {
+                      void handleLogoFilesSelected(files);
+                    }}
+                    onPreviewItem={() => {
+                      if (logoPreviewSrc) {
+                        setLogoPreviewOpen(true);
+                      }
+                    }}
+                    onRemoveItem={
+                      logoDraftFile || form.logoUrl
+                        ? () => {
+                            if (logoDraftFile) {
+                              restoreOriginalLogoAttachment();
+                              return;
+                            }
+                            updateForm("logoUrl", "");
+                            setLogoPreviewError(false);
+                            setLogoUploadError(null);
+                            if (submitError) {
+                              setSubmitError(null);
+                            }
+                          }
+                        : undefined
+                    }
+                    errorText={logoUploadError || fieldErrors.logoUrl || undefined}
+                    statusText={isLogoUploading ? "Uploading logo..." : null}
+                  />
+                </FormRow>
+
+                <FormRow label="Active">
+                  <button
+                    type="button"
+                    role="switch"
+                    aria-checked={form.active}
+                    aria-label="Active"
+                    onClick={() => setActive(!form.active)}
+                    disabled={isSubmitting || !canEdit}
+                    aria-disabled={isSubmitting || !canEdit}
+                    className={cn(
+                      "inline-flex h-10 w-fit items-center gap-3 px-1 py-2 text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring",
+                      form.active ? "text-emerald-700" : "text-slate-600",
+                    )}
+                  >
+                    <span className={cn("relative inline-flex h-5 w-9 items-center rounded-full transition", form.active ? "bg-emerald-500" : "bg-slate-300")}>
+                      <span className={cn("inline-block h-4 w-4 rounded-full bg-white shadow transition", form.active ? "translate-x-[18px]" : "translate-x-[2px]")} />
+                    </span>
+                  </button>
+                </FormRow>
+              </Section>
+
+              <Section className="space-y-3">
+                <SectionHeader
+                  title="Reference Data"
+                  description="Optional fields used by other FundSphere workflows."
+                />
+
+                <FormRow label="Consero ID">
+                  <Input
+                    {...conseroIdField}
+                    onBlur={(event) => {
+                      conseroIdField.onBlur(event);
+                      markFieldBlurred("conseroId");
+                    }}
+                    disabled={isSubmitting || !canEdit}
+                    maxLength={10}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </FormRow>
+                {fieldErrors.conseroId ? <p className="text-sm text-rose-600">{fieldErrors.conseroId}</p> : null}
+
+                <FormRow label="Consero Name">
+                  <Input
+                    {...conseroNameField}
+                    onBlur={(event) => {
+                      conseroNameField.onBlur(event);
+                      markFieldBlurred("conseroName");
+                    }}
+                    disabled={isSubmitting || !canEdit}
+                    maxLength={255}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </FormRow>
+                {fieldErrors.conseroName ? <p className="text-sm text-rose-600">{fieldErrors.conseroName}</p> : null}
+
+                <FormRow label="Strata Name">
+                  <Input
+                    {...strataNameField}
+                    onBlur={(event) => {
+                      strataNameField.onBlur(event);
+                      markFieldBlurred("strataName");
+                    }}
+                    disabled={isSubmitting || !canEdit}
+                    maxLength={255}
+                    autoComplete="off"
+                    spellCheck={false}
+                  />
+                </FormRow>
+                {fieldErrors.strataName ? <p className="text-sm text-rose-600">{fieldErrors.strataName}</p> : null}
+              </Section>
 
               {submitError ? <p className="mt-4 text-sm text-rose-600">{submitError}</p> : null}
             </div>
 
-            <ModalFooter className="mt-4 flex-col gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-between">
-              <span className="text-xs text-slate-500">
-                {form.active ? "Active accounts remain available for budget planning." : "Inactive accounts are soft-disabled, not deleted."}
-              </span>
-              <div className="flex items-center gap-2">
+            <ModalFooter className="mt-4 flex-col items-end gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-end">
+              <div className="flex items-center justify-end gap-2">
                 {canEdit && hasUnsavedChanges ? (
                   <Button
                     variant="outline"
@@ -763,7 +941,7 @@ function AccountModal({
                     Revert
                   </Button>
                 ) : null}
-                {canEdit && hasUnsavedChanges ? (
+                {showPrimaryAction ? (
                   <Button type="button" onClick={handleSubmit} disabled={!canSubmit}>
                     {isSubmitting ? (
                       <>
@@ -780,6 +958,29 @@ function AccountModal({
           </ModalShell>
         </DialogContent>
       </Dialog>
+
+      {hasLogoPreview ? (
+        <Dialog open={logoPreviewOpen} onOpenChange={setLogoPreviewOpen}>
+          <DialogContent
+            className="w-[calc(100vw-2.5rem)] max-w-3xl border-none bg-transparent p-0 shadow-none"
+            aria-describedby={undefined}
+          >
+            <div className="relative flex w-full items-center justify-center overflow-hidden rounded-2xl bg-white px-6 pb-6 pt-14 shadow-2xl sm:px-8 sm:pb-8 sm:pt-16">
+              <DialogClose asChild aria-label="Close logo preview">
+                <ModalCloseButton
+                  icon={<X className="size-4" />}
+                  className="absolute right-0 top-0 z-10 rounded-md bg-slate-900/85 p-1.5 text-white transition-colors hover:bg-slate-900 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                />
+              </DialogClose>
+              <img
+                src={logoPreviewSrc}
+                alt={`${form.name || "Account"} logo enlarged`}
+                className="mx-auto block h-auto max-h-[70vh] w-auto max-w-full object-contain"
+              />
+            </div>
+          </DialogContent>
+        </Dialog>
+      ) : null}
 
       <UnsavedChangesDialog
         open={isDiscardDialogOpen}
@@ -1326,6 +1527,14 @@ function FundsphereAccountsPage() {
     }
   }
 
+  async function handleAccountLogoUpload(file: File, account: { code: string; name: string }): Promise<string> {
+    return uploadFundsphereAccountLogo({
+      requestJson,
+      accountCode: account.code,
+      file,
+    });
+  }
+
   const activeCount = accounts?.filter((account) => account.active).length ?? 0;
   const inactiveCount = (accounts?.length ?? 0) - activeCount;
   const canRefresh = Boolean(isOnline && !isLoading && !isRefreshing && !isSaving && !isModalOpen);
@@ -1568,6 +1777,7 @@ function FundsphereAccountsPage() {
         account={modalAccount}
         canEdit={canEditFundsphere}
         onOpenChange={setIsModalOpen}
+        onUploadLogo={handleAccountLogoUpload}
         onSubmit={handleAccountSubmit}
       />
     </AppPageLayout>

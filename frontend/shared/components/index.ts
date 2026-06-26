@@ -3,6 +3,7 @@ export * from "./actions/IconActionButton";
 export * from "./actions/Tooltip";
 export * from "./entities/EntityItem";
 export * from "./form/FormRow";
+export * from "./form/ImageUploadField";
 export * from "./form/EmailChipsInput";
 export * from "./form/ReadOnlyField";
 export * from "./RichTextEditor";

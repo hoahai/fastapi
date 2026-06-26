@@ -224,3 +224,28 @@ export async function updateFundsphereAccount(params: {
     },
   });
 }
+
+export async function uploadFundsphereAccountLogo(params: {
+  requestJson: FundsphereRequestJson;
+  accountCode: string;
+  file: File;
+}): Promise<string> {
+  const formData = new FormData();
+  formData.append("accountCode", asString(params.accountCode));
+  formData.append("file", params.file);
+
+  const payload = await params.requestJson("/api/fundsphere/v1/accounts/logo/upload", {
+    method: "POST",
+    body: formData,
+    errorToast: false,
+  });
+  const data = unwrapEnvelope(payload);
+  if (!isRecord(data)) {
+    throw new Error("Could not upload logo.");
+  }
+  const logoUrl = asString(data.logoUrl);
+  if (!logoUrl) {
+    throw new Error("Could not upload logo.");
+  }
+  return logoUrl;
+}

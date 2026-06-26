@@ -1,14 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   RefreshCw,
-  UploadCloud,
   Search,
   UserCheck,
   UserRound,
   UserX,
   Users,
-  Trash2,
   X,
 } from "lucide-react";
 
@@ -16,6 +14,7 @@ import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
 import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { SectionCard } from "@shared/components/layout/SectionCard";
 import { Section, SectionHeader } from "@shared/components";
+import { ImageUploadField } from "@shared/components/form/ImageUploadField";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { DateInputField } from "@tradsphere/components/dashboard/FlightDateRangeField";
@@ -641,7 +640,6 @@ function EmployeeManagementModal({
   const [isManagersLoading, setIsManagersLoading] = useState(false);
   const [managerLoadError, setManagerLoadError] = useState<string | null>(null);
   const [fieldErrors, setFieldErrors] = useState(() => createEmptyFieldErrors());
-  const pictureFileInputRef = useRef<HTMLInputElement | null>(null);
   const originalPictureUrlRef = useRef<string>(asString(employee?.pictureUrl));
   const managerOptions = useMemo(
     () => employeeOptions.filter((option) => (
@@ -687,9 +685,6 @@ function EmployeeManagementModal({
       clearPictureDraftAttachment();
       setIsManagersLoading(false);
       setManagerLoadError(null);
-      if (pictureFileInputRef.current) {
-        pictureFileInputRef.current.value = "";
-      }
       setFieldErrors(createEmptyFieldErrors());
       return;
     }
@@ -708,9 +703,6 @@ function EmployeeManagementModal({
     clearPictureDraftAttachment();
     setIsManagersLoading(mode === "edit" && Boolean(employee?.id));
     setManagerLoadError(null);
-    if (pictureFileInputRef.current) {
-      pictureFileInputRef.current.value = "";
-    }
     setFieldErrors(createEmptyFieldErrors());
   }, [employee, mode, open]);
 
@@ -824,17 +816,6 @@ function EmployeeManagementModal({
     }));
   }
 
-  function openPicturePicker() {
-    if (isSubmitting || isPictureUploading || !canEdit) {
-      return;
-    }
-    setPictureUploadError(null);
-    if (pictureFileInputRef.current) {
-      pictureFileInputRef.current.value = "";
-      pictureFileInputRef.current.click();
-    }
-  }
-
   function clearPictureDraftAttachment() {
     if (pictureDraftObjectUrl) {
       URL.revokeObjectURL(pictureDraftObjectUrl);
@@ -868,32 +849,6 @@ function EmployeeManagementModal({
     const nextObjectUrl = URL.createObjectURL(file);
     setPictureDraftFile(file);
     setPictureDraftObjectUrl(nextObjectUrl);
-  }
-
-  async function handlePictureFileChange(fileList: FileList | null) {
-    const file = fileList?.[0] ?? null;
-    if (pictureFileInputRef.current) {
-      pictureFileInputRef.current.value = "";
-    }
-    if (!file) {
-      return;
-    }
-    await processPictureFile(file);
-  }
-
-  async function handlePicturePaste(event: ClipboardEvent<HTMLDivElement>) {
-    if (isSubmitting || isPictureUploading || !canEdit) {
-      return;
-    }
-    const clipboardFiles = Array.from(event.clipboardData?.items ?? [])
-      .filter((item) => item.kind === "file")
-      .map((item) => item.getAsFile())
-      .filter((file): file is File => file instanceof File);
-    if (!clipboardFiles.length) {
-      return;
-    }
-    event.preventDefault();
-    await processPictureFile(clipboardFiles[0]);
   }
 
   function restoreOriginalPictureAttachment() {
@@ -1114,92 +1069,46 @@ function EmployeeManagementModal({
                   </LabeledField>
 
                   <LabeledField label="Profile Picture" alignStart>
-                    <div className="space-y-3" onPaste={(event) => { void handlePicturePaste(event); }}>
-                      <input
-                        ref={pictureFileInputRef}
-                        type="file"
-                        accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
-                        className="hidden"
-                        onChange={(event) => {
-                          void handlePictureFileChange(event.target.files);
-                        }}
-                        disabled={isSubmitting || !canEdit || isPictureUploading}
-                      />
-                      <button
-                        type="button"
-                        className={cn(
-                          "flex w-full items-center justify-center gap-2 rounded-lg border border-dashed px-3 py-4 text-sm transition",
-                          isSubmitting || !canEdit || isPictureUploading
-                            ? "cursor-not-allowed border-blue-100 bg-blue-50/20 text-slate-400"
-                            : "cursor-pointer border-blue-200 bg-blue-50/30 text-slate-700 hover:border-blue-300 hover:bg-blue-50/50",
-                        )}
-                        onClick={openPicturePicker}
-                        disabled={isSubmitting || !canEdit || isPictureUploading}
-                      >
-                        <UploadCloud className="size-4 text-blue-600" />
-                        Select image or paste screenshot
-                      </button>
-
-                      {pictureAttachment ? (
-                        <div className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs">
-                          <div className="flex min-w-0 items-center gap-3">
-                            {hasPicturePreview ? (
-                              <button
-                                type="button"
-                                className="flex h-12 w-12 shrink-0 cursor-zoom-in items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-slate-50"
-                                onClick={() => setIsPicturePreviewOpen(true)}
-                                disabled={isSubmitting || !canEdit}
-                                aria-label="Preview profile picture"
-                              >
-                                <img
-                                  key={picturePreviewSrc || "picture-preview-empty"}
-                                  src={picturePreviewSrc}
-                                  alt={pictureAttachment.name}
-                                  className="h-full w-full object-cover"
-                                  loading="lazy"
-                                  onError={() => setPicturePreviewError(true)}
-                                />
-                              </button>
-                            ) : (
-                              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-500">
-                                <UserRound className="size-4" aria-hidden="true" />
-                              </div>
-                            )}
-                            <div className="min-w-0">
-                              <p className="truncate font-medium text-slate-800">{pictureAttachment.name}</p>
-                              <p className="text-slate-500">{pictureAttachment.meta}</p>
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            className="inline-flex size-6 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-70"
-                            onClick={() => {
+                    <ImageUploadField
+                      buttonLabel="Select image or paste screenshot"
+                      helperText="PNG, JPG, JPEG, or WEBP. Up to 10 MB."
+                      items={pictureAttachment ? [{
+                        key: pictureDraftFile ? `draft:${pictureDraftFile.name}` : `picture:${pictureAttachment.name}`,
+                        label: pictureAttachment.name,
+                        meta: pictureAttachment.meta,
+                        previewSrc: picturePreviewSrc,
+                        placeholder: <UserRound className="size-4" aria-hidden="true" />,
+                        previewAriaLabel: "Preview profile picture",
+                        removeAriaLabel: pictureDraftFile ? "Revert profile picture" : "Remove profile picture",
+                      }] : []}
+                      disabled={isSubmitting || !canEdit}
+                      isBusy={isPictureUploading}
+                      onFilesSelected={(files) => {
+                        if (files[0]) {
+                          void processPictureFile(files[0]);
+                        }
+                      }}
+                      onPreviewItem={() => {
+                        setIsPicturePreviewOpen(true);
+                      }}
+                      onRemoveItem={
+                        pictureAttachment
+                          ? () => {
                               if (pictureDraftFile) {
                                 restoreOriginalPictureAttachment();
-                              } else {
-                                updateForm("pictureUrl", "");
-                                setPictureDraftFile(null);
-                                setPictureDraftObjectUrl(null);
-                                setPicturePreviewError(false);
-                                setPictureUploadError(null);
+                                return;
                               }
-                              if (pictureFileInputRef.current) {
-                                pictureFileInputRef.current.value = "";
-                              }
-                            }}
-                            disabled={isSubmitting || !canEdit || isPictureUploading}
-                            aria-label={pictureDraftFile ? "Revert profile picture" : "Remove profile picture"}
-                          >
-                            <Trash2 className="size-4" aria-hidden="true" />
-                          </button>
-                        </div>
-                      ) : null}
-
-                      <p className="text-xs text-slate-500">PNG, JPG, JPEG, or WEBP. Up to 10 MB.</p>
-                      {isPictureUploading ? <p className="text-xs text-slate-500">Uploading picture...</p> : null}
-                      {pictureUploadError ? <p className="text-sm text-rose-600">{pictureUploadError}</p> : null}
-                      {errors.pictureUrl ? <p className="text-sm text-rose-600">{errors.pictureUrl}</p> : null}
-                    </div>
+                              updateForm("pictureUrl", "");
+                              setPictureDraftFile(null);
+                              setPictureDraftObjectUrl(null);
+                              setPicturePreviewError(false);
+                              setPictureUploadError(null);
+                            }
+                          : undefined
+                      }
+                      errorText={pictureUploadError || errors.pictureUrl || undefined}
+                      statusText={isPictureUploading ? "Uploading picture..." : null}
+                    />
                   </LabeledField>
                 </Section>
 
