@@ -10,7 +10,6 @@ import {
 } from "lucide-react";
 
 import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
-import { LoadActionArea } from "@shared/components/layout/LoadActionArea";
 import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { SectionCard } from "@shared/components/layout/SectionCard";
 import { Section, SectionHeader } from "@shared/components";
@@ -68,7 +67,9 @@ type AccountMode = "create" | "edit";
 type AccountGroupKey = "active" | "inactive";
 type AccountStatusFilter = "" | "active" | "inactive";
 type AccountSearchCriteria = {
-  query: string;
+  code: string;
+  name: string;
+  aeName: string;
   statusFilter: AccountStatusFilter;
 };
 
@@ -97,10 +98,23 @@ type AccountGroup = {
   items: FundsphereAccount[];
 };
 
+type FundsphereAccountRep = {
+  accountCode: string;
+  employeeId: string;
+};
+
+type LeaveSphereEmployeeLookup = {
+  id: string;
+  fullName: string;
+};
+
 const FUNDSPHERE_APP_CODE = "fundsphere";
+const DEFAULT_ACCOUNT_STATUS_FILTER: AccountStatusFilter = "active";
 const EMPTY_SEARCH_CRITERIA: AccountSearchCriteria = {
-  query: "",
-  statusFilter: "",
+  code: "",
+  name: "",
+  aeName: "",
+  statusFilter: DEFAULT_ACCOUNT_STATUS_FILTER,
 };
 const EMPTY_PAGE_STATE: PersistedAccountsPageState = {
   searchDraft: { ...EMPTY_SEARCH_CRITERIA },
@@ -108,7 +122,7 @@ const EMPTY_PAGE_STATE: PersistedAccountsPageState = {
   hasSearched: false,
 };
 const STATUS_OPTIONS: AppDropdownOption[] = [
-  { value: "", label: "All" },
+  { value: "", label: "" },
   { value: "active", label: "Active" },
   { value: "inactive", label: "Inactive" },
 ];
@@ -159,22 +173,53 @@ function normalizeStatusFilterValue(value: string): AccountStatusFilter {
   return "";
 }
 
-function buildAccountSearchText(account: FundsphereAccount): string {
-  return [
-    account.code,
-    account.name,
-    account.logoUrl ?? "",
-    account.conseroId ?? "",
-    account.conseroName ?? "",
-    account.strataName ?? "",
-  ]
-    .filter(Boolean)
-    .join(" ")
-    .toLowerCase();
-}
-
 function sortAccounts(accounts: FundsphereAccount[]): FundsphereAccount[] {
   return [...accounts].sort((left, right) => left.code.localeCompare(right.code));
+}
+
+function buildEmployeeFullName(firstName: string, lastName: string): string {
+  return [firstName, lastName].map((part) => part.trim()).filter(Boolean).join(" ");
+}
+
+function normalizeFundsphereAccountRep(value: unknown): FundsphereAccountRep | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const accountCode = asString(value.accountCode).toUpperCase();
+  const employeeId = asString(value.employeeId);
+  if (!accountCode || !employeeId) {
+    return null;
+  }
+
+  return {
+    accountCode,
+    employeeId,
+  };
+}
+
+function normalizeLeaveSphereEmployeeLookup(value: unknown): LeaveSphereEmployeeLookup | null {
+  if (!isRecord(value)) {
+    return null;
+  }
+
+  const id = asString(value.id);
+  const fullName = buildEmployeeFullName(asString(value.firstName), asString(value.lastName));
+  if (!id || !fullName) {
+    return null;
+  }
+
+  return {
+    id,
+    fullName,
+  };
+}
+
+function unwrapResponseData(payload: unknown): unknown {
+  if (isRecord(payload) && "data" in payload) {
+    return payload.data;
+  }
+  return payload;
 }
 
 function buildAccountGroups(accounts: FundsphereAccount[]): AccountGroup[] {
@@ -194,6 +239,7 @@ function buildEmptyMessage(params: {
   hasFilters: boolean;
   hasAccounts: boolean;
   hasMatches: boolean;
+  statusFilter: AccountStatusFilter;
 }): { title: string; description: string } {
   if (!params.hasSearched) {
     return {
@@ -201,17 +247,25 @@ function buildEmptyMessage(params: {
       description: "Load the account list, then use the filters to narrow results.",
     };
   }
-  if (!params.hasMatches && params.hasFilters) {
-    return {
-      title: "No matches",
-      description: "No accounts matched the current filters. Adjust the filters and search again.",
-    };
-  }
   if (!params.hasAccounts) {
     return {
       title: "No accounts yet",
       description: "Create the first FundSphere account to start managing budgets.",
     };
+  }
+  if (!params.hasMatches) {
+    if (params.statusFilter === "active") {
+      return {
+        title: "No active accounts",
+        description: "No active accounts matched the current filters. Switch Status to Inactive or clear the filters to see inactive accounts.",
+      };
+    }
+    if (params.hasFilters) {
+      return {
+        title: "No matches",
+        description: "No accounts matched the current filters. Adjust the filters and search again.",
+      };
+    }
   }
   if (params.hasFilters) {
     return {
@@ -240,9 +294,13 @@ function isPersistedAccountsPageState(value: unknown): value is PersistedAccount
     return false;
   }
   return (
-    typeof value.searchDraft.query === "string" &&
+    typeof value.searchDraft.code === "string" &&
+    typeof value.searchDraft.name === "string" &&
+    typeof value.searchDraft.aeName === "string" &&
     typeof value.searchDraft.statusFilter === "string" &&
-    typeof value.searchCriteria.query === "string" &&
+    typeof value.searchCriteria.code === "string" &&
+    typeof value.searchCriteria.name === "string" &&
+    typeof value.searchCriteria.aeName === "string" &&
     typeof value.searchCriteria.statusFilter === "string"
   );
 }
@@ -680,11 +738,13 @@ function buildAccountStatusClass(active: boolean): string {
 
 function AccountCard({
   account,
+  aeNames,
   disabled,
   canEdit,
   onEdit,
 }: {
   account: FundsphereAccount;
+  aeNames?: string | null;
   disabled?: boolean;
   canEdit: boolean;
   onEdit: (account: FundsphereAccount) => void;
@@ -730,6 +790,7 @@ function AccountCard({
 
           <div className="mt-3 grid grid-cols-1 gap-2 text-sm text-slate-700 sm:grid-cols-2 xl:grid-cols-3">
             <AccountMeta label="End Date" value={account.endDate ?? "—"} />
+            <AccountMeta label="AE Name" value={aeNames ?? "—"} />
             <AccountMeta label="Consero ID" value={account.conseroId ?? "—"} />
             <AccountMeta label="Consero Name" value={account.conseroName ?? "—"} />
             <AccountMeta className="xl:col-span-2" label="Strata Name" value={account.strataName ?? "—"} />
@@ -795,6 +856,8 @@ function FundsphereAccountsPage() {
 
   const [accounts, setAccounts] = useState<FundsphereAccount[] | null>(null);
   const accountsRef = useRef<FundsphereAccount[] | null>(null);
+  const [accountReps, setAccountReps] = useState<FundsphereAccountRep[] | null>(null);
+  const [employeeLookup, setEmployeeLookup] = useState<Record<string, string>>({});
   const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
@@ -881,6 +944,33 @@ function FundsphereAccountsPage() {
         return;
       }
       commitAccounts(nextAccounts, "network");
+      const [accountRepsResult, employeesResult] = await Promise.allSettled([
+        requestJson("/api/fundsphere/v1/accountReps", { errorToast: false }),
+        requestJson("/api/leavesphere/v1/employees", { errorToast: false }),
+      ]);
+      if (requestToken !== requestTokenRef.current) {
+        return;
+      }
+      if (accountRepsResult.status === "fulfilled") {
+        const payload = unwrapResponseData(accountRepsResult.value);
+        const reps = Array.isArray(payload)
+          ? payload
+              .map((item) => normalizeFundsphereAccountRep(item))
+              .filter((item): item is FundsphereAccountRep => item !== null)
+          : [];
+        setAccountReps(reps);
+      }
+      if (employeesResult.status === "fulfilled") {
+        const payload = unwrapResponseData(employeesResult.value);
+        const lookupEntries = Array.isArray(payload)
+          ? payload
+              .map((item) => normalizeLeaveSphereEmployeeLookup(item))
+              .filter((item): item is LeaveSphereEmployeeLookup => item !== null)
+          : [];
+        setEmployeeLookup(
+          Object.fromEntries(lookupEntries.map((item) => [item.id, item.fullName] as const)),
+        );
+      }
       setRefreshMessage(null);
       setErrorMessage(null);
     } catch (error) {
@@ -913,6 +1003,8 @@ function FundsphereAccountsPage() {
     setModalMode("create");
     setModalAccount(null);
     setIsSaving(false);
+    setAccountReps(null);
+    setEmployeeLookup({});
     setAccountGroupOpenState({
       active: true,
       inactive: true,
@@ -927,11 +1019,36 @@ function FundsphereAccountsPage() {
     void refreshAccounts("cache-first");
   }, [pageStateControls.hydrated, cacheKey]);
 
+  const accountRepNamesByAccountCode = useMemo(() => {
+    const grouped = new Map<string, Set<string>>();
+
+    for (const rep of accountReps ?? []) {
+      const employeeName = employeeLookup[rep.employeeId];
+      if (!employeeName) {
+        continue;
+      }
+      const accountCode = rep.accountCode.toUpperCase();
+      if (!grouped.has(accountCode)) {
+        grouped.set(accountCode, new Set());
+      }
+      grouped.get(accountCode)?.add(employeeName);
+    }
+
+    return Object.fromEntries(
+      Array.from(grouped.entries()).map(([accountCode, names]) => [
+        accountCode,
+        Array.from(names).sort((left, right) => left.localeCompare(right)).join(", "),
+      ]),
+    ) as Record<string, string>;
+  }, [accountReps, employeeLookup]);
+
   const filteredAccounts = useMemo(() => {
     if (!accounts) {
       return [];
     }
-    const query = searchCriteria.query.trim().toLowerCase();
+    const codeQuery = searchCriteria.code.trim().toLowerCase();
+    const nameQuery = searchCriteria.name.trim().toLowerCase();
+    const aeQuery = searchCriteria.aeName.trim().toLowerCase();
     return sortAccounts(
       accounts.filter((account) => {
         if (searchCriteria.statusFilter === "active" && !account.active) {
@@ -940,29 +1057,47 @@ function FundsphereAccountsPage() {
         if (searchCriteria.statusFilter === "inactive" && account.active) {
           return false;
         }
-        if (!query) {
-          return true;
+        if (codeQuery && !account.code.toLowerCase().includes(codeQuery)) {
+          return false;
         }
-        return buildAccountSearchText(account).includes(query);
+        if (nameQuery && !account.name.toLowerCase().includes(nameQuery)) {
+          return false;
+        }
+        if (aeQuery) {
+          const aeNames = accountRepNamesByAccountCode[account.code] ?? "";
+          if (!aeNames.toLowerCase().includes(aeQuery)) {
+            return false;
+          }
+        }
+        return true;
       }),
     );
-  }, [accounts, searchCriteria.query, searchCriteria.statusFilter]);
+  }, [accountRepNamesByAccountCode, accounts, searchCriteria.aeName, searchCriteria.code, searchCriteria.name, searchCriteria.statusFilter]);
 
   const accountGroups = useMemo(() => buildAccountGroups(filteredAccounts), [filteredAccounts]);
 
   const hasAccounts = Boolean(accounts && accounts.length > 0);
   const hasMatches = Boolean(filteredAccounts.length > 0);
-  const hasFilters = Boolean(searchCriteria.query.trim()) || Boolean(searchCriteria.statusFilter);
-  const hasDraftFilters = Boolean(searchDraft.query.trim()) || Boolean(searchDraft.statusFilter);
+  const hasFilters =
+    Boolean(searchCriteria.code.trim()) ||
+    Boolean(searchCriteria.name.trim()) ||
+    Boolean(searchCriteria.aeName.trim()) ||
+    searchCriteria.statusFilter !== DEFAULT_ACCOUNT_STATUS_FILTER;
+  const hasDraftFilters =
+    searchDraft.code.trim() !== searchCriteria.code.trim() ||
+    searchDraft.name.trim() !== searchCriteria.name.trim() ||
+    searchDraft.aeName.trim() !== searchCriteria.aeName.trim() ||
+    searchDraft.statusFilter !== searchCriteria.statusFilter;
   const emptyMessage = buildEmptyMessage({
     hasSearched,
     hasFilters,
     hasAccounts,
     hasMatches,
+    statusFilter: searchCriteria.statusFilter,
   });
 
   const searchResultText = !hasSearched
-    ? "Accounts load automatically. Use the filters to narrow the list."
+    ? "Active accounts load automatically. Use the filters to narrow the list."
     : !accounts
       ? "Loading accounts..."
       : filteredAccounts.length === 0
@@ -1125,88 +1260,129 @@ function FundsphereAccountsPage() {
         />
       ) : null}
     >
-      <SectionCard title="Filter Accounts" description="Search by code, name, or reference data, then narrow by status.">
-        <form className="space-y-5" onSubmit={handleSearchSubmit}>
-          <LoadActionArea
-            controls={(
-              <div className="grid grid-cols-1 gap-3 md:grid-cols-[minmax(0,1fr)_220px]">
-                <label className="block min-w-0">
-                  <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                    Search
-                  </span>
-                  <div className="relative">
-                    <Input
-                      value={searchDraft.query}
-                      onChange={(event) =>
-                        setPageState((current) => ({
-                          ...current,
-                          searchDraft: {
-                            ...current.searchDraft,
-                            query: event.target.value,
-                          },
-                        }))
-                      }
-                      placeholder="Search code, name, logo URL, or reference fields"
-                      autoComplete="off"
-                      spellCheck={false}
-                      className="pl-10"
-                    />
-                    <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
-                  </div>
-                </label>
+      <Section className="rounded-[1.45rem] border border-blue-100/90 bg-white/95 p-5 shadow-soft">
+        <SectionHeader
+          title="Accounts Search"
+          description="Select search criteria, then click Search to load matching accounts."
+        />
 
-                <label className="block min-w-0">
-                  <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
-                    Status
-                  </span>
-                  <AppDropdown
-                    value={searchDraft.statusFilter}
-                    options={STATUS_OPTIONS}
-                    onValueChange={(value) =>
-                      setPageState((current) => ({
-                        ...current,
-                        searchDraft: {
-                          ...current.searchDraft,
-                          statusFilter: normalizeStatusFilterValue(value),
-                        },
-                      }))
-                    }
-                    searchable={false}
-                    allowCustomValue={false}
-                    ariaLabel="Account status filter"
-                    placeholder="All"
-                  />
-                </label>
+        <form
+          className="space-y-5 px-1.5"
+          onSubmit={(event) => {
+            event.preventDefault();
+            handleSearchSubmit(event);
+          }}
+        >
+          <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2 xl:grid-cols-4">
+            <label className="block min-w-0">
+              <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                Code
+              </span>
+              <div className="relative">
+                <Input
+                  value={searchDraft.code}
+                  onChange={(event) =>
+                    setPageState((current) => ({
+                      ...current,
+                      searchDraft: {
+                        ...current.searchDraft,
+                        code: event.target.value,
+                      },
+                    }))
+                  }
+                  placeholder="Search code"
+                  autoComplete="off"
+                  spellCheck={false}
+                  className="pl-10"
+                />
+                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
               </div>
-            )}
-            actions={(
-              <>
-                {hasDraftFilters ? (
-                  <Button variant="outline" type="button" onClick={resetSearchCriteria} disabled={isLoading || isRefreshing}>
-                    Clear
-                  </Button>
-                ) : null}
+            </label>
+
+            <label className="block min-w-0">
+              <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                Name
+              </span>
+              <Input
+                value={searchDraft.name}
+                onChange={(event) =>
+                  setPageState((current) => ({
+                    ...current,
+                    searchDraft: {
+                      ...current.searchDraft,
+                      name: event.target.value,
+                    },
+                  }))
+                }
+                placeholder="Search name"
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </label>
+
+            <label className="block min-w-0">
+              <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                AE Name
+              </span>
+              <Input
+                value={searchDraft.aeName}
+                onChange={(event) =>
+                  setPageState((current) => ({
+                    ...current,
+                    searchDraft: {
+                      ...current.searchDraft,
+                      aeName: event.target.value,
+                    },
+                  }))
+                }
+                placeholder="Search AE name"
+                autoComplete="off"
+                spellCheck={false}
+              />
+            </label>
+
+            <label className="block min-w-0">
+              <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                Status
+              </span>
+              <AppDropdown
+                value={searchDraft.statusFilter}
+                options={STATUS_OPTIONS}
+                onValueChange={(value) =>
+                  setPageState((current) => ({
+                    ...current,
+                    searchDraft: {
+                      ...current.searchDraft,
+                      statusFilter: normalizeStatusFilterValue(value),
+                    },
+                  }))
+                }
+                searchable={false}
+                allowCustomValue={false}
+                ariaLabel="Account status filter"
+                placeholder="Active"
+              />
+            </label>
+          </div>
+
+          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-100/70 bg-blue-50/40 px-3 py-2">
+            <p className="text-xs font-medium text-slate-500">{searchResultText}</p>
+            <div className="flex flex-wrap items-center justify-end gap-2">
+              {hasDraftFilters ? (
+                <Button variant="outline" type="button" onClick={resetSearchCriteria} disabled={isLoading || isRefreshing}>
+                  Clear
+                </Button>
+              ) : null}
+              {hasDraftFilters ? (
                 <Button type="submit" disabled={isLoading || isRefreshing}>
                   <Search className="size-4" />
                   Search
                 </Button>
-              </>
-            )}
-          />
-
-          <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-100/70 bg-blue-50/40 px-3 py-2">
-            <p className="text-xs font-medium text-slate-500">{searchResultText}</p>
-            <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
-              <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700">
-                {activeCount} active
-              </span>
-              <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 font-medium text-slate-700">
-                {inactiveCount} inactive
-              </span>
+              ) : null}
             </div>
           </div>
         </form>
-      </SectionCard>
+      </Section>
 
       <div className="relative">
         <SectionCard
@@ -1253,6 +1429,7 @@ function FundsphereAccountsPage() {
                         <AccountCard
                           key={account.code}
                           account={account}
+                          aeNames={accountRepNamesByAccountCode[account.code] ?? ""}
                           disabled={isLoading || isRefreshing || isSaving}
                           canEdit={canEditFundsphere}
                           onEdit={openEditModal}
