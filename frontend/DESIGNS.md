@@ -143,11 +143,11 @@
 - Manual collapse/expand remains the source of truth for saved sidebar preference.
 - When manually collapsed, desktop sidebar may temporarily expand on hover/focus for navigation preview.
 - Temporary hover/focus expansion must not update saved collapsed preference and must return to collapsed on mouse leave/blur.
-- Expanded desktop sidebar should show section label, app icons, app labels, active state, and optional `Soon` badges.
+- Expanded desktop sidebar should show section label, app icons, app labels, and active state.
 - Collapsed desktop sidebar should be icon-only (no text labels and no leftover letter badges).
 - Sidebar remains fixed while page content scrolls independently.
-- Sidebar entries include `Home / Portal` and app links/status (for example `Tradsphere`, future app placeholders).
-- Sidebar entries must be visibility-scoped by signed-in access from `/api/auth/v1/session/me`; hide unauthorized app/page items.
+- Sidebar entries include `Home / Portal` and available app links.
+- Sidebar entries must be visibility-scoped by signed-in access from `/api/auth/v1/session/me`; hide unauthorized and unavailable app/page items.
 - App pages follow `/<app-name>/home` (for example `/tradsphere/home`).
 - `/fe` is compatibility-only and should redirect/alias to root-based routes.
 - Portal home should include a clear title, short guidance text, an Announcements section, and an Apps section with direct navigation cards.

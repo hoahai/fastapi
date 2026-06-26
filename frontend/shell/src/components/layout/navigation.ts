@@ -36,7 +36,42 @@ export type AppNavItem = {
 
 export const HOME_ROUTE = "/";
 
+export const WORKSPACE_APP_NAV_ORDER = [
+  "fundsphere",
+  "tradsphere",
+  "spendsphere",
+  "leavesphere",
+  "opssphere",
+  "shiftzy",
+] as const;
+
+const WORKSPACE_APP_NAV_ORDER_INDEX = new Map<string, number>(
+  WORKSPACE_APP_NAV_ORDER.map((appCode, index) => [appCode, index]),
+);
+
+export function getWorkspaceAppOrderIndex(appCode: string): number {
+  const normalized = String(appCode || "").trim().toLowerCase();
+  return WORKSPACE_APP_NAV_ORDER_INDEX.get(normalized) ?? Number.MAX_SAFE_INTEGER;
+}
+
 export const APP_NAV_ITEMS: AppNavItem[] = [
+  {
+    id: "fundsphere",
+    label: "FundSphere",
+    description: "Budget management workspace",
+    route: "/fundsphere/accounts",
+    icon: WalletCards,
+    available: true,
+    activeMatchPrefix: "/fundsphere/",
+    children: [
+      {
+        id: "fundsphere-accounts",
+        label: "Accounts",
+        route: "/fundsphere/accounts",
+        available: true,
+      },
+    ],
+  },
   {
     id: "tradsphere",
     label: "TradSphere",
@@ -85,6 +120,14 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
     ],
   },
   {
+    id: "spendsphere",
+    label: "SpendSphere",
+    description: "Workspace app",
+    route: "/spendsphere/home",
+    icon: WalletCards,
+    available: false,
+  },
+  {
     id: "leavesphere",
     label: "LeaveSphere",
     description: "PTO and request management",
@@ -114,34 +157,9 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
     ],
   },
   {
-    id: "spendsphere",
-    label: "SpendSphere",
-    description: "Coming soon",
-    route: "/spendsphere/home",
-    icon: WalletCards,
-    available: false,
-  },
-  {
-    id: "fundsphere",
-    label: "FundSphere",
-    description: "Budget management workspace",
-    route: "/fundsphere/accounts",
-    icon: WalletCards,
-    available: true,
-    activeMatchPrefix: "/fundsphere/",
-    children: [
-      {
-        id: "fundsphere-accounts",
-        label: "Accounts",
-        route: "/fundsphere/accounts",
-        available: true,
-      },
-    ],
-  },
-  {
     id: "opssphere",
     label: "OpsSphere",
-    description: "Coming soon",
+    description: "Workspace app",
     route: "/opssphere/home",
     icon: Wrench,
     available: false,

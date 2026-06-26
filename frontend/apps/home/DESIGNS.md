@@ -12,6 +12,7 @@
 - App cards must not imply access for signed-out users.
 - Signed-out state should emphasize sign-in CTA.
 - Signed-in state should reflect real app access from `/api/auth/v1/session/me`.
+- Apps that are not yet ready should be hidden rather than shown as coming soon.
 - If signed in with no app access, show a helpful no-access empty state.
 - Cross-app permission pattern: downstream app forms open in read-only mode for users without edit permission, and create/add/save/delete/upload controls remain disabled.
 

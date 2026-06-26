@@ -1,6 +1,6 @@
-import { ArrowRight, LayoutDashboard, LogIn, Lock, type LucideIcon } from "lucide-react";
+import { ArrowRight, LayoutDashboard, LogIn, type LucideIcon } from "lucide-react";
 
-import { APP_NAV_ITEMS } from "@shell/components/layout/navigation";
+import { APP_NAV_ITEMS, getWorkspaceAppOrderIndex } from "@shell/components/layout/navigation";
 import { PageBanner } from "@shell/components/layout/PageBanner";
 import { Button } from "@tradsphere/components/ui/button";
 import { Section, SectionHeader } from "@shared/components";
@@ -71,11 +71,11 @@ export function WorkspacePortalPage({ onNavigate }: WorkspacePortalPageProps) {
       }
     }
 
-    const cards = Array.from(perTenantApp.values());
+    const cards = Array.from(perTenantApp.values()).filter((item) => item.available);
     if (cards.length === 0 && isSuperAdmin && auth.accessProfile?.app?.code && auth.accessProfile?.tenant?.slug) {
       const fallbackCode = String(auth.accessProfile.app.code || "").trim().toLowerCase();
       const meta = appMetaByCode.get(fallbackCode);
-      cards.push({
+      const fallbackCard = {
         appCode: fallbackCode,
         appName: meta?.label || toTitleCase(fallbackCode || "workspace"),
         appDescription: meta?.description || "Workspace app",
@@ -85,13 +85,16 @@ export function WorkspacePortalPage({ onNavigate }: WorkspacePortalPageProps) {
         tenantSlug: String(auth.accessProfile.tenant.slug || "").trim().toLowerCase(),
         tenantName: null,
         role: "super_admin",
-      });
+      };
+      if (fallbackCard.available) {
+        cards.push(fallbackCard);
+      }
     }
 
     return cards.sort((a, b) => {
-      const appCmp = a.appName.localeCompare(b.appName);
-      if (appCmp !== 0) {
-        return appCmp;
+      const appOrderCmp = getWorkspaceAppOrderIndex(a.appCode) - getWorkspaceAppOrderIndex(b.appCode);
+      if (appOrderCmp !== 0) {
+        return appOrderCmp;
       }
       const tenantCmp = (a.tenantName || a.tenantSlug).localeCompare(b.tenantName || b.tenantSlug);
       if (tenantCmp !== 0) {
@@ -105,7 +108,7 @@ export function WorkspacePortalPage({ onNavigate }: WorkspacePortalPageProps) {
     });
   }, [appMetaByCode, auth.accessProfile, isSignedIn, isSuperAdmin]);
 
-  const launchableAssignments = assignmentCards.filter((item) => item.available);
+  const launchableAssignments = assignmentCards;
 
   const footerCacheStatusText = useMemo(() => {
     if (!isSignedIn) {
@@ -253,12 +256,8 @@ export function WorkspacePortalPage({ onNavigate }: WorkspacePortalPageProps) {
                         <p className="text-sm text-slate-500">{assignment.appDescription}</p>
                       </div>
                     </div>
-                    <span
-                      className={`rounded-full px-2.5 py-1 text-xs font-medium ${
-                        assignment.available ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-slate-500"
-                      }`}
-                    >
-                      {assignment.available ? "Available" : "Soon"}
+                    <span className="rounded-full bg-emerald-50 px-2.5 py-1 text-xs font-medium text-emerald-700">
+                      Available
                     </span>
                   </div>
 
@@ -275,24 +274,17 @@ export function WorkspacePortalPage({ onNavigate }: WorkspacePortalPageProps) {
                     </span>
                   </div>
 
-                  {assignment.available ? (
-                    <Button
-                      className="mt-4 w-full justify-between"
-                      onClick={() => {
-                        auth.setTenantSlug(assignment.tenantSlug);
-                        onNavigate(assignment.route);
-                      }}
-                      aria-label={`Open ${assignment.appName} for tenant ${tenantLabel} as ${roleLabel(assignment.role)}`}
-                    >
-                      Open {assignment.appName}
-                      <ArrowRight className="size-4" />
-                    </Button>
-                  ) : (
-                    <Button className="mt-4 w-full" variant="secondary" disabled>
-                      <Lock className="size-4" />
-                      Coming Soon
-                    </Button>
-                  )}
+                  <Button
+                    className="mt-4 w-full justify-between"
+                    onClick={() => {
+                      auth.setTenantSlug(assignment.tenantSlug);
+                      onNavigate(assignment.route);
+                    }}
+                    aria-label={`Open ${assignment.appName} for tenant ${tenantLabel} as ${roleLabel(assignment.role)}`}
+                  >
+                    Open {assignment.appName}
+                    <ArrowRight className="size-4" />
+                  </Button>
                 </article>
               );
             })}

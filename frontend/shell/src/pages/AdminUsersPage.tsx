@@ -1078,6 +1078,7 @@ export default function AdminUsersPage() {
     if (!editingUser || !editDraft) {
       return;
     }
+    const isSelfEdit = Boolean(currentUserId && editingUser.userId === currentUserId);
     const validAssignments = editDraft.assignments
       .map((item) => {
         const tenantId = String(item.tenantId || "").trim();
@@ -1111,6 +1112,9 @@ export default function AdminUsersPage() {
         },
       });
       closeEditUser();
+      if (isSelfEdit) {
+        auth.refreshAccessProfile({ force: true });
+      }
       await loadData("cache-chip");
     } finally {
       setSavingEdit(false);

@@ -408,28 +408,60 @@ class AdminEndpointTests(unittest.TestCase):
         mock_invalidate.assert_called_once_with(user_id="target-user")
         self.assertTrue(response["updatedMembershipOrRole"])
 
-    def test_update_user_access_forbids_self_access_change(self):
+    def test_update_user_access_allows_self_access_change_for_super_admin(self):
         request = self._request()
-        with patch("apps.auth.api.v1.endpoints.admin.authorize_bearer_for_tenant_app", return_value=_admin_result()), patch(
+        refreshed = [
+            {
+                "userId": "super-user",
+                "email": "super@example.com",
+                "fullName": "Workspace Super",
+                "status": "active",
+                "role": "super_admin",
+                "tenantMemberships": [{"tenant_id": "tenant-1", "status": "active"}],
+                "appAssignments": [{"tenant_id": "tenant-1", "app_id": "app-1", "role": "viewer"}],
+                "isSuperAdmin": True,
+            }
+        ]
+        with patch("apps.auth.api.v1.endpoints.admin.authorize_bearer_for_tenant_app", return_value=_super_admin_result()), patch(
             "apps.auth.api.v1.endpoints.admin.list_active_apps",
             return_value=[{"id": "app-1", "code": "tradsphere", "name": "TradSphere", "active": True}],
         ), patch(
             "apps.auth.api.v1.endpoints.admin.list_role_keys_from_store",
-            return_value=["viewer", "editor", "admin"],
+            return_value=["super_admin", "viewer", "editor", "admin"],
+        ), patch(
+            "apps.auth.api.v1.endpoints.admin.get_user_memberships",
+            return_value=[{"tenant_id": "tenant-1", "status": "active"}],
+        ), patch(
+            "apps.auth.api.v1.endpoints.admin.get_user_app_roles",
+            return_value=[{"tenant_id": "tenant-1", "app_id": "app-1", "role": "viewer"}],
         ), patch(
             "apps.auth.api.v1.endpoints.admin.is_user_super_admin",
-            return_value=False,
-        ):
-            with self.assertRaises(HTTPException) as exc:
-                update_user_access_v2_route(
-                    request=request,
-                    user_id="admin-user",
-                    payload={
-                        "appAssignments": [{"tenantId": "tenant-1", "appId": "app-1", "role": "viewer"}],
-                    },
-                )
+            return_value=True,
+        ), patch(
+            "apps.auth.api.v1.endpoints.admin.set_tenant_user_status"
+        ) as mock_set_status, patch(
+            "apps.auth.api.v1.endpoints.admin.set_tenant_app_role"
+        ) as mock_set_role, patch(
+            "apps.auth.api.v1.endpoints.admin.remove_tenant_app_role"
+        ) as mock_remove_role, patch(
+            "apps.auth.api.v1.endpoints.admin.list_users_with_access",
+            return_value=refreshed,
+        ), patch(
+            "apps.auth.api.v1.endpoints.admin.permission_cache.invalidate"
+        ) as mock_invalidate:
+            response = update_user_access_v2_route(
+                request=request,
+                user_id="super-user",
+                payload={
+                    "appAssignments": [{"tenantId": "tenant-1", "appId": "app-1", "role": "admin"}],
+                },
+            )
 
-        self.assertEqual(exc.exception.status_code, 403)
+        mock_set_status.assert_not_called()
+        mock_set_role.assert_called_once_with(tenant_id="tenant-1", user_id="super-user", app_id="app-1", role="admin")
+        mock_remove_role.assert_not_called()
+        mock_invalidate.assert_called_once_with(user_id="super-user")
+        self.assertTrue(response["permissionCacheInvalidated"])
 
     def test_update_user_access_forbids_non_super_cross_tenant_scope(self):
         request = self._request()

@@ -111,6 +111,9 @@ export function Sidebar({
       const groups: AppNavGroup[] = [];
 
       for (const item of APP_NAV_ITEMS) {
+        if (!item.available) {
+          continue;
+        }
         const appCode = String(item.id || "").trim().toLowerCase();
         let tenantAssignments = assignments
           .filter((entry) => entry.appCode === appCode)
@@ -140,11 +143,8 @@ export function Sidebar({
           }
         }
 
-        const shouldShow = isSuperAdmin || tenantAssignments.length > 0 || (!protectionEnabled && item.available);
+        const shouldShow = isSuperAdmin || tenantAssignments.length > 0 || !protectionEnabled;
         if (!shouldShow) {
-          continue;
-        }
-        if (!isSuperAdmin && !item.available) {
           continue;
         }
         groups.push({
@@ -728,52 +728,33 @@ function SidebarItem({
   onNavigate,
   onCloseMobile,
 }: SidebarItemProps) {
+  if (!available) {
+    return null;
+  }
   const iconTone = active ? "active" : available ? "default" : "muted";
 
   return (
     <TooltipTarget text={collapsed ? label : null}>
-      {available ? (
-        <a
-          href={route}
-          onClick={(event) => handleSidebarAnchorClick(event, () => {
-            onNavigate(route);
-            onCloseMobile();
-          })}
-          aria-current={active ? "page" : undefined}
-          className={cn(
-            "group relative flex w-full items-center gap-2.5 rounded-2xl px-2.5 py-2.5 text-left text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
-            active
-              ? collapsed
-                ? "bg-blue-200/48 text-blue-950 shadow-[0_14px_22px_-20px_rgba(59,130,246,0.46)]"
-                : "bg-blue-200/42 text-blue-950 shadow-[0_14px_22px_-20px_rgba(59,130,246,0.48)] backdrop-blur-sm"
-              : "text-slate-700 hover:bg-blue-100/58 hover:text-slate-900",
-            collapsed && "lg:justify-center lg:px-1.5",
-          )}
-        >
-          <NavIcon icon={Icon} tone={iconTone} />
-          {!collapsed ? <span className="truncate font-medium tracking-[-0.01em]">{label}</span> : null}
-        </a>
-      ) : (
-        <button
-          type="button"
-          disabled
-          aria-current={active ? "page" : undefined}
-          className={cn(
-            "group relative flex w-full items-center gap-2.5 rounded-2xl px-2.5 py-2.5 text-left text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
-            active
-              ? collapsed
-                ? "bg-blue-200/48 text-blue-950 shadow-[0_14px_22px_-20px_rgba(59,130,246,0.46)]"
-                : "bg-blue-200/42 text-blue-950 shadow-[0_14px_22px_-20px_rgba(59,130,246,0.48)] backdrop-blur-sm"
-              : "text-slate-700 hover:bg-blue-100/58 hover:text-slate-900",
-            !available && "cursor-not-allowed text-slate-500 opacity-70 hover:bg-transparent",
-            collapsed && "lg:justify-center lg:px-1.5",
-          )}
-        >
-          <NavIcon icon={Icon} tone={iconTone} />
-          {!collapsed ? <span className="truncate font-medium tracking-[-0.01em]">{label}</span> : null}
-          {!available && !collapsed ? <SoonBadge className="ml-auto" /> : null}
-        </button>
-      )}
+      <a
+        href={route}
+        onClick={(event) => handleSidebarAnchorClick(event, () => {
+          onNavigate(route);
+          onCloseMobile();
+        })}
+        aria-current={active ? "page" : undefined}
+        className={cn(
+          "group relative flex w-full items-center gap-2.5 rounded-2xl px-2.5 py-2.5 text-left text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
+          active
+            ? collapsed
+              ? "bg-blue-200/48 text-blue-950 shadow-[0_14px_22px_-20px_rgba(59,130,246,0.46)]"
+              : "bg-blue-200/42 text-blue-950 shadow-[0_14px_22px_-20px_rgba(59,130,246,0.48)] backdrop-blur-sm"
+            : "text-slate-700 hover:bg-blue-100/58 hover:text-slate-900",
+          collapsed && "lg:justify-center lg:px-1.5",
+        )}
+      >
+        <NavIcon icon={Icon} tone={iconTone} />
+        {!collapsed ? <span className="truncate font-medium tracking-[-0.01em]">{label}</span> : null}
+      </a>
     </TooltipTarget>
   );
 }
@@ -805,75 +786,48 @@ function SidebarParentItem({
   onToggleExpand,
   onExpand,
 }: SidebarParentItemProps) {
+  if (!available) {
+    return null;
+  }
   const iconTone = active ? "active" : available ? "default" : "muted";
 
   return (
     <TooltipTarget text={collapsed ? label : null}>
-      {available ? (
-        <a
-          href={route}
-          onClick={(event) => handleSidebarAnchorClick(event, () => {
-            if (hasChildren) {
-              if (!expanded) {
-                onExpand();
-                return;
-              }
-              onToggleExpand();
+      <a
+        href={route}
+        onClick={(event) => handleSidebarAnchorClick(event, () => {
+          if (hasChildren) {
+            if (!expanded) {
+              onExpand();
               return;
             }
-            onNavigate();
-          })}
-          aria-current={active ? "page" : undefined}
-          className={cn(
-            "group relative flex w-full items-center gap-2.5 rounded-2xl px-2.5 py-2.5 text-left text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
-            active
-              ? collapsed
-                ? "bg-blue-200/48 text-blue-950 shadow-[0_14px_22px_-20px_rgba(59,130,246,0.46)]"
-                : "bg-blue-200/42 text-blue-950 shadow-[0_14px_22px_-20px_rgba(59,130,246,0.48)] backdrop-blur-sm"
-              : "text-slate-700 hover:bg-blue-100/58 hover:text-slate-900",
-            collapsed && "lg:justify-center lg:px-1.5",
-          )}
-        >
-          <NavIcon icon={Icon} tone={iconTone} />
-          {!collapsed ? <span className="truncate font-medium tracking-[-0.01em]">{label}</span> : null}
-          {!collapsed && hasChildren ? (
-            <ChevronDown
-              className={cn(
-                "ml-auto size-4 text-slate-400 transition-transform group-hover:text-blue-600",
-                expanded && "rotate-180 text-blue-700",
-              )}
-            />
-          ) : null}
-        </a>
-      ) : (
-        <button
-          type="button"
-          disabled
-          aria-current={active ? "page" : undefined}
-          className={cn(
-            "group relative flex w-full items-center gap-2.5 rounded-2xl px-2.5 py-2.5 text-left text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
-            active
-              ? collapsed
-                ? "bg-blue-200/48 text-blue-950 shadow-[0_14px_22px_-20px_rgba(59,130,246,0.46)]"
-                : "bg-blue-200/42 text-blue-950 shadow-[0_14px_22px_-20px_rgba(59,130,246,0.48)] backdrop-blur-sm"
-              : "text-slate-700 hover:bg-blue-100/58 hover:text-slate-900",
-            !available && "cursor-not-allowed text-slate-500 opacity-70 hover:bg-transparent",
-            collapsed && "lg:justify-center lg:px-1.5",
-          )}
-        >
-          <NavIcon icon={Icon} tone={iconTone} />
-          {!collapsed ? <span className="truncate font-medium tracking-[-0.01em]">{label}</span> : null}
-          {!collapsed && hasChildren ? (
-            <ChevronDown
-              className={cn(
-                "ml-auto size-4 text-slate-400 transition-transform group-hover:text-blue-600",
-                expanded && "rotate-180 text-blue-700",
-              )}
-            />
-          ) : null}
-          {!available && !collapsed ? <SoonBadge className="ml-auto" /> : null}
-        </button>
-      )}
+            onToggleExpand();
+            return;
+          }
+          onNavigate();
+        })}
+        aria-current={active ? "page" : undefined}
+        className={cn(
+          "group relative flex w-full items-center gap-2.5 rounded-2xl px-2.5 py-2.5 text-left text-sm transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
+          active
+            ? collapsed
+              ? "bg-blue-200/48 text-blue-950 shadow-[0_14px_22px_-20px_rgba(59,130,246,0.46)]"
+              : "bg-blue-200/42 text-blue-950 shadow-[0_14px_22px_-20px_rgba(59,130,246,0.48)] backdrop-blur-sm"
+            : "text-slate-700 hover:bg-blue-100/58 hover:text-slate-900",
+          collapsed && "lg:justify-center lg:px-1.5",
+        )}
+      >
+        <NavIcon icon={Icon} tone={iconTone} />
+        {!collapsed ? <span className="truncate font-medium tracking-[-0.01em]">{label}</span> : null}
+        {!collapsed && hasChildren ? (
+          <ChevronDown
+            className={cn(
+              "ml-auto size-4 text-slate-400 transition-transform group-hover:text-blue-600",
+              expanded && "rotate-180 text-blue-700",
+            )}
+          />
+        ) : null}
+      </a>
     </TooltipTarget>
   );
 }
@@ -894,6 +848,9 @@ function appCodeFromRoute(route: string): string {
 
 function SidebarChildItem({ child, currentPath, tenantSlug, activeTenantSlug, accessProfile, onNavigate }: SidebarChildItemProps) {
   const normalizedTenantSlug = String(tenantSlug || "").trim().toLowerCase();
+  if (!child.available) {
+    return null;
+  }
   const appCode = appCodeFromRoute(child.route);
   if (child.route === "/leavesphere/leave-management" && !hasAppAdminAccess(accessProfile, "leavesphere")) {
     return null;
@@ -941,52 +898,27 @@ function SidebarChildItem({ child, currentPath, tenantSlug, activeTenantSlug, ac
           : TRADSPHERE_HOME_CHILD_ICON;
 
   return (
-    child.available ? (
-      <a
-        href={child.route}
-        onClick={(event) => handleSidebarAnchorClick(event, () => {
-          onNavigate(tenantSlug, child.route);
-        })}
-        aria-current={active ? "page" : undefined}
+    <a
+      href={child.route}
+      onClick={(event) => handleSidebarAnchorClick(event, () => {
+        onNavigate(tenantSlug, child.route);
+      })}
+      aria-current={active ? "page" : undefined}
+      className={cn(
+        "group flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[13px] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
+        active
+          ? "bg-blue-200/48 text-blue-950"
+          : "text-slate-600 hover:bg-blue-100/58 hover:text-slate-800",
+      )}
+    >
+      <ChildIcon
         className={cn(
-          "group flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[13px] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
-          active
-            ? "bg-blue-200/48 text-blue-950"
-            : "text-slate-600 hover:bg-blue-100/58 hover:text-slate-800",
+          "size-3.5 shrink-0 transition-colors",
+          active ? "text-blue-700" : "text-blue-600 group-hover:text-blue-700",
         )}
-      >
-        <ChildIcon
-          className={cn(
-            "size-3.5 shrink-0 transition-colors",
-            active ? "text-blue-700" : "text-blue-600 group-hover:text-blue-700",
-          )}
-        />
-        <span className="truncate font-medium">{child.label}</span>
-      </a>
-    ) : (
-      <button
-        type="button"
-        disabled
-        aria-current={active ? "page" : undefined}
-        className={cn(
-          "group flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left text-[13px] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500/65 focus-visible:ring-offset-1",
-          active
-            ? "bg-blue-200/48 text-blue-950"
-            : "text-slate-600 hover:bg-blue-100/58 hover:text-slate-800",
-          !child.available && "cursor-not-allowed text-slate-500 opacity-70 hover:bg-transparent",
-        )}
-      >
-        <ChildIcon
-          className={cn(
-            "size-3.5 shrink-0 transition-colors",
-            active ? "text-blue-700" : "text-blue-600 group-hover:text-blue-700",
-            !child.available && "text-slate-400 group-hover:text-slate-400",
-          )}
-        />
-        <span className="truncate font-medium">{child.label}</span>
-        {!child.available ? <SoonBadge className="ml-auto" /> : null}
-      </button>
-    )
+      />
+      <span className="truncate font-medium">{child.label}</span>
+    </a>
   );
 }
 
@@ -1006,19 +938,6 @@ function NavIcon({
         tone === "muted" && "text-slate-400 group-hover:text-slate-400",
       )}
     />
-  );
-}
-
-function SoonBadge({ className }: { className?: string }) {
-  return (
-    <span
-      className={cn(
-        "rounded-full border border-slate-300 bg-slate-100 px-2 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em] text-slate-600",
-        className,
-      )}
-    >
-      Soon
-    </span>
   );
 }
 
