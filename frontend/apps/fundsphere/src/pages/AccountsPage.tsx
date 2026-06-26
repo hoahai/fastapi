@@ -133,6 +133,7 @@ const STATUS_OPTIONS: AppDropdownOption[] = [
   { value: "active", label: "Active" },
   { value: "inactive", label: "Inactive" },
 ];
+const ACCOUNT_CARD_ACTIVATION_SUPPRESSION_MS = 250;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === "object" && value !== null && !Array.isArray(value);
@@ -821,10 +822,22 @@ function AccountCard({
 }) {
   const [logoError, setLogoError] = useState(false);
   const [logoPreviewOpen, setLogoPreviewOpen] = useState(false);
+  const suppressNextCardActivationRef = useRef(false);
   useEffect(() => {
     setLogoError(false);
     setLogoPreviewOpen(false);
+    suppressNextCardActivationRef.current = false;
   }, [account.logoUrl]);
+
+  function handleLogoPreviewOpenChange(nextOpen: boolean): void {
+    if (!nextOpen) {
+      suppressNextCardActivationRef.current = true;
+      window.setTimeout(() => {
+        suppressNextCardActivationRef.current = false;
+      }, ACCOUNT_CARD_ACTIVATION_SUPPRESSION_MS);
+    }
+    setLogoPreviewOpen(nextOpen);
+  }
 
   const showLogo = Boolean(account.logoUrl) && !logoError;
   const logoFallback = (account.name || account.code || "AC").slice(0, 2).toUpperCase();
@@ -835,12 +848,12 @@ function AccountCard({
       role="button"
       tabIndex={disabled || !canEdit || logoPreviewOpen ? -1 : 0}
       onClick={() => {
-        if (!disabled && canEdit && !logoPreviewOpen) {
+        if (!disabled && canEdit && !logoPreviewOpen && !suppressNextCardActivationRef.current) {
           onEdit(account);
         }
       }}
       onKeyDown={(event) => {
-        if (disabled || !canEdit || logoPreviewOpen) {
+        if (disabled || !canEdit || logoPreviewOpen || suppressNextCardActivationRef.current) {
           return;
         }
         if (event.key === "Enter" || event.key === " ") {
@@ -910,7 +923,7 @@ function AccountCard({
       </div>
 
       {showLogo ? (
-        <Dialog open={logoPreviewOpen} onOpenChange={setLogoPreviewOpen}>
+        <Dialog open={logoPreviewOpen} onOpenChange={handleLogoPreviewOpenChange}>
           <DialogContent
             className="w-[calc(100vw-2.5rem)] max-w-3xl border-none bg-transparent p-0 shadow-none"
             aria-describedby={undefined}
