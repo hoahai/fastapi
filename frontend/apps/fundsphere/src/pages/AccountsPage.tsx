@@ -587,7 +587,7 @@ function AccountModal({
     <>
       <Dialog open={open} onOpenChange={handleDialogOpenChange}>
         <DialogContent
-          className="max-h-[92vh] w-[min(94vw,1040px)] max-w-none overflow-hidden rounded-[1.6rem] bg-white px-7 py-6"
+          className="max-h-[92vh] w-[min(92vw,760px)] max-w-none overflow-hidden rounded-[1.6rem] bg-white px-7 py-6"
           onInteractOutside={(event) => {
             if (isSubmitting || hasUnsavedChanges) {
               event.preventDefault();
@@ -613,7 +613,7 @@ function AccountModal({
             </ModalHeaderRow>
 
             <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1">
-              <div className="grid grid-cols-1 gap-8 lg:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+              <div className="grid grid-cols-1 gap-8">
                 <Section className="space-y-3">
                   <SectionHeader
                     title="Identity"
