@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   CheckCircle2,
+  ChevronDown,
   PencilLine,
   Plus,
   RefreshCw,
@@ -64,6 +65,7 @@ type CacheStatus = {
 };
 
 type AccountMode = "create" | "edit";
+type AccountGroupKey = "active" | "inactive";
 type AccountStatusFilter = "" | "active" | "inactive";
 type AccountSearchCriteria = {
   query: string;
@@ -87,6 +89,12 @@ type AccountModalProps = {
     accountCode: string | null;
     form: FundsphereAccountFormState;
   }) => Promise<void>;
+};
+
+type AccountGroup = {
+  key: AccountGroupKey;
+  label: string;
+  items: FundsphereAccount[];
 };
 
 const FUNDSPHERE_APP_CODE = "fundsphere";
@@ -167,6 +175,18 @@ function buildAccountSearchText(account: FundsphereAccount): string {
 
 function sortAccounts(accounts: FundsphereAccount[]): FundsphereAccount[] {
   return [...accounts].sort((left, right) => left.code.localeCompare(right.code));
+}
+
+function buildAccountGroups(accounts: FundsphereAccount[]): AccountGroup[] {
+  const activeAccounts = accounts.filter((account) => account.active);
+  const inactiveAccounts = accounts.filter((account) => !account.active);
+
+  const groups: AccountGroup[] = [
+    { key: "active", label: "Active Accounts", items: activeAccounts },
+    { key: "inactive", label: "Inactive Accounts", items: inactiveAccounts },
+  ];
+
+  return groups.filter((group) => group.items.length > 0);
 }
 
 function buildEmptyMessage(params: {
@@ -658,6 +678,91 @@ function buildAccountStatusClass(active: boolean): string {
     : "border-slate-300 bg-slate-100/90 text-slate-700";
 }
 
+function AccountCard({
+  account,
+  disabled,
+  canEdit,
+  onEdit,
+}: {
+  account: FundsphereAccount;
+  disabled?: boolean;
+  canEdit: boolean;
+  onEdit: (account: FundsphereAccount) => void;
+}) {
+  return (
+    <article
+      role="button"
+      tabIndex={disabled || !canEdit ? -1 : 0}
+      onClick={() => {
+        if (!disabled && canEdit) {
+          onEdit(account);
+        }
+      }}
+      onKeyDown={(event) => {
+        if (disabled || !canEdit) {
+          return;
+        }
+        if (event.key === "Enter" || event.key === " ") {
+          event.preventDefault();
+          onEdit(account);
+        }
+      }}
+      className={cn(
+        "rounded-[1.35rem] border p-5 shadow-[0_18px_30px_-24px_rgba(37,99,235,0.42)] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
+        disabled ? "cursor-default" : "cursor-pointer",
+        account.active
+          ? "border-blue-100/90 bg-white hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-[0_20px_34px_-24px_rgba(37,99,235,0.5)]"
+          : "border-slate-200 bg-slate-50/90 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-[0_18px_28px_-26px_rgba(15,23,42,0.22)]",
+      )}
+    >
+      <div className="flex items-start justify-between gap-4">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <span className="inline-flex items-center rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-blue-800">
+              {account.code}
+            </span>
+            <span className={cn("inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium", buildAccountStatusClass(account.active))}>
+              {buildAccountStatusLabel(account.active)}
+            </span>
+          </div>
+
+          <p className="mt-2 truncate text-lg font-semibold tracking-[-0.02em] text-slate-900">{account.name}</p>
+
+          <div className="mt-3 grid grid-cols-1 gap-2 text-sm text-slate-700 sm:grid-cols-2 xl:grid-cols-3">
+            <AccountMeta label="End Date" value={account.endDate ?? "—"} />
+            <AccountMeta label="Consero ID" value={account.conseroId ?? "—"} />
+            <AccountMeta label="Consero Name" value={account.conseroName ?? "—"} />
+            <AccountMeta className="xl:col-span-2" label="Strata Name" value={account.strataName ?? "—"} />
+            <AccountMeta className="sm:col-span-2 xl:col-span-3" label="Logo URL" value={account.logoUrl ?? "—"} />
+          </div>
+        </div>
+
+        <div className="flex items-center gap-1.5">
+          <IconActionButton
+            aria-label={`Edit ${account.code}`}
+            tooltip="Edit account"
+            icon={<PencilLine />}
+            onClick={(event) => {
+              event.stopPropagation();
+              onEdit(account);
+            }}
+            disabled={disabled || !canEdit}
+          />
+        </div>
+      </div>
+    </article>
+  );
+}
+
+function AccountMeta({ label, value, className }: { label: string; value: string; className?: string }) {
+  return (
+    <p className={cn("min-w-0 truncate", className)}>
+      <span className="text-slate-500">{label}: </span>
+      <span className="text-slate-800">{value}</span>
+    </p>
+  );
+}
+
 function FundsphereAccountsPage() {
   const { requestJson } = useApiRequest();
   const { isOnline } = useOnlineStatus();
@@ -700,6 +805,10 @@ function FundsphereAccountsPage() {
   const [modalMode, setModalMode] = useState<AccountMode>("create");
   const [modalAccount, setModalAccount] = useState<FundsphereAccount | null>(null);
   const [isSaving, setIsSaving] = useState(false);
+  const [accountGroupOpenState, setAccountGroupOpenState] = useState<Record<AccountGroupKey, boolean>>({
+    active: true,
+    inactive: true,
+  });
 
   useEffect(() => {
     accountsRef.current = accounts;
@@ -804,6 +913,10 @@ function FundsphereAccountsPage() {
     setModalMode("create");
     setModalAccount(null);
     setIsSaving(false);
+    setAccountGroupOpenState({
+      active: true,
+      inactive: true,
+    });
     ++requestTokenRef.current;
   }, [cacheKey]);
 
@@ -834,6 +947,8 @@ function FundsphereAccountsPage() {
       }),
     );
   }, [accounts, searchCriteria.query, searchCriteria.statusFilter]);
+
+  const accountGroups = useMemo(() => buildAccountGroups(filteredAccounts), [filteredAccounts]);
 
   const hasAccounts = Boolean(accounts && accounts.length > 0);
   const hasMatches = Boolean(filteredAccounts.length > 0);
@@ -1104,64 +1219,49 @@ function FundsphereAccountsPage() {
           contentClassName="space-y-4"
         >
           {accounts && filteredAccounts.length > 0 ? (
-            <div className="overflow-hidden rounded-2xl border border-blue-100/90 bg-slate-50/75 shadow-[0_18px_30px_-26px_rgba(37,99,235,0.5)]">
-              <div className="overflow-x-auto">
-                <table className="min-w-full border-collapse">
-                  <thead className="bg-gradient-to-r from-blue-50/85 to-indigo-50/45">
-                    <tr className="text-left text-[11px] font-semibold uppercase tracking-[0.12em] text-blue-800">
-                      <th className="px-4 py-3">Code</th>
-                      <th className="px-4 py-3">Name</th>
-                      <th className="px-4 py-3">Status</th>
-                      <th className="px-4 py-3">End Date</th>
-                      <th className="px-4 py-3">Consero</th>
-                      <th className="px-4 py-3">Strata</th>
-                      <th className="px-4 py-3">Logo URL</th>
-                      <th className="px-4 py-3 text-right">Actions</th>
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {filteredAccounts.map((account) => (
-                      <tr
-                        key={account.code}
-                        className={cn(
-                          "border-t border-blue-100/70 text-sm",
-                          account.active ? "bg-white/95" : "bg-slate-50/90",
-                        )}
-                      >
-                        <td className="px-4 py-3 font-semibold tracking-[-0.01em] text-slate-900">{account.code}</td>
-                        <td className="px-4 py-3 text-slate-700">{account.name}</td>
-                        <td className="px-4 py-3">
-                          <span className={cn("inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium", buildAccountStatusClass(account.active))}>
-                            {buildAccountStatusLabel(account.active)}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-slate-600">{account.endDate ?? "—"}</td>
-                        <td className="px-4 py-3 text-slate-600">
-                          <div className="space-y-0.5">
-                            <p className="font-medium text-slate-700">{account.conseroId ?? "—"}</p>
-                            <p className="max-w-[18rem] truncate text-xs text-slate-500">{account.conseroName ?? "—"}</p>
-                          </div>
-                        </td>
-                        <td className="px-4 py-3 text-slate-600">{account.strataName ?? "—"}</td>
-                        <td className="px-4 py-3 text-slate-500">
-                          <span className="block max-w-[18rem] truncate">{account.logoUrl ?? "—"}</span>
-                        </td>
-                        <td className="px-4 py-3 text-right">
-                          <div className="inline-flex items-center gap-1">
-                            <IconActionButton
-                              aria-label={`Edit ${account.code}`}
-                              tooltip="Edit account"
-                              icon={<PencilLine />}
-                              onClick={() => openEditModal(account)}
-                              disabled={isLoading || isRefreshing || isSaving || !canEditFundsphere}
-                            />
-                          </div>
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
+            <div className="space-y-4">
+              <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
+                <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700">
+                  {activeCount} active
+                </span>
+                <span className="inline-flex items-center rounded-full border border-slate-200 bg-slate-50 px-2.5 py-1 font-medium text-slate-700">
+                  {inactiveCount} inactive
+                </span>
               </div>
+
+              {accountGroups.map((group) => (
+                <details
+                  key={group.key}
+                  open={accountGroupOpenState[group.key] ?? true}
+                  onToggle={(event) => {
+                    const nextOpen = event.currentTarget.open;
+                    setAccountGroupOpenState((current) => ({ ...current, [group.key]: nextOpen }));
+                  }}
+                  className="group overflow-hidden rounded-2xl border border-blue-100/90 bg-slate-50/75 shadow-[0_18px_30px_-26px_rgba(37,99,235,0.5)]"
+                >
+                  <summary className="flex cursor-pointer list-none items-center justify-between gap-2 border-b border-blue-100/90 bg-gradient-to-r from-blue-50/85 to-indigo-50/45 px-4 py-3.5">
+                    <p className="text-sm font-semibold uppercase tracking-[0.12em] text-blue-800">{group.label}</p>
+                    <span className="inline-flex items-center gap-2 text-slate-500" aria-hidden="true">
+                      <span className="text-xs">{group.items.length} accounts</span>
+                      <ChevronDown className="size-4 transition-transform group-open:rotate-180" />
+                    </span>
+                  </summary>
+
+                  <div className="p-3">
+                    <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
+                      {group.items.map((account) => (
+                        <AccountCard
+                          key={account.code}
+                          account={account}
+                          disabled={isLoading || isRefreshing || isSaving}
+                          canEdit={canEditFundsphere}
+                          onEdit={openEditModal}
+                        />
+                      ))}
+                    </div>
+                  </div>
+                </details>
+              ))}
             </div>
           ) : (
             <div className="relative overflow-hidden rounded-2xl border border-blue-100/90 bg-slate-50/75 p-8 text-center shadow-[0_18px_30px_-26px_rgba(37,99,235,0.5)]">
