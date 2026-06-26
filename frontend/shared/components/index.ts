@@ -13,6 +13,7 @@ export * from "./layout/LoadActionArea";
 export * from "./layout/PageCacheFooter";
 export * from "./layout/SectionCard";
 export * from "./layout/SectionHeader";
+export * from "./admin/PagePermissionsSection";
 export * from "./modal/ModalCacheFooter";
 export * from "./modal/ModalActionFooter";
 export * from "./modal/ModalCloseButton";

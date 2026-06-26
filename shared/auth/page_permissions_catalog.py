@@ -5,6 +5,14 @@ from collections.abc import Iterable
 PageDefinition = dict[str, str]
 
 _APP_PAGE_CATALOG: dict[str, list[PageDefinition]] = {
+    "fundsphere": [
+        {"key": "fundsphere_accounts", "label": "Accounts", "route": "/fundsphere/accounts"},
+    ],
+    "leavesphere": [
+        {"key": "leavesphere_home", "label": "My PTO / Manager PTO", "route": "/leavesphere/home"},
+        {"key": "leavesphere_leave_management", "label": "Leave Management", "route": "/leavesphere/leave-management"},
+        {"key": "leavesphere_employees", "label": "Employee Management", "route": "/leavesphere/employees"},
+    ],
     "tradsphere": [
         {"key": "tradsphere_home", "label": "Accounts", "route": "/tradsphere/home"},
         {"key": "tradsphere_estnums", "label": "Estimate Numbers", "route": "/tradsphere/estnums"},
@@ -19,10 +27,21 @@ _APP_PAGE_CATALOG: dict[str, list[PageDefinition]] = {
     ],
 }
 
+_LEGACY_PAGE_KEY_ALIASES: dict[str, str] = {
+    "leavesphere_admin_pto": "leavesphere_leave_management",
+}
+
 
 def normalize_app_code(value: object) -> str:
     normalized = str(value or "").strip().lower()
     return normalized
+
+
+def normalize_page_key(value: object) -> str:
+    normalized = str(value or "").strip().lower()
+    if not normalized:
+        return ""
+    return _LEGACY_PAGE_KEY_ALIASES.get(normalized, normalized)
 
 
 def list_page_catalog_for_app(*, app_code: str) -> list[PageDefinition]:
@@ -43,7 +62,7 @@ def normalize_page_keys(*, app_code: str, page_keys: Iterable[object]) -> list[s
     allowed_keys = list_page_keys_for_app(app_code=app_code)
     normalized_keys: set[str] = set()
     for value in page_keys:
-        key = str(value or "").strip().lower()
+        key = normalize_page_key(value)
         if key and key in allowed_keys:
             normalized_keys.add(key)
     return sorted(normalized_keys)
@@ -59,6 +78,31 @@ def _normalize_path(path: object) -> str:
 
 
 _APP_API_PAGE_KEY_RULES: dict[str, tuple[tuple[tuple[str, ...], tuple[str, ...]], ...]] = {
+    "fundsphere": (
+        (
+            (
+                "/accounts",
+                "/accountreps",
+                "/budgets",
+                "/departments",
+                "/services",
+                "/budgetchangehistories",
+                "/masterbudgetcontrol",
+            ),
+            ("fundsphere_accounts",),
+        ),
+    ),
+    "leavesphere": (
+        (("/ui/my-pto", "/my-pto"), ("leavesphere_home",)),
+        (
+            ("/ui/employees", "/employees/picture/upload", "/employeemanagers", "/employees"),
+            ("leavesphere_employees", "leavesphere_leave_management"),
+        ),
+        (
+            ("/admin/pto", "/ptotypes", "/ptoactions", "/admin/google-calendar"),
+            ("leavesphere_leave_management",),
+        ),
+    ),
     "tradsphere": (
         # Shared account selector/load helpers used by multiple pages.
         (

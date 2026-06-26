@@ -156,9 +156,42 @@
   - Signed-out users should see sign-in CTA and should not see app actions as available access.
   - Signed-in users should see only apps they can access, derived from `/api/auth/v1/session/me`.
   - Unauthorized/unavailable apps should be hidden from Workspace Home by default.
-  - Signed-in users with no app permissions should see a clear empty state:
-    - `You do not have access to any apps yet. Contact your workspace administrator.`
+- Signed-in users with no app permissions should see a clear empty state:
+  - `You do not have access to any apps yet. Contact your workspace administrator.`
 - Reuse a shared banner component so portal and app pages keep the same visual language.
+
+## Page/App Permission Catalog
+- New pages and new apps must update both the frontend route catalog and the backend permission catalog.
+- The frontend catalog controls route access checks and navigation visibility.
+- The backend catalog controls the admin page-permissions screen and API-side enforcement.
+- Keep page keys stable. If a page key changes, add a legacy alias instead of breaking existing assignments.
+- Do not ship a page or app without a matching catalog entry and route-to-page-key mapping.
+
+### New Page Checklist
+1. Add the route to the shell/router.
+2. Add the page key and label to `frontend/shared/auth/pagePermissions.ts`.
+3. Add the same page key and label to `shared/auth/page_permissions_catalog.py`.
+4. Add the route-to-page-key mapping to `shared/auth/page_permissions_catalog.py`.
+5. Add a legacy alias if an old page key or route must keep working.
+6. Update navigation/sidebar entries if the page should be user-visible.
+7. Add tests for the catalog entry and route mapping.
+
+### New App Checklist
+1. Add the app to shell navigation and routing.
+2. Add the app to `frontend/shared/auth/pagePermissions.ts`.
+3. Add the app to `shared/auth/page_permissions_catalog.py`.
+4. Add the app's API route mappings to `shared/auth/page_permissions_catalog.py`.
+5. Wire page-permission enforcement in `shared/auth/dependencies.py` if the app should support page restrictions.
+6. Add regression tests for the new app catalog and route rules.
+
+### Review Template
+- Does the route exist in the shell/router?
+- Does the frontend page catalog include the route?
+- Does the backend page catalog include the route?
+- Are route-to-page-key API mappings present?
+- Are legacy aliases needed for old keys or routes?
+- Is navigation updated if the page should be visible?
+- Is there a test that fails without the new page/app entry?
 
 ## Auth UX Pages
 - Auth pages under `/auth/*` should match TheSphereWorks visual language and remain responsive.

@@ -26,7 +26,7 @@ from shared.auth.invitations_repo import (
     upsert_tenant_app_role,
     upsert_profile_for_invited_user,
 )
-from shared.auth.page_permissions_catalog import list_page_catalog_for_app, normalize_page_keys
+from shared.auth.page_permissions_catalog import list_page_catalog_for_app, normalize_page_key, normalize_page_keys
 from shared.auth.page_permissions_repo import list_page_permissions_for_scope, replace_page_permissions_for_user
 from shared.auth.permissions_cache import permission_cache
 from shared.auth.profile_repo import compose_full_name, select_profile_for_user, split_full_name
@@ -670,7 +670,7 @@ def list_scoped_user_page_permissions_route(request: Request):
     page_keys_by_user_id: dict[str, set[str]] = {}
     for row in permission_rows:
         user_id = str(row.get("user_id") or "").strip()
-        page_key = str(row.get("page_key") or "").strip().lower()
+        page_key = normalize_page_key(row.get("page_key") or "")
         if not user_id or not page_key:
             continue
         if valid_page_keys and page_key not in valid_page_keys:
