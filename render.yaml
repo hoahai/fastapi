@@ -5,7 +5,7 @@ services:
     healthCheckPath: /ping
     buildCommand: >
       pip install -r requirements.txt &&
-      npm_config_production=false npm --prefix frontend/shell ci &&
+      npm_config_production=false npm --prefix frontend/shell install &&
       npm --prefix frontend/shell run build &&
       rm -rf apps/tradsphere/ui_dist &&
       mkdir -p apps/tradsphere/ui_dist &&
