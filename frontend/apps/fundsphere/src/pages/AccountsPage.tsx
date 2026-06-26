@@ -914,6 +914,12 @@ function AccountCard({
           <DialogContent
             className="w-[calc(100vw-2.5rem)] max-w-3xl border-none bg-transparent p-0 shadow-none"
             aria-describedby={undefined}
+            onClickCapture={(event) => {
+              event.stopPropagation();
+            }}
+            onPointerDownCapture={(event) => {
+              event.stopPropagation();
+            }}
           >
             <div className="relative flex w-full items-center justify-center overflow-hidden rounded-2xl bg-white px-6 pb-6 pt-14 shadow-2xl sm:px-8 sm:pb-8 sm:pt-16">
               <DialogClose asChild aria-label="Close logo preview">
