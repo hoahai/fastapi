@@ -110,15 +110,22 @@ type LeaveSphereEmployeeLookup = {
 
 const FUNDSPHERE_APP_CODE = "fundsphere";
 const DEFAULT_ACCOUNT_STATUS_FILTER: AccountStatusFilter = "active";
-const EMPTY_SEARCH_CRITERIA: AccountSearchCriteria = {
+const EMPTY_ACCOUNT_STATUS_FILTER: AccountStatusFilter = "";
+const DEFAULT_SEARCH_CRITERIA: AccountSearchCriteria = {
   code: "",
   name: "",
   aeName: "",
   statusFilter: DEFAULT_ACCOUNT_STATUS_FILTER,
 };
+const EMPTY_SEARCH_CRITERIA: AccountSearchCriteria = {
+  code: "",
+  name: "",
+  aeName: "",
+  statusFilter: EMPTY_ACCOUNT_STATUS_FILTER,
+};
 const EMPTY_PAGE_STATE: PersistedAccountsPageState = {
-  searchDraft: { ...EMPTY_SEARCH_CRITERIA },
-  searchCriteria: { ...EMPTY_SEARCH_CRITERIA },
+  searchDraft: { ...DEFAULT_SEARCH_CRITERIA },
+  searchCriteria: { ...DEFAULT_SEARCH_CRITERIA },
   hasSearched: false,
 };
 const STATUS_OPTIONS: AppDropdownOption[] = [
@@ -171,6 +178,15 @@ function normalizeStatusFilterValue(value: string): AccountStatusFilter {
     return value;
   }
   return "";
+}
+
+function hasAccountSearchCriteria(criteria: AccountSearchCriteria): boolean {
+  return (
+    Boolean(criteria.code.trim()) ||
+    Boolean(criteria.name.trim()) ||
+    Boolean(criteria.aeName.trim()) ||
+    Boolean(criteria.statusFilter)
+  );
 }
 
 function sortAccounts(accounts: FundsphereAccount[]): FundsphereAccount[] {
@@ -1083,11 +1099,7 @@ function FundsphereAccountsPage() {
     Boolean(searchCriteria.name.trim()) ||
     Boolean(searchCriteria.aeName.trim()) ||
     searchCriteria.statusFilter !== DEFAULT_ACCOUNT_STATUS_FILTER;
-  const hasDraftFilters =
-    searchDraft.code.trim() !== searchCriteria.code.trim() ||
-    searchDraft.name.trim() !== searchCriteria.name.trim() ||
-    searchDraft.aeName.trim() !== searchCriteria.aeName.trim() ||
-    searchDraft.statusFilter !== searchCriteria.statusFilter;
+  const hasDraftFilters = hasAccountSearchCriteria(searchDraft);
   const emptyMessage = buildEmptyMessage({
     hasSearched,
     hasFilters,
@@ -1268,10 +1280,7 @@ function FundsphereAccountsPage() {
 
         <form
           className="space-y-5 px-1.5"
-          onSubmit={(event) => {
-            event.preventDefault();
-            handleSearchSubmit(event);
-          }}
+          onSubmit={handleSearchSubmit}
         >
           <div className="grid grid-cols-1 gap-3.5 md:grid-cols-2 xl:grid-cols-4">
             <label className="block min-w-0">
