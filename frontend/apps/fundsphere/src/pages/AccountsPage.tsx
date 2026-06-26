@@ -189,6 +189,15 @@ function hasAccountSearchCriteria(criteria: AccountSearchCriteria): boolean {
   );
 }
 
+function areAccountSearchCriteriaEqual(left: AccountSearchCriteria, right: AccountSearchCriteria): boolean {
+  return (
+    left.code.trim() === right.code.trim() &&
+    left.name.trim() === right.name.trim() &&
+    left.aeName.trim() === right.aeName.trim() &&
+    left.statusFilter === right.statusFilter
+  );
+}
+
 function sortAccounts(accounts: FundsphereAccount[]): FundsphereAccount[] {
   return [...accounts].sort((left, right) => left.code.localeCompare(right.code));
 }
@@ -1059,7 +1068,7 @@ function FundsphereAccountsPage() {
   }, [accountReps, employeeLookup]);
 
   const filteredAccounts = useMemo(() => {
-    if (!accounts) {
+    if (!hasSearched || !accounts) {
       return [];
     }
     const codeQuery = searchCriteria.code.trim().toLowerCase();
@@ -1088,12 +1097,12 @@ function FundsphereAccountsPage() {
         return true;
       }),
     );
-  }, [accountRepNamesByAccountCode, accounts, searchCriteria.aeName, searchCriteria.code, searchCriteria.name, searchCriteria.statusFilter]);
+  }, [accountRepNamesByAccountCode, accounts, hasSearched, searchCriteria.aeName, searchCriteria.code, searchCriteria.name, searchCriteria.statusFilter]);
 
   const accountGroups = useMemo(() => buildAccountGroups(filteredAccounts), [filteredAccounts]);
 
   const hasAccounts = Boolean(accounts && accounts.length > 0);
-  const hasMatches = Boolean(filteredAccounts.length > 0);
+  const hasMatches = Boolean(hasSearched && filteredAccounts.length > 0);
   const hasFilters =
     Boolean(searchCriteria.code.trim()) ||
     Boolean(searchCriteria.name.trim()) ||
@@ -1109,11 +1118,11 @@ function FundsphereAccountsPage() {
   });
 
   const searchResultText = !hasSearched
-    ? "Active accounts load automatically. Use the filters to narrow the list."
+    ? "Search by one or more fields. Results load only after you click Search."
     : !accounts
       ? "Loading accounts..."
       : filteredAccounts.length === 0
-        ? "No accounts matched your current filters."
+        ? "No accounts matched your search."
         : `${filteredAccounts.length} account${filteredAccounts.length === 1 ? "" : "s"} shown.`;
 
   const pageMessages: StackMessage[] = [];
@@ -1142,11 +1151,24 @@ function FundsphereAccountsPage() {
 
   function handleSearchSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
+    const nextSearchCriteria = { ...pageState.searchDraft };
+    const shouldForceRefresh =
+      Boolean(accountsRef.current) && areAccountSearchCriteriaEqual(nextSearchCriteria, pageState.searchCriteria);
+
     setPageState((current) => ({
       ...current,
-      searchCriteria: { ...current.searchDraft },
+      searchCriteria: nextSearchCriteria,
       hasSearched: true,
     }));
+
+    if (shouldForceRefresh) {
+      void refreshAccounts("network-only");
+      return;
+    }
+
+    if (!accountsRef.current) {
+      void refreshAccounts("cache-first");
+    }
   }
 
   function resetSearchCriteria() {
@@ -1154,7 +1176,7 @@ function FundsphereAccountsPage() {
       ...current,
       searchDraft: { ...EMPTY_SEARCH_CRITERIA },
       searchCriteria: { ...EMPTY_SEARCH_CRITERIA },
-      hasSearched: true,
+      hasSearched: false,
     }));
   }
 
@@ -1398,8 +1420,10 @@ function FundsphereAccountsPage() {
           title="Accounts"
           description={
             accounts
-              ? `${filteredAccounts.length} of ${accounts.length} accounts shown.`
-              : "Accounts will appear after the initial load."
+              ? hasSearched
+                ? `${filteredAccounts.length} of ${accounts.length} accounts shown.`
+                : "Search results will appear after you run a search."
+              : "Search results will appear after you run a search."
           }
           contentClassName="space-y-4"
         >
