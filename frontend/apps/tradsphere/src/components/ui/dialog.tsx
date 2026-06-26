@@ -90,6 +90,9 @@ const DialogContent = React.forwardRef<
           <>
             <DialogOverlay asChild forceMount>
               <motion.div
+                onClick={(event) => {
+                  event.stopPropagation();
+                }}
                 initial={{ opacity: 0 }}
                 animate={{ opacity: open ? 1 : 0 }}
                 exit={{ opacity: 0 }}
