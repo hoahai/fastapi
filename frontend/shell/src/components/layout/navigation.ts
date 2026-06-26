@@ -3,7 +3,6 @@ import {
   ClipboardCheck,
   ContactRound,
   House,
-  LayoutDashboard,
   MapPinned,
   Plane,
   RadioTower,
@@ -125,10 +124,19 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
   {
     id: "fundsphere",
     label: "FundSphere",
-    description: "Coming soon",
-    route: "/fundsphere/home",
-    icon: LayoutDashboard,
-    available: false,
+    description: "Budget management workspace",
+    route: "/fundsphere/accounts",
+    icon: WalletCards,
+    available: true,
+    activeMatchPrefix: "/fundsphere/",
+    children: [
+      {
+        id: "fundsphere-accounts",
+        label: "Accounts",
+        route: "/fundsphere/accounts",
+        available: true,
+      },
+    ],
   },
   {
     id: "opssphere",
