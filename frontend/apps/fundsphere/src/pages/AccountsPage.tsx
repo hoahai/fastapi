@@ -833,14 +833,14 @@ function AccountCard({
   return (
     <article
       role="button"
-      tabIndex={disabled || !canEdit ? -1 : 0}
+      tabIndex={disabled || !canEdit || logoPreviewOpen ? -1 : 0}
       onClick={() => {
-        if (!disabled && canEdit) {
+        if (!disabled && canEdit && !logoPreviewOpen) {
           onEdit(account);
         }
       }}
       onKeyDown={(event) => {
-        if (disabled || !canEdit) {
+        if (disabled || !canEdit || logoPreviewOpen) {
           return;
         }
         if (event.key === "Enter" || event.key === " ") {
@@ -850,7 +850,7 @@ function AccountCard({
       }}
       className={cn(
         "rounded-[1.35rem] border p-4 shadow-[0_18px_30px_-24px_rgba(37,99,235,0.42)] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
-        disabled ? "cursor-default" : "cursor-pointer",
+        disabled || logoPreviewOpen ? "pointer-events-none cursor-default" : "cursor-pointer",
         account.active
           ? "border-blue-100/90 bg-white hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-[0_20px_34px_-24px_rgba(37,99,235,0.5)]"
           : "border-slate-200 bg-slate-50/90 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-[0_18px_28px_-26px_rgba(15,23,42,0.22)]",
