@@ -2,7 +2,6 @@ import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   CheckCircle2,
   ChevronDown,
-  PencilLine,
   Plus,
   RefreshCw,
   Search,
@@ -16,7 +15,6 @@ import { Section, SectionHeader } from "@shared/components";
 import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { ModalCloseButton, ModalFooter, ModalHeaderRow, ModalShell } from "@shared/components";
-import { IconActionButton } from "@shared/components/actions/IconActionButton";
 import { useApiRequest } from "@shared/hooks/useApiRequest";
 import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
 import { useOnlineStatus } from "@shared/hooks/useOnlineStatus";
@@ -816,6 +814,14 @@ function AccountCard({
   canEdit: boolean;
   onEdit: (account: FundsphereAccount) => void;
 }) {
+  const [logoError, setLogoError] = useState(false);
+  useEffect(() => {
+    setLogoError(false);
+  }, [account.logoUrl]);
+
+  const showLogo = Boolean(account.logoUrl) && !logoError;
+  const logoFallback = (account.name || account.code || "AC").slice(0, 2).toUpperCase();
+
   return (
     <article
       role="button"
@@ -835,59 +841,56 @@ function AccountCard({
         }
       }}
       className={cn(
-        "rounded-[1.35rem] border p-5 shadow-[0_18px_30px_-24px_rgba(37,99,235,0.42)] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
+        "rounded-[1.35rem] border p-4 shadow-[0_18px_30px_-24px_rgba(37,99,235,0.42)] transition focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500",
         disabled ? "cursor-default" : "cursor-pointer",
         account.active
           ? "border-blue-100/90 bg-white hover:-translate-y-0.5 hover:border-blue-200 hover:shadow-[0_20px_34px_-24px_rgba(37,99,235,0.5)]"
           : "border-slate-200 bg-slate-50/90 hover:-translate-y-0.5 hover:border-slate-300 hover:shadow-[0_18px_28px_-26px_rgba(15,23,42,0.22)]",
       )}
     >
-      <div className="flex items-start justify-between gap-4">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
+      <div className="flex items-start gap-4">
+        <div className="flex size-14 shrink-0 items-center justify-center overflow-hidden rounded-2xl border border-blue-100/90 bg-gradient-to-br from-slate-50 to-blue-50 ring-1 ring-white/70">
+          {showLogo ? (
+            <img
+              src={account.logoUrl ?? undefined}
+              alt={`${account.name} logo`}
+              className="h-full w-full object-contain p-2"
+              loading="lazy"
+              onError={() => setLogoError(true)}
+            />
+          ) : (
+            <span className="text-sm font-semibold uppercase tracking-[0.16em] text-blue-800">
+              {logoFallback}
+            </span>
+          )}
+        </div>
+
+        <div className="min-w-0 flex-1">
+          <p className="truncate text-lg font-semibold tracking-[-0.02em] text-slate-900">{account.name}</p>
+
+          <div className="mt-2 flex flex-wrap items-center gap-2">
             <span className="inline-flex items-center rounded-full border border-blue-100 bg-blue-50 px-2.5 py-1 text-xs font-semibold uppercase tracking-[0.12em] text-blue-800">
               {account.code}
             </span>
-            <span className={cn("inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium", buildAccountStatusClass(account.active))}>
+            <span
+              className={cn(
+                "inline-flex items-center rounded-full border px-2.5 py-1 text-xs font-medium",
+                buildAccountStatusClass(account.active),
+              )}
+            >
               {buildAccountStatusLabel(account.active)}
             </span>
           </div>
 
-          <p className="mt-2 truncate text-lg font-semibold tracking-[-0.02em] text-slate-900">{account.name}</p>
-
-          <div className="mt-3 grid grid-cols-1 gap-2 text-sm text-slate-700 sm:grid-cols-2 xl:grid-cols-3">
-            <AccountMeta label="End Date" value={account.endDate ?? "—"} />
-            <AccountMeta label="AE Name" value={aeNames ?? "—"} />
-            <AccountMeta label="Consero ID" value={account.conseroId ?? "—"} />
-            <AccountMeta label="Consero Name" value={account.conseroName ?? "—"} />
-            <AccountMeta className="xl:col-span-2" label="Strata Name" value={account.strataName ?? "—"} />
-            <AccountMeta className="sm:col-span-2 xl:col-span-3" label="Logo URL" value={account.logoUrl ?? "—"} />
-          </div>
-        </div>
-
-        <div className="flex items-center gap-1.5">
-          <IconActionButton
-            aria-label={`Edit ${account.code}`}
-            tooltip="Edit account"
-            icon={<PencilLine />}
-            onClick={(event) => {
-              event.stopPropagation();
-              onEdit(account);
-            }}
-            disabled={disabled || !canEdit}
-          />
+          {aeNames ? (
+            <p className="mt-3 truncate text-sm text-slate-600">
+              <span className="font-medium text-slate-500">AE: </span>
+              <span className="text-slate-800">{aeNames}</span>
+            </p>
+          ) : null}
         </div>
       </div>
     </article>
-  );
-}
-
-function AccountMeta({ label, value, className }: { label: string; value: string; className?: string }) {
-  return (
-    <p className={cn("min-w-0 truncate", className)}>
-      <span className="text-slate-500">{label}: </span>
-      <span className="text-slate-800">{value}</span>
-    </p>
   );
 }
 
