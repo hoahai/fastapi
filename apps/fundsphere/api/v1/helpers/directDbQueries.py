@@ -604,7 +604,9 @@ def get_department(*, code: str) -> dict[str, object] | None:
 def list_services(
     *,
     id: str | None = None,
+    name: str | None = None,
     department_code: str | None = None,
+    status: str | None = None,
     active: bool = True,
 ) -> list[dict[str, object]]:
     services_table = _quote_table_name(_services_table())
@@ -617,12 +619,25 @@ def list_services(
         where_parts.append("s.id = %s")
         params.append(service_id_text)
 
+    name_text = normalize_optional_input_text(name)
+    if name_text:
+        where_parts.append("LOWER(s.name) LIKE LOWER(%s)")
+        params.append(f"%{name_text}%")
+
     department_code_text = normalize_optional_input_text(department_code)
     if department_code_text:
         where_parts.append("s.departmentCode = %s")
         params.append(department_code_text.upper())
 
-    if active:
+    status_text = normalize_optional_input_text(status).lower()
+    if status_text:
+        if status_text == "active":
+            where_parts.append("s.active = 1")
+        elif status_text == "inactive":
+            where_parts.append("s.active = 0")
+        elif status_text != "all":
+            raise ValueError("status must be active, inactive, or all")
+    elif active:
         where_parts.append("s.active = 1")
 
     where_sql = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""

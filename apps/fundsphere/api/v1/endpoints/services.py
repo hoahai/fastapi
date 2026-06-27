@@ -19,7 +19,9 @@ router = APIRouter(prefix="/services")
 @router.get("")
 def list_services_route(
     id: str | None = Query(None, alias="id"),
+    name: str | None = Query(None, alias="name"),
     department_code: str | None = Query(None, alias="departmentCode"),
+    status: str | None = Query(None, alias="status"),
     active: bool = Query(True),
 ):
     """
@@ -31,8 +33,11 @@ def list_services_route(
     Example request (single service):
         GET /api/fundsphere/v1/services?id=7e4e0c9d-f8b8-4d2f-8d1d-6ce8b1f5b7f7
 
-    Example request (department filter):
-        GET /api/fundsphere/v1/services?departmentCode=MKT&active=false
+    Example request (name and department filters):
+        GET /api/fundsphere/v1/services?name=Paid%20Media&departmentCode=MKT&status=active
+
+    Example request (inactive services):
+        GET /api/fundsphere/v1/services?status=inactive
 
     Example response:
         {
@@ -55,10 +60,11 @@ def list_services_route(
     Requirements:
         - Requires X-Tenant-Id header
         - Requires valid API key or bearer token in compat mode
-        - id and departmentCode are optional filters
-        - active defaults to true
-        - active=true filters active services only
-        - active=false returns active and inactive services
+        - id, name, departmentCode, and status are optional filters
+        - active defaults to true when status is not provided
+        - status=active filters active services only
+        - status=inactive filters inactive services only
+        - status=all or active=false returns active and inactive services
         - Unknown query params are rejected (400)
         - Services are insert/update only in Phase 1; no delete route is exposed
     """
@@ -68,7 +74,7 @@ def list_services_route(
             if service is None:
                 raise HTTPException(status_code=404, detail="Service not found")
             return service
-        return list_services(id=id, department_code=department_code, active=active)
+        return list_services(id=id, name=name, department_code=department_code, status=status, active=active)
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

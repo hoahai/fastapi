@@ -17,6 +17,7 @@ import { Section, SectionHeader } from "@shared/components";
 import { ImageUploadField } from "@shared/components/form/ImageUploadField";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
+import { SearchEmptyStatePanel } from "@shared/components/status/SearchEmptyStatePanel";
 import { DateInputField } from "@tradsphere/components/dashboard/FlightDateRangeField";
 import { LabeledField } from "@tradsphere/components/dashboard/FormFieldRow";
 import { Button } from "@tradsphere/components/ui/button";
@@ -141,7 +142,6 @@ const EMPLOYEE_REGION_OPTIONS: AppDropdownOption[] = [
 ];
 
 const EMPLOYEE_STATUS_OPTIONS: AppDropdownOption[] = [
-  { value: "", label: "" },
   { value: "active", label: "Active" },
   { value: "inactive", label: "Inactive" },
 ];
@@ -156,14 +156,14 @@ const EMPLOYEE_REGION_FILTER_OPTIONS: AppDropdownOption[] = [
 const DEFAULT_SEARCH_CRITERIA: EmployeeSearchCriteria = {
   nameOrTitle: "",
   email: "",
-  statusFilter: "",
+  statusFilter: "active",
   regionFilter: "",
 };
 
 const EMPTY_SEARCH_CRITERIA: EmployeeSearchCriteria = {
   nameOrTitle: "",
   email: "",
-  statusFilter: "",
+  statusFilter: "active",
   regionFilter: "",
 };
 
@@ -487,10 +487,10 @@ function buildEmployeeRegionLabel(region: string): string {
 }
 
 function coerceEmployeeStatusFilter(value: string, fallback: EmployeeStatusFilter): EmployeeStatusFilter {
-  if (value === "" || value === "active" || value === "inactive") {
+  if (value === "active" || value === "inactive") {
     return value;
   }
-  return fallback;
+  return fallback === "active" || fallback === "inactive" ? fallback : "active";
 }
 
 function coerceEmployeeRegionFilter(value: string, fallback: EmployeeRegionFilter): EmployeeRegionFilter {
@@ -563,7 +563,7 @@ function getEmptyMessage(
   if (!hasSearched) {
     return {
       title: "Search employees",
-      description: "Select a search criterion, then click Search to load matching employees.",
+      description: "Use the search form above to find employees.",
     };
   }
   if (!hasMatches && hasFilters) {
@@ -598,7 +598,7 @@ function toEmployeeCardStatusClass(active: boolean): string {
 
 function normalizeStatusFilterValue(value: string): EmployeeStatusFilter {
   if (value === "" || value === "active" || value === "inactive") {
-    return value;
+    return value === "" ? "active" : value;
   }
   return "active";
 }
@@ -1512,22 +1512,16 @@ function EmptyEmployeesPanel({
   const message = getEmptyMessage(hasSearched, hasFilters, hasEmployees, hasMatches);
 
   return (
-    <div className="rounded-[1.35rem] border border-dashed border-blue-200/90 bg-gradient-to-b from-blue-50/45 to-white px-6 py-11 text-center">
-      <div className="mx-auto flex max-w-xl flex-col items-center gap-3">
-        <div className="inline-flex size-14 items-center justify-center rounded-full border border-blue-100 bg-blue-50 text-blue-700">
-          {hasEmployees ? <Search className="size-7" /> : <Users className="size-7" />}
-        </div>
-        <div className="space-y-1">
-          <p className="text-base font-semibold text-slate-900">{message.title}</p>
-          <p className="text-sm leading-6 text-slate-600">{message.description}</p>
-        </div>
-        {hasFilters ? (
-          <Button variant="outline" onClick={onClearFilters}>
-            Clear filters
-          </Button>
-        ) : null}
-      </div>
-    </div>
+    <SearchEmptyStatePanel
+      icon={hasEmployees ? <Search className="size-7" /> : <Users className="size-7" />}
+      message={message.title}
+      description={message.description}
+      action={hasFilters ? (
+        <Button variant="outline" onClick={onClearFilters}>
+          Clear filters
+        </Button>
+      ) : null}
+    />
   );
 }
 
@@ -2297,16 +2291,12 @@ export default function EmployeeManagementPage() {
       </Section>
 
       <div className="relative">
-        <SectionCard
-          title="Results"
-          description={
-            workspace && hasSearched
-              ? `${filteredEmployees.length} of ${workspace.summary.totalEmployees} employees shown.`
-              : "Search results will appear after you run a search."
-          }
-          contentClassName="space-y-4"
-        >
-          {workspace && filteredEmployees.length > 0 ? (
+        {workspace && filteredEmployees.length > 0 ? (
+          <SectionCard
+            title="Results"
+            description={`${filteredEmployees.length} of ${workspace.summary.totalEmployees} employees shown.`}
+            contentClassName="space-y-4"
+          >
             <div className="space-y-4">
               <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
                 <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700">
@@ -2355,21 +2345,21 @@ export default function EmployeeManagementPage() {
                 </details>
               ))}
             </div>
-          ) : (
-            <EmptyEmployeesPanel
-              hasSearched={hasSearched}
-              hasFilters={hasFilters}
-              hasEmployees={hasEmployees}
-              hasMatches={hasMatches}
-              onClearFilters={resetSearchCriteria}
-            />
-          )}
-
-          <SectionLoadingLayer
-            active={Boolean(isRefreshing && workspace)}
-            message="Refreshing employees..."
+          </SectionCard>
+        ) : (
+          <EmptyEmployeesPanel
+            hasSearched={hasSearched}
+            hasFilters={hasFilters}
+            hasEmployees={hasEmployees}
+            hasMatches={hasMatches}
+            onClearFilters={resetSearchCriteria}
           />
-        </SectionCard>
+        )}
+
+        <SectionLoadingLayer
+          active={Boolean(isRefreshing && workspace)}
+          message="Refreshing employees..."
+        />
       </div>
 
       <EmployeeManagementModal

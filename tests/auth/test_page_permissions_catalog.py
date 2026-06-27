@@ -8,6 +8,7 @@ from shared.auth.page_permissions_catalog import (
 def test_list_page_catalog_for_app_includes_non_tradsphere_apps() -> None:
     assert [page["key"] for page in list_page_catalog_for_app(app_code="fundsphere")] == [
         "fundsphere_accounts",
+        "fundsphere_services",
     ]
     assert [page["key"] for page in list_page_catalog_for_app(app_code="leavesphere")] == [
         "leavesphere_home",
@@ -21,6 +22,14 @@ def test_resolve_page_keys_for_api_path_covers_app_specific_routes() -> None:
         app_code="fundsphere",
         path="/api/fundsphere/v1/accounts/logo/upload",
     ) == {"fundsphere_accounts"}
+    assert resolve_page_keys_for_api_path(
+        app_code="fundsphere",
+        path="/api/fundsphere/v1/departments",
+    ) == {"fundsphere_accounts", "fundsphere_services"}
+    assert resolve_page_keys_for_api_path(
+        app_code="fundsphere",
+        path="/api/fundsphere/v1/services",
+    ) == {"fundsphere_accounts", "fundsphere_services"}
     assert resolve_page_keys_for_api_path(
         app_code="shiftzy",
         path="/api/shiftzy/v1/employees",

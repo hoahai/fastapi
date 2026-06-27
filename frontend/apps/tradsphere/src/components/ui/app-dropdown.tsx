@@ -257,7 +257,9 @@ export function AppDropdown({
       : selectedOptions.length <= 2
         ? selectedOptions.map((option) => formatOptionLabel(option)).join(", ")
         : `${formatOptionLabel(selectedOptions[0] as AppDropdownOption)}, +${selectedOptions.length - 1}`
-    : (selectedOption ? formatOptionLabel(selectedOption) : (value || placeholder));
+    : (selectedOption
+      ? (selectedOption.label.trim() ? formatOptionLabel(selectedOption) : placeholder)
+      : (value || placeholder));
   const isTriggerMuted = !multiple && Boolean(selectedOption?.muted);
   const panelSurfaceClasses =
     "relative isolate overflow-hidden rounded-lg border border-slate-200 bg-white/28 text-slate-900 shadow-xl ring-1 ring-slate-200/60 backdrop-blur-[32px] backdrop-saturate-150";

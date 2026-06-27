@@ -1,6 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
-  CheckCircle2,
   ChevronDown,
   Plus,
   RefreshCw,
@@ -26,6 +25,7 @@ import { hasAppEditAccess } from "@shared/auth/permissions";
 import { useAuth } from "@shared/auth/useAuth";
 import { cn } from "@shared/components/utils/cn";
 import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
+import { SearchEmptyStatePanel } from "@shared/components/status/SearchEmptyStatePanel";
 import { PageBanner } from "@shell/components/layout/PageBanner";
 import { Button } from "@tradsphere/components/ui/button";
 import { AppDropdown, type AppDropdownOption } from "@tradsphere/components/ui/app-dropdown";
@@ -113,7 +113,6 @@ type LeaveSphereEmployeeLookup = {
 
 const FUNDSPHERE_APP_CODE = "fundsphere";
 const DEFAULT_ACCOUNT_STATUS_FILTER: AccountStatusFilter = "active";
-const EMPTY_ACCOUNT_STATUS_FILTER: AccountStatusFilter = "";
 const DEFAULT_SEARCH_CRITERIA: AccountSearchCriteria = {
   code: "",
   name: "",
@@ -124,7 +123,7 @@ const EMPTY_SEARCH_CRITERIA: AccountSearchCriteria = {
   code: "",
   name: "",
   aeName: "",
-  statusFilter: EMPTY_ACCOUNT_STATUS_FILTER,
+  statusFilter: DEFAULT_ACCOUNT_STATUS_FILTER,
 };
 const EMPTY_PAGE_STATE: PersistedAccountsPageState = {
   searchDraft: { ...DEFAULT_SEARCH_CRITERIA },
@@ -132,7 +131,6 @@ const EMPTY_PAGE_STATE: PersistedAccountsPageState = {
   hasSearched: false,
 };
 const STATUS_OPTIONS: AppDropdownOption[] = [
-  { value: "", label: "" },
   { value: "active", label: "Active" },
   { value: "inactive", label: "Inactive" },
 ];
@@ -181,7 +179,7 @@ function normalizeStatusFilterValue(value: string): AccountStatusFilter {
   if (value === "active" || value === "inactive") {
     return value;
   }
-  return "";
+  return DEFAULT_ACCOUNT_STATUS_FILTER;
 }
 
 function hasAccountSearchCriteria(criteria: AccountSearchCriteria): boolean {
@@ -314,7 +312,7 @@ function buildEmptyMessage(params: {
   if (!params.hasSearched) {
     return {
       title: "Search accounts",
-      description: "Load the account list, then use the filters to narrow results.",
+      description: "Use the search form above to find accounts.",
     };
   }
   if (!params.hasAccounts) {
@@ -1197,14 +1195,52 @@ function FundsphereAccountsPage() {
     active: true,
     inactive: true,
   });
+  const didRestoreSearchStateRef = useRef<string | null>(null);
+  const searchDraft = pageState.searchDraft;
+  const searchCriteria = pageState.searchCriteria;
+  const hasSearched = pageState.hasSearched;
 
   useEffect(() => {
     accountsRef.current = accounts;
   }, [accounts]);
 
-  const searchDraft = pageState.searchDraft;
-  const searchCriteria = pageState.searchCriteria;
-  const hasSearched = pageState.hasSearched;
+  useEffect(() => {
+    if (!pageStateControls.hydrated) {
+      return;
+    }
+    setPageState((current) => {
+      const nextSearchDraftStatus = normalizeStatusFilterValue(current.searchDraft.statusFilter);
+      const nextSearchCriteriaStatus = normalizeStatusFilterValue(current.searchCriteria.statusFilter);
+      if (
+        nextSearchDraftStatus === current.searchDraft.statusFilter &&
+        nextSearchCriteriaStatus === current.searchCriteria.statusFilter
+      ) {
+        return current;
+      }
+      return {
+        ...current,
+        searchDraft: {
+          ...current.searchDraft,
+          statusFilter: nextSearchDraftStatus,
+        },
+        searchCriteria: {
+          ...current.searchCriteria,
+          statusFilter: nextSearchCriteriaStatus,
+        },
+      };
+    });
+  }, [pageStateControls.hydrated]);
+
+  useEffect(() => {
+    if (!pageStateControls.hydrated || !hasSearched) {
+      return;
+    }
+    if (didRestoreSearchStateRef.current === cacheKey) {
+      return;
+    }
+    didRestoreSearchStateRef.current = cacheKey;
+    void refreshAccounts("cache-first", searchCriteria);
+  }, [cacheKey, hasSearched, pageStateControls.hydrated, searchCriteria]);
 
   function commitAccounts(
     nextAccounts: FundsphereAccount[] | null,
@@ -1326,13 +1362,6 @@ function FundsphereAccountsPage() {
     });
     ++requestTokenRef.current;
   }, [cacheKey]);
-
-  useEffect(() => {
-    if (!pageStateControls.hydrated) {
-      return;
-    }
-    void refreshAccounts("cache-first", searchCriteria);
-  }, [pageStateControls.hydrated, cacheKey]);
 
   const accountRepNamesByAccountCode = useMemo(() => {
     const grouped = new Map<string, Set<string>>();
@@ -1693,18 +1722,12 @@ function FundsphereAccountsPage() {
       </Section>
 
       <div className="relative">
-        <SectionCard
-          title="Accounts"
-          description={
-            accounts
-              ? hasSearched
-                ? `${filteredAccounts.length} of ${accounts.length} accounts shown.`
-                : "Search results will appear after you run a search."
-              : "Search results will appear after you run a search."
-          }
-          contentClassName="space-y-4"
-        >
-          {accounts && filteredAccounts.length > 0 ? (
+        {accounts && filteredAccounts.length > 0 ? (
+          <SectionCard
+            title="Accounts"
+            description={`${filteredAccounts.length} of ${accounts.length} accounts shown.`}
+            contentClassName="space-y-4"
+          >
             <div className="space-y-4">
               <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
                 <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700">
@@ -1750,23 +1773,19 @@ function FundsphereAccountsPage() {
                 </details>
               ))}
             </div>
-          ) : (
-            <div className="relative overflow-hidden rounded-2xl border border-blue-100/90 bg-slate-50/75 p-8 text-center shadow-[0_18px_30px_-26px_rgba(37,99,235,0.5)]">
-              <div className="mx-auto flex size-12 items-center justify-center rounded-full border border-blue-100 bg-blue-50 text-blue-700">
-                <CheckCircle2 className="size-5" />
-              </div>
-              <div className="mt-4 space-y-1">
-                <p className="text-base font-semibold text-slate-800">{emptyMessage.title}</p>
-                <p className="text-sm leading-6 text-slate-500">{emptyMessage.description}</p>
-              </div>
-            </div>
-          )}
-
-          <SectionLoadingLayer
-            active={Boolean(isRefreshing && accounts)}
-            message="Refreshing accounts..."
+          </SectionCard>
+        ) : (
+          <SearchEmptyStatePanel
+            icon={<Search className="size-7" />}
+            message={emptyMessage.title}
+            description={emptyMessage.description}
           />
-        </SectionCard>
+        )}
+
+        <SectionLoadingLayer
+          active={Boolean(isRefreshing && accounts)}
+          message="Refreshing accounts..."
+        />
       </div>
 
       <PageLoadingLayer active={Boolean(isLoading && !accounts)} message="Loading accounts..." />
