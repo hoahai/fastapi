@@ -8,7 +8,7 @@ type PageBannerProps = {
   description: string;
   action?: ReactNode;
   className?: string;
-  gradientVariant?: "app" | "workspace" | "admin" | "shiftzy" | "tradsphere";
+  gradientVariant?: "app" | "workspace" | "admin" | "shiftzy" | "tradsphere" | "fundsphere";
 };
 
 const bannerGradientByVariant: Record<NonNullable<PageBannerProps["gradientVariant"]>, string> = {
@@ -21,6 +21,8 @@ const bannerGradientByVariant: Record<NonNullable<PageBannerProps["gradientVaria
     "bg-[radial-gradient(circle_at_16%_24%,rgba(14,165,233,0.3),transparent_44%),radial-gradient(circle_at_82%_22%,rgba(59,130,246,0.28),transparent_42%),radial-gradient(circle_at_62%_78%,rgba(16,185,129,0.2),transparent_48%),linear-gradient(135deg,#f6fbff_4%,#e5f1ff_45%,#eaf9f4_100%)]",
   tradsphere:
     "bg-[radial-gradient(circle_at_14%_30%,rgba(59,130,246,0.36),transparent_44%),radial-gradient(circle_at_86%_24%,rgba(99,102,241,0.34),transparent_44%),radial-gradient(circle_at_54%_86%,rgba(167,139,250,0.24),transparent_50%),linear-gradient(138deg,#f7fbff_3%,#e7f0ff_44%,#eaeeff_76%,#f5f7ff_100%)]",
+  fundsphere:
+    "bg-[radial-gradient(circle_at_16%_24%,rgba(125,193,195,0.28),transparent_42%),radial-gradient(circle_at_84%_22%,rgba(228,171,122,0.24),transparent_44%),linear-gradient(135deg,#f8fefe_4%,#eef9f9_44%,#fff6ec_76%,#fffdf8_100%)]",
 };
 
 export function PageBanner({

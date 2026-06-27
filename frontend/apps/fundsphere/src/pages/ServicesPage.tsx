@@ -1249,7 +1249,7 @@ function FundsphereServicesPage() {
       pageMessages={<PageMessageStack messages={pageMessages} />}
       banner={(
         <PageBanner
-          gradientVariant="workspace"
+          gradientVariant="fundsphere"
           eyebrow="FundSphere"
           title="Services"
           description="Manage service records used by budgets, departments, and operational reporting."

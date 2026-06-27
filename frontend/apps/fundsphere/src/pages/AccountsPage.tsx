@@ -1574,7 +1574,7 @@ function FundsphereAccountsPage() {
       pageMessages={<PageMessageStack messages={pageMessages} />}
       banner={(
         <PageBanner
-          gradientVariant="workspace"
+          gradientVariant="fundsphere"
           eyebrow="FundSphere"
           title="Accounts"
           description="Manage client account records used by budgets, services, and account assignments."
