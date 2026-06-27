@@ -1,6 +1,6 @@
 from __future__ import annotations
 
-from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Request, UploadFile
+from fastapi import APIRouter, Body, Depends, File, Form, HTTPException, Query, Request, UploadFile
 from pydantic import BaseModel
 
 from apps.leavesphere.api.v1.helpers.employees import (
@@ -125,12 +125,15 @@ async def upload_employee_picture_route(
 
 
 @router.get("")
-def get_employees_route():
+def get_employees_route(summary: bool = Query(False)):
     """
     List LeaveSphere employees.
 
     Example request:
         GET /api/leavesphere/v1/employees
+
+    Example request (summary):
+        GET /api/leavesphere/v1/employees?summary=true
 
     Example response:
         {
@@ -141,6 +144,32 @@ def get_employees_route():
               "firstName": "Alex",
               "lastName": "Chen",
               "email": "alex@example.com",
+              "phone": null,
+              "dob": null,
+              "pictureUrl": null,
+              "region": "US",
+              "startDate": null,
+              "title": null,
+              "isAE": false,
+              "active": 1
+            }
+          ]
+        }
+
+    Example response (summary):
+        {
+          "meta": {"timestamp": "2026-05-28T10:00:00+07:00", "duration_ms": 2},
+          "data": [
+            {
+              "id": "13f6b22f-0a86-43b8-946d-cbba67642e8b",
+              "identityKey": "218f1519-f95d-4d88-ac4c-df6a8cbf45c1",
+              "firstName": "Alex",
+              "lastName": "Chen",
+              "email": "alex@example.com",
+              "pictureUrl": null,
+              "region": "US",
+              "title": "AE",
+              "isAE": true,
               "active": 1
             }
           ]
@@ -149,8 +178,9 @@ def get_employees_route():
     Requirements:
         - Requires X-Tenant-Id header
         - Requires valid API key or bearer token in compat mode
+        - summary=true returns only the fields needed for the page list
     """
-    return list_employees()
+    return list_employees(summary=summary)
 
 
 @router.get("/{employee_id}")

@@ -63,6 +63,7 @@ import {
   deleteLeaveSphereEmployeeManagementManager,
   extractLeaveSphereEmployeeManagementCreatedEmployeeId,
   extractLeaveSphereEmployeeManagementEmployeeFromPayload,
+  loadLeaveSphereEmployeeManagementEmployee,
   loadLeaveSphereEmployeeManagementWorkspace,
   loadLeaveSphereEmployeeManagementManagers,
   normalizeLeaveSphereEmployeeManagementEmployee,
@@ -128,10 +129,6 @@ type EmployeeModalProps = {
   employeeOptions: AppDropdownOption[];
   onUploadPicture: (file: File, names: { firstName: string; lastName: string }) => Promise<string>;
   onSubmit: (payload: { mode: EmployeeMode; id: string | null; form: LeaveSphereEmployeeManagementFormState }) => Promise<void>;
-  detailCacheStatusText?: string | null;
-  detailCacheRefreshing?: boolean;
-  detailCacheRefreshDisabled?: boolean;
-  onRefreshDetailCache?: () => void;
   managerCacheContext: LeaveSphereEmployeeManagementManagerCacheContext;
 };
 
@@ -620,10 +617,6 @@ function EmployeeManagementModal({
   employeeOptions,
   onUploadPicture,
   onSubmit,
-  detailCacheStatusText,
-  detailCacheRefreshing = false,
-  detailCacheRefreshDisabled = false,
-  onRefreshDetailCache,
   managerCacheContext,
 }: EmployeeModalProps) {
   const [form, setForm] = useState<LeaveSphereEmployeeManagementFormState>(() => normalizeEmployeeForm(employee));
@@ -639,8 +632,10 @@ function EmployeeManagementModal({
   const [pictureDraftObjectUrl, setPictureDraftObjectUrl] = useState<string | null>(null);
   const [isManagersLoading, setIsManagersLoading] = useState(false);
   const [managerLoadError, setManagerLoadError] = useState<string | null>(null);
+  const [managerDetailCacheStatus, setManagerDetailCacheStatus] = useState<CacheStatus | null>(null);
   const [fieldErrors, setFieldErrors] = useState(() => createEmptyFieldErrors());
   const originalPictureUrlRef = useRef<string>(asString(employee?.pictureUrl));
+  const managerDetailRequestTokenRef = useRef(0);
   const managerOptions = useMemo(
     () => employeeOptions.filter((option) => (
       option.value !== employee?.id && (!option.muted || form.managerIds.includes(option.value))
@@ -685,6 +680,7 @@ function EmployeeManagementModal({
       clearPictureDraftAttachment();
       setIsManagersLoading(false);
       setManagerLoadError(null);
+      setManagerDetailCacheStatus(null);
       setFieldErrors(createEmptyFieldErrors());
       return;
     }
@@ -703,86 +699,101 @@ function EmployeeManagementModal({
     clearPictureDraftAttachment();
     setIsManagersLoading(mode === "edit" && Boolean(employee?.id));
     setManagerLoadError(null);
+    setManagerDetailCacheStatus(null);
     setFieldErrors(createEmptyFieldErrors());
   }, [employee, mode, open]);
 
-  useEffect(() => {
-    let cancelled = false;
-    if (!open || mode !== "edit" || !employee?.id) {
-      return () => {
-        cancelled = true;
-      };
+  async function refreshManagerAssignments(policy: CachePolicy): Promise<void> {
+    const employeeId = asString(employee?.id);
+    if (!open || mode !== "edit" || !employeeId) {
+      setManagerDetailCacheStatus(null);
+      setIsManagersLoading(false);
+      return;
     }
 
+    const requestToken = ++managerDetailRequestTokenRef.current;
     const cacheSnapshot = readLeaveSphereEmployeeManagementManagerCacheSnapshot({
       ...managerCacheContext,
     });
     const cachedManagerIds = cacheSnapshot?.data
       ? normalizeManagerIds(
           cacheSnapshot.data
-            .filter((item) => item.employeeId === employee.id)
+            .filter((item) => item.employeeId === employeeId)
             .map((item) => item.managerId)
-            .filter((managerId) => managerId && managerId !== employee.id),
+            .filter((managerId) => managerId && managerId !== employeeId),
         )
       : [];
+    const shouldFetchFromNetwork = shouldFetchNetwork(policy, cacheSnapshot);
+
     if (cacheSnapshot) {
       setForm((current) => ({ ...current, managerIds: cachedManagerIds }));
       setBaseline((current) => ({ ...current, managerIds: cachedManagerIds }));
+      setManagerDetailCacheStatus({
+        source: "cache",
+        fetchedAt: cacheSnapshot.fetchedAt,
+      });
     }
     setManagerLoadError(null);
-    if (cacheSnapshot && !cacheSnapshot.isExpired) {
-      setIsManagersLoading(false);
-      return () => {
-        cancelled = true;
-      };
+
+    if (!shouldFetchFromNetwork) {
+      if (requestToken === managerDetailRequestTokenRef.current) {
+        setIsManagersLoading(false);
+      }
+      return;
     }
 
     setIsManagersLoading(true);
 
-    void (async () => {
-      try {
-        const mappings = await loadLeaveSphereEmployeeManagementManagers({
-          requestJson,
-        });
-        if (cancelled) {
-          return;
-        }
-        const nextManagerLinks = mappings
-          .map((item) => ({
-            employeeId: asString(item.employeeId),
-            managerId: asString(item.managerId),
-          }))
-          .filter((item) => item.employeeId && item.managerId) as LeaveSphereEmployeeManagementManagerCacheItem[];
-        const nextManagerIds = normalizeManagerIds(
-          nextManagerLinks
-            .filter((item) => item.employeeId === employee.id)
-            .map((item) => item.managerId)
-            .filter((managerId) => managerId && managerId !== employee.id),
-        );
-        setForm((current) => ({ ...current, managerIds: nextManagerIds }));
-        setBaseline((current) => ({ ...current, managerIds: nextManagerIds }));
-        syncLeaveSphereEmployeeManagementManagerCache(
-          {
-            ...managerCacheContext,
-          },
-          nextManagerLinks,
-          { source: "network", fetchedAt: Date.now() },
-        );
-      } catch (error) {
-        if (cancelled) {
-          return;
-        }
-        setManagerLoadError(error instanceof Error && error.message.trim() ? error.message.trim() : "Could not load managers.");
-      } finally {
-        if (!cancelled) {
-          setIsManagersLoading(false);
-        }
+    try {
+      const mappings = await loadLeaveSphereEmployeeManagementManagers({
+        requestJson,
+      });
+      if (requestToken !== managerDetailRequestTokenRef.current) {
+        return;
       }
-    })();
+      const nextManagerLinks = mappings
+        .map((item) => ({
+          employeeId: asString(item.employeeId),
+          managerId: asString(item.managerId),
+        }))
+        .filter((item) => item.employeeId && item.managerId) as LeaveSphereEmployeeManagementManagerCacheItem[];
+      const nextManagerIds = normalizeManagerIds(
+        nextManagerLinks
+          .filter((item) => item.employeeId === employeeId)
+          .map((item) => item.managerId)
+          .filter((managerId) => managerId && managerId !== employeeId),
+      );
+      setForm((current) => ({ ...current, managerIds: nextManagerIds }));
+      setBaseline((current) => ({ ...current, managerIds: nextManagerIds }));
+      const fetchedAt = Date.now();
+      setManagerDetailCacheStatus({
+        source: "network",
+        fetchedAt,
+      });
+      syncLeaveSphereEmployeeManagementManagerCache(
+        {
+          ...managerCacheContext,
+        },
+        nextManagerLinks,
+        { source: "network", fetchedAt },
+      );
+    } catch (error) {
+      if (requestToken !== managerDetailRequestTokenRef.current) {
+        return;
+      }
+      setManagerLoadError(error instanceof Error && error.message.trim() ? error.message.trim() : "Could not load managers.");
+    } finally {
+      if (requestToken === managerDetailRequestTokenRef.current) {
+        setIsManagersLoading(false);
+      }
+    }
+  }
 
-    return () => {
-      cancelled = true;
-    };
+  useEffect(() => {
+    if (!open || mode !== "edit" || !employee?.id) {
+      return;
+    }
+    void refreshManagerAssignments("cache-first");
   }, [employee?.id, managerCacheContext, mode, open, requestJson]);
 
   useEffect(() => {
@@ -1215,21 +1226,27 @@ function EmployeeManagementModal({
               {submitError ? <p className="mt-4 text-sm text-rose-600">{submitError}</p> : null}
             </div>
 
-            {mode === "edit" && detailCacheStatusText && onRefreshDetailCache ? (
+            {mode === "edit" ? (
               <ModalCacheFooter
-                text={detailCacheStatusText}
+                text={
+                  isManagersLoading
+                    ? "Refreshing manager assignments..."
+                    : managerDetailCacheStatus
+                      ? `Data source: ${managerDetailCacheStatus.source}. Last updated ${formatRelativeTime(managerDetailCacheStatus.fetchedAt)}.`
+                      : "No cached manager assignments yet"
+                }
                 onRefresh={() => {
-                  if (!detailCacheRefreshDisabled && !detailCacheRefreshing && !hasUnsavedChanges && !isSubmitting) {
-                    onRefreshDetailCache();
+                  if (!isManagersLoading && !hasUnsavedChanges && !isSubmitting) {
+                    void refreshManagerAssignments("network-only");
                   }
                 }}
-                disabled={detailCacheRefreshDisabled || detailCacheRefreshing || hasUnsavedChanges || isSubmitting}
-                refreshing={detailCacheRefreshing}
-                refreshLabel="Refresh employee workspace"
+                disabled={isManagersLoading || hasUnsavedChanges || isSubmitting}
+                refreshing={isManagersLoading}
+                refreshLabel="Refresh manager assignments"
                 tooltipText={
                   hasUnsavedChanges
-                    ? "Save or discard your edits before refreshing employee data."
-                    : "Click to refresh this employee data"
+                    ? "Save or discard your edits before refreshing manager assignments."
+                    : "Click to refresh manager assignments"
                 }
                 actions={
                   <>
@@ -1633,6 +1650,7 @@ export default function EmployeeManagementPage() {
   const [lifecyclePendingEmployeeId, setLifecyclePendingEmployeeId] = useState<string | null>(null);
   const [isMutationInFlight, setIsMutationInFlight] = useState(false);
   const hydratedPageStateScopeRef = useRef<string | null>(null);
+  const modalEmployeeRequestTokenRef = useRef(0);
 
   useEffect(() => {
     workspaceRef.current = workspace;
@@ -1952,15 +1970,31 @@ export default function EmployeeManagementPage() {
     if (!canManage) {
       return;
     }
+    ++modalEmployeeRequestTokenRef.current;
     setModalMode("create");
     setModalEmployee(null);
     setIsModalOpen(true);
   }
 
-  function openEditModal(employee: LeaveSphereEmployeeManagementEmployee) {
-    setModalMode("edit");
-    setModalEmployee(employee);
-    setIsModalOpen(true);
+  async function openEditModal(employee: LeaveSphereEmployeeManagementEmployee) {
+    const requestToken = ++modalEmployeeRequestTokenRef.current;
+    try {
+      const nextEmployee = await loadLeaveSphereEmployeeManagementEmployee({
+        requestJson,
+        employeeId: employee.id,
+      });
+      if (requestToken !== modalEmployeeRequestTokenRef.current) {
+        return;
+      }
+      setModalMode("edit");
+      setModalEmployee(nextEmployee);
+      setIsModalOpen(true);
+    } catch (error) {
+      if (requestToken !== modalEmployeeRequestTokenRef.current) {
+        return;
+      }
+      setErrorMessage(error instanceof Error && error.message.trim() ? error.message.trim() : "Could not load employee.");
+    }
   }
 
   function startToggleEmployeeActive(employee: LeaveSphereEmployeeManagementEmployee, nextActive: boolean) {
@@ -2372,12 +2406,6 @@ export default function EmployeeManagementPage() {
         employeeOptions={employeeOptions}
         onUploadPicture={handlePictureUpload}
         onSubmit={handleEmployeeSubmit}
-        detailCacheStatusText={modalMode === "edit" ? cacheStatusText : null}
-        detailCacheRefreshing={isRefreshing}
-        detailCacheRefreshDisabled={isLoading || isRefreshing || !isOnline}
-        onRefreshDetailCache={() => {
-          void refreshWorkspace("network-only");
-        }}
         managerCacheContext={managerCacheBaseContext}
       />
 

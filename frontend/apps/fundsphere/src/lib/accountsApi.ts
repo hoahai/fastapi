@@ -164,10 +164,26 @@ export async function loadFundsphereAccounts(params: {
   } else {
     searchParams.set("status", "all");
   }
+  searchParams.set("summary", "true");
 
   const query = searchParams.toString();
   const payload = await params.requestJson(query ? `/api/fundsphere/v1/accounts?${query}` : "/api/fundsphere/v1/accounts");
   return normalizeFundsphereAccounts(payload);
+}
+
+export async function loadFundsphereAccount(params: {
+  requestJson: FundsphereRequestJson;
+  code: string;
+}): Promise<FundsphereAccount> {
+  const code = asString(params.code).toUpperCase();
+  const payload = await params.requestJson(`/api/fundsphere/v1/accounts?code=${encodeURIComponent(code)}`, {
+    errorToast: false,
+  });
+  const account = normalizeFundsphereAccounts(payload)[0] ?? null;
+  if (!account) {
+    throw new Error("Could not load account.");
+  }
+  return account;
 }
 
 export async function createFundsphereAccount(params: {

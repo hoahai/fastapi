@@ -113,13 +113,18 @@ def _build_pto_transaction_update_query(*, updates: dict) -> tuple[str, tuple[ob
     return query, tuple(params)
 
 
-def get_employees(*, employee_id: str | None = None) -> list[dict]:
+def get_employees(*, employee_id: str | None = None, summary: bool = False) -> list[dict]:
     tables = get_db_tables()
     where, params = _build_where_clauses([("id = %s", employee_id)])
-    query = (
-        "SELECT "
+    columns = (
         "dateCreated, dateUpdated, id, identityKey, firstName, lastName, email, "
-        "phone, dob, pictureUrl, region, startDate, title, isAE, active "
+        "pictureUrl, region, title, isAE, active"
+        if summary
+        else "dateCreated, dateUpdated, id, identityKey, firstName, lastName, email, "
+        "phone, dob, pictureUrl, region, startDate, title, isAE, active"
+    )
+    query = (
+        f"SELECT {columns} "
         f"FROM {tables['EMPLOYEES']}{where} "
         "ORDER BY lastName ASC, firstName ASC"
     )

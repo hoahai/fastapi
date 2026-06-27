@@ -84,6 +84,15 @@ function asNullableNumber(value: unknown): number | null {
   return Number.isFinite(parsed) ? parsed : null;
 }
 
+function formatDecimalDisplay(value: unknown): string {
+  const text = asString(value);
+  if (!text) {
+    return "";
+  }
+  const parsed = Number(text);
+  return Number.isFinite(parsed) ? parsed.toFixed(2) : text;
+}
+
 function normalizeDate(value: unknown): string | null {
   const text = asString(value);
   return text ? text.slice(0, 10) : null;
@@ -117,8 +126,8 @@ export function normalizeFundsphereService(value: unknown): FundsphereService | 
     departmentName,
     departmentListingOrder: asNullableNumber(value.departmentListingOrder),
     description: asString(value.description) || null,
-    commission: asString(value.commission) || "0",
-    netAdjustment: asString(value.netAdjustment) || "0",
+    commission: formatDecimalDisplay(value.commission) || "0.00",
+    netAdjustment: formatDecimalDisplay(value.netAdjustment) || "0.00",
     active: asBoolean(value.active),
     dateCreated: normalizeDate(value.dateCreated),
     dateUpdated: normalizeDate(value.dateUpdated),
@@ -177,8 +186,8 @@ export function normalizeFundsphereServiceForm(service: FundsphereService | null
     name: service.name,
     departmentCode: service.departmentCode,
     description: service.description ?? "",
-    commission: service.commission,
-    netAdjustment: service.netAdjustment,
+    commission: formatDecimalDisplay(service.commission),
+    netAdjustment: formatDecimalDisplay(service.netAdjustment),
     active: service.active,
   };
 }
@@ -209,10 +218,26 @@ export async function loadFundsphereServices(params: {
   } else {
     searchParams.set("status", "all");
   }
+  searchParams.set("summary", "true");
 
   const query = searchParams.toString();
   const payload = await params.requestJson(query ? `/api/fundsphere/v1/services?${query}` : "/api/fundsphere/v1/services");
   return normalizeFundsphereServices(payload);
+}
+
+export async function loadFundsphereService(params: {
+  requestJson: FundsphereRequestJson;
+  id: string;
+}): Promise<FundsphereService> {
+  const id = asString(params.id);
+  const payload = await params.requestJson(`/api/fundsphere/v1/services?id=${encodeURIComponent(id)}`, {
+    errorToast: false,
+  });
+  const service = normalizeFundsphereService(payload);
+  if (!service) {
+    throw new Error("Could not load service.");
+  }
+  return service;
 }
 
 export async function loadFundsphereDepartments(params: {

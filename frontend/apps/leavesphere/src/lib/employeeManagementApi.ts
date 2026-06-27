@@ -403,17 +403,26 @@ export async function uploadLeaveSphereEmployeeManagementPicture(
 
 type RequestJson = (url: string, options?: ApiRequestOptions) => Promise<unknown>;
 
-function buildLoadUrl(freshData: boolean): string {
-  return freshData ? "/api/leavesphere/v1/ui/employees/load?fresh_data=true" : "/api/leavesphere/v1/ui/employees/load";
+function buildLoadUrl(freshData: boolean, summary: boolean): string {
+  const query = new URLSearchParams();
+  if (freshData) {
+    query.set("fresh_data", "true");
+  }
+  if (summary) {
+    query.set("summary", "true");
+  }
+  const queryText = query.toString();
+  return queryText ? `/api/leavesphere/v1/ui/employees/load?${queryText}` : "/api/leavesphere/v1/ui/employees/load";
 }
 
 export async function loadLeaveSphereEmployeeManagementWorkspace(
   params: {
     requestJson: RequestJson;
     freshData?: boolean;
+    summary?: boolean;
   },
 ): Promise<LeaveSphereEmployeeManagementWorkspace> {
-  const payload = await params.requestJson(buildLoadUrl(Boolean(params.freshData)), {
+  const payload = await params.requestJson(buildLoadUrl(Boolean(params.freshData), params.summary !== false), {
     errorToast: false,
   });
   const workspace = normalizeLeaveSphereEmployeeManagementWorkspace(payload);
@@ -421,6 +430,20 @@ export async function loadLeaveSphereEmployeeManagementWorkspace(
     throw new Error("Could not load employee management workspace.");
   }
   return workspace;
+}
+
+export async function loadLeaveSphereEmployeeManagementEmployee(params: {
+  requestJson: RequestJson;
+  employeeId: string;
+}): Promise<LeaveSphereEmployeeManagementEmployee> {
+  const payload = await params.requestJson(`/api/leavesphere/v1/employees/${encodeURIComponent(asString(params.employeeId))}`, {
+    errorToast: false,
+  });
+  const employee = extractLeaveSphereEmployeeManagementEmployeeFromPayload(payload);
+  if (!employee) {
+    throw new Error("Could not load employee.");
+  }
+  return employee;
 }
 
 export async function createLeaveSphereEmployeeManagementEmployee(

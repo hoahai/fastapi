@@ -7,7 +7,7 @@ import { SectionCard } from "@shared/components/layout/SectionCard";
 import { Section, SectionHeader } from "@shared/components";
 import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
-import { FormRow, ModalCloseButton, ModalFooter, ModalHeaderRow, ModalShell, ReadOnlyField } from "@shared/components";
+import { FormRow, ModalCacheFooter, ModalCloseButton, ModalFooter, ModalHeaderRow, ModalShell, NumberUnitField } from "@shared/components";
 import { useApiRequest } from "@shared/hooks/useApiRequest";
 import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
 import { useOnlineStatus } from "@shared/hooks/useOnlineStatus";
@@ -37,6 +37,7 @@ import { UnsavedChangesDialog } from "@tradsphere/components/ui/unsaved-changes-
 import {
   createFundsphereService,
   loadFundsphereDepartments,
+  loadFundsphereService,
   loadFundsphereServices,
   normalizeFundsphereServiceForm,
   updateFundsphereService,
@@ -44,12 +45,15 @@ import {
   type FundsphereService,
   type FundsphereServiceFormState,
   type FundsphereServiceSearchCriteria,
+  type FundsphereRequestJson,
 } from "@fundsphere/lib/servicesApi";
 import {
   buildFundsphereServicesCacheKey,
   readFundsphereServicesDepartmentsCacheSnapshot,
+  readFundsphereServiceDetailCacheSnapshot,
   FUNDSPHERE_SERVICES_PAGE_CODE,
   readFundsphereServicesCacheSnapshot,
+  syncFundsphereServiceDetailCache,
   syncFundsphereServicesDepartmentsCache,
   syncFundsphereServicesCache,
   type FundsphereServicesCacheContext,
@@ -78,11 +82,14 @@ type ServiceModalProps = {
   departmentLoading: boolean;
   canEdit: boolean;
   onOpenChange: (open: boolean) => void;
+  requestJson: FundsphereRequestJson;
   onSubmit: (payload: {
     mode: ServiceMode;
     serviceId: string | null;
     form: FundsphereServiceFormState;
   }) => Promise<void>;
+  cacheContext: FundsphereServicesCacheContext;
+  isOnline: boolean;
 };
 
 type ServiceGroup = {
@@ -343,6 +350,24 @@ function toServiceForm(service: FundsphereService | null): FundsphereServiceForm
   return normalizeFundsphereServiceForm(service);
 }
 
+function toUiService(service: FundsphereService): FundsphereService {
+  return {
+    ...service,
+    id: asString(service.id),
+    name: asString(service.name),
+    conseroId: service.conseroId ? asString(service.conseroId) : null,
+    departmentCode: asString(service.departmentCode).toUpperCase(),
+    departmentName: asString(service.departmentName),
+    departmentListingOrder: service.departmentListingOrder ?? null,
+    description: service.description ? asString(service.description) : null,
+    commission: asString(service.commission) || "0.00",
+    netAdjustment: asString(service.netAdjustment) || "0.00",
+    active: Boolean(service.active),
+    dateCreated: service.dateCreated ? asString(service.dateCreated) : null,
+    dateUpdated: service.dateUpdated ? asString(service.dateUpdated) : null,
+  };
+}
+
 function buildServicePayloadFromForm(form: FundsphereServiceFormState): FundsphereServiceFormState {
   return {
     name: asString(form.name),
@@ -421,14 +446,20 @@ function ServiceModal({
   departmentLoading,
   canEdit,
   onOpenChange,
+  requestJson,
   onSubmit,
+  cacheContext,
+  isOnline,
 }: ServiceModalProps) {
   const [form, setForm] = useState<FundsphereServiceFormState>(() => toServiceForm(service));
   const [baseline, setBaseline] = useState<FundsphereServiceFormState>(() => toServiceForm(service));
   const [isSubmitting, setIsSubmitting] = useState(false);
+  const [detailCacheStatus, setDetailCacheStatus] = useState<CacheStatus | null>(null);
+  const [isDetailRefreshing, setIsDetailRefreshing] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false);
   const [fieldErrors, setFieldErrors] = useState(() => createEmptyServiceFieldErrors());
+  const detailRequestTokenRef = useRef(0);
 
   const currentFormErrors = useMemo(() => validateServiceForm(form), [form]);
   const formIsValid = useMemo(() => Object.values(currentFormErrors).every((item) => item === null), [currentFormErrors]);
@@ -446,18 +477,6 @@ function ServiceModal({
       setSubmitError(null);
     }
   });
-  const commissionField = useCommittedTextField<HTMLInputElement>(form.commission, (value) => {
-    setForm((current) => ({ ...current, commission: value }));
-    if (submitError) {
-      setSubmitError(null);
-    }
-  });
-  const netAdjustmentField = useCommittedTextField<HTMLInputElement>(form.netAdjustment, (value) => {
-    setForm((current) => ({ ...current, netAdjustment: value }));
-    if (submitError) {
-      setSubmitError(null);
-    }
-  });
 
   function markFieldBlurred(field: keyof ReturnType<typeof validateServiceForm>, nextForm: FundsphereServiceFormState = form) {
     setFieldErrors((current) => ({
@@ -471,6 +490,8 @@ function ServiceModal({
       setForm(toServiceForm(null));
       setBaseline(toServiceForm(null));
       setIsSubmitting(false);
+      setDetailCacheStatus(null);
+      setIsDetailRefreshing(false);
       setSubmitError(null);
       setIsDiscardDialogOpen(false);
       setFieldErrors(createEmptyServiceFieldErrors());
@@ -480,11 +501,82 @@ function ServiceModal({
     const nextForm = toServiceForm(service);
     setForm(nextForm);
     setBaseline(nextForm);
+    setDetailCacheStatus(null);
+    setIsDetailRefreshing(false);
     setSubmitError(null);
     setIsSubmitting(false);
     setIsDiscardDialogOpen(false);
     setFieldErrors(createEmptyServiceFieldErrors());
   }, [open, service]);
+
+  async function refreshServiceDetail(policy: CachePolicy): Promise<void> {
+    const serviceId = asString(service?.id);
+    if (mode !== "edit" || !serviceId) {
+      setDetailCacheStatus(null);
+      setIsDetailRefreshing(false);
+      return;
+    }
+
+    const requestToken = ++detailRequestTokenRef.current;
+    const snapshot = readFundsphereServiceDetailCacheSnapshot(cacheContext, serviceId);
+    const cachedService = snapshot?.data ? toUiService(snapshot.data) : null;
+    const shouldFetch = shouldFetchNetwork(policy, snapshot);
+
+    if (cachedService) {
+      const cachedForm = toServiceForm(cachedService);
+      setForm(cachedForm);
+      setBaseline(cachedForm);
+      setDetailCacheStatus({
+        source: "cache",
+        fetchedAt: snapshot?.fetchedAt ?? Date.now(),
+      });
+    }
+
+    if (!shouldFetch) {
+      if (requestToken === detailRequestTokenRef.current) {
+        setIsDetailRefreshing(false);
+      }
+      return;
+    }
+
+    if (!isOnline) {
+      if (requestToken === detailRequestTokenRef.current) {
+        setIsDetailRefreshing(false);
+      }
+      return;
+    }
+
+    setIsDetailRefreshing(true);
+    try {
+      const nextService = toUiService(await loadFundsphereService({
+        requestJson,
+        id: serviceId,
+      }));
+      if (requestToken !== detailRequestTokenRef.current) {
+        return;
+      }
+      const nextForm = toServiceForm(nextService);
+      setForm(nextForm);
+      setBaseline(nextForm);
+      const fetchedAt = Date.now();
+      setDetailCacheStatus({
+        source: "network",
+        fetchedAt,
+      });
+      syncFundsphereServiceDetailCache(cacheContext, nextService, { source: "network", fetchedAt });
+    } finally {
+      if (requestToken === detailRequestTokenRef.current) {
+        setIsDetailRefreshing(false);
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (!open || mode !== "edit" || !service?.id) {
+      return;
+    }
+    void refreshServiceDetail("cache-first");
+  }, [mode, open, service?.id]);
 
   function updateForm<K extends keyof FundsphereServiceFormState>(field: K, value: FundsphereServiceFormState[K]) {
     setForm((current) => ({
@@ -571,17 +663,6 @@ function ServiceModal({
 
             <div className="mt-4 min-h-0 flex-1 overflow-y-auto pr-1 space-y-4">
               <Section className="space-y-3">
-                <SectionHeader
-                  title="Service Details"
-                  description="Core service information and status."
-                />
-
-                {mode === "edit" ? (
-                  <FormRow label="Service ID">
-                    <ReadOnlyField value={service?.id ?? ""} />
-                  </FormRow>
-                ) : null}
-
                 <FormRow
                   label={(
                     <>
@@ -641,36 +722,35 @@ function ServiceModal({
                 </FormRow>
                 {fieldErrors.description ? <p className="text-sm text-rose-600">{fieldErrors.description}</p> : null}
 
-                <div className="grid grid-cols-1 gap-4 md:grid-cols-2">
+                <div className="space-y-4">
                   <FormRow label="Commission">
-                    <Input
-                      {...commissionField}
-                      onBlur={(event) => {
-                        commissionField.onBlur(event);
-                        markFieldBlurred("commission");
-                      }}
+                    <NumberUnitField
+                      value={form.commission}
+                      unit="%"
+                      unitPosition="left"
+                      onValueChange={(value) => updateForm("commission", value)}
+                      onBlurValue={(value) => markFieldBlurred("commission", { ...form, commission: value })}
                       disabled={isSubmitting || !canEdit}
-                      maxLength={32}
-                      autoComplete="off"
-                      inputMode="decimal"
+                      placeholder="0.00"
+                      shellClassName="max-w-[18rem]"
                     />
                   </FormRow>
+                  {fieldErrors.commission ? <p className="text-sm text-rose-600">{fieldErrors.commission}</p> : null}
+
                   <FormRow label="Net Adjustment">
-                    <Input
-                      {...netAdjustmentField}
-                      onBlur={(event) => {
-                        netAdjustmentField.onBlur(event);
-                        markFieldBlurred("netAdjustment");
-                      }}
+                    <NumberUnitField
+                      value={form.netAdjustment}
+                      unit="$"
+                      unitPosition="left"
+                      onValueChange={(value) => updateForm("netAdjustment", value)}
+                      onBlurValue={(value) => markFieldBlurred("netAdjustment", { ...form, netAdjustment: value })}
                       disabled={isSubmitting || !canEdit}
-                      maxLength={32}
-                      autoComplete="off"
-                      inputMode="decimal"
+                      placeholder="0.00"
+                      shellClassName="max-w-[18rem]"
                     />
                   </FormRow>
+                  {fieldErrors.netAdjustment ? <p className="text-sm text-rose-600">{fieldErrors.netAdjustment}</p> : null}
                 </div>
-                {fieldErrors.commission ? <p className="text-sm text-rose-600">{fieldErrors.commission}</p> : null}
-                {fieldErrors.netAdjustment ? <p className="text-sm text-rose-600">{fieldErrors.netAdjustment}</p> : null}
 
                 <FormRow label="Active">
                   <button
@@ -696,32 +776,83 @@ function ServiceModal({
               {submitError ? <p className="mt-4 text-sm text-rose-600">{submitError}</p> : null}
             </div>
 
-            <ModalFooter className="mt-4 flex-col items-end gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-end">
-              <div className="flex items-center justify-end gap-2">
-                {canEdit && hasUnsavedChanges ? (
-                  <Button
-                    variant="outline"
-                    type="button"
-                    onClick={restoreBaseline}
-                    disabled={isSubmitting}
-                  >
-                    Revert
-                  </Button>
-                ) : null}
-                {showPrimaryAction ? (
-                  <Button type="button" onClick={handleSubmit} disabled={!canSubmit}>
-                    {isSubmitting ? (
-                      <>
-                        <RefreshCw className="size-4 animate-spin" />
-                        {mode === "create" ? "Creating..." : "Saving..."}
-                      </>
-                    ) : (
-                      primaryActionLabel
-                    )}
-                  </Button>
-                ) : null}
-              </div>
-            </ModalFooter>
+            {mode === "edit" ? (
+              <ModalCacheFooter
+                text={
+                  isDetailRefreshing
+                    ? "Refreshing service data..."
+                    : detailCacheStatus
+                      ? `Data source: ${detailCacheStatus.source}. Last updated ${formatRelativeTime(detailCacheStatus.fetchedAt)}.`
+                      : "No cached service data yet"
+                }
+                onRefresh={() => {
+                  if (!isDetailRefreshing && !hasUnsavedChanges && !isSubmitting) {
+                    void refreshServiceDetail("network-only");
+                  }
+                }}
+                disabled={isDetailRefreshing || hasUnsavedChanges || isSubmitting}
+                refreshing={isDetailRefreshing}
+                refreshLabel="Refresh service data"
+                tooltipText={
+                  hasUnsavedChanges
+                    ? "Save or discard your edits before refreshing service data."
+                    : "Click to refresh this service data"
+                }
+                actions={(
+                  <>
+                    {canEdit && hasUnsavedChanges ? (
+                      <Button
+                        variant="outline"
+                        type="button"
+                        onClick={restoreBaseline}
+                        disabled={isSubmitting}
+                      >
+                        Revert
+                      </Button>
+                    ) : null}
+                    {showPrimaryAction ? (
+                      <Button type="button" onClick={handleSubmit} disabled={!canSubmit}>
+                        {isSubmitting ? (
+                          <>
+                            <RefreshCw className="size-4 animate-spin" />
+                            Saving...
+                          </>
+                        ) : (
+                          primaryActionLabel
+                        )}
+                      </Button>
+                    ) : null}
+                  </>
+                )}
+              />
+            ) : (
+              <ModalFooter className="mt-4 flex-col items-end gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-end">
+                <div className="flex items-center justify-end gap-2">
+                  {canEdit && hasUnsavedChanges ? (
+                    <Button
+                      variant="outline"
+                      type="button"
+                      onClick={restoreBaseline}
+                      disabled={isSubmitting}
+                    >
+                      Revert
+                    </Button>
+                  ) : null}
+                  {showPrimaryAction ? (
+                    <Button type="button" onClick={handleSubmit} disabled={!canSubmit}>
+                      {isSubmitting ? (
+                        <>
+                          <RefreshCw className="size-4 animate-spin" />
+                          {mode === "create" ? "Creating..." : "Saving..."}
+                        </>
+                      ) : (
+                        primaryActionLabel
+                      )}
+                    </Button>
+                  ) : null}
+                </div>
+              </ModalFooter>
+            )}
           </ModalShell>
         </DialogContent>
       </Dialog>
@@ -1228,6 +1359,25 @@ function FundsphereServicesPage() {
           id: payload.serviceId,
           form: payload.form,
         });
+
+        const department = departments.find((item) => item.code === asString(payload.form.departmentCode).toUpperCase());
+        if (modalService) {
+          syncFundsphereServiceDetailCache(
+            cacheContext,
+            {
+              ...modalService,
+              name: asString(payload.form.name),
+              departmentCode: asString(payload.form.departmentCode).toUpperCase(),
+              departmentName: department?.name ?? modalService.departmentName,
+              departmentListingOrder: department?.listingOrder ?? modalService.departmentListingOrder ?? null,
+              description: asString(payload.form.description) || null,
+              commission: asString(payload.form.commission) || "0.00",
+              netAdjustment: asString(payload.form.netAdjustment) || "0.00",
+              active: Boolean(payload.form.active),
+            },
+            { source: "network", fetchedAt: Date.now() },
+          );
+        }
       }
 
       void refreshServices("network-only", searchCriteria);
@@ -1457,7 +1607,7 @@ function FundsphereServicesPage() {
 
       <PageLoadingLayer active={Boolean(isLoading && !services)} message="Loading services..." />
 
-        <ServiceModal
+      <ServiceModal
         open={isModalOpen}
         mode={modalMode}
         service={modalService}
@@ -1465,7 +1615,10 @@ function FundsphereServicesPage() {
         departmentLoading={isLoadingDepartments}
         canEdit={canEditFundsphere}
         onOpenChange={setIsModalOpen}
+        requestJson={requestJson}
         onSubmit={handleServiceSubmit}
+        cacheContext={cacheContext}
+        isOnline={isOnline}
       />
     </AppPageLayout>
   );

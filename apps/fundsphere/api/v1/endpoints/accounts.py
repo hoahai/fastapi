@@ -81,6 +81,7 @@ def list_accounts_route(
     ae_name: str | None = Query(None, alias="aeName"),
     status: str | None = Query(None, alias="status"),
     active: bool = Query(True),
+    summary: bool = Query(False),
 ):
     """
     Return FundSphere account reference rows.
@@ -94,7 +95,25 @@ def list_accounts_route(
     Example request (AE and status filters):
         GET /api/fundsphere/v1/accounts?aeName=Alex%20Chen&status=inactive
 
+    Example request (summary rows for search):
+        GET /api/fundsphere/v1/accounts?status=active&summary=true
+
     Example response:
+        {
+          "meta": {"timestamp": "2026-06-26T10:00:00+07:00", "duration_ms": 2},
+          "data": [
+            {
+              "code": "ACME01",
+              "name": "Acme Media",
+              "logoUrl": null,
+              "active": 1,
+              "dateCreated": "2026-06-26T10:00:00+07:00",
+              "dateUpdated": "2026-06-26T10:00:00+07:00"
+            }
+          ]
+        }
+
+    Example response (full detail):
         {
           "meta": {"timestamp": "2026-06-26T10:00:00+07:00", "duration_ms": 2},
           "data": [
@@ -106,7 +125,9 @@ def list_accounts_route(
               "conseroName": "Acme Media",
               "strataName": "Acme",
               "active": 1,
-              "endDate": null
+              "endDate": null,
+              "dateCreated": "2026-06-26T10:00:00+07:00",
+              "dateUpdated": "2026-06-26T10:00:00+07:00"
             }
           ]
         }
@@ -118,11 +139,19 @@ def list_accounts_route(
         - status accepts active, inactive, or all; when omitted, the legacy active flag is used
         - active=true filters by active accounts only when status is omitted
         - active=false returns active and inactive rows when status is omitted
+        - summary=true returns only the fields needed for the page search list
         - aeName requires DB_TABLES.employees to be configured so AE names can be resolved from accountReps
         - Unknown query params are rejected (400)
     """
     try:
-        return list_accounts(code=code, name=name, ae_name=ae_name, status=status, active=active)
+        return list_accounts(
+            code=code,
+            name=name,
+            ae_name=ae_name,
+            status=status,
+            active=active,
+            summary=summary,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

@@ -5,6 +5,7 @@ export * from "./entities/EntityItem";
 export * from "./form/FormRow";
 export * from "./form/ImageUploadField";
 export * from "./form/EmailChipsInput";
+export * from "./form/NumberUnitField";
 export * from "./form/ReadOnlyField";
 export * from "./RichTextEditor";
 export * from "./layout/Section";

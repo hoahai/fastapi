@@ -23,6 +23,7 @@ def list_services_route(
     department_code: str | None = Query(None, alias="departmentCode"),
     status: str | None = Query(None, alias="status"),
     active: bool = Query(True),
+    summary: bool = Query(False),
 ):
     """
     Return FundSphere service reference rows joined to departments.
@@ -38,6 +39,9 @@ def list_services_route(
 
     Example request (inactive services):
         GET /api/fundsphere/v1/services?status=inactive
+
+    Example request (summary rows for search):
+        GET /api/fundsphere/v1/services?status=active&summary=true
 
     Example response:
         {
@@ -57,6 +61,22 @@ def list_services_route(
           ]
         }
 
+    Example response (summary):
+        {
+          "meta": {"timestamp": "2026-06-26T10:00:00+07:00", "duration_ms": 2},
+          "data": [
+            {
+              "id": "7e4e0c9d-f8b8-4d2f-8d1d-6ce8b1f5b7f7",
+              "name": "Paid Media",
+              "departmentCode": "MKT",
+              "departmentName": "Marketing",
+              "departmentListingOrder": 10,
+              "description": null,
+              "active": 1
+            }
+          ]
+        }
+
     Requirements:
         - Requires X-Tenant-Id header
         - Requires valid API key or bearer token in compat mode
@@ -65,6 +85,7 @@ def list_services_route(
         - status=active filters active services only
         - status=inactive filters inactive services only
         - status=all or active=false returns active and inactive services
+        - summary=true returns only the fields needed for the page search list
         - Unknown query params are rejected (400)
         - Services are insert/update only in Phase 1; no delete route is exposed
     """
@@ -74,7 +95,14 @@ def list_services_route(
             if service is None:
                 raise HTTPException(status_code=404, detail="Service not found")
             return service
-        return list_services(id=id, name=name, department_code=department_code, status=status, active=active)
+        return list_services(
+            id=id,
+            name=name,
+            department_code=department_code,
+            status=status,
+            active=active,
+            summary=summary,
+        )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
 

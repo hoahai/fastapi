@@ -338,7 +338,8 @@ def _invalidate_service_related_caches() -> None:
 
 
 def _normalize_account_status_filter(status: str | None, active: bool) -> str:
-    status_text = normalize_optional_input_text(status).lower()
+    status_text = normalize_optional_input_text(status)
+    status_text = status_text.lower() if status_text else ""
     if status_text in {"active", "inactive", "all"}:
         return status_text
     if status_text:
@@ -353,6 +354,7 @@ def list_accounts(
     ae_name: str | None = None,
     status: str | None = None,
     active: bool = True,
+    summary: bool = False,
 ) -> list[dict[str, object]]:
     table = _quote_table_name(_accounts_table())
     employees_table = _employees_table()
@@ -392,9 +394,13 @@ def list_accounts(
         where_parts.append("a.active = 0")
 
     where_sql = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
+    select_columns = (
+        "a.dateCreated, a.dateUpdated, a.code, a.name, a.logoUrl, a.active"
+        if summary
+        else "a.dateCreated, a.dateUpdated, a.code, a.name, a.logoUrl, a.conseroId, a.conseroName, a.strataName, a.active, a.endDate"
+    )
     query = (
-        "SELECT a.dateCreated, a.dateUpdated, a.code, a.name, a.logoUrl, a.conseroId, "
-        "a.conseroName, a.strataName, a.active, a.endDate "
+        f"SELECT {select_columns} "
         f"FROM {table} a{where_sql} ORDER BY a.code ASC"
     )
     return [_normalize_row(row) for row in fetch_all(query, tuple(params))]
@@ -608,6 +614,7 @@ def list_services(
     department_code: str | None = None,
     status: str | None = None,
     active: bool = True,
+    summary: bool = False,
 ) -> list[dict[str, object]]:
     services_table = _quote_table_name(_services_table())
     departments_table = _quote_table_name(_departments_table())
@@ -629,7 +636,8 @@ def list_services(
         where_parts.append("s.departmentCode = %s")
         params.append(department_code_text.upper())
 
-    status_text = normalize_optional_input_text(status).lower()
+    status_text = normalize_optional_input_text(status)
+    status_text = status_text.lower() if status_text else ""
     if status_text:
         if status_text == "active":
             where_parts.append("s.active = 1")
@@ -641,11 +649,17 @@ def list_services(
         where_parts.append("s.active = 1")
 
     where_sql = f" WHERE {' AND '.join(where_parts)}" if where_parts else ""
-    query = (
-        "SELECT "
-        "s.dateCreated, s.dateUpdated, s.id, s.name, s.conseroId, s.departmentCode, "
+    select_columns = (
+        "s.dateCreated, s.dateUpdated, s.id, s.name, s.departmentCode, "
         "d.name AS departmentName, d.listingOrder AS departmentListingOrder, "
-        "s.description, s.commission, s.netAdjustment, s.active "
+        "s.description, s.active"
+        if summary
+        else "s.dateCreated, s.dateUpdated, s.id, s.name, s.conseroId, s.departmentCode, "
+        "d.name AS departmentName, d.listingOrder AS departmentListingOrder, "
+        "s.description, s.commission, s.netAdjustment, s.active"
+    )
+    query = (
+        f"SELECT {select_columns} "
         f"FROM {services_table} s "
         f"INNER JOIN {departments_table} d ON s.departmentCode = d.code"
         f"{where_sql} "

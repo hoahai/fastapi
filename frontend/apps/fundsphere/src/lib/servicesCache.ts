@@ -5,6 +5,7 @@ import type { FundsphereDepartment, FundsphereService } from "@fundsphere/lib/se
 
 export const FUNDSPHERE_SERVICES_PAGE_CODE = "services";
 const FUNDSPHERE_SERVICES_CACHE_VERSION = "v1";
+const FUNDSPHERE_SERVICE_DETAIL_CACHE_VERSION = "v1";
 export const FUNDSPHERE_SERVICES_CACHE_TTL_MS = FRONTEND_CACHE_TTL_MS.DEFAULT;
 const FUNDSPHERE_SERVICES_DEPARTMENTS_CACHE_VERSION = "v1";
 export const FUNDSPHERE_SERVICES_DEPARTMENTS_CACHE_TTL_MS = FRONTEND_CACHE_TTL_MS.DEFAULT;
@@ -17,6 +18,8 @@ export type FundsphereServicesCacheContext = {
 export type FundsphereServicesDepartmentsCacheContext = {
   tenantSlug: string;
 };
+
+export type FundsphereServiceDetailCacheContext = FundsphereServicesCacheContext;
 
 export type FundsphereServicesCacheCriteria = {
   name: string;
@@ -99,6 +102,75 @@ export function syncFundsphereServicesCache(
   }
 
   writeFundsphereServicesCache(context, services, criteria, options);
+
+  return {
+    changed,
+    previous,
+  };
+}
+
+export function buildFundsphereServiceDetailCacheKey(
+  context: FundsphereServiceDetailCacheContext,
+  serviceId: string,
+): string {
+  return [
+    "services",
+    "detail",
+    FUNDSPHERE_SERVICE_DETAIL_CACHE_VERSION,
+    normalizeCachePart(context.tenantSlug),
+    normalizeCachePart(context.userKey),
+    normalizeCachePart(serviceId),
+  ].join(":");
+}
+
+export function readFundsphereServiceDetailCacheSnapshot(
+  context: FundsphereServiceDetailCacheContext,
+  serviceId: string,
+) {
+  return readBrowserCacheSnapshot<FundsphereService>(buildFundsphereServiceDetailCacheKey(context, serviceId));
+}
+
+export function writeFundsphereServiceDetailCache(
+  context: FundsphereServiceDetailCacheContext,
+  service: FundsphereService,
+  options?: {
+    source?: "cache" | "network";
+    fetchedAt?: number;
+  },
+): void {
+  writeBrowserCache(
+    buildFundsphereServiceDetailCacheKey(context, service.id),
+    service,
+    FUNDSPHERE_SERVICES_CACHE_TTL_MS,
+    {
+      source: options?.source ?? "network",
+      fetchedAt: options?.fetchedAt,
+      version: FUNDSPHERE_SERVICE_DETAIL_CACHE_VERSION,
+    },
+  );
+}
+
+export function syncFundsphereServiceDetailCache(
+  context: FundsphereServiceDetailCacheContext,
+  service: FundsphereService,
+  options?: {
+    source?: "cache" | "network";
+    fetchedAt?: number;
+  },
+): {
+  changed: boolean;
+  previous: FundsphereService | null;
+} {
+  const snapshot = readFundsphereServiceDetailCacheSnapshot(context, service.id);
+  const previous = snapshot?.data ?? null;
+  let changed = true;
+  try {
+    changed = JSON.stringify(previous) !== JSON.stringify(service);
+  } catch {
+    changed = true;
+  }
+
+  writeFundsphereServiceDetailCache(context, service, options);
 
   return {
     changed,

@@ -5,12 +5,15 @@ import type { FundsphereAccount } from "@fundsphere/lib/accountsApi";
 
 export const FUNDSPHERE_ACCOUNTS_PAGE_CODE = "accounts";
 const FUNDSPHERE_ACCOUNTS_CACHE_VERSION = "v1";
+const FUNDSPHERE_ACCOUNT_DETAIL_CACHE_VERSION = "v1";
 export const FUNDSPHERE_ACCOUNTS_CACHE_TTL_MS = FRONTEND_CACHE_TTL_MS.DEFAULT;
 
 export type FundsphereAccountsCacheContext = {
   tenantSlug: string;
   userKey: string;
 };
+
+export type FundsphereAccountDetailCacheContext = FundsphereAccountsCacheContext;
 
 export type FundsphereAccountsCacheCriteria = {
   code: string;
@@ -95,6 +98,75 @@ export function syncFundsphereAccountsCache(
   }
 
   writeFundsphereAccountsCache(context, accounts, criteria, options);
+
+  return {
+    changed,
+    previous,
+  };
+}
+
+export function buildFundsphereAccountDetailCacheKey(
+  context: FundsphereAccountDetailCacheContext,
+  accountCode: string,
+): string {
+  return [
+    "accounts",
+    "detail",
+    FUNDSPHERE_ACCOUNT_DETAIL_CACHE_VERSION,
+    normalizeCachePart(context.tenantSlug),
+    normalizeCachePart(context.userKey),
+    normalizeCachePart(accountCode.toUpperCase()),
+  ].join(":");
+}
+
+export function readFundsphereAccountDetailCacheSnapshot(
+  context: FundsphereAccountDetailCacheContext,
+  accountCode: string,
+) {
+  return readBrowserCacheSnapshot<FundsphereAccount>(buildFundsphereAccountDetailCacheKey(context, accountCode));
+}
+
+export function writeFundsphereAccountDetailCache(
+  context: FundsphereAccountDetailCacheContext,
+  account: FundsphereAccount,
+  options?: {
+    source?: "cache" | "network";
+    fetchedAt?: number;
+  },
+): void {
+  writeBrowserCache(
+    buildFundsphereAccountDetailCacheKey(context, account.code),
+    account,
+    FUNDSPHERE_ACCOUNTS_CACHE_TTL_MS,
+    {
+      source: options?.source ?? "network",
+      fetchedAt: options?.fetchedAt,
+      version: FUNDSPHERE_ACCOUNT_DETAIL_CACHE_VERSION,
+    },
+  );
+}
+
+export function syncFundsphereAccountDetailCache(
+  context: FundsphereAccountDetailCacheContext,
+  account: FundsphereAccount,
+  options?: {
+    source?: "cache" | "network";
+    fetchedAt?: number;
+  },
+): {
+  changed: boolean;
+  previous: FundsphereAccount | null;
+} {
+  const snapshot = readFundsphereAccountDetailCacheSnapshot(context, account.code);
+  const previous = snapshot?.data ?? null;
+  let changed = true;
+  try {
+    changed = JSON.stringify(previous) !== JSON.stringify(account);
+  } catch {
+    changed = true;
+  }
+
+  writeFundsphereAccountDetailCache(context, account, options);
 
   return {
     changed,

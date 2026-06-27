@@ -14,7 +14,7 @@ import { Section, SectionHeader } from "@shared/components";
 import { ImageUploadField } from "@shared/components/form/ImageUploadField";
 import { PageLoadingLayer, SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
-import { ModalCloseButton, ModalFooter, ModalHeaderRow, ModalShell } from "@shared/components";
+import { ModalCacheFooter, ModalCloseButton, ModalFooter, ModalHeaderRow, ModalShell } from "@shared/components";
 import { useApiRequest } from "@shared/hooks/useApiRequest";
 import { useCommittedTextField } from "@shared/hooks/useCommittedTextField";
 import { useOnlineStatus } from "@shared/hooks/useOnlineStatus";
@@ -44,6 +44,7 @@ import { ReadOnlyField } from "@shared/components/form/ReadOnlyField";
 
 import {
   createFundsphereAccount,
+  loadFundsphereAccount,
   loadFundsphereAccounts,
   normalizeFundsphereAccountForm,
   uploadFundsphereAccountLogo,
@@ -54,7 +55,9 @@ import {
 } from "@fundsphere/lib/accountsApi";
 import {
   buildFundsphereAccountsCacheKey,
+  readFundsphereAccountDetailCacheSnapshot,
   readFundsphereAccountsCacheSnapshot,
+  syncFundsphereAccountDetailCache,
   syncFundsphereAccountsCache,
   FUNDSPHERE_ACCOUNTS_PAGE_CODE,
   type FundsphereAccountsCacheContext,
@@ -87,12 +90,15 @@ type AccountModalProps = {
   account: FundsphereAccount | null;
   canEdit: boolean;
   onOpenChange: (open: boolean) => void;
+  requestJson: FundsphereRequestJson;
   onUploadLogo: (file: File, account: { code: string; name: string }) => Promise<string>;
   onSubmit: (payload: {
     mode: AccountMode;
     accountCode: string | null;
     form: FundsphereAccountFormState;
   }) => Promise<void>;
+  cacheContext: FundsphereAccountsCacheContext;
+  isOnline: boolean;
 };
 
 type AccountGroup = {
@@ -446,13 +452,18 @@ function AccountModal({
   account,
   canEdit,
   onOpenChange,
+  requestJson,
   onUploadLogo,
   onSubmit,
+  cacheContext,
+  isOnline,
 }: AccountModalProps) {
   const [form, setForm] = useState<FundsphereAccountFormState>(() => toAccountForm(account));
   const [baseline, setBaseline] = useState<FundsphereAccountFormState>(() => toAccountForm(account));
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [isLogoUploading, setIsLogoUploading] = useState(false);
+  const [detailCacheStatus, setDetailCacheStatus] = useState<CacheStatus | null>(null);
+  const [isDetailRefreshing, setIsDetailRefreshing] = useState(false);
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [logoUploadError, setLogoUploadError] = useState<string | null>(null);
   const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false);
@@ -461,6 +472,7 @@ function AccountModal({
   const [logoPreviewOpen, setLogoPreviewOpen] = useState(false);
   const [logoDraftFile, setLogoDraftFile] = useState<File | null>(null);
   const [logoDraftObjectUrl, setLogoDraftObjectUrl] = useState<string | null>(null);
+  const detailRequestTokenRef = useRef(0);
 
   const currentFormErrors = useMemo(() => validateAccountForm(form, mode), [form, mode]);
   const formIsValid = useMemo(() => Object.values(currentFormErrors).every((item) => item === null), [currentFormErrors]);
@@ -558,6 +570,8 @@ function AccountModal({
       setBaseline(toAccountForm(null));
       setIsSubmitting(false);
       setIsLogoUploading(false);
+      setDetailCacheStatus(null);
+      setIsDetailRefreshing(false);
       setSubmitError(null);
       setLogoUploadError(null);
       setIsDiscardDialogOpen(false);
@@ -571,6 +585,8 @@ function AccountModal({
     const nextForm = toAccountForm(account);
     setForm(nextForm);
     setBaseline(nextForm);
+    setDetailCacheStatus(null);
+    setIsDetailRefreshing(false);
     setSubmitError(null);
     setIsSubmitting(false);
     setIsLogoUploading(false);
@@ -581,6 +597,75 @@ function AccountModal({
     setLogoPreviewOpen(false);
     clearLogoDraftAttachment();
   }, [account, open]);
+
+  async function refreshAccountDetail(policy: CachePolicy): Promise<void> {
+    const accountCode = asString(account?.code).toUpperCase();
+    if (mode !== "edit" || !accountCode) {
+      setDetailCacheStatus(null);
+      setIsDetailRefreshing(false);
+      return;
+    }
+
+    const requestToken = ++detailRequestTokenRef.current;
+    const snapshot = readFundsphereAccountDetailCacheSnapshot(cacheContext, accountCode);
+    const cachedAccount = snapshot?.data ? toUiAccount(snapshot.data) : null;
+    const shouldFetch = shouldFetchNetwork(policy, snapshot);
+
+    if (cachedAccount) {
+      const cachedForm = toAccountForm(cachedAccount);
+      setForm(cachedForm);
+      setBaseline(cachedForm);
+      setDetailCacheStatus({
+        source: "cache",
+        fetchedAt: snapshot?.fetchedAt ?? Date.now(),
+      });
+    }
+
+    if (!shouldFetch) {
+      if (requestToken === detailRequestTokenRef.current) {
+        setIsDetailRefreshing(false);
+      }
+      return;
+    }
+
+    if (!isOnline) {
+      if (requestToken === detailRequestTokenRef.current) {
+        setIsDetailRefreshing(false);
+      }
+      return;
+    }
+
+    setIsDetailRefreshing(true);
+    try {
+      const nextAccount = toUiAccount(await loadFundsphereAccount({
+        requestJson,
+        code: accountCode,
+      }));
+      if (requestToken !== detailRequestTokenRef.current) {
+        return;
+      }
+      const nextForm = toAccountForm(nextAccount);
+      setForm(nextForm);
+      setBaseline(nextForm);
+      const fetchedAt = Date.now();
+      setDetailCacheStatus({
+        source: "network",
+        fetchedAt,
+      });
+      syncFundsphereAccountDetailCache(cacheContext, nextAccount, { source: "network", fetchedAt });
+    } finally {
+      if (requestToken === detailRequestTokenRef.current) {
+        setIsDetailRefreshing(false);
+      }
+    }
+  }
+
+  useEffect(() => {
+    if (!open || mode !== "edit" || !account?.code) {
+      return;
+    }
+    void refreshAccountDetail("cache-first");
+  }, [account?.code, mode, open]);
 
   function updateForm<K extends keyof FundsphereAccountFormState>(
     field: K,
@@ -927,32 +1012,83 @@ function AccountModal({
               {submitError ? <p className="mt-4 text-sm text-rose-600">{submitError}</p> : null}
             </div>
 
-            <ModalFooter className="mt-4 flex-col items-end gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-end">
-              <div className="flex items-center justify-end gap-2">
-                {canEdit && hasUnsavedChanges ? (
-                  <Button
-                    variant="outline"
-                    type="button"
-                    onClick={restoreBaseline}
-                    disabled={isSubmitting}
-                  >
-                    Revert
-                  </Button>
-                ) : null}
-                {showPrimaryAction ? (
-                  <Button type="button" onClick={handleSubmit} disabled={!canSubmit}>
-                    {isSubmitting ? (
-                      <>
-                        <RefreshCw className="size-4 animate-spin" />
-                        {mode === "create" ? "Creating..." : "Saving..."}
-                      </>
-                    ) : (
-                      primaryActionLabel
-                    )}
-                  </Button>
-                ) : null}
-              </div>
-            </ModalFooter>
+            {mode === "edit" ? (
+              <ModalCacheFooter
+                text={
+                  isDetailRefreshing
+                    ? "Refreshing account data..."
+                    : detailCacheStatus
+                      ? `Data source: ${detailCacheStatus.source}. Last updated ${formatRelativeTime(detailCacheStatus.fetchedAt)}.`
+                      : "No cached account data yet"
+                }
+                onRefresh={() => {
+                  if (!isDetailRefreshing && !hasUnsavedChanges && !isSubmitting) {
+                    void refreshAccountDetail("network-only");
+                  }
+                }}
+                disabled={isDetailRefreshing || hasUnsavedChanges || isSubmitting}
+                refreshing={isDetailRefreshing}
+                refreshLabel="Refresh account data"
+                tooltipText={
+                  hasUnsavedChanges
+                    ? "Save or discard your edits before refreshing account data."
+                    : "Click to refresh this account data"
+                }
+                actions={(
+                  <>
+                    {canEdit && hasUnsavedChanges ? (
+                      <Button
+                        variant="outline"
+                        type="button"
+                        onClick={restoreBaseline}
+                        disabled={isSubmitting}
+                      >
+                        Revert
+                      </Button>
+                    ) : null}
+                    {showPrimaryAction ? (
+                      <Button type="button" onClick={handleSubmit} disabled={!canSubmit}>
+                        {isSubmitting ? (
+                          <>
+                            <RefreshCw className="size-4 animate-spin" />
+                            Saving...
+                          </>
+                        ) : (
+                          primaryActionLabel
+                        )}
+                      </Button>
+                    ) : null}
+                  </>
+                )}
+              />
+            ) : (
+              <ModalFooter className="mt-4 flex-col items-end gap-2 border-t border-slate-100 pt-3 sm:flex-row sm:items-center sm:justify-end">
+                <div className="flex items-center justify-end gap-2">
+                  {canEdit && hasUnsavedChanges ? (
+                    <Button
+                      variant="outline"
+                      type="button"
+                      onClick={restoreBaseline}
+                      disabled={isSubmitting}
+                    >
+                      Revert
+                    </Button>
+                  ) : null}
+                  {showPrimaryAction ? (
+                    <Button type="button" onClick={handleSubmit} disabled={!canSubmit}>
+                      {isSubmitting ? (
+                        <>
+                          <RefreshCw className="size-4 animate-spin" />
+                          {mode === "create" ? "Creating..." : "Saving..."}
+                        </>
+                      ) : (
+                        primaryActionLabel
+                      )}
+                    </Button>
+                  ) : null}
+                </div>
+              </ModalFooter>
+            )}
           </ModalShell>
         </DialogContent>
       </Dialog>
@@ -1544,6 +1680,7 @@ function FundsphereAccountsPage() {
         searchCriteria,
         { source: "network", fetchedAt: Date.now() },
       );
+      syncFundsphereAccountDetailCache(cacheContext, nextAccount, { source: "network", fetchedAt: Date.now() });
       setPageState((current) => ({
         ...current,
         hasSearched: true,
@@ -1796,8 +1933,11 @@ function FundsphereAccountsPage() {
         account={modalAccount}
         canEdit={canEditFundsphere}
         onOpenChange={setIsModalOpen}
+        requestJson={requestJson}
         onUploadLogo={handleAccountLogoUpload}
         onSubmit={handleAccountSubmit}
+        cacheContext={cacheContext}
+        isOnline={isOnline}
       />
     </AppPageLayout>
   );

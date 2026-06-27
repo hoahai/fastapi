@@ -169,6 +169,42 @@ class FundSphereDirectDbQueryTests(unittest.TestCase):
         self.assertIn("a.active = 0", query)
         self.assertEqual(params, ("%ACME%", "%Media%", "%Alex Chen%"))
 
+    def test_list_accounts_summary_uses_trimmed_projection(self):
+        tables = {
+            "ACCOUNTS": "AccountsTbl",
+            "ACCOUNTREPS": "AccountRepsTbl",
+            "BUDGETCHANGEHISTORIES": "BudgetChangeHistoriesTbl",
+            "BUDGETS": "BudgetsTbl",
+            "DEPARTMENTS": "DepartmentsTbl",
+            "EMPLOYEES": "EmployeesTbl",
+            "SERVICES": "ServicesTbl",
+        }
+        captured: list[tuple[str, tuple[object, ...]]] = []
+
+        def _capture_fetch_all(query, params=()):
+            captured.append((query, params))
+            return [
+                {
+                    "code": "ACME01",
+                    "name": "Acme Media",
+                    "logoUrl": None,
+                    "active": 1,
+                }
+            ]
+
+        with patch.object(dbq, "get_direct_db_tables", return_value=tables), patch.object(
+            dbq,
+            "fetch_all",
+            side_effect=_capture_fetch_all,
+        ):
+            result = dbq.list_accounts(status="active", summary=True)
+
+        self.assertEqual(result[0]["code"], "ACME01")
+        query, _ = captured[0]
+        self.assertIn("a.logoUrl, a.active", query)
+        self.assertNotIn("conseroId", query)
+        self.assertNotIn("endDate", query)
+
     def test_list_services_uses_backend_filters_for_search(self):
         tables = {
             "ACCOUNTS": "AccountsTbl",
@@ -216,6 +252,45 @@ class FundSphereDirectDbQueryTests(unittest.TestCase):
         self.assertIn("s.departmentCode = %s", query)
         self.assertIn("s.active = 0", query)
         self.assertEqual(params, ("%Paid%", "MKT"))
+
+    def test_list_services_summary_uses_trimmed_projection(self):
+        tables = {
+            "ACCOUNTS": "AccountsTbl",
+            "ACCOUNTREPS": "AccountRepsTbl",
+            "BUDGETCHANGEHISTORIES": "BudgetChangeHistoriesTbl",
+            "BUDGETS": "BudgetsTbl",
+            "DEPARTMENTS": "DepartmentsTbl",
+            "EMPLOYEES": "EmployeesTbl",
+            "SERVICES": "ServicesTbl",
+        }
+        captured: list[tuple[str, tuple[object, ...]]] = []
+
+        def _capture_fetch_all(query, params=()):
+            captured.append((query, params))
+            return [
+                {
+                    "id": "7e4e0c9d-f8b8-4d2f-8d1d-6ce8b1f5b7f7",
+                    "name": "Paid Media",
+                    "departmentCode": "MKT",
+                    "departmentName": "Marketing",
+                    "departmentListingOrder": 10,
+                    "description": None,
+                    "active": 1,
+                }
+            ]
+
+        with patch.object(dbq, "get_direct_db_tables", return_value=tables), patch.object(
+            dbq,
+            "fetch_all",
+            side_effect=_capture_fetch_all,
+        ):
+            result = dbq.list_services(name="Paid", department_code="mkt", summary=True)
+
+        self.assertEqual(result[0]["id"], "7e4e0c9d-f8b8-4d2f-8d1d-6ce8b1f5b7f7")
+        query, _ = captured[0]
+        self.assertIn("s.departmentCode", query)
+        self.assertNotIn("commission", query)
+        self.assertNotIn("netAdjustment", query)
 
     def test_list_accounts_requires_employee_table_for_ae_name_search(self):
         tables = {
