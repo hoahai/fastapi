@@ -4,8 +4,10 @@ import { readBrowserCacheSnapshot, writeBrowserCache } from "@fundsphere/lib/bro
 import type { FundsphereDepartment, FundsphereService } from "@fundsphere/lib/servicesApi";
 
 export const FUNDSPHERE_SERVICES_PAGE_CODE = "services";
-const FUNDSPHERE_SERVICES_CACHE_VERSION = "v1";
-const FUNDSPHERE_SERVICE_DETAIL_CACHE_VERSION = "v1";
+// Bump these when the cached service summary/detail shape changes so stale rows
+// from older releases do not leak into the modal or search list.
+const FUNDSPHERE_SERVICES_CACHE_VERSION = "v2";
+const FUNDSPHERE_SERVICE_DETAIL_CACHE_VERSION = "v2";
 export const FUNDSPHERE_SERVICES_CACHE_TTL_MS = FRONTEND_CACHE_TTL_MS.DEFAULT;
 const FUNDSPHERE_SERVICES_DEPARTMENTS_CACHE_VERSION = "v1";
 export const FUNDSPHERE_SERVICES_DEPARTMENTS_CACHE_TTL_MS = FRONTEND_CACHE_TTL_MS.DEFAULT;

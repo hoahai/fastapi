@@ -1366,6 +1366,7 @@ function FundsphereServicesPage() {
             cacheContext,
             {
               ...modalService,
+              id: modalService.id,
               name: asString(payload.form.name),
               departmentCode: asString(payload.form.departmentCode).toUpperCase(),
               departmentName: department?.name ?? modalService.departmentName,
@@ -1607,12 +1608,12 @@ function FundsphereServicesPage() {
 
       <PageLoadingLayer active={Boolean(isLoading && !services)} message="Loading services..." />
 
-      <ServiceModal
-        open={isModalOpen}
-        mode={modalMode}
-        service={modalService}
-        departmentOptions={departmentOptions}
-        departmentLoading={isLoadingDepartments}
+        <ServiceModal
+          open={isModalOpen}
+          mode={modalMode}
+          service={modalService}
+          departmentOptions={departmentOptions}
+          departmentLoading={isLoadingDepartments}
         canEdit={canEditFundsphere}
         onOpenChange={setIsModalOpen}
         requestJson={requestJson}

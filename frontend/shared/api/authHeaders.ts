@@ -10,8 +10,7 @@ export function buildAuthHeaders(
   if (session?.accessToken) {
     headers.Authorization = `Bearer ${session.accessToken}`;
   }
-  const fallbackTenant = String(import.meta.env.VITE_DEFAULT_TENANT_SLUG || "").trim();
-  const normalizedTenant = String(tenantSlug || fallbackTenant).trim();
+  const normalizedTenant = String(tenantSlug || "").trim();
   if (normalizedTenant) {
     headers["X-Tenant-Id"] = normalizedTenant;
   }

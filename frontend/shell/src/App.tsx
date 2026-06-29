@@ -835,13 +835,9 @@ function App() {
   function renderProfileRoute() {
     return (
       <RequireSignedIn>
-        <RequireTenantAccess fallback={<UnauthorizedPage />}>
-          <RequireAnyPermission permissions={["workspace.super_admin", "tradsphere.viewer"]} fallback={<UnauthorizedPage />}>
-            <Suspense fallback={<RouteChunkFallback />}>
-              <ProfilePage />
-            </Suspense>
-          </RequireAnyPermission>
-        </RequireTenantAccess>
+        <Suspense fallback={<RouteChunkFallback />}>
+          <ProfilePage />
+        </Suspense>
       </RequireSignedIn>
     );
   }

@@ -233,7 +233,7 @@ export async function loadFundsphereService(params: {
   const payload = await params.requestJson(`/api/fundsphere/v1/services?id=${encodeURIComponent(id)}`, {
     errorToast: false,
   });
-  const service = normalizeFundsphereService(payload);
+  const service = normalizeFundsphereService(unwrapEnvelope(payload));
   if (!service) {
     throw new Error("Could not load service.");
   }

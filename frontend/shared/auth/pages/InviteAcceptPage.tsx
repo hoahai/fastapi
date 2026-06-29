@@ -15,7 +15,9 @@ type InvitePayload = {
   id?: string;
   email?: string;
   tenantId?: string;
+  tenantSlug?: string;
   appId?: string;
+  appCode?: string;
   role?: string;
   status?: string;
   expiresAt?: string;
@@ -73,7 +75,9 @@ function normalizeInvitePayload(input: unknown): InvitePayload | null {
     id: typeof record.id === "string" ? record.id : undefined,
     email: typeof record.email === "string" ? record.email : undefined,
     tenantId: typeof record.tenantId === "string" ? record.tenantId : undefined,
+    tenantSlug: typeof record.tenantSlug === "string" ? record.tenantSlug : undefined,
     appId: typeof record.appId === "string" ? record.appId : undefined,
+    appCode: typeof record.appCode === "string" ? record.appCode : undefined,
     role: typeof record.role === "string" ? record.role : undefined,
     status: typeof record.status === "string" ? record.status : undefined,
     expiresAt: typeof record.expiresAt === "string" ? record.expiresAt : undefined,
@@ -125,6 +129,20 @@ function normalizeStatus(status?: string): string {
   return value;
 }
 
+function resolveInviteRedirectPath(appCode: string): string {
+  const normalized = String(appCode || "").trim().toLowerCase();
+  if (!normalized) {
+    return "/";
+  }
+  if (normalized === "fundsphere") {
+    return "/fundsphere/accounts";
+  }
+  if (normalized === "tradsphere" || normalized === "shiftzy" || normalized === "leavesphere" || normalized === "spendsphere" || normalized === "opssphere") {
+    return `/${normalized}/home`;
+  }
+  return "/";
+}
+
 export function InviteAcceptPage({ token }: InviteAcceptPageProps) {
   const auth = useAuth();
   const [state, setState] = useState<InviteViewState>("loading");
@@ -142,7 +160,7 @@ export function InviteAcceptPage({ token }: InviteAcceptPageProps) {
   const inviteStatus = normalizeStatus(payload?.status);
   const signedInEmail = String(auth.user?.email || "").trim().toLowerCase();
   const inviteEmail = String(payload?.email || "").trim().toLowerCase();
-  const workspaceLabel = auth.tenantSlug || String(import.meta.env.VITE_DEFAULT_TENANT_SLUG || "").trim().toLowerCase();
+  const workspaceLabel = String(payload?.tenantSlug || auth.tenantSlug || "workspace").trim().toLowerCase();
   const canCreatePassword = Boolean(inviteEmail);
   const registerPasswordValidationError = useMemo(() => {
     const policyError = validatePasswordAgainstPolicy(registerPassword);
@@ -181,6 +199,13 @@ export function InviteAcceptPage({ token }: InviteAcceptPageProps) {
     }
     return "This invitation is no longer available.";
   }, [inviteStatus]);
+
+  useEffect(() => {
+    const invitedTenantSlug = String(payload?.tenantSlug || "").trim().toLowerCase();
+    if (invitedTenantSlug && auth.tenantSlug !== invitedTenantSlug) {
+      auth.setTenantSlug(invitedTenantSlug);
+    }
+  }, [auth.setTenantSlug, auth.tenantSlug, payload?.tenantSlug]);
 
   useEffect(() => {
     if (profileFirstName.trim() || profileLastName.trim()) {
@@ -350,7 +375,7 @@ export function InviteAcceptPage({ token }: InviteAcceptPageProps) {
 
       setState("accepted");
       window.setTimeout(() => {
-        window.location.replace("/tradsphere/home");
+        window.location.replace(resolveInviteRedirectPath(payload?.appCode || ""));
       }, 650);
     } catch (err) {
       setError(normalizeAuthError(err));
