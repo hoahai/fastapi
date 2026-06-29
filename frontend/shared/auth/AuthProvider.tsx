@@ -112,10 +112,6 @@ function removeStorage(key: string): void {
   }
 }
 
-function getDefaultTenantSlug(): string {
-  return "";
-}
-
 function getCurrentAppCodeFromLocation(): string {
   if (typeof window === "undefined") {
     return "workspace";
