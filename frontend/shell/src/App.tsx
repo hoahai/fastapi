@@ -5,7 +5,7 @@ import { APP_NAV_ITEMS, HOME_ROUTE } from "@shell/components/layout/navigation";
 import { ToastProvider } from "@shell/components/ui/toast";
 import { useRouteScrollRestoration } from "@shell/hooks/useRouteScrollRestoration";
 import { AuthProvider } from "@shared/auth/AuthProvider";
-import { AuthLoadingFallback, RequirePermission, RequireTenantAccess, shouldProtectFrontendAuth } from "@shared/auth/guards";
+import { AuthLoadingFallback, RequireTenantAccess, shouldProtectFrontendAuth } from "@shared/auth/guards";
 import { canAccessAppRoute } from "@shared/auth/pagePermissions";
 import { hasAppAdminAccess, hasAppViewAccess, hasSuperAdminAccess } from "@shared/auth/permissions";
 import { AuthCallbackPage, InviteAcceptPage, LoginPage, PendingInvitePage, UnauthorizedPage, UpdatePasswordPage } from "@shared/auth/pages";
@@ -672,7 +672,7 @@ function App() {
     return (
       <RequireSignedIn>
         <RequireTenantAccess fallback={<RedirectToHome />}>
-          <RequirePermission permission="tradsphere.viewer" fallback={<RedirectToHome />}>
+          <RequireAppView appCode="tradsphere" fallback={<RedirectToHome />}>
             {frontendPath === "/tradsphere/home" ? (
               <RequireAppPageRoute appCode="tradsphere" route="/tradsphere/home" fallback={<RedirectToHome />}>
                 <Suspense fallback={<RouteChunkFallback />}>
@@ -715,7 +715,7 @@ function App() {
                 </Suspense>
               </RequireAppPageRoute>
             ) : null}
-          </RequirePermission>
+          </RequireAppView>
         </RequireTenantAccess>
       </RequireSignedIn>
     );
