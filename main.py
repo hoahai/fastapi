@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from fastapi import FastAPI, HTTPException
+from fastapi import FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, RedirectResponse
 from fastapi.staticfiles import StaticFiles
 
@@ -92,6 +92,27 @@ if _TRADSPHERE_FE_DIST.exists():
 app.include_router(opssphere_public_router)
 
 
+def _should_redirect_frontend_path(full_path: str) -> bool:
+    normalized_path = f"/{str(full_path or '').lstrip('/')}"
+    if normalized_path == "/":
+        return False
+    if normalized_path == "/api" or normalized_path.startswith("/api/"):
+        return False
+    if normalized_path == "/assets" or normalized_path.startswith("/assets/"):
+        return False
+    if normalized_path == "/fe/assets" or normalized_path.startswith("/fe/assets/"):
+        return False
+    if normalized_path.endswith("/"):
+        return False
+    return True
+
+
+def _redirect_to_frontend_canonical_path(full_path: str, query_string: str = "") -> RedirectResponse:
+    normalized_path = f"/{str(full_path or '').lstrip('/')}".rstrip("/")
+    suffix = f"?{query_string}" if query_string else ""
+    return RedirectResponse(url=f"{normalized_path}/{suffix}", status_code=307)
+
+
 def _frontend_index_response() -> FileResponse:
     if _FRONTEND_INDEX.exists():
         return FileResponse(_FRONTEND_INDEX)
@@ -121,20 +142,28 @@ if _TRADSPHERE_FE_DIST.exists():
 
 
     @app.get("/fe/{full_path:path}")
-    def serve_fe_app(full_path: str):
+    def serve_fe_app(request: Request, full_path: str):
         normalized_path = full_path.lstrip("/")
         if not normalized_path:
             return RedirectResponse(url="/", status_code=307)
-        return RedirectResponse(url=f"/{normalized_path}", status_code=307)
+        return _redirect_to_frontend_canonical_path(normalized_path, request.url.query)
+
+
+@app.get("/shiftzy/home")
+def redirect_shiftzy_home():
+    return RedirectResponse(url="/shiftzy/home/", status_code=307)
 
 
 @app.get("/{full_path:path}")
-def serve_frontend_app(full_path: str):
+def serve_frontend_app(request: Request, full_path: str):
     if full_path == "api" or full_path.startswith("api/"):
         raise HTTPException(status_code=404, detail="Not Found")
 
     target = _TRADSPHERE_FE_DIST / full_path
     if target.exists() and target.is_file():
         return FileResponse(target)
+
+    if _should_redirect_frontend_path(full_path):
+        return _redirect_to_frontend_canonical_path(full_path, request.url.query)
 
     return _frontend_index_response()
