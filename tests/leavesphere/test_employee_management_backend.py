@@ -62,13 +62,41 @@ class LeaveSphereEmployeeManagementBackendTests(unittest.TestCase):
         self.assertEqual(workspace["summary"]["activeEmployees"], 1)
         self.assertEqual(workspace["summary"]["inactiveEmployees"], 0)
         mock_read.assert_not_called()
-        mock_get.assert_called_once_with()
+        mock_get.assert_called_once_with(summary=False)
         mock_write.assert_has_calls(
             [
                 call(namespace="employees:list", value=rows),
                 call(namespace="employee-management:workspace", value=workspace),
             ]
         )
+
+    def test_load_employee_management_workspace_summary_uses_summary_cache(self):
+        rows = [
+            {
+                "id": "emp-1",
+                "identityKey": "identity-1",
+                "firstName": "Alex",
+                "lastName": "Chen",
+                "email": "alex@example.com",
+                "pictureUrl": None,
+                "region": "US",
+                "title": "AE",
+                "isAE": True,
+                "active": 1,
+            }
+        ]
+
+        with patch.object(employee_helpers, "read_leave_sphere_read_cache", side_effect=[None, None]) as mock_read, patch.object(
+            employee_helpers,
+            "list_employees",
+            return_value=rows,
+        ) as mock_list, patch.object(employee_helpers, "write_leave_sphere_read_cache") as mock_write:
+            workspace = employee_helpers.load_employee_management_workspace(summary=True)
+
+        self.assertEqual(workspace["employees"], rows)
+        self.assertEqual(mock_read.call_count, 1)
+        mock_list.assert_called_once_with(summary=True)
+        mock_write.assert_called_once_with(namespace="employee-management:workspace:summary", value=workspace)
 
     def test_activate_and_deactivate_employee_toggle_active_flag(self):
         for helper_name, expected_active in (

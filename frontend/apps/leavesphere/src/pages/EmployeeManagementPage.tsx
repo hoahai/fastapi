@@ -1,14 +1,12 @@
-import { useEffect, useMemo, useRef, useState, type ClipboardEvent } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   ChevronDown,
   RefreshCw,
-  UploadCloud,
   Search,
   UserCheck,
   UserRound,
   UserX,
   Users,
-  Trash2,
   X,
 } from "lucide-react";
 
@@ -16,8 +14,10 @@ import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
 import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { SectionCard } from "@shared/components/layout/SectionCard";
 import { Section, SectionHeader } from "@shared/components";
+import { ImageUploadField } from "@shared/components/form/ImageUploadField";
 import { PageMessageStack, type StackMessage } from "@shared/components/status/MessageStack";
 import { SectionLoadingLayer } from "@shared/components/status/LoadingOverlay";
+import { SearchEmptyStatePanel } from "@shared/components/status/SearchEmptyStatePanel";
 import { DateInputField } from "@tradsphere/components/dashboard/FlightDateRangeField";
 import { LabeledField } from "@tradsphere/components/dashboard/FormFieldRow";
 import { Button } from "@tradsphere/components/ui/button";
@@ -63,6 +63,7 @@ import {
   deleteLeaveSphereEmployeeManagementManager,
   extractLeaveSphereEmployeeManagementCreatedEmployeeId,
   extractLeaveSphereEmployeeManagementEmployeeFromPayload,
+  loadLeaveSphereEmployeeManagementEmployee,
   loadLeaveSphereEmployeeManagementWorkspace,
   loadLeaveSphereEmployeeManagementManagers,
   normalizeLeaveSphereEmployeeManagementEmployee,
@@ -128,10 +129,6 @@ type EmployeeModalProps = {
   employeeOptions: AppDropdownOption[];
   onUploadPicture: (file: File, names: { firstName: string; lastName: string }) => Promise<string>;
   onSubmit: (payload: { mode: EmployeeMode; id: string | null; form: LeaveSphereEmployeeManagementFormState }) => Promise<void>;
-  detailCacheStatusText?: string | null;
-  detailCacheRefreshing?: boolean;
-  detailCacheRefreshDisabled?: boolean;
-  onRefreshDetailCache?: () => void;
   managerCacheContext: LeaveSphereEmployeeManagementManagerCacheContext;
 };
 
@@ -142,7 +139,6 @@ const EMPLOYEE_REGION_OPTIONS: AppDropdownOption[] = [
 ];
 
 const EMPLOYEE_STATUS_OPTIONS: AppDropdownOption[] = [
-  { value: "", label: "" },
   { value: "active", label: "Active" },
   { value: "inactive", label: "Inactive" },
 ];
@@ -157,14 +153,14 @@ const EMPLOYEE_REGION_FILTER_OPTIONS: AppDropdownOption[] = [
 const DEFAULT_SEARCH_CRITERIA: EmployeeSearchCriteria = {
   nameOrTitle: "",
   email: "",
-  statusFilter: "",
+  statusFilter: "active",
   regionFilter: "",
 };
 
 const EMPTY_SEARCH_CRITERIA: EmployeeSearchCriteria = {
   nameOrTitle: "",
   email: "",
-  statusFilter: "",
+  statusFilter: "active",
   regionFilter: "",
 };
 
@@ -488,10 +484,10 @@ function buildEmployeeRegionLabel(region: string): string {
 }
 
 function coerceEmployeeStatusFilter(value: string, fallback: EmployeeStatusFilter): EmployeeStatusFilter {
-  if (value === "" || value === "active" || value === "inactive") {
+  if (value === "active" || value === "inactive") {
     return value;
   }
-  return fallback;
+  return fallback === "active" || fallback === "inactive" ? fallback : "active";
 }
 
 function coerceEmployeeRegionFilter(value: string, fallback: EmployeeRegionFilter): EmployeeRegionFilter {
@@ -564,7 +560,7 @@ function getEmptyMessage(
   if (!hasSearched) {
     return {
       title: "Search employees",
-      description: "Select a search criterion, then click Search to load matching employees.",
+      description: "Use the search form above to find employees.",
     };
   }
   if (!hasMatches && hasFilters) {
@@ -599,7 +595,7 @@ function toEmployeeCardStatusClass(active: boolean): string {
 
 function normalizeStatusFilterValue(value: string): EmployeeStatusFilter {
   if (value === "" || value === "active" || value === "inactive") {
-    return value;
+    return value === "" ? "active" : value;
   }
   return "active";
 }
@@ -621,10 +617,6 @@ function EmployeeManagementModal({
   employeeOptions,
   onUploadPicture,
   onSubmit,
-  detailCacheStatusText,
-  detailCacheRefreshing = false,
-  detailCacheRefreshDisabled = false,
-  onRefreshDetailCache,
   managerCacheContext,
 }: EmployeeModalProps) {
   const [form, setForm] = useState<LeaveSphereEmployeeManagementFormState>(() => normalizeEmployeeForm(employee));
@@ -640,9 +632,10 @@ function EmployeeManagementModal({
   const [pictureDraftObjectUrl, setPictureDraftObjectUrl] = useState<string | null>(null);
   const [isManagersLoading, setIsManagersLoading] = useState(false);
   const [managerLoadError, setManagerLoadError] = useState<string | null>(null);
+  const [managerDetailCacheStatus, setManagerDetailCacheStatus] = useState<CacheStatus | null>(null);
   const [fieldErrors, setFieldErrors] = useState(() => createEmptyFieldErrors());
-  const pictureFileInputRef = useRef<HTMLInputElement | null>(null);
   const originalPictureUrlRef = useRef<string>(asString(employee?.pictureUrl));
+  const managerDetailRequestTokenRef = useRef(0);
   const managerOptions = useMemo(
     () => employeeOptions.filter((option) => (
       option.value !== employee?.id && (!option.muted || form.managerIds.includes(option.value))
@@ -687,9 +680,7 @@ function EmployeeManagementModal({
       clearPictureDraftAttachment();
       setIsManagersLoading(false);
       setManagerLoadError(null);
-      if (pictureFileInputRef.current) {
-        pictureFileInputRef.current.value = "";
-      }
+      setManagerDetailCacheStatus(null);
       setFieldErrors(createEmptyFieldErrors());
       return;
     }
@@ -708,89 +699,101 @@ function EmployeeManagementModal({
     clearPictureDraftAttachment();
     setIsManagersLoading(mode === "edit" && Boolean(employee?.id));
     setManagerLoadError(null);
-    if (pictureFileInputRef.current) {
-      pictureFileInputRef.current.value = "";
-    }
+    setManagerDetailCacheStatus(null);
     setFieldErrors(createEmptyFieldErrors());
   }, [employee, mode, open]);
 
-  useEffect(() => {
-    let cancelled = false;
-    if (!open || mode !== "edit" || !employee?.id) {
-      return () => {
-        cancelled = true;
-      };
+  async function refreshManagerAssignments(policy: CachePolicy): Promise<void> {
+    const employeeId = asString(employee?.id);
+    if (!open || mode !== "edit" || !employeeId) {
+      setManagerDetailCacheStatus(null);
+      setIsManagersLoading(false);
+      return;
     }
 
+    const requestToken = ++managerDetailRequestTokenRef.current;
     const cacheSnapshot = readLeaveSphereEmployeeManagementManagerCacheSnapshot({
       ...managerCacheContext,
     });
     const cachedManagerIds = cacheSnapshot?.data
       ? normalizeManagerIds(
           cacheSnapshot.data
-            .filter((item) => item.employeeId === employee.id)
+            .filter((item) => item.employeeId === employeeId)
             .map((item) => item.managerId)
-            .filter((managerId) => managerId && managerId !== employee.id),
+            .filter((managerId) => managerId && managerId !== employeeId),
         )
       : [];
+    const shouldFetchFromNetwork = shouldFetchNetwork(policy, cacheSnapshot);
+
     if (cacheSnapshot) {
       setForm((current) => ({ ...current, managerIds: cachedManagerIds }));
       setBaseline((current) => ({ ...current, managerIds: cachedManagerIds }));
+      setManagerDetailCacheStatus({
+        source: "cache",
+        fetchedAt: cacheSnapshot.fetchedAt,
+      });
     }
     setManagerLoadError(null);
-    if (cacheSnapshot && !cacheSnapshot.isExpired) {
-      setIsManagersLoading(false);
-      return () => {
-        cancelled = true;
-      };
+
+    if (!shouldFetchFromNetwork) {
+      if (requestToken === managerDetailRequestTokenRef.current) {
+        setIsManagersLoading(false);
+      }
+      return;
     }
 
     setIsManagersLoading(true);
 
-    void (async () => {
-      try {
-        const mappings = await loadLeaveSphereEmployeeManagementManagers({
-          requestJson,
-        });
-        if (cancelled) {
-          return;
-        }
-        const nextManagerLinks = mappings
-          .map((item) => ({
-            employeeId: asString(item.employeeId),
-            managerId: asString(item.managerId),
-          }))
-          .filter((item) => item.employeeId && item.managerId) as LeaveSphereEmployeeManagementManagerCacheItem[];
-        const nextManagerIds = normalizeManagerIds(
-          nextManagerLinks
-            .filter((item) => item.employeeId === employee.id)
-            .map((item) => item.managerId)
-            .filter((managerId) => managerId && managerId !== employee.id),
-        );
-        setForm((current) => ({ ...current, managerIds: nextManagerIds }));
-        setBaseline((current) => ({ ...current, managerIds: nextManagerIds }));
-        syncLeaveSphereEmployeeManagementManagerCache(
-          {
-            ...managerCacheContext,
-          },
-          nextManagerLinks,
-          { source: "network", fetchedAt: Date.now() },
-        );
-      } catch (error) {
-        if (cancelled) {
-          return;
-        }
-        setManagerLoadError(error instanceof Error && error.message.trim() ? error.message.trim() : "Could not load managers.");
-      } finally {
-        if (!cancelled) {
-          setIsManagersLoading(false);
-        }
+    try {
+      const mappings = await loadLeaveSphereEmployeeManagementManagers({
+        requestJson,
+      });
+      if (requestToken !== managerDetailRequestTokenRef.current) {
+        return;
       }
-    })();
+      const nextManagerLinks = mappings
+        .map((item) => ({
+          employeeId: asString(item.employeeId),
+          managerId: asString(item.managerId),
+        }))
+        .filter((item) => item.employeeId && item.managerId) as LeaveSphereEmployeeManagementManagerCacheItem[];
+      const nextManagerIds = normalizeManagerIds(
+        nextManagerLinks
+          .filter((item) => item.employeeId === employeeId)
+          .map((item) => item.managerId)
+          .filter((managerId) => managerId && managerId !== employeeId),
+      );
+      setForm((current) => ({ ...current, managerIds: nextManagerIds }));
+      setBaseline((current) => ({ ...current, managerIds: nextManagerIds }));
+      const fetchedAt = Date.now();
+      setManagerDetailCacheStatus({
+        source: "network",
+        fetchedAt,
+      });
+      syncLeaveSphereEmployeeManagementManagerCache(
+        {
+          ...managerCacheContext,
+        },
+        nextManagerLinks,
+        { source: "network", fetchedAt },
+      );
+    } catch (error) {
+      if (requestToken !== managerDetailRequestTokenRef.current) {
+        return;
+      }
+      setManagerLoadError(error instanceof Error && error.message.trim() ? error.message.trim() : "Could not load managers.");
+    } finally {
+      if (requestToken === managerDetailRequestTokenRef.current) {
+        setIsManagersLoading(false);
+      }
+    }
+  }
 
-    return () => {
-      cancelled = true;
-    };
+  useEffect(() => {
+    if (!open || mode !== "edit" || !employee?.id) {
+      return;
+    }
+    void refreshManagerAssignments("cache-first");
   }, [employee?.id, managerCacheContext, mode, open, requestJson]);
 
   useEffect(() => {
@@ -822,17 +825,6 @@ function EmployeeManagementModal({
       ...current,
       [field]: validateEmployeeField(field, nextForm),
     }));
-  }
-
-  function openPicturePicker() {
-    if (isSubmitting || isPictureUploading || !canEdit) {
-      return;
-    }
-    setPictureUploadError(null);
-    if (pictureFileInputRef.current) {
-      pictureFileInputRef.current.value = "";
-      pictureFileInputRef.current.click();
-    }
   }
 
   function clearPictureDraftAttachment() {
@@ -868,32 +860,6 @@ function EmployeeManagementModal({
     const nextObjectUrl = URL.createObjectURL(file);
     setPictureDraftFile(file);
     setPictureDraftObjectUrl(nextObjectUrl);
-  }
-
-  async function handlePictureFileChange(fileList: FileList | null) {
-    const file = fileList?.[0] ?? null;
-    if (pictureFileInputRef.current) {
-      pictureFileInputRef.current.value = "";
-    }
-    if (!file) {
-      return;
-    }
-    await processPictureFile(file);
-  }
-
-  async function handlePicturePaste(event: ClipboardEvent<HTMLDivElement>) {
-    if (isSubmitting || isPictureUploading || !canEdit) {
-      return;
-    }
-    const clipboardFiles = Array.from(event.clipboardData?.items ?? [])
-      .filter((item) => item.kind === "file")
-      .map((item) => item.getAsFile())
-      .filter((file): file is File => file instanceof File);
-    if (!clipboardFiles.length) {
-      return;
-    }
-    event.preventDefault();
-    await processPictureFile(clipboardFiles[0]);
   }
 
   function restoreOriginalPictureAttachment() {
@@ -1114,92 +1080,46 @@ function EmployeeManagementModal({
                   </LabeledField>
 
                   <LabeledField label="Profile Picture" alignStart>
-                    <div className="space-y-3" onPaste={(event) => { void handlePicturePaste(event); }}>
-                      <input
-                        ref={pictureFileInputRef}
-                        type="file"
-                        accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
-                        className="hidden"
-                        onChange={(event) => {
-                          void handlePictureFileChange(event.target.files);
-                        }}
-                        disabled={isSubmitting || !canEdit || isPictureUploading}
-                      />
-                      <button
-                        type="button"
-                        className={cn(
-                          "flex w-full items-center justify-center gap-2 rounded-lg border border-dashed px-3 py-4 text-sm transition",
-                          isSubmitting || !canEdit || isPictureUploading
-                            ? "cursor-not-allowed border-blue-100 bg-blue-50/20 text-slate-400"
-                            : "cursor-pointer border-blue-200 bg-blue-50/30 text-slate-700 hover:border-blue-300 hover:bg-blue-50/50",
-                        )}
-                        onClick={openPicturePicker}
-                        disabled={isSubmitting || !canEdit || isPictureUploading}
-                      >
-                        <UploadCloud className="size-4 text-blue-600" />
-                        Select image or paste screenshot
-                      </button>
-
-                      {pictureAttachment ? (
-                        <div className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs">
-                          <div className="flex min-w-0 items-center gap-3">
-                            {hasPicturePreview ? (
-                              <button
-                                type="button"
-                                className="flex h-12 w-12 shrink-0 cursor-zoom-in items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-slate-50"
-                                onClick={() => setIsPicturePreviewOpen(true)}
-                                disabled={isSubmitting || !canEdit}
-                                aria-label="Preview profile picture"
-                              >
-                                <img
-                                  key={picturePreviewSrc || "picture-preview-empty"}
-                                  src={picturePreviewSrc}
-                                  alt={pictureAttachment.name}
-                                  className="h-full w-full object-cover"
-                                  loading="lazy"
-                                  onError={() => setPicturePreviewError(true)}
-                                />
-                              </button>
-                            ) : (
-                              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-500">
-                                <UserRound className="size-4" aria-hidden="true" />
-                              </div>
-                            )}
-                            <div className="min-w-0">
-                              <p className="truncate font-medium text-slate-800">{pictureAttachment.name}</p>
-                              <p className="text-slate-500">{pictureAttachment.meta}</p>
-                            </div>
-                          </div>
-                          <button
-                            type="button"
-                            className="inline-flex size-6 items-center justify-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring disabled:opacity-70"
-                            onClick={() => {
+                    <ImageUploadField
+                      buttonLabel="Select image or paste screenshot"
+                      helperText="PNG, JPG, JPEG, or WEBP. Up to 10 MB."
+                      items={pictureAttachment ? [{
+                        key: pictureDraftFile ? `draft:${pictureDraftFile.name}` : `picture:${pictureAttachment.name}`,
+                        label: pictureAttachment.name,
+                        meta: pictureAttachment.meta,
+                        previewSrc: picturePreviewSrc,
+                        placeholder: <UserRound className="size-4" aria-hidden="true" />,
+                        previewAriaLabel: "Preview profile picture",
+                        removeAriaLabel: pictureDraftFile ? "Revert profile picture" : "Remove profile picture",
+                      }] : []}
+                      disabled={isSubmitting || !canEdit}
+                      isBusy={isPictureUploading}
+                      onFilesSelected={(files) => {
+                        if (files[0]) {
+                          void processPictureFile(files[0]);
+                        }
+                      }}
+                      onPreviewItem={() => {
+                        setIsPicturePreviewOpen(true);
+                      }}
+                      onRemoveItem={
+                        pictureAttachment
+                          ? () => {
                               if (pictureDraftFile) {
                                 restoreOriginalPictureAttachment();
-                              } else {
-                                updateForm("pictureUrl", "");
-                                setPictureDraftFile(null);
-                                setPictureDraftObjectUrl(null);
-                                setPicturePreviewError(false);
-                                setPictureUploadError(null);
+                                return;
                               }
-                              if (pictureFileInputRef.current) {
-                                pictureFileInputRef.current.value = "";
-                              }
-                            }}
-                            disabled={isSubmitting || !canEdit || isPictureUploading}
-                            aria-label={pictureDraftFile ? "Revert profile picture" : "Remove profile picture"}
-                          >
-                            <Trash2 className="size-4" aria-hidden="true" />
-                          </button>
-                        </div>
-                      ) : null}
-
-                      <p className="text-xs text-slate-500">PNG, JPG, JPEG, or WEBP. Up to 10 MB.</p>
-                      {isPictureUploading ? <p className="text-xs text-slate-500">Uploading picture...</p> : null}
-                      {pictureUploadError ? <p className="text-sm text-rose-600">{pictureUploadError}</p> : null}
-                      {errors.pictureUrl ? <p className="text-sm text-rose-600">{errors.pictureUrl}</p> : null}
-                    </div>
+                              updateForm("pictureUrl", "");
+                              setPictureDraftFile(null);
+                              setPictureDraftObjectUrl(null);
+                              setPicturePreviewError(false);
+                              setPictureUploadError(null);
+                            }
+                          : undefined
+                      }
+                      errorText={pictureUploadError || errors.pictureUrl || undefined}
+                      statusText={isPictureUploading ? "Uploading picture..." : null}
+                    />
                   </LabeledField>
                 </Section>
 
@@ -1306,21 +1226,27 @@ function EmployeeManagementModal({
               {submitError ? <p className="mt-4 text-sm text-rose-600">{submitError}</p> : null}
             </div>
 
-            {mode === "edit" && detailCacheStatusText && onRefreshDetailCache ? (
+            {mode === "edit" ? (
               <ModalCacheFooter
-                text={detailCacheStatusText}
+                text={
+                  isManagersLoading
+                    ? "Refreshing manager assignments..."
+                    : managerDetailCacheStatus
+                      ? `Data source: ${managerDetailCacheStatus.source}. Last updated ${formatRelativeTime(managerDetailCacheStatus.fetchedAt)}.`
+                      : "No cached manager assignments yet"
+                }
                 onRefresh={() => {
-                  if (!detailCacheRefreshDisabled && !detailCacheRefreshing && !hasUnsavedChanges && !isSubmitting) {
-                    onRefreshDetailCache();
+                  if (!isManagersLoading && !hasUnsavedChanges && !isSubmitting) {
+                    void refreshManagerAssignments("network-only");
                   }
                 }}
-                disabled={detailCacheRefreshDisabled || detailCacheRefreshing || hasUnsavedChanges || isSubmitting}
-                refreshing={detailCacheRefreshing}
-                refreshLabel="Refresh employee workspace"
+                disabled={isManagersLoading || hasUnsavedChanges || isSubmitting}
+                refreshing={isManagersLoading}
+                refreshLabel="Refresh manager assignments"
                 tooltipText={
                   hasUnsavedChanges
-                    ? "Save or discard your edits before refreshing employee data."
-                    : "Click to refresh this employee data"
+                    ? "Save or discard your edits before refreshing manager assignments."
+                    : "Click to refresh manager assignments"
                 }
                 actions={
                   <>
@@ -1603,22 +1529,16 @@ function EmptyEmployeesPanel({
   const message = getEmptyMessage(hasSearched, hasFilters, hasEmployees, hasMatches);
 
   return (
-    <div className="rounded-[1.35rem] border border-dashed border-blue-200/90 bg-gradient-to-b from-blue-50/45 to-white px-6 py-11 text-center">
-      <div className="mx-auto flex max-w-xl flex-col items-center gap-3">
-        <div className="inline-flex size-14 items-center justify-center rounded-full border border-blue-100 bg-blue-50 text-blue-700">
-          {hasEmployees ? <Search className="size-7" /> : <Users className="size-7" />}
-        </div>
-        <div className="space-y-1">
-          <p className="text-base font-semibold text-slate-900">{message.title}</p>
-          <p className="text-sm leading-6 text-slate-600">{message.description}</p>
-        </div>
-        {hasFilters ? (
-          <Button variant="outline" onClick={onClearFilters}>
-            Clear filters
-          </Button>
-        ) : null}
-      </div>
-    </div>
+    <SearchEmptyStatePanel
+      icon={hasEmployees ? <Search className="size-7" /> : <Users className="size-7" />}
+      message={message.title}
+      description={message.description}
+      action={hasFilters ? (
+        <Button variant="outline" onClick={onClearFilters}>
+          Clear filters
+        </Button>
+      ) : null}
+    />
   );
 }
 
@@ -1730,6 +1650,7 @@ export default function EmployeeManagementPage() {
   const [lifecyclePendingEmployeeId, setLifecyclePendingEmployeeId] = useState<string | null>(null);
   const [isMutationInFlight, setIsMutationInFlight] = useState(false);
   const hydratedPageStateScopeRef = useRef<string | null>(null);
+  const modalEmployeeRequestTokenRef = useRef(0);
 
   useEffect(() => {
     workspaceRef.current = workspace;
@@ -2049,15 +1970,31 @@ export default function EmployeeManagementPage() {
     if (!canManage) {
       return;
     }
+    ++modalEmployeeRequestTokenRef.current;
     setModalMode("create");
     setModalEmployee(null);
     setIsModalOpen(true);
   }
 
-  function openEditModal(employee: LeaveSphereEmployeeManagementEmployee) {
-    setModalMode("edit");
-    setModalEmployee(employee);
-    setIsModalOpen(true);
+  async function openEditModal(employee: LeaveSphereEmployeeManagementEmployee) {
+    const requestToken = ++modalEmployeeRequestTokenRef.current;
+    try {
+      const nextEmployee = await loadLeaveSphereEmployeeManagementEmployee({
+        requestJson,
+        employeeId: employee.id,
+      });
+      if (requestToken !== modalEmployeeRequestTokenRef.current) {
+        return;
+      }
+      setModalMode("edit");
+      setModalEmployee(nextEmployee);
+      setIsModalOpen(true);
+    } catch (error) {
+      if (requestToken !== modalEmployeeRequestTokenRef.current) {
+        return;
+      }
+      setErrorMessage(error instanceof Error && error.message.trim() ? error.message.trim() : "Could not load employee.");
+    }
   }
 
   function startToggleEmployeeActive(employee: LeaveSphereEmployeeManagementEmployee, nextActive: boolean) {
@@ -2388,16 +2325,12 @@ export default function EmployeeManagementPage() {
       </Section>
 
       <div className="relative">
-        <SectionCard
-          title="Results"
-          description={
-            workspace && hasSearched
-              ? `${filteredEmployees.length} of ${workspace.summary.totalEmployees} employees shown.`
-              : "Search results will appear after you run a search."
-          }
-          contentClassName="space-y-4"
-        >
-          {workspace && filteredEmployees.length > 0 ? (
+        {workspace && filteredEmployees.length > 0 ? (
+          <SectionCard
+            title="Results"
+            description={`${filteredEmployees.length} of ${workspace.summary.totalEmployees} employees shown.`}
+            contentClassName="space-y-4"
+          >
             <div className="space-y-4">
               <div className="flex flex-wrap items-center gap-2 text-xs text-slate-600">
                 <span className="inline-flex items-center rounded-full border border-emerald-200 bg-emerald-50 px-2.5 py-1 font-medium text-emerald-700">
@@ -2446,21 +2379,21 @@ export default function EmployeeManagementPage() {
                 </details>
               ))}
             </div>
-          ) : (
-            <EmptyEmployeesPanel
-              hasSearched={hasSearched}
-              hasFilters={hasFilters}
-              hasEmployees={hasEmployees}
-              hasMatches={hasMatches}
-              onClearFilters={resetSearchCriteria}
-            />
-          )}
-
-          <SectionLoadingLayer
-            active={Boolean(isRefreshing && workspace)}
-            message="Refreshing employees..."
+          </SectionCard>
+        ) : (
+          <EmptyEmployeesPanel
+            hasSearched={hasSearched}
+            hasFilters={hasFilters}
+            hasEmployees={hasEmployees}
+            hasMatches={hasMatches}
+            onClearFilters={resetSearchCriteria}
           />
-        </SectionCard>
+        )}
+
+        <SectionLoadingLayer
+          active={Boolean(isRefreshing && workspace)}
+          message="Refreshing employees..."
+        />
       </div>
 
       <EmployeeManagementModal
@@ -2473,12 +2406,6 @@ export default function EmployeeManagementPage() {
         employeeOptions={employeeOptions}
         onUploadPicture={handlePictureUpload}
         onSubmit={handleEmployeeSubmit}
-        detailCacheStatusText={modalMode === "edit" ? cacheStatusText : null}
-        detailCacheRefreshing={isRefreshing}
-        detailCacheRefreshDisabled={isLoading || isRefreshing || !isOnline}
-        onRefreshDetailCache={() => {
-          void refreshWorkspace("network-only");
-        }}
         managerCacheContext={managerCacheBaseContext}
       />
 

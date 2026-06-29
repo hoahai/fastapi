@@ -123,9 +123,9 @@ export function LoginPage() {
   const passwordInputRef = useRef<HTMLInputElement | null>(null);
 
   const normalizedEmail = useMemo(() => email.trim().toLowerCase(), [email]);
-  const tenantSlug = auth.tenantSlug || String(import.meta.env.VITE_DEFAULT_TENANT_SLUG || "").trim().toLowerCase();
+  const tenantSlug = auth.tenantSlug || String(auth.accessProfile?.tenant?.slug || "").trim().toLowerCase();
   const postLoginPath = useMemo(() => resolvePostLoginPath(auth.accessProfile, tenantSlug), [auth.accessProfile, tenantSlug]);
-  const tenantLabel = auth.tenantSlug || String(import.meta.env.VITE_DEFAULT_TENANT_SLUG || "").trim().toLowerCase();
+  const tenantLabel = tenantSlug || "workspace";
   const authProtectionEnabled = shouldProtectFrontendAuth();
   const resolvedAccessError = normalizeAccessErrorMessage(auth.accessError);
   const hasNoAppAccessError = String(auth.accessError || "").toLowerCase().includes("does not have access to this app");

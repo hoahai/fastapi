@@ -17,7 +17,7 @@ import { Spinner } from "@tradsphere/components/ui/spinner";
 import { useApiRequest } from "@shared/hooks/useApiRequest";
 import { useOnlineStatus } from "@shared/hooks/useOnlineStatus";
 import { readBrowserCacheSnapshot, writeBrowserCache } from "@shared/lib/browserCache";
-import { TradspherePermissionDetailsSection } from "@tradsphere/components/admin/TradspherePermissionDetailsSection";
+import { PagePermissionsSection } from "@shared/components/admin/PagePermissionsSection";
 import { resolveAppScopedAdminSections } from "@shell/admin/appScopedAdminConfig";
 import { SectionCard } from "@shared/components";
 import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
@@ -297,7 +297,7 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
   const normalizedAppCode = String(appCode || "").trim().toLowerCase();
   const enabledSections = useMemo(() => resolveAppScopedAdminSections(normalizedAppCode), [normalizedAppCode]);
   const showUserAccessSection = enabledSections.includes("user_access");
-  const showTradspherePermissionDetails = enabledSections.includes("tradsphere_permission_details");
+  const showPagePermissionsSection = enabledSections.includes("page_permissions");
   const needsUserDirectory = showUserAccessSection;
   const appLabel = String(appName || normalizedAppCode || "App").trim() || "App";
   const currentTenantSlug = String(auth.accessProfile?.tenant?.slug || auth.tenantSlug || "-").trim() || "-";
@@ -1040,8 +1040,8 @@ export default function AppScopedAdminPage({ appCode, appName }: AppScopedAdminP
         </SectionCard>
       ) : null}
 
-      {showTradspherePermissionDetails ? (
-        <TradspherePermissionDetailsSection
+      {showPagePermissionsSection ? (
+        <PagePermissionsSection
           appCode={normalizedAppCode}
           appLabel={appLabel}
           removedUserId={lastRemovedUserId}

@@ -23,6 +23,8 @@ const LeaveSphereMyPtoPage = lazy(() => import("@leavesphere/pages/MyPtoPage"));
 const LeaveSphereLeaveManagementPage = lazy(() => import("@leavesphere/pages/LeaveManagementPage"));
 const LeaveSphereEmployeeManagementPage = lazy(() => import("@leavesphere/pages/EmployeeManagementPage"));
 const LeaveSphereQuickApprovalPage = lazy(() => import("@leavesphere/pages/QuickApprovalPage"));
+const FundSphereAccountsPage = lazy(() => import("@fundsphere/pages/AccountsPage"));
+const FundSphereServicesPage = lazy(() => import("@fundsphere/pages/ServicesPage"));
 const AdminUsersPage = lazy(() => import("@shell/pages/AdminUsersPage"));
 const AppScopedAdminPage = lazy(() => import("@shell/pages/AppScopedAdminPage"));
 const ProfilePage = lazy(() => import("@shell/pages/ProfilePage"));
@@ -43,6 +45,9 @@ function getFrontendPath(pathname: string): string {
   }
   if (normalizedPath === "/leavesphere/admin-pto" || normalizedPath === "/leavesphere/admin-pto/") {
     return "/leavesphere/leave-management";
+  }
+  if (normalizedPath === "/fundsphere/home" || normalizedPath === "/fundsphere/home/") {
+    return "/fundsphere/accounts";
   }
 
   if (normalizedPath.startsWith("/fe/")) {
@@ -67,6 +72,9 @@ function normalizeLegacyLeaveSphereRoute(route: string): string {
   const normalized = stripTrailingSlash(route);
   if (normalized === "/leavesphere/admin-pto") {
     return "/leavesphere/leave-management";
+  }
+  if (normalized === "/fundsphere/home") {
+    return "/fundsphere/accounts";
   }
   return normalized;
 }
@@ -282,6 +290,12 @@ function toScrollStorageKey(route: string): string {
   }
   if (route === "/leavesphere/employees") {
     return "leavesphere.employees.scrollY";
+  }
+  if (route === "/fundsphere/accounts") {
+    return "fundsphere.accounts.scrollY";
+  }
+  if (route === "/fundsphere/services") {
+    return "fundsphere.services.scrollY";
   }
   if (route === "/admin/users") {
     return "workspace.admin.users.scrollY";
@@ -582,6 +596,8 @@ function App() {
       "/tradsphere/invoice-checklists",
       "/shiftzy/home",
       "/shiftzy/employees",
+      "/fundsphere/accounts",
+      "/fundsphere/services",
       "/leavesphere/home",
       "/leavesphere/leave-management",
       "/leavesphere/employees",
@@ -766,6 +782,31 @@ function App() {
     );
   }
 
+  function renderFundSphereRoute() {
+    return (
+      <RequireSignedIn>
+        <RequireTenantAccess fallback={<RedirectToHome />}>
+          <RequireAppView appCode="fundsphere" fallback={<RedirectToHome />}>
+            {frontendPath === "/fundsphere/accounts" ? (
+              <RequireAppPageRoute appCode="fundsphere" route="/fundsphere/accounts" fallback={<RedirectToHome />}>
+                <Suspense fallback={<RouteChunkFallback />}>
+                  <FundSphereAccountsPage />
+                </Suspense>
+              </RequireAppPageRoute>
+            ) : null}
+            {frontendPath === "/fundsphere/services" ? (
+              <RequireAppPageRoute appCode="fundsphere" route="/fundsphere/services" fallback={<RedirectToHome />}>
+                <Suspense fallback={<RouteChunkFallback />}>
+                  <FundSphereServicesPage />
+                </Suspense>
+              </RequireAppPageRoute>
+            ) : null}
+          </RequireAppView>
+        </RequireTenantAccess>
+      </RequireSignedIn>
+    );
+  }
+
   function renderScopedAppAdminRoute(appCode: string) {
     const normalizedAppCode = String(appCode || "").trim().toLowerCase();
     if (!normalizedAppCode) {
@@ -794,13 +835,9 @@ function App() {
   function renderProfileRoute() {
     return (
       <RequireSignedIn>
-        <RequireTenantAccess fallback={<UnauthorizedPage />}>
-          <RequireAnyPermission permissions={["workspace.super_admin", "tradsphere.viewer"]} fallback={<UnauthorizedPage />}>
-            <Suspense fallback={<RouteChunkFallback />}>
-              <ProfilePage />
-            </Suspense>
-          </RequireAnyPermission>
-        </RequireTenantAccess>
+        <Suspense fallback={<RouteChunkFallback />}>
+          <ProfilePage />
+        </Suspense>
       </RequireSignedIn>
     );
   }
@@ -836,6 +873,7 @@ function App() {
       {frontendPath === "/admin/users" ? renderAdminRoute() : null}
       {frontendPath.startsWith("/tradsphere/") ? renderTradsphereRoute() : null}
       {frontendPath.startsWith("/shiftzy/") ? renderShiftzyRoute() : null}
+      {frontendPath.startsWith("/fundsphere/") ? renderFundSphereRoute() : null}
       {frontendPath.startsWith("/leavesphere/") && !leaveSphereQuickApprovalToken ? renderLeaveSphereRoute() : null}
       {scopedAdminAppCode ? renderScopedAppAdminRoute(scopedAdminAppCode) : null}
       {frontendPath === HOME_ROUTE ? (

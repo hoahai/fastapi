@@ -42,6 +42,12 @@ class InvitationEndpointTests(unittest.TestCase):
         ), patch(
             "apps.auth.api.v1.endpoints.invitations.get_invitation_by_token",
             return_value=invitation_row,
+        ), patch(
+            "apps.auth.api.v1.endpoints.invitations._resolve_tenant_slug",
+            return_value="lacs",
+        ), patch(
+            "apps.auth.api.v1.endpoints.invitations._resolve_app_code",
+            return_value="shiftzy",
         ), patch("apps.auth.api.v1.endpoints.invitations.upsert_profile_for_invited_user") as mock_upsert_profile, patch(
             "apps.auth.api.v1.endpoints.invitations.activate_tenant_user"
         ) as mock_activate, patch(
@@ -71,6 +77,8 @@ class InvitationEndpointTests(unittest.TestCase):
         mock_mark.assert_called_once()
         mock_invalidate.assert_called_once_with(user_id="user-1")
         self.assertEqual(response["status"], "accepted")
+        self.assertEqual(response["tenantSlug"], "lacs")
+        self.assertEqual(response["appCode"], "shiftzy")
         self.assertEqual(response["role"], "viewer")
 
     def test_tenant_admin_cannot_invite_brand_new_user(self):
@@ -232,6 +240,11 @@ class InvitationEndpointTests(unittest.TestCase):
                 ],
             }
         ]
+        provider = SimpleNamespace(
+            select_many=lambda **kwargs: [
+                {"user_id": "user-123", "email": "existing@example.com", "full_name": "Existing User"}
+            ]
+        )
         with patch("apps.auth.api.v1.endpoints.invitations.authorize_bearer_for_tenant_app", return_value=auth_result), patch(
             "apps.auth.api.v1.endpoints.invitations.find_user_id_by_email",
             return_value="user-123",
@@ -241,16 +254,16 @@ class InvitationEndpointTests(unittest.TestCase):
         ), patch(
             "apps.auth.api.v1.endpoints.invitations.list_tenant_users_with_app_role",
             return_value=scoped_rows,
+        ), patch(
+            "apps.auth.api.v1.endpoints.invitations.get_auth_provider",
+            return_value=provider,
         ):
             response = lookup_active_existing_user_route(
                 request=request,
                 email="existing@example.com",
             )
 
-        self.assertEqual(len(response["items"]), 1)
-        self.assertEqual(response["items"][0]["userId"], "user-123")
-        self.assertTrue(response["items"][0]["assignedInScope"])
-        self.assertEqual(response["items"][0]["role"], "editor")
+        self.assertEqual(response["items"], [])
 
     def test_lookup_active_existing_user_returns_empty_for_unknown_or_inactive_user(self):
         request = SimpleNamespace(
@@ -271,12 +284,23 @@ class InvitationEndpointTests(unittest.TestCase):
                 permissions=frozenset({"tradsphere.admin", "tradsphere.viewer"}),
             ),
         )
+        provider = SimpleNamespace(
+            select_many=lambda **kwargs: [
+                {"user_id": "user-123", "email": "inactive@example.com", "full_name": "Inactive User"}
+            ]
+        )
         with patch("apps.auth.api.v1.endpoints.invitations.authorize_bearer_for_tenant_app", return_value=auth_result), patch(
             "apps.auth.api.v1.endpoints.invitations.find_user_id_by_email",
             return_value="user-123",
         ), patch(
             "apps.auth.api.v1.endpoints.invitations.is_auth_user_active",
             return_value=False,
+        ), patch(
+            "apps.auth.api.v1.endpoints.invitations.list_tenant_users_with_app_role",
+            return_value=[],
+        ), patch(
+            "apps.auth.api.v1.endpoints.invitations.get_auth_provider",
+            return_value=provider,
         ):
             response = lookup_active_existing_user_route(
                 request=request,

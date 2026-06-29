@@ -113,8 +113,7 @@ function removeStorage(key: string): void {
 }
 
 function getDefaultTenantSlug(): string {
-  const envValue = String(import.meta.env.VITE_DEFAULT_TENANT_SLUG || "").trim().toLowerCase();
-  return envValue;
+  return "";
 }
 
 function getCurrentAppCodeFromLocation(): string {
@@ -136,11 +135,18 @@ function getCurrentAppCodeFromLocation(): string {
   return "workspace";
 }
 
-async function fetchAccessProfile(session: SupabaseSession, tenantSlug: string): Promise<AccessProfile> {
+async function fetchAccessProfile(session: SupabaseSession, tenantSlug: string, appCode: string): Promise<AccessProfile> {
   const headers: Record<string, string> = {
     Authorization: `Bearer ${session.accessToken}`,
-    "X-Tenant-Id": tenantSlug,
   };
+  const normalizedTenantSlug = String(tenantSlug || "").trim();
+  if (normalizedTenantSlug) {
+    headers["X-Tenant-Id"] = normalizedTenantSlug;
+  }
+  const normalizedAppCode = String(appCode || "").trim().toLowerCase();
+  if (normalizedAppCode && normalizedAppCode !== "workspace") {
+    headers["X-App-Code"] = normalizedAppCode;
+  }
 
   const response = await fetch("/api/auth/v1/session/me", {
     method: "GET",
@@ -288,13 +294,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>("loading");
   const [session, setSession] = useState<SupabaseSession | null>(() => readJson<SupabaseSession>(SESSION_STORAGE_KEY));
   const [user, setUser] = useState<AuthUser | null>(() => readJson<AuthUser>(USER_STORAGE_KEY));
-  const [tenantSlug, setTenantSlugState] = useState<string>(() => {
-    const stored = readJson<string>(TENANT_STORAGE_KEY);
-    if (typeof stored === "string" && stored.trim()) {
-      return stored.trim().toLowerCase();
-    }
-    return getDefaultTenantSlug();
-  });
+  const [tenantSlug, setTenantSlugState] = useState<string>("");
   const [accessProfile, setAccessProfile] = useState<AccessProfile | null>(null);
   const [authNotice, setAuthNotice] = useState<string | null>(() => {
     const stored = readJson<string>(AUTH_NOTICE_STORAGE_KEY);
@@ -316,7 +316,11 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const setTenantSlug = useCallback((value: string) => {
     const normalized = String(value || "").trim().toLowerCase();
     setTenantSlugState(normalized);
-    writeJson(TENANT_STORAGE_KEY, normalized);
+    if (normalized) {
+      writeJson(TENANT_STORAGE_KEY, normalized);
+    } else {
+      removeStorage(TENANT_STORAGE_KEY);
+    }
   }, []);
 
   const clearAuthNotice = useCallback(() => {
@@ -365,6 +369,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
     removeStorage(SESSION_STORAGE_KEY);
     removeStorage(USER_STORAGE_KEY);
+    removeStorage(TENANT_STORAGE_KEY);
     removeStorage(ACCESS_PROFILE_CACHE_KEY);
     if (currentUserStateKey) {
       clearScopedPageStatesForUser(currentUserStateKey);
@@ -516,16 +521,6 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setAccessCacheStatus(null);
         return;
       }
-      if (!tenantSlug) {
-        setAccessProfile(null);
-        setAccessLoading(false);
-        setAccessRefreshing(false);
-        setAccessError("Missing tenant selection");
-        setAccessRefreshError(null);
-        setAccessCacheStatus(null);
-        return;
-      }
-
       const isManualRefresh = accessRefreshVersion > handledRefreshVersionRef.current;
       if (isManualRefresh) {
         handledRefreshVersionRef.current = accessRefreshVersion;
@@ -576,13 +571,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       try {
-        const profile = await fetchAccessProfile(activeSession, tenantSlug);
+        const profile = await fetchAccessProfile(activeSession, "", currentAppCode);
         if (cancelled) {
           return;
         }
         if (!user && profile.user) {
           setUser(profile.user);
           writeJson(USER_STORAGE_KEY, profile.user);
+        }
+        const resolvedTenantSlug = String(profile.tenant?.slug || "").trim().toLowerCase();
+        if (resolvedTenantSlug && resolvedTenantSlug !== tenantSlug) {
+          setTenantSlug(resolvedTenantSlug);
         }
         setAccessProfile(profile);
         setAccessLoading(false);
@@ -593,7 +592,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           source: "network",
           fetchedAt: Date.now(),
         });
-        writeCachedAccessProfile(profile.user.id, tenantSlug, currentAppCode, profile);
+        writeCachedAccessProfile(profile.user.id, resolvedTenantSlug || tenantSlug, currentAppCode, profile);
       } catch (error) {
         const statusCode = error instanceof AccessProfileRequestError ? error.status : 0;
         if (statusCode === 401 && activeSession.refreshToken) {
@@ -605,13 +604,17 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             if (refreshed?.accessToken) {
               setSession(refreshed);
               writeJson(SESSION_STORAGE_KEY, refreshed);
-              const retriedProfile = await fetchAccessProfile(refreshed, tenantSlug);
+              const retriedProfile = await fetchAccessProfile(refreshed, "", currentAppCode);
               if (cancelled) {
                 return;
               }
               if (!user && retriedProfile.user) {
                 setUser(retriedProfile.user);
                 writeJson(USER_STORAGE_KEY, retriedProfile.user);
+              }
+              const retriedTenantSlug = String(retriedProfile.tenant?.slug || "").trim().toLowerCase();
+              if (retriedTenantSlug && retriedTenantSlug !== tenantSlug) {
+                setTenantSlug(retriedTenantSlug);
               }
               setAccessProfile(retriedProfile);
               setAccessLoading(false);
@@ -622,7 +625,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
                 source: "network",
                 fetchedAt: Date.now(),
               });
-              writeCachedAccessProfile(retriedProfile.user.id, tenantSlug, currentAppCode, retriedProfile);
+              writeCachedAccessProfile(
+                retriedProfile.user.id,
+                retriedTenantSlug || tenantSlug,
+                currentAppCode,
+                retriedProfile,
+              );
               return;
             }
           } catch (refreshError) {

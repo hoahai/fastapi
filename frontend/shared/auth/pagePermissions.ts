@@ -24,6 +24,10 @@ const APP_PAGE_CATALOG: Record<string, AppPageDefinition[]> = {
     { key: "leavesphere_leave_management", label: "Leave Management", route: "/leavesphere/leave-management" },
     { key: "leavesphere_employees", label: "Employee Management", route: "/leavesphere/employees" },
   ],
+  fundsphere: [
+    { key: "fundsphere_accounts", label: "Accounts", route: "/fundsphere/accounts" },
+    { key: "fundsphere_services", label: "Services", route: "/fundsphere/services" },
+  ],
 };
 
 const LEGACY_PAGE_KEY_ALIASES: Record<string, string> = {

@@ -20,7 +20,9 @@ from shared.tenant import get_tenant_id
 
 _VALID_REGIONS = {"US", "MEXICO", "PHILIPPINES"}
 _EMPLOYEE_MANAGEMENT_WORKSPACE_NAMESPACE = "employee-management:workspace"
+_EMPLOYEE_MANAGEMENT_WORKSPACE_SUMMARY_NAMESPACE = "employee-management:workspace:summary"
 _EMPLOYEE_LIST_NAMESPACE = "employees:list"
+_EMPLOYEE_LIST_SUMMARY_NAMESPACE = "employees:list:summary"
 
 
 def _normalize_required_text(value: object, *, field: str, max_length: int = 255) -> str:
@@ -114,13 +116,32 @@ def _normalize_duplicate_error(exc: Exception) -> str | None:
     return "Duplicate employee value violates unique constraints"
 
 
-def list_employees() -> list[dict]:
-    cached = read_leave_sphere_read_cache(namespace=_EMPLOYEE_LIST_NAMESPACE)
+def _normalize_employee_summary_row(row: dict) -> dict:
+    return {
+        "dateCreated": row.get("dateCreated"),
+        "dateUpdated": row.get("dateUpdated"),
+        "id": row.get("id"),
+        "identityKey": row.get("identityKey"),
+        "firstName": row.get("firstName"),
+        "lastName": row.get("lastName"),
+        "email": row.get("email"),
+        "pictureUrl": row.get("pictureUrl"),
+        "region": row.get("region"),
+        "title": row.get("title"),
+        "isAE": row.get("isAE"),
+        "active": row.get("active"),
+    }
+
+
+def list_employees(*, summary: bool = False) -> list[dict]:
+    namespace = _EMPLOYEE_LIST_SUMMARY_NAMESPACE if summary else _EMPLOYEE_LIST_NAMESPACE
+    cached = read_leave_sphere_read_cache(namespace=namespace)
     if isinstance(cached, list):
         return cached
-    rows = get_employees()
-    write_leave_sphere_read_cache(namespace=_EMPLOYEE_LIST_NAMESPACE, value=rows)
-    return rows
+    rows = get_employees(summary=summary)
+    value = [_normalize_employee_summary_row(row) for row in rows] if summary else rows
+    write_leave_sphere_read_cache(namespace=namespace, value=value)
+    return value
 
 
 def get_employee(employee_id: str) -> dict | None:
@@ -287,23 +308,26 @@ def _build_employee_management_workspace(employees: list[dict]) -> dict:
     }
 
 
-def _read_employee_rows(*, force_refresh: bool) -> list[dict]:
+def _read_employee_rows(*, force_refresh: bool, summary: bool) -> list[dict]:
     if force_refresh:
-        rows = get_employees()
-        write_leave_sphere_read_cache(namespace=_EMPLOYEE_LIST_NAMESPACE, value=rows)
-        return rows
-    return list_employees()
+        rows = get_employees(summary=summary)
+        value = [_normalize_employee_summary_row(row) for row in rows] if summary else rows
+        namespace = _EMPLOYEE_LIST_SUMMARY_NAMESPACE if summary else _EMPLOYEE_LIST_NAMESPACE
+        write_leave_sphere_read_cache(namespace=namespace, value=value)
+        return value
+    return list_employees(summary=summary)
 
 
-def load_employee_management_workspace(*, force_refresh: bool = False) -> dict:
+def load_employee_management_workspace(*, force_refresh: bool = False, summary: bool = False) -> dict:
+    namespace = _EMPLOYEE_MANAGEMENT_WORKSPACE_SUMMARY_NAMESPACE if summary else _EMPLOYEE_MANAGEMENT_WORKSPACE_NAMESPACE
     if not force_refresh:
-        cached = read_leave_sphere_read_cache(namespace=_EMPLOYEE_MANAGEMENT_WORKSPACE_NAMESPACE)
+        cached = read_leave_sphere_read_cache(namespace=namespace)
         if isinstance(cached, dict):
             return cached
 
-    employees = _read_employee_rows(force_refresh=force_refresh)
+    employees = _read_employee_rows(force_refresh=force_refresh, summary=summary)
     workspace = _build_employee_management_workspace(employees)
-    write_leave_sphere_read_cache(namespace=_EMPLOYEE_MANAGEMENT_WORKSPACE_NAMESPACE, value=workspace)
+    write_leave_sphere_read_cache(namespace=namespace, value=workspace)
     return workspace
 
 

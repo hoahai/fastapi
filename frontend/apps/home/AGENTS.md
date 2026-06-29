@@ -15,7 +15,7 @@
   - workspace banner/header
   - Announcements section
   - Apps section with responsive app-card grid
-- Apps grid should show current apps and mark unavailable apps as `Soon`.
+- Apps grid should show only available apps; hide unavailable apps entirely.
 - Workspace Home auth visibility:
   - If not signed in, show sign-in CTA and do not imply app access.
   - If signed in, app availability should follow `/api/auth/v1/session/me` permissions.

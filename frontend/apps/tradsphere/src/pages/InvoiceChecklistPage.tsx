@@ -4,11 +4,9 @@ import {
   useMemo,
   useRef,
   useState,
-  type ClipboardEvent as ReactClipboardEvent,
-  type DragEvent as ReactDragEvent,
   type KeyboardEvent as ReactKeyboardEvent,
 } from "react";
-import { AlertTriangle, Loader2, Monitor, Paperclip, Plus, RefreshCw, Trash2, UploadCloud, X } from "lucide-react";
+import { AlertTriangle, Loader2, Monitor, Paperclip, Plus, RefreshCw, Trash2, X } from "lucide-react";
 
 import { ActionIconButton } from "@/components/dashboard/ActionIconButton";
 import { LabeledField } from "@/components/dashboard/FormFieldRow";
@@ -54,6 +52,7 @@ import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
 import { LoadActionArea } from "@shared/components/layout/LoadActionArea";
 import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
 import { SectionCard } from "@shared/components/layout/SectionCard";
+import { ImageUploadField } from "@shared/components/form/ImageUploadField";
 import { ModalCloseButton, ModalHeaderRow, ModalShell } from "@shared/components";
 import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 import { PageLoadingLayer, SectionLoadingLayer, SectionLoadingOverlay } from "@shared/components/status/LoadingOverlay";
@@ -7747,7 +7746,6 @@ function AddStationNoteDialog({
   const [noteTextDraft, setNoteTextDraft] = useState("");
   const [files, setFiles] = useState<File[]>([]);
   const [removedAttachmentIds, setRemovedAttachmentIds] = useState<number[]>([]);
-  const [brokenPreviewByKey, setBrokenPreviewByKey] = useState<Record<string, true>>({});
   const [previewImage, setPreviewImage] = useState<{ src: string; name: string } | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false);
@@ -7761,7 +7759,6 @@ function AddStationNoteDialog({
       setNoteTextDraft("");
       setFiles([]);
       setRemovedAttachmentIds([]);
-      setBrokenPreviewByKey({});
       setPreviewImage(null);
       setError(null);
       setIsDiscardDialogOpen(false);
@@ -7772,7 +7769,6 @@ function AddStationNoteDialog({
       setNoteTextDraft(initialNoteText);
       setFiles([]);
       setRemovedAttachmentIds([]);
-      setBrokenPreviewByKey({});
       setPreviewImage(null);
       setError(null);
       setIsDiscardDialogOpen(false);
@@ -7893,52 +7889,6 @@ function AddStationNoteDialog({
     setError(null);
   }
 
-  function handleFileInputChange(fileList: FileList | null) {
-    if (!fileList?.length) {
-      return;
-    }
-    handleAddFiles(Array.from(fileList));
-  }
-
-  function normalizeClipboardFile(file: File, index: number): File {
-    if (file.name) {
-      return file;
-    }
-    const extension = file.type.split("/")[1]?.toLowerCase() || "png";
-    const fallbackName = `pasted-image-${Date.now()}-${index + 1}.${extension}`;
-    return new File([file], fallbackName, { type: file.type || "image/png" });
-  }
-
-  function handleUploadPaste(event: ReactClipboardEvent<HTMLDivElement>) {
-    if (disabled || isBusy) {
-      return;
-    }
-    const clipboardItems = Array.from(event.clipboardData?.items ?? []);
-    const clipboardFiles = clipboardItems
-      .filter((item) => item.kind === "file")
-      .map((item) => item.getAsFile())
-      .filter((file): file is File => file instanceof File)
-      .map((file, index) => normalizeClipboardFile(file, index));
-    if (clipboardFiles.length === 0) {
-      return;
-    }
-    event.preventDefault();
-    handleAddFiles(clipboardFiles);
-  }
-
-  function handleUploadDrop(event: ReactDragEvent<HTMLDivElement>) {
-    event.preventDefault();
-    event.stopPropagation();
-    if (disabled || isBusy) {
-      return;
-    }
-    const droppedFiles = Array.from(event.dataTransfer?.files ?? []);
-    if (!droppedFiles.length) {
-      return;
-    }
-    handleAddFiles(droppedFiles);
-  }
-
   function removeFile(index: number) {
     setFiles((current) => current.filter((_, currentIndex) => currentIndex !== index));
   }
@@ -8036,90 +7986,44 @@ function AddStationNoteDialog({
               </LabeledField>
 
               <LabeledField alignStart label="Upload Files">
-                <div
-                  onPaste={handleUploadPaste}
-                  onDragOver={(event) => {
-                    event.preventDefault();
+                <ImageUploadField
+                  buttonLabel="Select image(s) or paste screenshot"
+                  helperText="No attachments yet. Paste a screenshot here or choose files."
+                  items={uploadedAttachmentRows.map((row) => ({
+                    key: row.key,
+                    label: row.label,
+                    meta: row.meta,
+                    openUrl: row.openUrl,
+                    previewSrc: row.previewSrc,
+                    previewAriaLabel: `Preview ${row.label}`,
+                    openAriaLabel: `Open ${row.label}`,
+                    removeAriaLabel: `Remove ${row.label}`,
+                    placeholder: <Paperclip className="size-4" aria-hidden="true" />,
+                  }))}
+                  disabled={disabled || isBusy}
+                  isBusy={isBusy}
+                  multiple
+                  onFilesSelected={handleAddFiles}
+                  onPreviewItem={(item) => {
+                    const row = uploadedAttachmentRows.find((current) => current.key === item.key);
+                    if (row?.previewSrc) {
+                      setPreviewImage({ src: row.previewSrc, name: row.label });
+                    }
                   }}
-                  onDrop={handleUploadDrop}
-                >
-                <label className="flex cursor-pointer items-center justify-center gap-2 rounded-lg border border-dashed border-blue-200 bg-blue-50/30 px-3 py-4 text-sm text-slate-700 hover:border-blue-300 hover:bg-blue-50/50">
-                  <UploadCloud className="size-4 text-blue-600" />
-                  Select image(s) or paste screenshot
-                  <input
-                    type="file"
-                    accept=".png,.jpg,.jpeg,.webp,image/png,image/jpeg,image/webp"
-                    multiple
-                    className="hidden"
-                    onChange={(event) => handleFileInputChange(event.target.files)}
-                    disabled={disabled || isBusy}
-                  />
-                </label>
-                {uploadedAttachmentRows.length ? (
-                  <div className="mt-2 space-y-2">
-                    {uploadedAttachmentRows.map((row) => (
-                      <div key={row.key} className="flex items-center justify-between gap-3 rounded-md border border-slate-200 bg-white px-3 py-2 text-xs">
-                        <div className="flex min-w-0 items-center gap-3">
-                          {row.previewSrc && !brokenPreviewByKey[row.key] ? (
-                            <button
-                              type="button"
-                              className="flex h-12 w-12 shrink-0 cursor-zoom-in items-center justify-center overflow-hidden rounded-md border border-slate-200 bg-slate-50"
-                              onClick={() => setPreviewImage({ src: row.previewSrc!, name: row.label })}
-                              disabled={disabled || isBusy}
-                              aria-label={`Preview ${row.label}`}
-                            >
-                              <img
-                                src={row.previewSrc!}
-                                alt={row.label}
-                                className="h-full w-full object-cover"
-                                onError={() => {
-                                  setBrokenPreviewByKey((current) => ({ ...current, [row.key]: true }));
-                                }}
-                              />
-                            </button>
-                          ) : row.openUrl ? (
-                            <button
-                              type="button"
-                              className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-500 hover:bg-slate-100"
-                              aria-label={`Open ${row.label}`}
-                              onClick={() => {
-                                if (row.openUrl) {
-                                  onOpenAttachment?.(row.openUrl);
-                                }
-                              }}
-                              disabled={disabled || isBusy}
-                            >
-                              <Paperclip className="size-4" aria-hidden="true" />
-                            </button>
-                          ) : (
-                            <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-md border border-slate-200 bg-slate-50 text-slate-500">
-                              <Paperclip className="size-4" aria-hidden="true" />
-                            </div>
-                          )}
-                          <div className="min-w-0">
-                            <p className="truncate font-medium text-slate-800">{row.label}</p>
-                            <p className="text-slate-500">{row.meta}</p>
-                          </div>
-                        </div>
-                        <ActionIconButton
-                          icon={<Trash2 />}
-                          tooltip="Remove attachment"
-                          onClick={row.remove}
-                          disabled={disabled || isBusy}
-                          className="!h-6 !w-6 !p-0 text-rose-500 hover:text-rose-600 focus-visible:text-rose-600 hover:!scale-105 focus-visible:!scale-105 [&_svg]:!h-3.5 [&_svg]:!w-3.5 [&_svg]:text-rose-500 [&_svg]:transition-transform [&_svg]:duration-150 hover:[&_svg]:scale-110 focus-visible:[&_svg]:scale-110 hover:[&_svg]:text-rose-600 focus-visible:[&_svg]:text-rose-600"
-                          aria-label={`Remove ${row.label}`}
-                        />
-                      </div>
-                    ))}
-                  </div>
-                ) : (
-                  <p className="mt-2 text-xs text-slate-500">No attachments yet. Paste a screenshot here or choose files.</p>
-                )}
-                </div>
+                  onOpenItem={(item) => {
+                    const row = uploadedAttachmentRows.find((current) => current.key === item.key);
+                    if (row?.openUrl) {
+                      onOpenAttachment?.(row.openUrl);
+                    }
+                  }}
+                  onRemoveItem={(item) => {
+                    const row = uploadedAttachmentRows.find((current) => current.key === item.key);
+                    row?.remove();
+                  }}
+                  errorText={error || undefined}
+                />
               </LabeledField>
             </div>
-
-            {error ? <p className="text-sm text-rose-600">{error}</p> : null}
 
             <DialogFooter>
               {hasValidDraft || isBusy ? (

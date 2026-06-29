@@ -24,6 +24,7 @@
       "@home/*": ["../apps/home/src/*"],
       "@shiftzy/*": ["../apps/shiftzy/src/*"],
       "@leavesphere/*": ["../apps/leavesphere/src/*"],
+      "@fundsphere/*": ["../apps/fundsphere/src/*"],
       "@shared/*": ["../shared/*"],
       "react": ["./node_modules/@types/react/index.d.ts"],
       "react-dom": ["./node_modules/@types/react-dom/index.d.ts"],
@@ -41,6 +42,7 @@
     "../apps/tradsphere/src/**/*",
     "../apps/shiftzy/src/**/*",
     "../apps/leavesphere/src/**/*",
+    "../apps/fundsphere/src/**/*",
     "../apps/home/src/**/*",
     "../shared/**/*"
   ]

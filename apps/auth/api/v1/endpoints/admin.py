@@ -1079,8 +1079,6 @@ def _update_user_access_impl(request: Request, user_id: str, payload: dict[str, 
         or bool(desired_memberships)
         or bool(desired_assignments)
     )
-    if normalized_user_id == str(result.principal.user_id or "").strip() and has_access_update_intent:
-        raise HTTPException(status_code=403, detail="You cannot modify your own access from this endpoint")
     if not has_access_update_intent and _parse_profile_full_name(payload) is None:
         raise HTTPException(status_code=400, detail="At least one of tenantMemberships, appAssignments, status, role, or fullName is required")
 
@@ -1164,7 +1162,7 @@ def update_user_access_route(
         - Omitting `tenantMemberships` is supported; membership status changes are applied only when explicit `status`/`tenantMemberships` are provided
         - Membership status must be one of: active, pending, disabled
         - Role keys must exist in assignable role catalog
-        - Admin actors cannot modify their own access/membership via this endpoint
+        - Workspace super admins may update their own access assignments from this endpoint
     """
     return _update_user_access_impl(request=request, user_id=user_id, payload=payload if isinstance(payload, dict) else {})
 
@@ -1191,7 +1189,7 @@ def update_user_access_v2_route(
         - Same as `PATCH /api/auth/v1/admin/users/{user_id}`
         - Super Admin `status=disabled|active` triggers global auth ban/unban in Supabase
         - `appAssignments` can be used as the single source of app-role updates without implicitly disabling tenant membership
-        - Admin actors cannot modify their own access/membership via this endpoint
+        - Workspace super admins may update their own access assignments from this endpoint
     """
     return _update_user_access_impl(request=request, user_id=user_id, payload=payload if isinstance(payload, dict) else {})
 

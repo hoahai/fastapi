@@ -26,7 +26,7 @@ from shared.auth.invitations_repo import (
     upsert_tenant_app_role,
     upsert_profile_for_invited_user,
 )
-from shared.auth.page_permissions_catalog import list_page_catalog_for_app, normalize_page_keys
+from shared.auth.page_permissions_catalog import list_page_catalog_for_app, normalize_page_key, normalize_page_keys
 from shared.auth.page_permissions_repo import list_page_permissions_for_scope, replace_page_permissions_for_user
 from shared.auth.permissions_cache import permission_cache
 from shared.auth.profile_repo import compose_full_name, select_profile_for_user, split_full_name
@@ -108,6 +108,81 @@ def _is_missing_profile_column_error(exc: Exception, *, column: str) -> bool:
         f"column profiles.{column} does not exist" in message
         or f'column "{column}" of relation "profiles" does not exist' in message
     )
+
+
+def _resolve_tenant_slug(*, tenant_id: str) -> str | None:
+    normalized_tenant_id = str(tenant_id or "").strip()
+    if not normalized_tenant_id:
+        return None
+    row = get_auth_provider().select_single(
+        table="tenants",
+        filters={"id": normalized_tenant_id, "active": "true"},
+        select="id,slug",
+    )
+    if not row:
+        return None
+    return str(row.get("slug") or "").strip().lower() or None
+
+
+def _resolve_app_code(*, app_id: str) -> str | None:
+    normalized_app_id = str(app_id or "").strip()
+    if not normalized_app_id:
+        return None
+    row = get_auth_provider().select_single(
+        table="apps",
+        filters={"id": normalized_app_id, "active": "true"},
+        select="id,code",
+    )
+    if not row:
+        return None
+    return str(row.get("code") or "").strip().lower() or None
+
+
+def _serialize_invitation_response(*, row: dict[str, object], assignments: list[dict[str, object]]) -> dict[str, object]:
+    tenant_id = str(row.get("tenant_id") or "").strip()
+    app_id = str(row.get("app_id") or "").strip()
+    role = normalize_role_key(str(row.get("role") or "").strip())
+    tenant_slug = _resolve_tenant_slug(tenant_id=tenant_id)
+    app_code = _resolve_app_code(app_id=app_id)
+
+    resolved_assignments = [
+        {
+            "tenantId": str(item.get("tenant_id") or "").strip(),
+            "tenantSlug": _resolve_tenant_slug(tenant_id=str(item.get("tenant_id") or "").strip()),
+            "appId": str(item.get("app_id") or "").strip(),
+            "appCode": _resolve_app_code(app_id=str(item.get("app_id") or "").strip()),
+            "role": normalize_role_key(str(item.get("role") or "").strip()),
+        }
+        for item in assignments
+        if str(item.get("tenant_id") or "").strip()
+        and str(item.get("app_id") or "").strip()
+        and normalize_role_key(str(item.get("role") or "").strip())
+    ]
+    if not resolved_assignments:
+        resolved_assignments = [
+            {
+                "tenantId": tenant_id,
+                "tenantSlug": tenant_slug,
+                "appId": app_id,
+                "appCode": app_code,
+                "role": role,
+            }
+        ]
+
+    return {
+        "id": row.get("id"),
+        "email": row.get("email"),
+        "tenantId": row.get("tenant_id"),
+        "tenantSlug": tenant_slug,
+        "appId": row.get("app_id"),
+        "appCode": app_code,
+        "role": role,
+        "status": row.get("status"),
+        "expiresAt": row.get("expires_at"),
+        "acceptedAt": row.get("accepted_at"),
+        "createdAt": row.get("created_at"),
+        "assignments": resolved_assignments,
+    }
 
 
 def _serialize_scoped_user_row(
@@ -670,7 +745,7 @@ def list_scoped_user_page_permissions_route(request: Request):
     page_keys_by_user_id: dict[str, set[str]] = {}
     for row in permission_rows:
         user_id = str(row.get("user_id") or "").strip()
-        page_key = str(row.get("page_key") or "").strip().lower()
+        page_key = normalize_page_key(row.get("page_key") or "")
         if not user_id or not page_key:
             continue
         if valid_page_keys and page_key not in valid_page_keys:
@@ -857,7 +932,9 @@ def get_invitation_route(token: str):
           "id": "0ec0a2f8-0a59-42e4-b296-8f8b4a8e6d6d",
           "email": "new.user@company.com",
           "tenantId": "a4f4fd7d-2c0d-4bb2-bf73-26e5f7f918bf",
+          "tenantSlug": "lacs",
           "appId": "f57fc74c-b429-4ce2-8bd0-c6f154a2cb18",
+          "appCode": "shiftzy",
           "role": "viewer",
           "status": "pending",
           "expiresAt": "2026-05-13T08:00:00+00:00",
@@ -876,38 +953,8 @@ def get_invitation_route(token: str):
 
     invitation_id = str(row.get("id") or "").strip()
     assignments = list_invitation_assignments(invitation_id=invitation_id)
-    resolved_assignments = [
-        {
-            "tenantId": str(item.get("tenant_id") or "").strip(),
-            "appId": str(item.get("app_id") or "").strip(),
-            "role": normalize_role_key(str(item.get("role") or "").strip()),
-        }
-        for item in assignments
-        if str(item.get("tenant_id") or "").strip()
-        and str(item.get("app_id") or "").strip()
-        and normalize_role_key(str(item.get("role") or "").strip())
-    ]
-    if not resolved_assignments:
-        resolved_assignments = [
-            {
-                "tenantId": str(row.get("tenant_id") or "").strip(),
-                "appId": str(row.get("app_id") or "").strip(),
-                "role": normalize_role_key(str(row.get("role") or "").strip()),
-            }
-        ]
 
-    return {
-        "id": row.get("id"),
-        "email": row.get("email"),
-        "tenantId": row.get("tenant_id"),
-        "appId": row.get("app_id"),
-        "role": normalize_role_key(str(row.get("role") or "").strip()),
-        "status": row.get("status"),
-        "expiresAt": row.get("expires_at"),
-        "acceptedAt": row.get("accepted_at"),
-        "createdAt": row.get("created_at"),
-        "assignments": resolved_assignments,
-    }
+    return _serialize_invitation_response(row=row, assignments=assignments)
 
 
 @router.post("/{token}/accept")
@@ -935,7 +982,9 @@ def accept_invitation_route(
         {
           "status": "accepted",
           "tenantId": "a4f4fd7d-2c0d-4bb2-bf73-26e5f7f918bf",
+          "tenantSlug": "lacs",
           "appId": "f57fc74c-b429-4ce2-8bd0-c6f154a2cb18",
+          "appCode": "shiftzy",
           "role": "viewer"
         }
 
@@ -1018,12 +1067,16 @@ def accept_invitation_route(
     return {
         "status": "accepted",
         "tenantId": tenant_id,
+        "tenantSlug": _resolve_tenant_slug(tenant_id=tenant_id),
         "appId": app_id,
+        "appCode": _resolve_app_code(app_id=app_id),
         "role": role,
         "assignments": [
             {
                 "tenantId": assignment_tenant_id,
+                "tenantSlug": _resolve_tenant_slug(tenant_id=assignment_tenant_id),
                 "appId": assignment_app_id,
+                "appCode": _resolve_app_code(app_id=assignment_app_id),
                 "role": assignment_role,
             }
             for assignment_tenant_id, assignment_app_id, assignment_role in resolved_assignments

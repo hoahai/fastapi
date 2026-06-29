@@ -219,6 +219,7 @@ def enforce_tradsphere_permission(request: Request) -> None:
 
 def enforce_leavesphere_permission(request: Request) -> None:
     _enforce_route_permission_for_app(request, app_code="leavesphere")
+    _enforce_page_permission_for_app(request, app_code="leavesphere")
 
 
 def enforce_spendsphere_permission(request: Request) -> None:
@@ -227,10 +228,12 @@ def enforce_spendsphere_permission(request: Request) -> None:
 
 def enforce_fundsphere_permission(request: Request) -> None:
     _enforce_route_permission_for_app(request, app_code="fundsphere")
+    _enforce_page_permission_for_app(request, app_code="fundsphere")
 
 
 def enforce_shiftzy_permission(request: Request) -> None:
     _enforce_route_permission_for_app(request, app_code="shiftzy")
+    _enforce_page_permission_for_app(request, app_code="shiftzy")
 
 
 def enforce_opssphere_permission(request: Request) -> None:

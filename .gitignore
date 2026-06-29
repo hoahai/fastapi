@@ -59,6 +59,7 @@ logs/
 # ------------------
 caches.json.lock
 caches.json.tmp
+caches.json
 
 # ------------------
 # Frontend dependencies/build artifacts
