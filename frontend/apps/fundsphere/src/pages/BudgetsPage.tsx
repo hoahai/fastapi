@@ -2247,7 +2247,7 @@ function FundsphereBudgetPageContent() {
                                 >
                                   <BudgetHierarchyLabel
                                     level={1}
-                                    title={serviceGroup.serviceName}
+                                    title={`${serviceGroup.serviceName} Total`}
                                     subtitle={null}
                                     open={serviceOpen}
                                     onToggle={() => undefined}
