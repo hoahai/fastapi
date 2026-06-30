@@ -13,7 +13,8 @@ const CALENDAR_POPUP_WIDTH_PX = 312;
 const CALENDAR_POPUP_EDGE_PADDING_PX = 12;
 const CALENDAR_POPUP_OFFSET_PX = 8;
 const CALENDAR_POPUP_MIN_HEIGHT_PX = 240;
-const CALENDAR_POPUP_Z_INDEX = 90;
+// The popup is portaled to document.body, so it must sit above the dialog stack.
+const CALENDAR_POPUP_Z_INDEX = 260;
 export const FLIGHT_DATE_PICKER_POPOVER_SELECTOR = '[data-flight-date-picker-popover="true"]';
 
 const CHICAGO_DATE_PARTS_FORMATTER = new Intl.DateTimeFormat("en-US", {

@@ -5,7 +5,7 @@ import type { FundsphereAccount } from "@fundsphere/lib/accountsApi";
 import type { FundsphereBudgetMatrixResponse, FundsphereBudgetMatrixRow } from "@fundsphere/lib/budgetsApi";
 
 export const FUNDSPHERE_BUDGETS_PAGE_CODE = "budgets";
-const FUNDSPHERE_BUDGETS_MATRIX_CACHE_VERSION = "v1";
+const FUNDSPHERE_BUDGETS_MATRIX_CACHE_VERSION = "v2";
 const FUNDSPHERE_BUDGETS_ACCOUNT_OPTIONS_CACHE_VERSION = "v1";
 const FUNDSPHERE_BUDGETS_DETAIL_CACHE_VERSION = "v1";
 export const FUNDSPHERE_BUDGETS_CACHE_TTL_MS = FRONTEND_CACHE_TTL_MS.DEFAULT;
@@ -18,6 +18,7 @@ export type FundsphereBudgetsCacheContext = {
 export type FundsphereBudgetsCacheCriteria = {
   accountCodes: string[];
   periods: string[];
+  serviceIds: string[];
 };
 
 function normalizeCachePart(value: string): string {
@@ -49,6 +50,7 @@ export function buildFundsphereBudgetsMatrixCacheKey(
     normalizeCachePart(context.userKey),
     normalizeCriteriaPart(criteria?.accountCodes ?? []),
     normalizeCriteriaPart(criteria?.periods ?? []),
+    normalizeCriteriaPart(criteria?.serviceIds ?? []),
   ].join(":");
 }
 

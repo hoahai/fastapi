@@ -7,8 +7,8 @@ PageDefinition = dict[str, str]
 _APP_PAGE_CATALOG: dict[str, list[PageDefinition]] = {
     "fundsphere": [
         {"key": "fundsphere_accounts", "label": "Accounts", "route": "/fundsphere/accounts"},
-        {"key": "fundsphere_budgets", "label": "Budgets", "route": "/fundsphere/budgets"},
         {"key": "fundsphere_services", "label": "Services", "route": "/fundsphere/services"},
+        {"key": "fundsphere_budgets", "label": "Budgets", "route": "/fundsphere/budgets"},
     ],
     "leavesphere": [
         {"key": "leavesphere_home", "label": "My PTO / Manager PTO", "route": "/leavesphere/home"},

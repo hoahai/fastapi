@@ -231,12 +231,14 @@ export async function loadFundsphereBudgetMatrix(params: {
   requestJson: FundsphereRequestJson;
   accountCodes: string[];
   periods: string[];
+  serviceIds: string[];
 }): Promise<FundsphereBudgetMatrixResponse> {
   const payload = await params.requestJson("/api/fundsphere/v1/masterBudgetControl/budgetMatrix/load", {
     method: "POST",
     body: {
       accountCodes: params.accountCodes,
       periods: params.periods,
+      serviceIds: params.serviceIds,
     },
     errorToast: false,
   });

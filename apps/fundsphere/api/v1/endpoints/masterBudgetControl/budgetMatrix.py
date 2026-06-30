@@ -28,6 +28,7 @@ _PERIOD_RE = r"^(\d{1,2})\/(\d{4})$"
 class BudgetMatrixLoadRequest(BaseModel):
     accountCodes: list[str]
     periods: list[str]
+    serviceIds: list[str] = []
 
     @field_validator("accountCodes")
     @classmethod
@@ -69,6 +70,19 @@ class BudgetMatrixLoadRequest(BaseModel):
             normalized.append(normalized_period)
         if not normalized:
             raise ValueError("At least one period is required")
+        return normalized
+
+    @field_validator("serviceIds")
+    @classmethod
+    def _validate_service_ids(cls, value: list[str]) -> list[str]:
+        normalized: list[str] = []
+        seen: set[str] = set()
+        for raw_service_id in value:
+            service_id = str(raw_service_id or "").strip()
+            if not service_id or service_id in seen:
+                continue
+            seen.add(service_id)
+            normalized.append(service_id)
         return normalized
 
 
@@ -119,7 +133,8 @@ def load_budget_matrix_route(
         POST /api/fundsphere/v1/masterBudgetControl/budgetMatrix/load
         {
           "accountCodes": ["ACH", "CAMK"],
-          "periods": ["6/2026", "7/2026"]
+          "periods": ["6/2026", "7/2026"],
+          "serviceIds": ["7e4e0c9d-f8b8-4d2f-8d1d-6ce8b1f5b7f7"]
         }
 
     Example response:
@@ -163,6 +178,7 @@ def load_budget_matrix_route(
         - Requires valid API key or bearer token in compat mode
         - accountCodes is required and must contain at least one account code
         - periods is required and must contain at least one period in m/yyyy format
+        - serviceIds is optional; when present, only matching service rows are returned
         - Unknown query params are rejected (400)
     """
     _reject_unknown_query_params(request, allowed=set())
@@ -172,6 +188,7 @@ def load_budget_matrix_route(
         rows = get_master_budget_control_budget_matrix_rows(
             account_codes=payload.accountCodes,
             periods=periods,
+            service_ids=payload.serviceIds,
         )
         return {
             "accountCodes": payload.accountCodes,

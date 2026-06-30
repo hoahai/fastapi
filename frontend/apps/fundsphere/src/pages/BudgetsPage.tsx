@@ -66,6 +66,14 @@ import {
   type FundsphereBudgetMatrixResponse,
   type FundsphereBudgetMatrixRow,
 } from "@fundsphere/lib/budgetsApi";
+import {
+  loadFundsphereServices,
+  type FundsphereService,
+} from "@fundsphere/lib/servicesApi";
+import {
+  readFundsphereServicesCacheSnapshot,
+  syncFundsphereServicesCache,
+} from "@fundsphere/lib/servicesCache";
 
 type CacheStatus = {
   source: "cache" | "network";
@@ -177,6 +185,12 @@ const FUNDSPHERE_APP_CODE = "fundsphere";
 const DEFAULT_SEARCH_CRITERIA: BudgetSearchCriteria = {
   accountCodes: [],
   periods: [],
+  serviceIds: [],
+};
+const DEFAULT_SERVICE_OPTIONS_CRITERIA = {
+  name: "",
+  departmentCode: "",
+  statusFilter: "" as const,
 };
 const EMPTY_PAGE_STATE: PersistedBudgetsPageState = {
   searchDraft: { ...DEFAULT_SEARCH_CRITERIA },
@@ -310,6 +324,19 @@ function normalizeSelectionList(values: string[]): string[] {
   return normalized;
 }
 
+function normalizeServiceSelectionList(values: string[]): string[] {
+  const normalized = Array.from(
+    new Map(
+      (values ?? [])
+        .map((value) => asString(value))
+        .filter(Boolean)
+        .map((value) => [value.toLowerCase(), value]),
+    ).values(),
+  );
+  normalized.sort((left, right) => left.localeCompare(right));
+  return normalized;
+}
+
 function normalizePeriodSelectionList(values: string[], periodOrder: Map<string, number>): string[] {
   const normalized = Array.from(
     new Set(
@@ -329,21 +356,71 @@ function normalizePeriodSelectionList(values: string[], periodOrder: Map<string,
   return normalized;
 }
 
+function normalizeBudgetSearchCriteria(
+  criteria: BudgetSearchCriteria,
+  periodOrder: Map<string, number>,
+): BudgetSearchCriteria {
+  return {
+    accountCodes: normalizeSelectionList(criteria.accountCodes ?? []),
+    periods: normalizePeriodSelectionList(criteria.periods ?? [], periodOrder),
+    serviceIds: normalizeServiceSelectionList(criteria.serviceIds ?? []),
+  };
+}
+
 function hasBudgetSearchCriteria(criteria: BudgetSearchCriteria): boolean {
-  return Boolean(criteria.accountCodes.length || criteria.periods.length);
+  return Boolean((criteria.accountCodes ?? []).length || (criteria.periods ?? []).length || (criteria.serviceIds ?? []).length);
+}
+
+function hasBudgetMatrixLoadCriteria(criteria: BudgetSearchCriteria): boolean {
+  return Boolean(criteria.accountCodes.length && criteria.periods.length);
 }
 
 function areBudgetSearchCriteriaEqual(left: BudgetSearchCriteria, right: BudgetSearchCriteria): boolean {
   const leftAccounts = normalizeSelectionList(left.accountCodes);
   const rightAccounts = normalizeSelectionList(right.accountCodes);
-  const leftPeriods = [...left.periods];
-  const rightPeriods = [...right.periods];
+  const leftPeriods = [...(left.periods ?? [])];
+  const rightPeriods = [...(right.periods ?? [])];
+  const leftServices = normalizeServiceSelectionList(left.serviceIds ?? []);
+  const rightServices = normalizeServiceSelectionList(right.serviceIds ?? []);
   return (
     leftAccounts.length === rightAccounts.length &&
     leftAccounts.every((value, index) => value === rightAccounts[index]) &&
     leftPeriods.length === rightPeriods.length &&
-    leftPeriods.every((value, index) => value === rightPeriods[index])
+    leftPeriods.every((value, index) => value === rightPeriods[index]) &&
+    leftServices.length === rightServices.length &&
+    leftServices.every((value, index) => value === rightServices[index])
   );
+}
+
+function sortBudgetServices(services: FundsphereService[]): FundsphereService[] {
+  return [...services].sort((left, right) => {
+    if (left.active !== right.active) {
+      return left.active ? -1 : 1;
+    }
+    const leftOrder = left.departmentListingOrder ?? Number.MAX_SAFE_INTEGER;
+    const rightOrder = right.departmentListingOrder ?? Number.MAX_SAFE_INTEGER;
+    if (leftOrder !== rightOrder) {
+      return leftOrder - rightOrder;
+    }
+    const departmentComparison = left.departmentName.localeCompare(right.departmentName);
+    if (departmentComparison !== 0) {
+      return departmentComparison;
+    }
+    const serviceComparison = left.name.localeCompare(right.name);
+    if (serviceComparison !== 0) {
+      return serviceComparison;
+    }
+    return left.id.localeCompare(right.id);
+  });
+}
+
+function buildBudgetServiceOptions(services: FundsphereService[]): AppDropdownOption[] {
+  return sortBudgetServices(services).map((service) => ({
+    value: service.id,
+    label: service.name,
+    keywords: `${service.departmentName} ${service.departmentCode} ${service.id}`,
+    muted: !service.active,
+  }));
 }
 
 function normalizeBooleanRecord(value: unknown): Record<string, boolean> {
@@ -757,11 +834,15 @@ function isPersistedBudgetsPageState(value: unknown): value is PersistedBudgetsP
   if (typeof value.hasSearched !== "boolean" || !isRecord(value.searchDraft) || !isRecord(value.searchCriteria)) {
     return false;
   }
+  const searchDraftServiceIds = value.searchDraft.serviceIds;
+  const searchCriteriaServiceIds = value.searchCriteria.serviceIds;
   return (
     Array.isArray(value.searchDraft.accountCodes) &&
     Array.isArray(value.searchDraft.periods) &&
     Array.isArray(value.searchCriteria.accountCodes) &&
     Array.isArray(value.searchCriteria.periods) &&
+    (searchDraftServiceIds === undefined || Array.isArray(searchDraftServiceIds)) &&
+    (searchCriteriaServiceIds === undefined || Array.isArray(searchCriteriaServiceIds)) &&
     (value.selectedCell === undefined || normalizeBudgetCellSelectionState(value.selectedCell) !== undefined)
   );
 }
@@ -1434,15 +1515,19 @@ function FundsphereBudgetPageContent() {
   );
 
   const [accountOptions, setAccountOptions] = useState<FundsphereAccount[]>([]);
+  const [serviceOptions, setServiceOptions] = useState<FundsphereService[]>([]);
   const [matrix, setMatrix] = useState<FundsphereBudgetMatrixResponse | null>(null);
   const accountOptionsRef = useRef<FundsphereAccount[]>([]);
+  const serviceOptionsRef = useRef<FundsphereService[]>([]);
   const matrixRef = useRef<FundsphereBudgetMatrixResponse | null>(null);
   const didRestoreMatrixCacheRef = useRef<string | null>(null);
   const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null);
   const [accountOptionsError, setAccountOptionsError] = useState<string | null>(null);
+  const [serviceOptionsError, setServiceOptionsError] = useState<string | null>(null);
   const [matrixError, setMatrixError] = useState<string | null>(null);
   const [refreshMessage, setRefreshMessage] = useState<string | null>(null);
   const [isLoadingAccounts, setIsLoadingAccounts] = useState(true);
+  const [isLoadingServices, setIsLoadingServices] = useState(true);
   const [isLoadingMatrix, setIsLoadingMatrix] = useState(false);
   const [isRefreshingMatrix, setIsRefreshingMatrix] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
@@ -1451,6 +1536,7 @@ function FundsphereBudgetPageContent() {
   const [modalCell, setModalCell] = useState<BudgetCellContext | null>(null);
   const [matrixCriteria, setMatrixCriteria] = useState<BudgetSearchCriteria | null>(null);
   const accountOptionsTokenRef = useRef(0);
+  const serviceOptionsTokenRef = useRef(0);
   const matrixRequestTokenRef = useRef(0);
 
   const searchDraft = pageState.searchDraft;
@@ -1492,18 +1578,16 @@ function FundsphereBudgetPageContent() {
   }, [accountOptions]);
 
   useEffect(() => {
+    serviceOptionsRef.current = serviceOptions;
+  }, [serviceOptions]);
+
+  useEffect(() => {
     if (!pageStateControls.hydrated) {
       return;
     }
     setPageState((current) => {
-      const normalizedSearchDraft = {
-        accountCodes: normalizeSelectionList(current.searchDraft.accountCodes),
-        periods: normalizePeriodSelectionList(current.searchDraft.periods, periodOrder),
-      };
-      const normalizedSearchCriteria = {
-        accountCodes: normalizeSelectionList(current.searchCriteria.accountCodes),
-        periods: normalizePeriodSelectionList(current.searchCriteria.periods, periodOrder),
-      };
+      const normalizedSearchDraft = normalizeBudgetSearchCriteria(current.searchDraft, periodOrder);
+      const normalizedSearchCriteria = normalizeBudgetSearchCriteria(current.searchCriteria, periodOrder);
       const normalizedDepartmentOpenState = normalizeBooleanRecord(current.departmentOpenState);
       const normalizedServiceOpenState = normalizeBooleanRecord(current.serviceOpenState);
       const normalizedSelectedCell = normalizeBudgetCellSelectionState(current.selectedCell);
@@ -1545,6 +1629,13 @@ function FundsphereBudgetPageContent() {
     void refreshBudgetAccounts("cache-first");
   }, [pageStateControls.hydrated, requestJson, cacheContext]);
 
+  useEffect(() => {
+    if (!pageStateControls.hydrated) {
+      return;
+    }
+    void refreshBudgetServices("cache-first");
+  }, [pageStateControls.hydrated, requestJson, cacheContext]);
+
   function commitBudgetAccounts(
     nextAccounts: FundsphereAccount[] | null,
     source: "cache" | "network",
@@ -1557,6 +1648,74 @@ function FundsphereBudgetPageContent() {
     syncFundsphereBudgetAccountsCache(cacheContext, nextAccounts, { source, fetchedAt: Date.now() });
   }
 
+  function commitBudgetServices(
+    nextServices: FundsphereService[] | null,
+    source: "cache" | "network",
+  ) {
+    serviceOptionsRef.current = nextServices ?? [];
+    setServiceOptions(nextServices ?? []);
+    if (!nextServices) {
+      return;
+    }
+    syncFundsphereServicesCache(
+      cacheContext,
+      nextServices,
+      DEFAULT_SERVICE_OPTIONS_CRITERIA,
+      { source, fetchedAt: Date.now() },
+    );
+  }
+
+  async function refreshBudgetServices(policy: CachePolicy): Promise<void> {
+    const requestToken = ++serviceOptionsTokenRef.current;
+    const snapshot = readFundsphereServicesCacheSnapshot(cacheContext, DEFAULT_SERVICE_OPTIONS_CRITERIA);
+    const cachedServices = snapshot?.data ? sortBudgetServices(snapshot.data) : null;
+    const shouldFetch = shouldFetchNetwork(policy, snapshot);
+
+    if (cachedServices) {
+      commitBudgetServices(cachedServices, "cache");
+      setServiceOptionsError(null);
+    }
+
+    if (!shouldFetch) {
+      setIsLoadingServices(false);
+      return;
+    }
+
+    if (!isOnline) {
+      if (!cachedServices) {
+        setServiceOptionsError("You're offline. Connect to load service options.");
+      }
+      setIsLoadingServices(false);
+      return;
+    }
+
+    setIsLoadingServices(true);
+    try {
+      const nextServices = sortBudgetServices(
+        await loadFundsphereServices({
+          requestJson,
+          criteria: DEFAULT_SERVICE_OPTIONS_CRITERIA,
+        }),
+      );
+      if (requestToken !== serviceOptionsTokenRef.current) {
+        return;
+      }
+      commitBudgetServices(nextServices, "network");
+      setServiceOptionsError(null);
+    } catch (error) {
+      if (requestToken !== serviceOptionsTokenRef.current) {
+        return;
+      }
+      if (!cachedServices) {
+        setServiceOptionsError(error instanceof Error && error.message.trim() ? error.message.trim() : "Could not load service options.");
+      }
+    } finally {
+      if (requestToken === serviceOptionsTokenRef.current) {
+        setIsLoadingServices(false);
+      }
+    }
+  }
+
   function commitBudgetMatrix(
     nextMatrix: FundsphereBudgetMatrixResponse | null,
     source: "cache" | "network",
@@ -1567,6 +1726,7 @@ function FundsphereBudgetPageContent() {
     setMatrixCriteria({
       accountCodes: normalizeSelectionList(criteria.accountCodes),
       periods: normalizePeriodSelectionList(criteria.periods, periodOrder),
+      serviceIds: normalizeServiceSelectionList(criteria.serviceIds),
     });
     if (!nextMatrix) {
       return;
@@ -1581,6 +1741,7 @@ function FundsphereBudgetPageContent() {
         : {
             accountCodes: normalizeSelectionList(criteria.accountCodes),
             periods: normalizePeriodSelectionList(criteria.periods, periodOrder),
+            serviceIds: normalizeServiceSelectionList(criteria.serviceIds),
           },
     }));
     syncFundsphereBudgetsMatrixCache(cacheContext, nextMatrix, criteria, { source, fetchedAt });
@@ -1644,10 +1805,7 @@ function FundsphereBudgetPageContent() {
     criteria: BudgetSearchCriteria = searchCriteria,
   ): Promise<void> {
     const requestToken = ++matrixRequestTokenRef.current;
-    const normalizedCriteria = {
-      accountCodes: normalizeSelectionList(criteria.accountCodes),
-      periods: normalizePeriodSelectionList(criteria.periods, periodOrder),
-    };
+    const normalizedCriteria = normalizeBudgetSearchCriteria(criteria, periodOrder);
     const snapshot = readFundsphereBudgetsMatrixCacheSnapshot(cacheContext, normalizedCriteria);
     const cachedMatrix = snapshot?.data ?? null;
     const shouldFetch = shouldFetchNetwork(policy, snapshot);
@@ -1688,6 +1846,7 @@ function FundsphereBudgetPageContent() {
         requestJson,
         accountCodes: normalizedCriteria.accountCodes,
         periods: normalizedCriteria.periods,
+        serviceIds: normalizedCriteria.serviceIds,
       });
       if (requestToken !== matrixRequestTokenRef.current) {
         return;
@@ -1716,7 +1875,8 @@ function FundsphereBudgetPageContent() {
   async function refreshBudgetPageBundle(policy: CachePolicy, criteria: BudgetSearchCriteria = searchCriteria): Promise<void> {
     await Promise.all([
       refreshBudgetAccounts(policy),
-      hasBudgetSearchCriteria(criteria) ? refreshBudgetMatrix(policy, criteria) : Promise.resolve(),
+      refreshBudgetServices(policy),
+      hasBudgetMatrixLoadCriteria(criteria) ? refreshBudgetMatrix(policy, criteria) : Promise.resolve(),
     ]);
   }
 
@@ -1727,6 +1887,10 @@ function FundsphereBudgetPageContent() {
   const accountsByCode = useMemo(() => {
     return new Map(accountOptions.map((account) => [account.code.toUpperCase(), account]));
   }, [accountOptions]);
+  const serviceDropdownOptions = useMemo<AppDropdownOption[]>(
+    () => buildBudgetServiceOptions(serviceOptions),
+    [serviceOptions],
+  );
   const periodDropdownOptions = useMemo<AppDropdownOption[]>(() => buildBudgetPeriodOptions(), []);
   const matrixColumns = useMemo(
     () => buildBudgetColumns(accountsByCode, searchCriteria.accountCodes, searchCriteria.periods),
@@ -1787,7 +1951,7 @@ function FundsphereBudgetPageContent() {
   const hasMatrix = Boolean(matrix && matrixHierarchy.departments.length > 0);
   const hasDraftFilters = hasBudgetSearchCriteria(searchDraft);
   const searchResultText = !hasSearched
-    ? "Select accounts and periods, then click Search to load the budget matrix."
+    ? "Select accounts, periods, and services, then click Search to load the budget matrix."
     : !matrix && !isLoadingMatrix && !isRefreshingMatrix
       ? "Click Search to load the budget matrix."
       : !matrix
@@ -1811,6 +1975,13 @@ function FundsphereBudgetPageContent() {
       message: accountOptionsError,
     });
   }
+  if (serviceOptionsError) {
+    pageMessages.push({
+      id: "fundsphere-budgets-service-options",
+      variant: "error",
+      message: serviceOptionsError,
+    });
+  }
   if (matrixError) {
     pageMessages.push({
       id: "fundsphere-budgets-error",
@@ -1831,15 +2002,15 @@ function FundsphereBudgetPageContent() {
     ? areBudgetSearchCriteriaEqual(matrixCriteria, searchCriteria)
     : false;
   const shouldShowMatrixLoadingOverlay = Boolean(isLoadingMatrix && (!matrix || !matrixCriteriaMatchesSearch));
-  const isPageRefreshing = isLoadingAccounts || isLoadingMatrix || isRefreshingMatrix;
+  const isPageRefreshing = isLoadingAccounts || isLoadingServices || isLoadingMatrix || isRefreshingMatrix;
   const canRefresh = Boolean(isOnline && !isPageRefreshing && !isSaving && !modalOpen);
 
   function handleSearchSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
-    const nextSearchCriteria = {
-      accountCodes: normalizeSelectionList(searchDraft.accountCodes),
-      periods: normalizePeriodSelectionList(searchDraft.periods, periodOrder),
-    };
+    const nextSearchCriteria = normalizeBudgetSearchCriteria(searchDraft, periodOrder);
+    if (!hasBudgetMatrixLoadCriteria(nextSearchCriteria)) {
+      return;
+    }
     didRestoreMatrixCacheRef.current = buildFundsphereBudgetsMatrixCacheKey(cacheContext, nextSearchCriteria);
     const shouldForceRefresh =
       hasSearched && areBudgetSearchCriteriaEqual(nextSearchCriteria, searchCriteria);
@@ -2006,7 +2177,7 @@ function FundsphereBudgetPageContent() {
           disabled={!canRefresh}
           refreshing={isPageRefreshing}
           refreshLabel="Refresh budgets and filters"
-          tooltipText={isOnline ? "Click to hard refresh budget data and filters" : "Offline. Reconnect to refresh budgets."}
+          tooltipText={isOnline ? "Click to hard refresh budget data, services, and filters" : "Offline. Reconnect to refresh budgets."}
           containerClassName="w-full"
         />
       ) : null}
@@ -2014,7 +2185,7 @@ function FundsphereBudgetPageContent() {
       <Section className="rounded-[1.45rem] border border-blue-100/90 bg-white/95 p-5 shadow-soft">
         <SectionHeader
           title="Budget Search"
-          description="Select accounts and periods, then click Search to load the budget matrix."
+          description="Select accounts, periods, and services, then click Search to load the budget matrix."
         />
 
         <form className="space-y-5 px-1.5" onSubmit={handleSearchSubmit}>
@@ -2075,6 +2246,35 @@ function FundsphereBudgetPageContent() {
                 placeholder="Select periods"
               />
             </label>
+
+            <label className="block min-w-0">
+              <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
+                Services
+              </span>
+              <AppDropdown
+                value=""
+                values={searchDraft.serviceIds}
+                multiple
+                options={serviceDropdownOptions}
+                onValueChange={() => {
+                  // Multi-select is controlled through onValuesChange.
+                }}
+                onValuesChange={(values) =>
+                  setPageState((current) => ({
+                    ...current,
+                    searchDraft: {
+                      ...current.searchDraft,
+                      serviceIds: normalizeServiceSelectionList(values),
+                    },
+                  }))
+                }
+                searchable
+                loading={isLoadingServices}
+                allowCustomValue={false}
+                ariaLabel="Service filter"
+                placeholder="Select services"
+              />
+            </label>
           </div>
 
           <div className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-blue-100/70 bg-blue-50/40 px-3 py-2">
@@ -2085,7 +2285,7 @@ function FundsphereBudgetPageContent() {
                   Clear
                 </Button>
               ) : null}
-              {hasDraftFilters ? (
+              {hasBudgetMatrixLoadCriteria(searchDraft) ? (
                 <Button type="submit" disabled={isLoadingMatrix || isRefreshingMatrix || isLoadingAccounts}>
                   <Search className="size-4" />
                   Search

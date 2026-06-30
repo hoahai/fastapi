@@ -2,6 +2,7 @@ import {
   CalendarClock,
   ClipboardCheck,
   ContactRound,
+  CircleDollarSign,
   House,
   MapPinned,
   Plane,
@@ -60,7 +61,7 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
     label: "FundSphere",
     description: "Budget management workspace",
     route: "/fundsphere/accounts",
-    icon: WalletCards,
+    icon: CircleDollarSign,
     available: true,
     activeMatchPrefix: "/fundsphere/",
     children: [
@@ -71,15 +72,15 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
         available: true,
       },
       {
-        id: "fundsphere-budgets",
-        label: "Budgets",
-        route: "/fundsphere/budgets",
-        available: true,
-      },
-      {
         id: "fundsphere-services",
         label: "Services",
         route: "/fundsphere/services",
+        available: true,
+      },
+      {
+        id: "fundsphere-budgets",
+        label: "Budgets",
+        route: "/fundsphere/budgets",
         available: true,
       },
     ],

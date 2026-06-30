@@ -1045,6 +1045,7 @@ def get_master_budget_control_budget_matrix_rows(
     *,
     account_codes: list[str],
     periods: list[tuple[int, int]],
+    service_ids: list[str] | None = None,
 ) -> list[dict]:
     if not account_codes or not periods:
         return []
@@ -1060,6 +1061,11 @@ def get_master_budget_control_budget_matrix_rows(
     )
     if not requested_buckets:
         return []
+    requested_service_ids = [
+        str(service_id or "").strip()
+        for service_id in (service_ids or [])
+        if str(service_id or "").strip()
+    ]
 
     columns = _resolve_budget_data_columns(
         accounts_table=accounts_table,
@@ -1101,6 +1107,13 @@ def get_master_budget_control_budget_matrix_rows(
         )
         bucket_params.extend([account_code, month, year])
 
+    service_filter_clause = ""
+    service_params: list[object] = []
+    if requested_service_ids:
+        service_placeholders = ", ".join(["%s"] * len(requested_service_ids))
+        service_filter_clause = f" AND b.{budget_service_id_expr} IN ({service_placeholders})"
+        service_params.extend(requested_service_ids)
+
     query = (
         "SELECT "
         f"b.{budget_id_expr} AS budgetId, "
@@ -1123,7 +1136,8 @@ def get_master_budget_control_budget_matrix_rows(
         f"INNER JOIN {quoted_accounts_table} a ON b.{budget_account_code_expr} = a.{account_code_expr} "
         f"INNER JOIN {quoted_services_table} s ON b.{budget_service_id_expr} = s.{service_id_expr} "
         f"INNER JOIN {quoted_departments_table} d ON s.{service_department_code_expr} = d.{department_code_expr} "
-        f"WHERE {' OR '.join(bucket_conditions)} "
+        f"WHERE ({' OR '.join(bucket_conditions)})"
+        f"{service_filter_clause} "
         "ORDER BY "
         f"d.{department_listing_order_expr} ASC, "
         f"d.{department_name_expr} ASC, "
@@ -1133,7 +1147,7 @@ def get_master_budget_control_budget_matrix_rows(
         f"b.{budget_year_expr} ASC, "
         f"b.{budget_month_expr} ASC"
     )
-    return [_normalize_row(row) for row in fetch_all(query, tuple(bucket_params))]
+    return [_normalize_row(row) for row in fetch_all(query, tuple(bucket_params + service_params))]
 
 
 def get_master_budget_control_master_budget_sheet_data(
