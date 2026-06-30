@@ -246,10 +246,10 @@ function reduceRgbaAlpha(value: string | undefined, factor: number): string | un
 
 function buildBudgetMatrixDepartmentBandStyles(departmentCode: string) {
   const styles = buildFundsphereDepartmentColorStyles({ identity: departmentCode });
-  const headerBackground = reduceRgbaAlpha(typeof styles.headerStyle.backgroundColor === "string" ? styles.headerStyle.backgroundColor : undefined, 4) ?? "transparent";
-  const serviceBackground = reduceRgbaAlpha(typeof styles.headerStyle.backgroundColor === "string" ? styles.headerStyle.backgroundColor : undefined, 3) ?? headerBackground;
-  const surfaceBackground = reduceRgbaAlpha(typeof styles.cardStyle.backgroundColor === "string" ? styles.cardStyle.backgroundColor : undefined, 4) ?? "transparent";
-  const detailBackground = reduceRgbaAlpha(typeof styles.cardStyle.backgroundColor === "string" ? styles.cardStyle.backgroundColor : undefined, 3.25) ?? surfaceBackground;
+  const headerBackground = reduceRgbaAlpha(typeof styles.headerStyle.backgroundColor === "string" ? styles.headerStyle.backgroundColor : undefined, 3) ?? "transparent";
+  const serviceBackground = reduceRgbaAlpha(typeof styles.headerStyle.backgroundColor === "string" ? styles.headerStyle.backgroundColor : undefined, 2.2) ?? headerBackground;
+  const surfaceBackground = reduceRgbaAlpha(typeof styles.cardStyle.backgroundColor === "string" ? styles.cardStyle.backgroundColor : undefined, 3) ?? "transparent";
+  const detailBackground = reduceRgbaAlpha(typeof styles.cardStyle.backgroundColor === "string" ? styles.cardStyle.backgroundColor : undefined, 2.4) ?? surfaceBackground;
 
   return {
     headerStyle: {
