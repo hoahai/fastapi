@@ -2170,7 +2170,7 @@ function FundsphereBudgetPageContent() {
                     const departmentBodyRowCount = departmentOpen
                       ? departmentGroup.serviceGroups.reduce((count, serviceGroup) => {
                         const serviceOpen = serviceOpenState[serviceGroup.key] ?? true;
-                        return count + 1 + (serviceOpen ? serviceGroup.detailRows.length : 0);
+                        return count + (serviceOpen ? Math.max(serviceGroup.detailRows.length, 1) : 1);
                       }, 0)
                       : 0;
                     let departmentCellRendered = false;
@@ -2245,7 +2245,8 @@ function FundsphereBudgetPageContent() {
                         {departmentGroup.serviceGroups.map((serviceGroup) => {
                           const serviceOpen = serviceOpenState[serviceGroup.key] ?? true;
                           const serviceDetailRows = serviceOpen ? serviceGroup.detailRows : [];
-                          const serviceRowSpan = 1 + serviceDetailRows.length;
+                          const serviceRowSpan = serviceOpen ? Math.max(serviceDetailRows.length, 1) : 1;
+                          const showServiceTotalRow = !serviceOpen || serviceGroup.detailRows.length === 0;
                           const showDepartmentCell = !departmentCellRendered;
                           if (showDepartmentCell) {
                             departmentCellRendered = true;
@@ -2253,42 +2254,43 @@ function FundsphereBudgetPageContent() {
 
                           return (
                             <Fragment key={serviceGroup.key}>
-                              <tr key={`${serviceGroup.key}:total`} className="bg-transparent">
-                                {showDepartmentCell ? (
-                                  <td
-                                    rowSpan={departmentBodyRowCount}
-                                    className={cn(
-                                      BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS,
-                                      "border-b border-slate-200 bg-transparent px-2 py-2 align-top cursor-pointer select-none",
-                                    )}
-                                    style={mergeStyles(BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE, departmentBandStyles.headerStyle)}
-                                    role="button"
-                                    tabIndex={0}
-                                    aria-expanded={departmentOpen}
-                                    onClick={() => {
-                                      updateDepartmentOpenState((current) => ({
-                                        ...current,
-                                        [departmentGroup.key]: !departmentOpen,
-                                      }));
-                                    }}
-                                    onKeyDown={(event) =>
-                                      handleHierarchyCellKeyDown(event, () => {
+                              {showServiceTotalRow ? (
+                                <tr key={`${serviceGroup.key}:total`} className="bg-transparent">
+                                  {showDepartmentCell ? (
+                                    <td
+                                      rowSpan={departmentBodyRowCount}
+                                      className={cn(
+                                        BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS,
+                                        "border-b border-slate-200 bg-transparent px-2 py-2 align-top cursor-pointer select-none",
+                                      )}
+                                      style={mergeStyles(BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE, departmentBandStyles.headerStyle)}
+                                      role="button"
+                                      tabIndex={0}
+                                      aria-expanded={departmentOpen}
+                                      onClick={() => {
                                         updateDepartmentOpenState((current) => ({
                                           ...current,
                                           [departmentGroup.key]: !departmentOpen,
                                         }));
-                                      })
-                                    }
-                                  >
-                                    <BudgetHierarchyLabel
-                                      level={0}
-                                      title={departmentGroup.departmentName}
-                                      subtitle={null}
-                                      open={departmentOpen}
-                                      onToggle={() => undefined}
-                                    />
-                                  </td>
-                                ) : null}
+                                      }}
+                                      onKeyDown={(event) =>
+                                        handleHierarchyCellKeyDown(event, () => {
+                                          updateDepartmentOpenState((current) => ({
+                                            ...current,
+                                            [departmentGroup.key]: !departmentOpen,
+                                          }));
+                                        })
+                                      }
+                                    >
+                                      <BudgetHierarchyLabel
+                                        level={0}
+                                        title={departmentGroup.departmentName}
+                                        subtitle={null}
+                                        open={departmentOpen}
+                                        onToggle={() => undefined}
+                                      />
+                                    </td>
+                                  ) : null}
                                   <td
                                     rowSpan={serviceRowSpan}
                                     className={cn(
@@ -2297,58 +2299,133 @@ function FundsphereBudgetPageContent() {
                                     )}
                                     style={mergeStyles(BUDGET_MATRIX_SERVICE_COLUMN_STYLE, departmentBandStyles.serviceStyle)}
                                     role="button"
-                                  tabIndex={0}
-                                  aria-expanded={serviceOpen}
-                                  onClick={() => {
-                                    updateServiceOpenState((current) => ({
-                                      ...current,
-                                      [serviceGroup.key]: !serviceOpen,
-                                    }));
-                                  }}
-                                  onKeyDown={(event) =>
-                                    handleHierarchyCellKeyDown(event, () => {
+                                    tabIndex={0}
+                                    aria-expanded={serviceOpen}
+                                    onClick={() => {
                                       updateServiceOpenState((current) => ({
                                         ...current,
                                         [serviceGroup.key]: !serviceOpen,
                                       }));
-                                    })
-                                  }
-                                >
-                                  <BudgetHierarchyLabel
-                                    level={1}
-                                    title={`${serviceGroup.serviceName} Total`}
-                                    subtitle={null}
-                                    open={serviceOpen}
-                                    onToggle={() => undefined}
-                                    emphasis="muted"
-                                  />
-                                </td>
-                              <td
-                                  className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-t border-slate-200 bg-transparent px-2 py-2")}
-                                  style={mergeStyles(BUDGET_MATRIX_SEGMENT_COLUMN_STYLE, departmentBandStyles.surfaceStyle)}
-                                />
-                                {matrixColumns.map((column, columnIndex) => {
-                                  return (
-                                  <td
-                                    key={`${serviceGroup.key}:${column.key}`}
-                                    className={cn(
-                                      BUDGET_MATRIX_PERIOD_COLUMN_CLASS,
-                                      getAccountBoundaryClass(columnIndex),
-                                      "border-t border-slate-200 bg-transparent px-1 py-2 text-center text-sm font-semibold text-slate-800",
-                                    )}
-                                    style={mergeStyles(getAccountBoundaryStyle(columnIndex), departmentBandStyles.headerStyle)}
+                                    }}
+                                    onKeyDown={(event) =>
+                                      handleHierarchyCellKeyDown(event, () => {
+                                        updateServiceOpenState((current) => ({
+                                          ...current,
+                                          [serviceGroup.key]: !serviceOpen,
+                                        }));
+                                      })
+                                    }
                                   >
-                                    {centsToCurrency(serviceGroup.totalCentsByColumn[column.key] ?? 0)}
-                                    {columnIndex === periodCountPerAccount - 1 ? <BudgetMatrixBoundaryDivider /> : null}
+                                    <BudgetHierarchyLabel
+                                      level={1}
+                                      title={`${serviceGroup.serviceName} Total`}
+                                      subtitle={null}
+                                      open={serviceOpen}
+                                      onToggle={() => undefined}
+                                      emphasis="muted"
+                                    />
                                   </td>
-                                  );
-                                })}
-                              </tr>
+                                  <td
+                                    className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-t border-slate-200 bg-transparent px-2 py-2")}
+                                    style={mergeStyles(BUDGET_MATRIX_SEGMENT_COLUMN_STYLE, departmentBandStyles.surfaceStyle)}
+                                  />
+                                  {matrixColumns.map((column, columnIndex) => {
+                                    return (
+                                      <td
+                                        key={`${serviceGroup.key}:${column.key}`}
+                                        className={cn(
+                                          BUDGET_MATRIX_PERIOD_COLUMN_CLASS,
+                                          getAccountBoundaryClass(columnIndex),
+                                          "border-t border-slate-200 bg-transparent px-1 py-2 text-center text-sm font-semibold text-slate-800",
+                                        )}
+                                        style={mergeStyles(getAccountBoundaryStyle(columnIndex), departmentBandStyles.headerStyle)}
+                                      >
+                                        {centsToCurrency(serviceGroup.totalCentsByColumn[column.key] ?? 0)}
+                                        {columnIndex === periodCountPerAccount - 1 ? <BudgetMatrixBoundaryDivider /> : null}
+                                      </td>
+                                    );
+                                  })}
+                                </tr>
+                              ) : null}
 
-                              {serviceDetailRows.map((detailRow) => {
+                              {serviceDetailRows.map((detailRow, detailRowIndex) => {
                                 const detailLabel = detailRow.subService ? detailRow.subService : "";
+                                const showServiceCell = serviceOpen && detailRowIndex === 0;
                                 return (
                                   <tr key={detailRow.key} className="bg-transparent">
+                                    {showServiceCell ? (
+                                      <>
+                                        {showDepartmentCell ? (
+                                          <td
+                                            rowSpan={departmentBodyRowCount}
+                                            className={cn(
+                                              BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS,
+                                              "border-b border-slate-200 bg-transparent px-2 py-2 align-top cursor-pointer select-none",
+                                            )}
+                                            style={mergeStyles(BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE, departmentBandStyles.headerStyle)}
+                                            role="button"
+                                            tabIndex={0}
+                                            aria-expanded={departmentOpen}
+                                            onClick={() => {
+                                              updateDepartmentOpenState((current) => ({
+                                                ...current,
+                                                [departmentGroup.key]: !departmentOpen,
+                                              }));
+                                            }}
+                                            onKeyDown={(event) =>
+                                              handleHierarchyCellKeyDown(event, () => {
+                                                updateDepartmentOpenState((current) => ({
+                                                  ...current,
+                                                  [departmentGroup.key]: !departmentOpen,
+                                                }));
+                                              })
+                                            }
+                                          >
+                                            <BudgetHierarchyLabel
+                                              level={0}
+                                              title={departmentGroup.departmentName}
+                                              subtitle={null}
+                                              open={departmentOpen}
+                                              onToggle={() => undefined}
+                                            />
+                                          </td>
+                                        ) : null}
+                                        <td
+                                          rowSpan={serviceRowSpan}
+                                          className={cn(
+                                            BUDGET_MATRIX_SERVICE_COLUMN_CLASS,
+                                            "border-t border-slate-200 bg-transparent px-2 py-2 align-top cursor-pointer select-none",
+                                          )}
+                                          style={mergeStyles(BUDGET_MATRIX_SERVICE_COLUMN_STYLE, departmentBandStyles.serviceStyle)}
+                                          role="button"
+                                          tabIndex={0}
+                                          aria-expanded={serviceOpen}
+                                          onClick={() => {
+                                            updateServiceOpenState((current) => ({
+                                              ...current,
+                                              [serviceGroup.key]: !serviceOpen,
+                                            }));
+                                          }}
+                                          onKeyDown={(event) =>
+                                            handleHierarchyCellKeyDown(event, () => {
+                                              updateServiceOpenState((current) => ({
+                                                ...current,
+                                                [serviceGroup.key]: !serviceOpen,
+                                              }));
+                                            })
+                                          }
+                                        >
+                                          <BudgetHierarchyLabel
+                                            level={1}
+                                            title={serviceGroup.serviceName}
+                                            subtitle={null}
+                                            open={serviceOpen}
+                                            onToggle={() => undefined}
+                                            emphasis="muted"
+                                          />
+                                        </td>
+                                      </>
+                                    ) : null}
                                     <td
                                       className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-b border-slate-200 bg-transparent px-2 py-2")}
                                       style={mergeStyles(BUDGET_MATRIX_SEGMENT_COLUMN_STYLE, departmentBandStyles.surfaceStyle)}
