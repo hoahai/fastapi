@@ -2435,11 +2435,11 @@ function FundsphereBudgetPageContent() {
                           </td>
                           <td
                             className={cn(BUDGET_MATRIX_SERVICE_COLUMN_CLASS, "border-t border-slate-200 bg-transparent px-2 py-2")}
-                            style={mergeStyles(BUDGET_MATRIX_SERVICE_COLUMN_STYLE, departmentBandStyles.serviceStyle)}
+                            style={mergeStyles(BUDGET_MATRIX_SERVICE_COLUMN_STYLE, departmentBandStyles.headerStyle)}
                           />
                           <td
                             className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-t border-slate-200 bg-transparent px-2 py-2")}
-                            style={mergeStyles(BUDGET_MATRIX_SEGMENT_COLUMN_STYLE, departmentBandStyles.surfaceStyle)}
+                            style={mergeStyles(BUDGET_MATRIX_SEGMENT_COLUMN_STYLE, departmentBandStyles.headerStyle)}
                           />
                           {matrixColumns.map((column, columnIndex) => {
                             return (
@@ -2450,7 +2450,7 @@ function FundsphereBudgetPageContent() {
                                 getAccountBoundaryClass(columnIndex),
                                 "border-t border-slate-200 bg-transparent px-1 py-2 text-center text-sm font-semibold text-slate-900",
                               )}
-                              style={mergeStyles(getAccountBoundaryStyle(columnIndex), departmentBandStyles.serviceStyle)}
+                              style={mergeStyles(getAccountBoundaryStyle(columnIndex), departmentBandStyles.headerStyle)}
                             >
                               {centsToCurrency(departmentGroup.totalCentsByColumn[column.key] ?? 0)}
                               {columnIndex === periodCountPerAccount - 1 ? <BudgetMatrixBoundaryDivider /> : null}
