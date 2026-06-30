@@ -2072,111 +2072,112 @@ function FundsphereBudgetPageContent() {
               </div>
             </div>
 
-            <div className="overflow-x-auto overflow-y-hidden">
-              <table className="w-max min-w-full table-fixed border-separate border-spacing-0">
-                <colgroup>
-                  <col style={{ width: 180, minWidth: 180 }} />
-                  <col style={{ width: 220, minWidth: 220 }} />
-                  <col style={{ width: 220, minWidth: 220 }} />
-                  {matrixColumns.map((column) => (
-                    <col key={column.key} style={{ width: 104, minWidth: 104 }} />
-                  ))}
-                </colgroup>
-                <thead>
-                  <tr className="bg-slate-50/90">
-                    <th
-                      className={cn(
-                        BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS,
-                        BUDGET_MATRIX_FROZEN_HEADER_CLASS,
-                        "bg-slate-100/95 italic text-xs font-semibold normal-case tracking-[-0.01em] text-slate-900",
-                      )}
-                      style={BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE}
-                      rowSpan={2}
-                    >
-                      Department
-                    </th>
-                    <th
-                      className={cn(
-                        BUDGET_MATRIX_SERVICE_COLUMN_CLASS,
-                        BUDGET_MATRIX_FROZEN_HEADER_CLASS,
-                        "bg-slate-100/95 italic text-xs font-semibold normal-case tracking-[-0.01em] text-slate-900",
-                      )}
-                      style={BUDGET_MATRIX_SERVICE_COLUMN_STYLE}
-                      rowSpan={2}
-                    >
-                      Service
-                    </th>
-                    <th
-                      className={cn(
-                        BUDGET_MATRIX_SEGMENT_COLUMN_CLASS,
-                        BUDGET_MATRIX_FROZEN_HEADER_CLASS,
-                        "bg-slate-100/95 italic text-xs font-semibold normal-case tracking-[-0.01em] text-slate-900",
-                      )}
-                      style={BUDGET_MATRIX_SEGMENT_COLUMN_STYLE}
-                      rowSpan={2}
-                    >
-                      Segment
-                    </th>
-                    {searchCriteria.accountCodes.map((accountCode, accountIndex) => {
-                      const account = accountsByCode.get(accountCode.toUpperCase());
-                      const isLastAccountGroup = accountIndex === searchCriteria.accountCodes.length - 1;
-                      return (
-                        <th
-                          key={accountCode}
-                          colSpan={searchCriteria.periods.length}
-                          className={cn(
-                            BUDGET_MATRIX_ACCOUNT_HEADER_CLASS,
-                            !isLastAccountGroup ? "relative border-r-2 border-r-slate-400" : "",
-                          )}
-                          style={{
-                            ...BUDGET_MATRIX_ACCOUNT_HEADER_STYLE,
-                            width: accountGroupWidth,
-                            minWidth: accountGroupWidth,
-                            maxWidth: accountGroupWidth,
-                          }}
-                        >
-                          <BudgetMatrixAccountHeaderLabel
-                            accountCode={account?.code ?? accountCode}
-                            accountName={account?.name ?? null}
-                            useAccountName={useAccountNamesInHeader}
-                          />
-                          {!isLastAccountGroup ? <BudgetMatrixBoundaryDivider /> : null}
-                        </th>
-                      );
-                    })}
-                  </tr>
-                  <tr className="bg-slate-50/95">
-                    {searchCriteria.accountCodes.flatMap((accountCode) =>
-                      searchCriteria.periods.map((period, periodIndex) => {
-                        const [monthText, yearText] = period.split("/");
-                        const month = Number(monthText);
-                        const year = Number(yearText);
-                        const label = Number.isFinite(month) && Number.isFinite(year)
-                          ? formatPeriodLabel(month, year)
-                          : period;
+            <div className="px-5 pb-5">
+              <div className="overflow-x-auto overflow-y-hidden">
+                <table className="w-max min-w-full table-fixed border-separate border-spacing-0">
+                  <colgroup>
+                    <col style={{ width: 180, minWidth: 180 }} />
+                    <col style={{ width: 220, minWidth: 220 }} />
+                    <col style={{ width: 220, minWidth: 220 }} />
+                    {matrixColumns.map((column) => (
+                      <col key={column.key} style={{ width: 104, minWidth: 104 }} />
+                    ))}
+                  </colgroup>
+                  <thead>
+                    <tr className="bg-slate-50/90">
+                      <th
+                        className={cn(
+                          BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS,
+                          BUDGET_MATRIX_FROZEN_HEADER_CLASS,
+                          "bg-slate-100/95 italic text-xs font-semibold normal-case tracking-[-0.01em] text-slate-900",
+                        )}
+                        style={BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE}
+                        rowSpan={2}
+                      >
+                        Department
+                      </th>
+                      <th
+                        className={cn(
+                          BUDGET_MATRIX_SERVICE_COLUMN_CLASS,
+                          BUDGET_MATRIX_FROZEN_HEADER_CLASS,
+                          "bg-slate-100/95 italic text-xs font-semibold normal-case tracking-[-0.01em] text-slate-900",
+                        )}
+                        style={BUDGET_MATRIX_SERVICE_COLUMN_STYLE}
+                        rowSpan={2}
+                      >
+                        Service
+                      </th>
+                      <th
+                        className={cn(
+                          BUDGET_MATRIX_SEGMENT_COLUMN_CLASS,
+                          BUDGET_MATRIX_FROZEN_HEADER_CLASS,
+                          "bg-slate-100/95 italic text-xs font-semibold normal-case tracking-[-0.01em] text-slate-900",
+                        )}
+                        style={BUDGET_MATRIX_SEGMENT_COLUMN_STYLE}
+                        rowSpan={2}
+                      >
+                        Segment
+                      </th>
+                      {searchCriteria.accountCodes.map((accountCode, accountIndex) => {
+                        const account = accountsByCode.get(accountCode.toUpperCase());
+                        const isLastAccountGroup = accountIndex === searchCriteria.accountCodes.length - 1;
                         return (
                           <th
-                            key={`${accountCode}:${period}`}
+                            key={accountCode}
+                            colSpan={searchCriteria.periods.length}
                             className={cn(
-                              BUDGET_MATRIX_PERIOD_COLUMN_CLASS,
-                              BUDGET_MATRIX_PERIOD_HEADER_CLASS,
-                              getAccountBoundaryClass(periodIndex),
+                              BUDGET_MATRIX_ACCOUNT_HEADER_CLASS,
+                              !isLastAccountGroup ? "relative border-r-2 border-r-slate-400" : "",
                             )}
                             style={{
-                              ...BUDGET_MATRIX_PERIOD_HEADER_STYLE,
-                              ...getAccountBoundaryStyle(periodIndex),
+                              ...BUDGET_MATRIX_ACCOUNT_HEADER_STYLE,
+                              width: accountGroupWidth,
+                              minWidth: accountGroupWidth,
+                              maxWidth: accountGroupWidth,
                             }}
                           >
-                            {label}
-                            {periodIndex === periodCountPerAccount - 1 ? <BudgetMatrixBoundaryDivider /> : null}
+                            <BudgetMatrixAccountHeaderLabel
+                              accountCode={account?.code ?? accountCode}
+                              accountName={account?.name ?? null}
+                              useAccountName={useAccountNamesInHeader}
+                            />
+                            {!isLastAccountGroup ? <BudgetMatrixBoundaryDivider /> : null}
                           </th>
                         );
-                      }),
-                    )}
-                  </tr>
-                </thead>
-                <tbody>
-                  {matrixHierarchy.departments.map((departmentGroup) => {
+                      })}
+                    </tr>
+                    <tr className="bg-slate-50/95">
+                      {searchCriteria.accountCodes.flatMap((accountCode) =>
+                        searchCriteria.periods.map((period, periodIndex) => {
+                          const [monthText, yearText] = period.split("/");
+                          const month = Number(monthText);
+                          const year = Number(yearText);
+                          const label = Number.isFinite(month) && Number.isFinite(year)
+                            ? formatPeriodLabel(month, year)
+                            : period;
+                          return (
+                            <th
+                              key={`${accountCode}:${period}`}
+                              className={cn(
+                                BUDGET_MATRIX_PERIOD_COLUMN_CLASS,
+                                BUDGET_MATRIX_PERIOD_HEADER_CLASS,
+                                getAccountBoundaryClass(periodIndex),
+                              )}
+                              style={{
+                                ...BUDGET_MATRIX_PERIOD_HEADER_STYLE,
+                                ...getAccountBoundaryStyle(periodIndex),
+                              }}
+                            >
+                              {label}
+                              {periodIndex === periodCountPerAccount - 1 ? <BudgetMatrixBoundaryDivider /> : null}
+                            </th>
+                          );
+                        }),
+                      )}
+                    </tr>
+                  </thead>
+                  <tbody>
+                    {matrixHierarchy.departments.map((departmentGroup) => {
                     const departmentBandStyles = buildBudgetMatrixDepartmentBandStyles(departmentGroup.departmentCode);
                     const departmentOpen = departmentOpenState[departmentGroup.key] ?? true;
                     const departmentBodyRowCount = departmentOpen
@@ -2551,46 +2552,47 @@ function FundsphereBudgetPageContent() {
                       </Fragment>
                     );
                   })}
-                </tbody>
-                <tfoot>
-                  <tr className="bg-slate-900 text-white">
-                    <td
-                      className={cn(
-                        BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS,
-                        "border-t border-slate-800 bg-slate-900 px-2 py-2",
-                      )}
-                      style={BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE}
-                    >
-                      <p className="text-sm font-semibold">Grand Total</p>
-                      <p className="text-[11px] uppercase tracking-[0.12em] text-slate-300">All departments</p>
-                    </td>
-                    <td
-                      className={cn(BUDGET_MATRIX_SERVICE_COLUMN_CLASS, "border-t border-slate-800 bg-slate-900 px-2 py-2")}
-                      style={BUDGET_MATRIX_SERVICE_COLUMN_STYLE}
-                    />
-                    <td
-                      className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-t border-slate-800 bg-slate-900 px-2 py-2")}
-                      style={BUDGET_MATRIX_SEGMENT_COLUMN_STYLE}
-                    />
-                    {matrixColumns.map((column, columnIndex) => {
-                      return (
+                  </tbody>
+                  <tfoot>
+                    <tr className="bg-slate-900 text-white">
                       <td
-                        key={`grand:${column.key}`}
                         className={cn(
-                          BUDGET_MATRIX_PERIOD_COLUMN_CLASS,
-                          getAccountBoundaryClass(columnIndex),
-                          "border-t border-slate-800 px-1 py-2 text-center text-sm font-semibold",
+                          BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS,
+                          "border-t border-slate-800 bg-slate-900 px-2 py-2",
                         )}
-                        style={getAccountBoundaryStyle(columnIndex)}
+                        style={BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE}
                       >
-                        {centsToCurrency(matrixHierarchy.grandTotalsByColumn[column.key] ?? 0)}
-                        {columnIndex === periodCountPerAccount - 1 ? <BudgetMatrixBoundaryDivider /> : null}
+                        <p className="text-sm font-semibold">Grand Total</p>
+                        <p className="text-[11px] uppercase tracking-[0.12em] text-slate-300">All departments</p>
                       </td>
-                      );
-                    })}
-                  </tr>
-                </tfoot>
-              </table>
+                      <td
+                        className={cn(BUDGET_MATRIX_SERVICE_COLUMN_CLASS, "border-t border-slate-800 bg-slate-900 px-2 py-2")}
+                        style={BUDGET_MATRIX_SERVICE_COLUMN_STYLE}
+                      />
+                      <td
+                        className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-t border-slate-800 bg-slate-900 px-2 py-2")}
+                        style={BUDGET_MATRIX_SEGMENT_COLUMN_STYLE}
+                      />
+                      {matrixColumns.map((column, columnIndex) => {
+                        return (
+                        <td
+                          key={`grand:${column.key}`}
+                          className={cn(
+                            BUDGET_MATRIX_PERIOD_COLUMN_CLASS,
+                            getAccountBoundaryClass(columnIndex),
+                            "border-t border-slate-800 px-1 py-2 text-center text-sm font-semibold",
+                          )}
+                          style={getAccountBoundaryStyle(columnIndex)}
+                        >
+                          {centsToCurrency(matrixHierarchy.grandTotalsByColumn[column.key] ?? 0)}
+                          {columnIndex === periodCountPerAccount - 1 ? <BudgetMatrixBoundaryDivider /> : null}
+                        </td>
+                        );
+                      })}
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
             </div>
 
             <SectionLoadingLayer
