@@ -864,7 +864,7 @@ function BudgetMatrixHeaderBoundaryDivider() {
   return (
     <span
       aria-hidden="true"
-      className="pointer-events-none absolute right-0 top-0 z-40 h-full w-[3px] bg-slate-400"
+      className="pointer-events-none absolute right-0 top-0 z-40 h-full w-[2px] bg-slate-400"
     />
   );
 }
@@ -2171,14 +2171,14 @@ function FundsphereBudgetPageContent() {
                             colSpan={searchCriteria.periods.length}
                             className={cn(
                               BUDGET_MATRIX_ACCOUNT_HEADER_CLASS,
-                              !isLastAccountGroup ? "relative border-r-4 border-r-slate-500" : "",
+                              !isLastAccountGroup ? "relative border-r-2 border-r-slate-400" : "",
                             )}
                             style={{
                               ...BUDGET_MATRIX_ACCOUNT_HEADER_STYLE,
                               width: accountGroupWidth,
                               minWidth: accountGroupWidth,
                               maxWidth: accountGroupWidth,
-                              ...(isLastAccountGroup ? null : { boxShadow: "inset -4px 0 0 0 #94a3b8" }),
+                              ...(isLastAccountGroup ? null : { boxShadow: "inset -2px 0 0 0 #cbd5e1" }),
                             }}
                           >
                             <BudgetMatrixAccountHeaderLabel
