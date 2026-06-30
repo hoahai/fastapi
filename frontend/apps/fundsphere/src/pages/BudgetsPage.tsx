@@ -813,7 +813,7 @@ const BUDGET_MATRIX_PERIOD_WIDTH = 104;
 const BUDGET_MATRIX_PERIOD_COLUMN_CLASS = "w-[104px] min-w-[104px] max-w-[104px]";
 const BUDGET_MATRIX_FROZEN_HEADER_CLASS = "bg-slate-50/95 border-b border-slate-200 px-2 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500";
 const BUDGET_MATRIX_ACCOUNT_HEADER_CLASS = "border-b border-slate-200 px-2 py-2 text-center text-[12px] font-semibold uppercase tracking-[0.12em] text-slate-900 whitespace-normal break-words";
-const BUDGET_MATRIX_PERIOD_HEADER_CLASS = "border-b border-slate-200 px-2 py-3 text-center text-[11px] font-semibold text-slate-700 whitespace-nowrap";
+const BUDGET_MATRIX_PERIOD_HEADER_CLASS = "border-b border-slate-200 px-2 py-4 text-center text-[11px] font-semibold text-slate-700 whitespace-nowrap";
 
 const BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE: CSSProperties = {
   position: "sticky",
@@ -858,7 +858,7 @@ const BUDGET_MATRIX_ACCOUNT_HEADER_STYLE: CSSProperties = {
 
 const BUDGET_MATRIX_PERIOD_HEADER_STYLE: CSSProperties = {
   position: "sticky",
-  top: 45,
+  top: 48,
   zIndex: 49,
   backgroundColor: "#f1f5f9",
   color: "#334155",
