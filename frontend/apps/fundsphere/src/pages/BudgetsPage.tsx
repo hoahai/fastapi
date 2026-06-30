@@ -225,10 +225,31 @@ function mergeStyles(...styles: Array<CSSProperties | null | undefined>): CSSPro
   return Object.assign({}, ...styles.filter(Boolean));
 }
 
+function reduceRgbaAlpha(value: string | undefined, factor: number): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const match = value.trim().match(/^rgba\((\d+),\s*(\d+),\s*(\d+),\s*([0-9.]+)\)$/i);
+  if (!match) {
+    return value;
+  }
+  const red = Number(match[1]);
+  const green = Number(match[2]);
+  const blue = Number(match[3]);
+  const alpha = Number(match[4]);
+  if (![red, green, blue, alpha].every(Number.isFinite)) {
+    return value;
+  }
+  const nextAlpha = Math.max(0, Math.min(1, alpha * factor));
+  return `rgba(${red}, ${green}, ${blue}, ${nextAlpha.toFixed(3)})`;
+}
+
 function buildBudgetMatrixDepartmentBandStyles(departmentCode: string) {
   const styles = buildFundsphereDepartmentColorStyles({ identity: departmentCode });
-  const headerBackground = styles.headerStyle.backgroundColor ?? "transparent";
-  const surfaceBackground = styles.cardStyle.backgroundColor ?? "transparent";
+  const headerBackground = reduceRgbaAlpha(typeof styles.headerStyle.backgroundColor === "string" ? styles.headerStyle.backgroundColor : undefined, 0.7) ?? "transparent";
+  const serviceBackground = reduceRgbaAlpha(typeof styles.headerStyle.backgroundColor === "string" ? styles.headerStyle.backgroundColor : undefined, 0.45) ?? headerBackground;
+  const surfaceBackground = reduceRgbaAlpha(typeof styles.cardStyle.backgroundColor === "string" ? styles.cardStyle.backgroundColor : undefined, 0.8) ?? "transparent";
+  const detailBackground = reduceRgbaAlpha(typeof styles.cardStyle.backgroundColor === "string" ? styles.cardStyle.backgroundColor : undefined, 0.6) ?? surfaceBackground;
 
   return {
     headerStyle: {
@@ -238,7 +259,7 @@ function buildBudgetMatrixDepartmentBandStyles(departmentCode: string) {
       boxShadow: "none",
     } satisfies CSSProperties,
     serviceStyle: {
-      backgroundColor: headerBackground,
+      backgroundColor: serviceBackground,
       backgroundImage: "none",
       borderLeft: "none",
       boxShadow: "none",
@@ -250,7 +271,7 @@ function buildBudgetMatrixDepartmentBandStyles(departmentCode: string) {
       boxShadow: "none",
     } satisfies CSSProperties,
     detailStyle: {
-      backgroundColor: surfaceBackground,
+      backgroundColor: detailBackground,
       backgroundImage: "none",
       borderLeft: "none",
       boxShadow: "none",
