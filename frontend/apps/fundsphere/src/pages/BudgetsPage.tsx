@@ -1409,6 +1409,7 @@ function FundsphereBudgetPageContent() {
   const [modalOpen, setModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<BudgetMode>("create");
   const [modalCell, setModalCell] = useState<BudgetCellContext | null>(null);
+  const [matrixCriteria, setMatrixCriteria] = useState<BudgetSearchCriteria | null>(null);
   const accountOptionsTokenRef = useRef(0);
   const matrixRequestTokenRef = useRef(0);
 
@@ -1523,6 +1524,10 @@ function FundsphereBudgetPageContent() {
   ) {
     matrixRef.current = nextMatrix;
     setMatrix(nextMatrix);
+    setMatrixCriteria({
+      accountCodes: normalizeSelectionList(criteria.accountCodes),
+      periods: normalizePeriodSelectionList(criteria.periods, periodOrder),
+    });
     if (!nextMatrix) {
       return;
     }
@@ -1778,6 +1783,10 @@ function FundsphereBudgetPageContent() {
         ? `Data source: ${cacheStatus.source}. Last updated ${formatRelativeTime(cacheStatus.fetchedAt)}.`
         : "No cached budget matrix yet";
 
+  const matrixCriteriaMatchesSearch = matrixCriteria
+    ? areBudgetSearchCriteriaEqual(matrixCriteria, searchCriteria)
+    : false;
+  const shouldShowMatrixLoadingOverlay = Boolean(isLoadingMatrix && (!matrix || !matrixCriteriaMatchesSearch));
   const isPageRefreshing = isLoadingAccounts || isLoadingMatrix || isRefreshingMatrix;
   const canRefresh = Boolean(isOnline && !isPageRefreshing && !isSaving && !modalOpen);
 
@@ -1814,6 +1823,7 @@ function FundsphereBudgetPageContent() {
     matrixRef.current = null;
     didRestoreMatrixCacheRef.current = null;
     setMatrix(null);
+    setMatrixCriteria(null);
     setCacheStatus(null);
     setRefreshMessage(null);
     setMatrixError(null);
@@ -2601,7 +2611,7 @@ function FundsphereBudgetPageContent() {
           />
         )}
 
-        <PageLoadingLayer active={Boolean(isLoadingMatrix && !matrix)} message="Loading budget matrix..." />
+        <PageLoadingLayer active={shouldShowMatrixLoadingOverlay} message="Loading budget matrix..." />
       </div>
 
       <BudgetModal
