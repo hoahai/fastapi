@@ -771,6 +771,31 @@ function BudgetHierarchyLabel({
   );
 }
 
+function BudgetMatrixBoundaryDivider() {
+  return (
+    <span
+      aria-hidden="true"
+      className="pointer-events-none absolute right-0 top-0 z-20 h-full w-[2px] bg-slate-400"
+    />
+  );
+}
+
+function BudgetMatrixAccountHeaderLabel({
+  accountCode,
+  accountName,
+  useAccountName,
+}: {
+  accountCode: string;
+  accountName?: string | null;
+  useAccountName: boolean;
+}) {
+  return (
+    <span className="block whitespace-normal break-words leading-tight tracking-[0.02em]">
+      {useAccountName && accountName ? accountName : accountCode.toUpperCase()}
+    </span>
+  );
+}
+
 function handleHierarchyCellKeyDown(
   event: KeyboardEvent<HTMLTableCellElement>,
   onToggle: () => void,
@@ -784,9 +809,10 @@ function handleHierarchyCellKeyDown(
 const BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS = "sticky left-0 z-50 w-[180px] min-w-[180px] max-w-[180px]";
 const BUDGET_MATRIX_SERVICE_COLUMN_CLASS = "sticky left-[180px] z-40 w-[220px] min-w-[220px] max-w-[220px]";
 const BUDGET_MATRIX_SEGMENT_COLUMN_CLASS = "sticky left-[400px] z-30 w-[220px] min-w-[220px] max-w-[220px]";
+const BUDGET_MATRIX_PERIOD_WIDTH = 104;
 const BUDGET_MATRIX_PERIOD_COLUMN_CLASS = "w-[104px] min-w-[104px] max-w-[104px]";
-const BUDGET_MATRIX_FROZEN_HEADER_CLASS = "bg-slate-50/95 border-b border-r border-slate-200 px-2 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500";
-const BUDGET_MATRIX_ACCOUNT_HEADER_CLASS = "border-b border-slate-200 px-2 py-2 text-center text-[12px] font-semibold uppercase tracking-[0.12em] text-slate-900 whitespace-nowrap";
+const BUDGET_MATRIX_FROZEN_HEADER_CLASS = "bg-slate-50/95 border-b border-slate-200 px-2 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500";
+const BUDGET_MATRIX_ACCOUNT_HEADER_CLASS = "border-b border-slate-200 px-2 py-2 text-center text-[12px] font-semibold uppercase tracking-[0.12em] text-slate-900 whitespace-normal break-words";
 const BUDGET_MATRIX_PERIOD_HEADER_CLASS = "border-b border-slate-200 px-2 py-2 text-center text-[11px] font-semibold text-slate-700 whitespace-nowrap";
 
 const BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE: CSSProperties = {
@@ -797,6 +823,7 @@ const BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE: CSSProperties = {
   minWidth: 180,
   maxWidth: 180,
   backgroundColor: "#f8fafc",
+  boxShadow: "inset -1px 0 0 0 #e2e8f0",
 };
 
 const BUDGET_MATRIX_SERVICE_COLUMN_STYLE: CSSProperties = {
@@ -807,6 +834,7 @@ const BUDGET_MATRIX_SERVICE_COLUMN_STYLE: CSSProperties = {
   minWidth: 220,
   maxWidth: 220,
   backgroundColor: "#ffffff",
+  boxShadow: "inset -1px 0 0 0 #e2e8f0",
 };
 
 const BUDGET_MATRIX_SEGMENT_COLUMN_STYLE: CSSProperties = {
@@ -817,6 +845,7 @@ const BUDGET_MATRIX_SEGMENT_COLUMN_STYLE: CSSProperties = {
   minWidth: 220,
   maxWidth: 220,
   backgroundColor: "#ffffff",
+  boxShadow: "inset -1px 0 0 0 #e2e8f0",
 };
 
 const BUDGET_MATRIX_ACCOUNT_HEADER_STYLE: CSSProperties = {
@@ -1589,9 +1618,11 @@ function FundsphereBudgetPageContent() {
     [accountsByCode, searchCriteria.accountCodes, searchCriteria.periods],
   );
   const periodCountPerAccount = searchCriteria.periods.length;
+  const accountGroupWidth = Math.max(periodCountPerAccount, 1) * BUDGET_MATRIX_PERIOD_WIDTH;
+  const useAccountNamesInHeader = accountGroupWidth >= 312;
   const getAccountBoundaryClass = (columnIndex: number) =>
     periodCountPerAccount > 0 && (columnIndex + 1) % periodCountPerAccount === 0
-      ? "border-r-2 border-r-slate-400"
+      ? "relative border-r-2 border-r-slate-400"
       : "";
   const getAccountBoundaryStyle = (columnIndex: number): CSSProperties | undefined =>
     periodCountPerAccount > 0 && (columnIndex + 1) % periodCountPerAccount === 0
@@ -2015,14 +2046,21 @@ function FundsphereBudgetPageContent() {
                           colSpan={searchCriteria.periods.length}
                           className={cn(
                             BUDGET_MATRIX_ACCOUNT_HEADER_CLASS,
-                            !isLastAccountGroup ? "border-r-2 border-r-slate-300" : "",
+                            !isLastAccountGroup ? "relative border-r-2 border-r-slate-400" : "",
                           )}
                           style={{
                             ...BUDGET_MATRIX_ACCOUNT_HEADER_STYLE,
-                            ...(isLastAccountGroup ? {} : { boxShadow: "inset -2px 0 0 0 #cbd5e1" }),
+                            width: accountGroupWidth,
+                            minWidth: accountGroupWidth,
+                            maxWidth: accountGroupWidth,
                           }}
                         >
-                          {account ? `${account.code.toUpperCase()} - ${account.name}` : accountCode.toUpperCase()}
+                          <BudgetMatrixAccountHeaderLabel
+                            accountCode={account?.code ?? accountCode}
+                            accountName={account?.name ?? null}
+                            useAccountName={useAccountNamesInHeader}
+                          />
+                          {!isLastAccountGroup ? <BudgetMatrixBoundaryDivider /> : null}
                         </th>
                       );
                     })}
@@ -2050,6 +2088,7 @@ function FundsphereBudgetPageContent() {
                             }}
                           >
                             {label}
+                            {periodIndex === periodCountPerAccount - 1 ? <BudgetMatrixBoundaryDivider /> : null}
                           </th>
                         );
                       }),
@@ -2071,11 +2110,11 @@ function FundsphereBudgetPageContent() {
                       return (
                         <Fragment key={departmentGroup.key}>
                           <tr key={`${departmentGroup.key}:collapsed`} className="bg-violet-50/70">
-                            <td
-                              className={cn(
-                                BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS,
-                                "border-b border-r border-violet-200/80 bg-violet-100 px-2 py-2 align-top cursor-pointer select-none",
-                              )}
+                              <td
+                                className={cn(
+                                  BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS,
+                                  "border-b border-violet-200/80 bg-violet-100 px-2 py-2 align-top cursor-pointer select-none",
+                                )}
                               style={BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE}
                               role="button"
                               tabIndex={0}
@@ -2104,11 +2143,11 @@ function FundsphereBudgetPageContent() {
                               />
                             </td>
                             <td
-                              className={cn(BUDGET_MATRIX_SERVICE_COLUMN_CLASS, "border-b border-r border-violet-200/80 bg-violet-100 px-2 py-2")}
+                              className={cn(BUDGET_MATRIX_SERVICE_COLUMN_CLASS, "border-b border-violet-200/80 bg-violet-100 px-2 py-2")}
                               style={BUDGET_MATRIX_SERVICE_COLUMN_STYLE}
                             />
                             <td
-                              className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-b border-r border-violet-200/80 bg-violet-100 px-2 py-2")}
+                              className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-b border-violet-200/80 bg-violet-100 px-2 py-2")}
                               style={BUDGET_MATRIX_SEGMENT_COLUMN_STYLE}
                             />
                             {matrixColumns.map((column, columnIndex) => {
@@ -2123,6 +2162,7 @@ function FundsphereBudgetPageContent() {
                                 style={getAccountBoundaryStyle(columnIndex)}
                               >
                                 {centsToCurrency(departmentGroup.totalCentsByColumn[column.key] ?? 0)}
+                                {columnIndex === periodCountPerAccount - 1 ? <BudgetMatrixBoundaryDivider /> : null}
                               </td>
                               );
                             })}
@@ -2149,7 +2189,7 @@ function FundsphereBudgetPageContent() {
                                     rowSpan={departmentBodyRowCount}
                                     className={cn(
                                       BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS,
-                                      "border-b border-r border-slate-200 bg-slate-50 px-2 py-2 align-top cursor-pointer select-none",
+                                      "border-b border-slate-200 bg-slate-50 px-2 py-2 align-top cursor-pointer select-none",
                                     )}
                                     style={BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE}
                                     role="button"
@@ -2182,7 +2222,7 @@ function FundsphereBudgetPageContent() {
                                 <td
                                   className={cn(
                                     BUDGET_MATRIX_SERVICE_COLUMN_CLASS,
-                                    "border-b border-r border-slate-200 bg-white px-2 py-2 align-top cursor-pointer select-none",
+                                    "border-b border-slate-200 bg-white px-2 py-2 align-top cursor-pointer select-none",
                                   )}
                                   style={BUDGET_MATRIX_SERVICE_COLUMN_STYLE}
                                   role="button"
@@ -2213,7 +2253,7 @@ function FundsphereBudgetPageContent() {
                                   />
                                 </td>
                                 <td
-                                  className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-b border-r border-slate-200 bg-white px-2 py-2")}
+                                  className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-b border-slate-200 bg-white px-2 py-2")}
                                   style={BUDGET_MATRIX_SEGMENT_COLUMN_STYLE}
                                 />
                                 {matrixColumns.map((column, columnIndex) => {
@@ -2228,6 +2268,7 @@ function FundsphereBudgetPageContent() {
                                     style={getAccountBoundaryStyle(columnIndex)}
                                   >
                                     {centsToCurrency(serviceGroup.totalCentsByColumn[column.key] ?? 0)}
+                                    {columnIndex === periodCountPerAccount - 1 ? <BudgetMatrixBoundaryDivider /> : null}
                                   </td>
                                   );
                                 })}
@@ -2238,11 +2279,11 @@ function FundsphereBudgetPageContent() {
                                 return (
                                   <tr key={detailRow.key} className="bg-white">
                                     <td
-                                      className={cn(BUDGET_MATRIX_SERVICE_COLUMN_CLASS, "border-b border-r border-slate-200 bg-white px-2 py-2")}
+                                      className={cn(BUDGET_MATRIX_SERVICE_COLUMN_CLASS, "border-b border-slate-200 bg-white px-2 py-2")}
                                       style={BUDGET_MATRIX_SERVICE_COLUMN_STYLE}
                                     />
                                     <td
-                                      className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-b border-r border-slate-200 bg-white px-2 py-2")}
+                                      className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-b border-slate-200 bg-white px-2 py-2")}
                                       style={BUDGET_MATRIX_SEGMENT_COLUMN_STYLE}
                                     >
                                       <BudgetHierarchyLabel
@@ -2263,9 +2304,9 @@ function FundsphereBudgetPageContent() {
                                             "border-b border-slate-200 px-1 py-1",
                                           )}
                                           style={{
-                                            width: 104,
-                                            minWidth: 104,
-                                            maxWidth: 104,
+                                            width: BUDGET_MATRIX_PERIOD_WIDTH,
+                                            minWidth: BUDGET_MATRIX_PERIOD_WIDTH,
+                                            maxWidth: BUDGET_MATRIX_PERIOD_WIDTH,
                                             ...getAccountBoundaryStyle(columnIndex),
                                           }}
                                         >
@@ -2307,6 +2348,7 @@ function FundsphereBudgetPageContent() {
                                             }}
                                             align="center"
                                           />
+                                          {columnIndex === periodCountPerAccount - 1 ? <BudgetMatrixBoundaryDivider /> : null}
                                         </td>
                                       );
                                     })}
@@ -2318,17 +2360,17 @@ function FundsphereBudgetPageContent() {
                         })}
                         <tr key={`${departmentGroup.key}:total`} className="bg-violet-100/70">
                           <td
-                            className={cn(BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS, "border-t border-r border-violet-200/80 bg-violet-100 px-2 py-2")}
+                            className={cn(BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS, "border-t border-violet-200/80 bg-violet-100 px-2 py-2")}
                             style={BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE}
                           >
                             <p className="text-sm font-semibold text-slate-900">{departmentGroup.departmentName} Total</p>
                           </td>
                           <td
-                            className={cn(BUDGET_MATRIX_SERVICE_COLUMN_CLASS, "border-t border-r border-violet-200/80 bg-violet-100 px-2 py-2")}
+                            className={cn(BUDGET_MATRIX_SERVICE_COLUMN_CLASS, "border-t border-violet-200/80 bg-violet-100 px-2 py-2")}
                             style={BUDGET_MATRIX_SERVICE_COLUMN_STYLE}
                           />
                           <td
-                            className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-t border-r border-violet-200/80 bg-violet-100 px-2 py-2")}
+                            className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-t border-violet-200/80 bg-violet-100 px-2 py-2")}
                             style={BUDGET_MATRIX_SEGMENT_COLUMN_STYLE}
                           />
                           {matrixColumns.map((column, columnIndex) => {
@@ -2343,6 +2385,7 @@ function FundsphereBudgetPageContent() {
                               style={getAccountBoundaryStyle(columnIndex)}
                             >
                               {centsToCurrency(departmentGroup.totalCentsByColumn[column.key] ?? 0)}
+                              {columnIndex === periodCountPerAccount - 1 ? <BudgetMatrixBoundaryDivider /> : null}
                             </td>
                             );
                           })}
@@ -2356,7 +2399,7 @@ function FundsphereBudgetPageContent() {
                     <td
                       className={cn(
                         BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS,
-                        "border-t border-r border-slate-800 bg-slate-900 px-2 py-2",
+                        "border-t border-slate-800 bg-slate-900 px-2 py-2",
                       )}
                       style={BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE}
                     >
@@ -2364,11 +2407,11 @@ function FundsphereBudgetPageContent() {
                       <p className="text-[11px] uppercase tracking-[0.12em] text-slate-300">All departments</p>
                     </td>
                     <td
-                      className={cn(BUDGET_MATRIX_SERVICE_COLUMN_CLASS, "border-t border-r border-slate-800 bg-slate-900 px-2 py-2")}
+                      className={cn(BUDGET_MATRIX_SERVICE_COLUMN_CLASS, "border-t border-slate-800 bg-slate-900 px-2 py-2")}
                       style={BUDGET_MATRIX_SERVICE_COLUMN_STYLE}
                     />
                     <td
-                      className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-t border-r border-slate-800 bg-slate-900 px-2 py-2")}
+                      className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-t border-slate-800 bg-slate-900 px-2 py-2")}
                       style={BUDGET_MATRIX_SEGMENT_COLUMN_STYLE}
                     />
                     {matrixColumns.map((column, columnIndex) => {
@@ -2383,6 +2426,7 @@ function FundsphereBudgetPageContent() {
                         style={getAccountBoundaryStyle(columnIndex)}
                       >
                         {centsToCurrency(matrixHierarchy.grandTotalsByColumn[column.key] ?? 0)}
+                        {columnIndex === periodCountPerAccount - 1 ? <BudgetMatrixBoundaryDivider /> : null}
                       </td>
                       );
                     })}
