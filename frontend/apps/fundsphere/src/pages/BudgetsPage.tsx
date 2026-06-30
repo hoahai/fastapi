@@ -860,6 +860,15 @@ function BudgetMatrixBoundaryDivider() {
   );
 }
 
+function BudgetMatrixHeaderBoundaryDivider() {
+  return (
+    <span
+      aria-hidden="true"
+      className="pointer-events-none absolute right-0 top-0 z-40 h-full w-[3px] bg-slate-400"
+    />
+  );
+}
+
 function BudgetMatrixGroupBoundaryDivider() {
   return (
     <span
@@ -2176,7 +2185,7 @@ function FundsphereBudgetPageContent() {
                               accountName={account?.name ?? null}
                               useAccountName={useAccountNamesInHeader}
                             />
-                            {!isLastAccountGroup ? <BudgetMatrixBoundaryDivider /> : null}
+                            {!isLastAccountGroup ? <BudgetMatrixHeaderBoundaryDivider /> : null}
                           </th>
                         );
                       })}
