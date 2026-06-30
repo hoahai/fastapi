@@ -874,10 +874,10 @@ const BUDGET_MATRIX_PERIOD_WIDTH = 104;
 const BUDGET_MATRIX_ACCOUNT_HEADER_HEIGHT = 48;
 const BUDGET_MATRIX_PERIOD_HEADER_HEIGHT = 40;
 const BUDGET_MATRIX_HEADER_TOTAL_HEIGHT = BUDGET_MATRIX_ACCOUNT_HEADER_HEIGHT + BUDGET_MATRIX_PERIOD_HEADER_HEIGHT;
-const BUDGET_MATRIX_PERIOD_COLUMN_CLASS = "w-[104px] min-w-[104px] max-w-[104px]";
+const BUDGET_MATRIX_PERIOD_COLUMN_CLASS = "relative z-0 w-[104px] min-w-[104px] max-w-[104px]";
 const BUDGET_MATRIX_FROZEN_HEADER_CLASS = `bg-slate-50/95 border-b border-slate-200 px-2 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500 h-[${BUDGET_MATRIX_HEADER_TOTAL_HEIGHT}px]`;
 const BUDGET_MATRIX_ACCOUNT_HEADER_CLASS = `border-b border-slate-200 px-2 py-0 text-center text-[12px] font-semibold uppercase tracking-[0.12em] text-slate-900 whitespace-normal break-words h-[${BUDGET_MATRIX_ACCOUNT_HEADER_HEIGHT}px]`;
-const BUDGET_MATRIX_PERIOD_HEADER_CLASS = `border-b border-slate-200 px-2 py-0 text-center text-[11px] font-semibold text-slate-700 whitespace-nowrap h-[${BUDGET_MATRIX_PERIOD_HEADER_HEIGHT}px]`;
+const BUDGET_MATRIX_PERIOD_HEADER_CLASS = `relative z-0 border-b border-slate-200 px-2 py-0 text-center text-[11px] font-semibold text-slate-700 whitespace-nowrap h-[${BUDGET_MATRIX_PERIOD_HEADER_HEIGHT}px]`;
 
 const BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE: CSSProperties = {
   position: "sticky",
