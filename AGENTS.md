@@ -1382,7 +1382,7 @@ End with:
 
 
 
-Before edits, please create a real git safety checkpoint commit on a WIP branch for all changes so I can restore my code back to current code.
+Before edits for the below request, please create a real git safety checkpoint commit on a WIP branch for all changes so I can restore my code back to current code.
 
 My current code is good. Please create one new base safety checkpoint commit on a WIP branch so I can restore to this exact current state later, then clean up old local checkpoint/WIP branches and checkpoint tags that are no longer needed.
 

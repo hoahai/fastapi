@@ -2176,6 +2176,7 @@ function FundsphereBudgetPageContent() {
                         {departmentGroup.serviceGroups.map((serviceGroup) => {
                           const serviceOpen = serviceOpenState[serviceGroup.key] ?? true;
                           const serviceDetailRows = serviceOpen ? serviceGroup.detailRows : [];
+                          const serviceRowSpan = 1 + serviceDetailRows.length;
                           const showDepartmentCell = !departmentCellRendered;
                           if (showDepartmentCell) {
                             departmentCellRendered = true;
@@ -2220,6 +2221,7 @@ function FundsphereBudgetPageContent() {
                                   </td>
                                 ) : null}
                                 <td
+                                  rowSpan={serviceRowSpan}
                                   className={cn(
                                     BUDGET_MATRIX_SERVICE_COLUMN_CLASS,
                                     "border-b border-slate-200 bg-white px-2 py-2 align-top cursor-pointer select-none",
@@ -2278,10 +2280,6 @@ function FundsphereBudgetPageContent() {
                                 const detailLabel = detailRow.subService ? detailRow.subService : "";
                                 return (
                                   <tr key={detailRow.key} className="bg-white">
-                                    <td
-                                      className={cn(BUDGET_MATRIX_SERVICE_COLUMN_CLASS, "border-b border-slate-200 bg-white px-2 py-2")}
-                                      style={BUDGET_MATRIX_SERVICE_COLUMN_STYLE}
-                                    />
                                     <td
                                       className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-b border-slate-200 bg-white px-2 py-2")}
                                       style={BUDGET_MATRIX_SEGMENT_COLUMN_STYLE}
