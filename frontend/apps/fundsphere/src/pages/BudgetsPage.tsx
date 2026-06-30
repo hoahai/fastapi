@@ -1,5 +1,5 @@
-import { Fragment, useEffect, useMemo, useRef, useState, type FormEvent } from "react";
-import { ChevronDown, ChevronRight, RefreshCw, Search, X } from "lucide-react";
+import { Fragment, useEffect, useMemo, useRef, useState, type CSSProperties, type FormEvent, type KeyboardEvent } from "react";
+import { ChevronDown, ChevronUp, RefreshCw, Search, X } from "lucide-react";
 
 import { AppPageLayout } from "@shared/components/layout/AppPageLayout";
 import { PageCacheFooter } from "@shared/components/layout/PageCacheFooter";
@@ -42,6 +42,7 @@ import { UnsavedChangesDialog } from "@tradsphere/components/ui/unsaved-changes-
 
 import { loadFundsphereAccounts, type FundsphereAccount } from "@fundsphere/lib/accountsApi";
 import {
+  buildFundsphereBudgetsMatrixCacheKey,
   readFundsphereBudgetDetailCacheSnapshot,
   readFundsphereBudgetAccountsCacheSnapshot,
   readFundsphereBudgetsMatrixCacheSnapshot,
@@ -78,12 +79,30 @@ type PersistedBudgetsPageState = {
   searchDraft: BudgetSearchCriteria;
   searchCriteria: BudgetSearchCriteria;
   hasSearched: boolean;
+  departmentOpenState?: Record<string, boolean>;
+  serviceOpenState?: Record<string, boolean>;
+  selectedCell?: PersistedBudgetCellSelectionState;
+};
+
+type PersistedBudgetCellSelectionState = {
+  accountCode: string;
+  accountName: string;
+  month: number;
+  year: number;
+  serviceId: string;
+  serviceName: string;
+  departmentCode: string;
+  departmentName: string;
+  subService: string;
+  mode: BudgetMode;
 };
 
 type BudgetCellValue = {
   row: FundsphereBudgetMatrixRow | null;
   cents: number;
 };
+
+type BudgetHierarchyLevel = 0 | 1 | 2;
 
 type BudgetColumn = {
   key: string;
@@ -249,6 +268,63 @@ function areBudgetSearchCriteriaEqual(left: BudgetSearchCriteria, right: BudgetS
   );
 }
 
+function normalizeBooleanRecord(value: unknown): Record<string, boolean> {
+  if (!isRecord(value)) {
+    return {};
+  }
+  const normalized: Record<string, boolean> = {};
+  for (const [key, nextValue] of Object.entries(value)) {
+    if (typeof nextValue === "boolean") {
+      normalized[key] = nextValue;
+    }
+  }
+  return normalized;
+}
+
+function normalizeBudgetCellSelectionState(value: unknown): PersistedBudgetCellSelectionState | undefined {
+  if (!isRecord(value)) {
+    return undefined;
+  }
+
+  const accountCode = asString(value.accountCode).toUpperCase();
+  const accountName = asString(value.accountName);
+  const month = Number(value.month);
+  const year = Number(value.year);
+  const serviceId = asString(value.serviceId);
+  const serviceName = asString(value.serviceName);
+  const departmentCode = asString(value.departmentCode).toUpperCase();
+  const departmentName = asString(value.departmentName);
+  const subService = asString(value.subService);
+  const mode = value.mode === "edit" || value.mode === "create" ? value.mode : null;
+
+  if (
+    !accountCode ||
+    !accountName ||
+    !Number.isFinite(month) ||
+    !Number.isFinite(year) ||
+    !serviceId ||
+    !serviceName ||
+    !departmentCode ||
+    !departmentName ||
+    !mode
+  ) {
+    return undefined;
+  }
+
+  return {
+    accountCode,
+    accountName,
+    month: Math.trunc(month),
+    year: Math.trunc(year),
+    serviceId,
+    serviceName,
+    departmentCode,
+    departmentName,
+    subService,
+    mode,
+  };
+}
+
 function getMonthLabel(month: number): string {
   return new Intl.DateTimeFormat("en-US", { month: "long" }).format(new Date(2026, month - 1, 1));
 }
@@ -334,6 +410,16 @@ function budgetFormFromRow(row: FundsphereBudgetMatrixRow | null): FundsphereBud
 
 function buildColumnKey(accountCode: string, month: number, year: number): string {
   return `${accountCode.toUpperCase()}::${month}/${year}`;
+}
+
+function buildBudgetCellSelectionKey(cell: {
+  accountCode: string;
+  month: number;
+  year: number;
+  serviceId: string;
+  subService: string;
+}): string {
+  return [cell.accountCode.toUpperCase(), cell.month, cell.year, cell.serviceId, cell.subService].join("::");
 }
 
 function buildBudgetColumns(
@@ -597,7 +683,8 @@ function isPersistedBudgetsPageState(value: unknown): value is PersistedBudgetsP
     Array.isArray(value.searchDraft.accountCodes) &&
     Array.isArray(value.searchDraft.periods) &&
     Array.isArray(value.searchCriteria.accountCodes) &&
-    Array.isArray(value.searchCriteria.periods)
+    Array.isArray(value.searchCriteria.periods) &&
+    (value.selectedCell === undefined || normalizeBudgetCellSelectionState(value.selectedCell) !== undefined)
   );
 }
 
@@ -605,19 +692,27 @@ function BudgetMatrixCellButton({
   value,
   title,
   onClick,
+  align = "center",
+  selected = false,
 }: {
   value: BudgetCellValue | null;
   title: string;
   onClick: () => void;
+  align?: "center" | "right";
+  selected?: boolean;
 }) {
   return (
     <button
       type="button"
       className={cn(
-        "flex w-full items-center justify-end rounded-md px-2 py-2 text-right text-sm transition",
+        "flex w-full items-center rounded-md px-2 py-2 text-sm transition",
+        align === "right" ? "justify-end text-right" : "justify-center text-center",
         value?.row
           ? "bg-white/85 font-medium text-slate-800 hover:bg-blue-50 hover:text-blue-800"
           : "bg-slate-50/80 text-slate-400 hover:bg-blue-50 hover:text-blue-800",
+        selected
+          ? "ring-2 ring-inset ring-blue-500/70 bg-blue-50/90 text-blue-900 shadow-[0_0_0_1px_rgba(59,130,246,0.25)]"
+          : null,
       )}
       title={title}
       onClick={onClick}
@@ -626,6 +721,101 @@ function BudgetMatrixCellButton({
     </button>
   );
 }
+
+function BudgetHierarchyLabel({
+  level,
+  title,
+  subtitle,
+  open,
+  onToggle,
+  emphasis = "default",
+}: {
+  level: BudgetHierarchyLevel;
+  title: string;
+  subtitle?: string | null;
+  open?: boolean;
+  onToggle?: () => void;
+  emphasis?: "default" | "muted" | "subtle";
+}) {
+  const titleClass =
+    level === 0
+      ? "text-sm font-semibold text-slate-900"
+      : level === 1
+        ? "text-sm font-medium text-slate-800"
+        : "text-sm font-medium text-slate-700";
+  const subtitleClass =
+    emphasis === "default"
+      ? "text-[11px] uppercase tracking-[0.12em] text-slate-500"
+      : emphasis === "muted"
+        ? "text-[11px] uppercase tracking-[0.12em] text-slate-400"
+      : "text-[10px] uppercase tracking-[0.11em] text-slate-400";
+
+  return (
+    <div className="flex min-w-0 items-center gap-2">
+      {typeof onToggle === "function" ? (
+        <span
+          className={cn(
+            "inline-flex shrink-0 items-center justify-center text-slate-500",
+            level === 0 ? "h-4 w-4" : level === 1 ? "h-4 w-4" : "h-3.5 w-3.5",
+          )}
+          aria-hidden="true"
+        >
+          {open ? <ChevronDown className="size-3.5 shrink-0" /> : <ChevronUp className="size-3.5 shrink-0" />}
+        </span>
+      ) : null}
+      <div className="min-w-0">
+        <p className={cn("truncate leading-tight tracking-[-0.01em]", titleClass)}>{title}</p>
+        {subtitle ? <p className={cn("leading-tight", subtitleClass)}>{subtitle}</p> : null}
+      </div>
+    </div>
+  );
+}
+
+function handleHierarchyCellKeyDown(
+  event: KeyboardEvent<HTMLTableCellElement>,
+  onToggle: () => void,
+) {
+  if (event.key === "Enter" || event.key === " ") {
+    event.preventDefault();
+    onToggle();
+  }
+}
+
+const BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS = "sticky left-0 z-50 w-[180px] min-w-[180px] max-w-[180px]";
+const BUDGET_MATRIX_SERVICE_COLUMN_CLASS = "sticky left-[180px] z-40 w-[220px] min-w-[220px] max-w-[220px]";
+const BUDGET_MATRIX_SEGMENT_COLUMN_CLASS = "sticky left-[400px] z-30 w-[220px] min-w-[220px] max-w-[220px]";
+const BUDGET_MATRIX_PERIOD_COLUMN_CLASS = "w-[104px] min-w-[104px] max-w-[104px]";
+const BUDGET_MATRIX_FROZEN_HEADER_CLASS = "bg-slate-50/95 border-b border-r border-slate-200 px-2 py-2 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500";
+
+const BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE: CSSProperties = {
+  position: "sticky",
+  left: 0,
+  zIndex: 50,
+  width: 180,
+  minWidth: 180,
+  maxWidth: 180,
+  backgroundColor: "#f8fafc",
+};
+
+const BUDGET_MATRIX_SERVICE_COLUMN_STYLE: CSSProperties = {
+  position: "sticky",
+  left: 180,
+  zIndex: 40,
+  width: 220,
+  minWidth: 220,
+  maxWidth: 220,
+  backgroundColor: "#ffffff",
+};
+
+const BUDGET_MATRIX_SEGMENT_COLUMN_STYLE: CSSProperties = {
+  position: "sticky",
+  left: 400,
+  zIndex: 30,
+  width: 220,
+  minWidth: 220,
+  maxWidth: 220,
+  backgroundColor: "#ffffff",
+};
 
 function BudgetModal({
   open,
@@ -1090,6 +1280,7 @@ function FundsphereBudgetPageContent() {
   const [matrix, setMatrix] = useState<FundsphereBudgetMatrixResponse | null>(null);
   const accountOptionsRef = useRef<FundsphereAccount[]>([]);
   const matrixRef = useRef<FundsphereBudgetMatrixResponse | null>(null);
+  const didRestoreMatrixCacheRef = useRef<string | null>(null);
   const [cacheStatus, setCacheStatus] = useState<CacheStatus | null>(null);
   const [accountOptionsError, setAccountOptionsError] = useState<string | null>(null);
   const [matrixError, setMatrixError] = useState<string | null>(null);
@@ -1098,8 +1289,6 @@ function FundsphereBudgetPageContent() {
   const [isLoadingMatrix, setIsLoadingMatrix] = useState(false);
   const [isRefreshingMatrix, setIsRefreshingMatrix] = useState(false);
   const [isSaving, setIsSaving] = useState(false);
-  const [departmentOpenState, setDepartmentOpenState] = useState<Record<string, boolean>>({});
-  const [serviceOpenState, setServiceOpenState] = useState<Record<string, boolean>>({});
   const [modalOpen, setModalOpen] = useState(false);
   const [modalMode, setModalMode] = useState<BudgetMode>("create");
   const [modalCell, setModalCell] = useState<BudgetCellContext | null>(null);
@@ -1109,6 +1298,36 @@ function FundsphereBudgetPageContent() {
   const searchDraft = pageState.searchDraft;
   const searchCriteria = pageState.searchCriteria;
   const hasSearched = pageState.hasSearched;
+  const departmentOpenState = pageState.departmentOpenState ?? {};
+  const serviceOpenState = pageState.serviceOpenState ?? {};
+  const selectedCell = pageState.selectedCell ?? null;
+  const selectedCellKey = selectedCell ? buildBudgetCellSelectionKey(selectedCell) : null;
+
+  function updateDepartmentOpenState(
+    updater: Record<string, boolean> | ((current: Record<string, boolean>) => Record<string, boolean>),
+  ) {
+    setPageState((current) => {
+      const currentState = normalizeBooleanRecord(current.departmentOpenState);
+      const nextState = typeof updater === "function" ? updater(currentState) : updater;
+      return {
+        ...current,
+        departmentOpenState: nextState,
+      };
+    });
+  }
+
+  function updateServiceOpenState(
+    updater: Record<string, boolean> | ((current: Record<string, boolean>) => Record<string, boolean>),
+  ) {
+    setPageState((current) => {
+      const currentState = normalizeBooleanRecord(current.serviceOpenState);
+      const nextState = typeof updater === "function" ? updater(currentState) : updater;
+      return {
+        ...current,
+        serviceOpenState: nextState,
+      };
+    });
+  }
 
   useEffect(() => {
     accountOptionsRef.current = accountOptions;
@@ -1127,18 +1346,39 @@ function FundsphereBudgetPageContent() {
         accountCodes: normalizeSelectionList(current.searchCriteria.accountCodes),
         periods: normalizePeriodSelectionList(current.searchCriteria.periods, periodOrder),
       };
+      const normalizedDepartmentOpenState = normalizeBooleanRecord(current.departmentOpenState);
+      const normalizedServiceOpenState = normalizeBooleanRecord(current.serviceOpenState);
+      const normalizedSelectedCell = normalizeBudgetCellSelectionState(current.selectedCell);
       const searchDraftChanged = !areBudgetSearchCriteriaEqual(current.searchDraft, normalizedSearchDraft);
       const searchCriteriaChanged = !areBudgetSearchCriteriaEqual(current.searchCriteria, normalizedSearchCriteria);
-      if (!searchDraftChanged && !searchCriteriaChanged) {
+      const departmentOpenChanged = JSON.stringify(normalizedDepartmentOpenState) !== JSON.stringify(current.departmentOpenState ?? {});
+      const serviceOpenChanged = JSON.stringify(normalizedServiceOpenState) !== JSON.stringify(current.serviceOpenState ?? {});
+      const selectedCellChanged = JSON.stringify(normalizedSelectedCell ?? null) !== JSON.stringify(current.selectedCell ?? null);
+      if (!searchDraftChanged && !searchCriteriaChanged && !departmentOpenChanged && !serviceOpenChanged && !selectedCellChanged) {
         return current;
       }
       return {
         ...current,
         searchDraft: searchDraftChanged ? normalizedSearchDraft : current.searchDraft,
         searchCriteria: searchCriteriaChanged ? normalizedSearchCriteria : current.searchCriteria,
+        departmentOpenState: departmentOpenChanged ? normalizedDepartmentOpenState : current.departmentOpenState,
+        serviceOpenState: serviceOpenChanged ? normalizedServiceOpenState : current.serviceOpenState,
+        selectedCell: selectedCellChanged ? normalizedSelectedCell : current.selectedCell,
       };
     });
   }, [pageStateControls.hydrated, periodOrder, setPageState]);
+
+  useEffect(() => {
+    if (!pageStateControls.hydrated || !hasSearched) {
+      return;
+    }
+    const restoreKey = buildFundsphereBudgetsMatrixCacheKey(cacheContext, searchCriteria);
+    if (didRestoreMatrixCacheRef.current === restoreKey) {
+      return;
+    }
+    didRestoreMatrixCacheRef.current = restoreKey;
+    void refreshBudgetMatrix("cache-first", searchCriteria);
+  }, [cacheContext, hasSearched, pageStateControls.hydrated, searchCriteria]);
 
   useEffect(() => {
     if (!pageStateControls.hydrated) {
@@ -1345,7 +1585,7 @@ function FundsphereBudgetPageContent() {
     if (!matrixHierarchy.departments.length) {
       return;
     }
-    setDepartmentOpenState((current) => {
+    updateDepartmentOpenState((current) => {
       const next = { ...current };
       for (const department of matrixHierarchy.departments) {
         if (typeof next[department.key] !== "boolean") {
@@ -1354,7 +1594,7 @@ function FundsphereBudgetPageContent() {
       }
       return next;
     });
-    setServiceOpenState((current) => {
+    updateServiceOpenState((current) => {
       const next = { ...current };
       for (const department of matrixHierarchy.departments) {
         for (const serviceGroup of department.serviceGroups) {
@@ -1419,6 +1659,7 @@ function FundsphereBudgetPageContent() {
       accountCodes: normalizeSelectionList(searchDraft.accountCodes),
       periods: normalizePeriodSelectionList(searchDraft.periods, periodOrder),
     };
+    didRestoreMatrixCacheRef.current = buildFundsphereBudgetsMatrixCacheKey(cacheContext, nextSearchCriteria);
     const shouldForceRefresh =
       hasSearched && areBudgetSearchCriteriaEqual(nextSearchCriteria, searchCriteria);
 
@@ -1443,17 +1684,21 @@ function FundsphereBudgetPageContent() {
 
   function resetSearchCriteria() {
     matrixRef.current = null;
+    didRestoreMatrixCacheRef.current = null;
     setMatrix(null);
     setCacheStatus(null);
     setRefreshMessage(null);
     setMatrixError(null);
-    setDepartmentOpenState({});
-    setServiceOpenState({});
+    updateDepartmentOpenState({});
+    updateServiceOpenState({});
     setPageState((current) => ({
       ...current,
       searchDraft: { ...DEFAULT_SEARCH_CRITERIA },
       searchCriteria: { ...DEFAULT_SEARCH_CRITERIA },
       hasSearched: false,
+      departmentOpenState: {},
+      serviceOpenState: {},
+      selectedCell: undefined,
     }));
   }
 
@@ -1461,6 +1706,21 @@ function FundsphereBudgetPageContent() {
     if (!canEditFundsphere) {
       return;
     }
+    setPageState((current) => ({
+      ...current,
+      selectedCell: {
+        accountCode: cell.accountCode,
+        accountName: cell.accountName,
+        month: cell.month,
+        year: cell.year,
+        serviceId: cell.serviceId,
+        serviceName: cell.serviceName,
+        departmentCode: cell.departmentCode,
+        departmentName: cell.departmentName,
+        subService: cell.subService,
+        mode,
+      },
+    }));
     setModalMode(mode);
     setModalCell(cell);
     setModalOpen(true);
@@ -1674,30 +1934,65 @@ function FundsphereBudgetPageContent() {
               </div>
             </div>
 
-            <div className="overflow-auto">
-              <table className="min-w-max w-full border-collapse">
+            <div className="overflow-x-auto overflow-y-hidden">
+              <table className="w-max min-w-full table-fixed border-separate border-spacing-0">
+                <colgroup>
+                  <col style={{ width: 180, minWidth: 180 }} />
+                  <col style={{ width: 220, minWidth: 220 }} />
+                  <col style={{ width: 220, minWidth: 220 }} />
+                  {matrixColumns.map((column) => (
+                    <col key={column.key} style={{ width: 104, minWidth: 104 }} />
+                  ))}
+                </colgroup>
                 <thead>
                   <tr className="bg-slate-50/90">
                     <th
-                      className="sticky left-0 z-20 border-b border-r border-slate-200 bg-slate-50/95 px-4 py-3 text-left text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500"
+                      className={cn(
+                        BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS,
+                        BUDGET_MATRIX_FROZEN_HEADER_CLASS,
+                        "bg-slate-100/95 italic text-sm font-semibold normal-case tracking-[-0.01em] text-slate-900",
+                      )}
+                      style={BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE}
                       rowSpan={2}
                     >
-                      Department / Service / Segment
+                      Department
                     </th>
-                  {searchCriteria.accountCodes.map((accountCode) => {
+                    <th
+                      className={cn(
+                        BUDGET_MATRIX_SERVICE_COLUMN_CLASS,
+                        BUDGET_MATRIX_FROZEN_HEADER_CLASS,
+                        "bg-slate-100/95 italic text-sm font-semibold normal-case tracking-[-0.01em] text-slate-900",
+                      )}
+                      style={BUDGET_MATRIX_SERVICE_COLUMN_STYLE}
+                      rowSpan={2}
+                    >
+                      Service
+                    </th>
+                    <th
+                      className={cn(
+                        BUDGET_MATRIX_SEGMENT_COLUMN_CLASS,
+                        BUDGET_MATRIX_FROZEN_HEADER_CLASS,
+                        "bg-slate-100/95 italic text-sm font-semibold normal-case tracking-[-0.01em] text-slate-900",
+                      )}
+                      style={BUDGET_MATRIX_SEGMENT_COLUMN_STYLE}
+                      rowSpan={2}
+                    >
+                      Segment
+                    </th>
+                    {searchCriteria.accountCodes.map((accountCode) => {
                       const account = accountsByCode.get(accountCode.toUpperCase());
                       return (
                         <th
                           key={accountCode}
                           colSpan={searchCriteria.periods.length}
-                          className="border-b border-slate-200 px-3 py-3 text-center text-[11px] font-semibold uppercase tracking-[0.16em] text-slate-500"
+                          className="border-b border-slate-200 bg-violet-700 px-2 py-2 text-center text-[12px] font-semibold uppercase tracking-[0.12em] text-white whitespace-nowrap"
                         >
                           {account ? `${account.code.toUpperCase()} - ${account.name}` : accountCode.toUpperCase()}
                         </th>
                       );
                     })}
                   </tr>
-                  <tr className="bg-slate-50/70">
+                  <tr className="bg-violet-700">
                     {searchCriteria.accountCodes.flatMap((accountCode) =>
                       searchCriteria.periods.map((period) => {
                         const [monthText, yearText] = period.split("/");
@@ -1709,7 +2004,10 @@ function FundsphereBudgetPageContent() {
                         return (
                           <th
                             key={`${accountCode}:${period}`}
-                            className="border-b border-slate-200 px-3 py-2 text-center text-xs font-semibold text-slate-600"
+                            className={cn(
+                              BUDGET_MATRIX_PERIOD_COLUMN_CLASS,
+                              "border-b border-slate-200 px-2 py-2 text-center text-[11px] font-semibold text-white whitespace-nowrap",
+                            )}
                           >
                             {label}
                           </th>
@@ -1721,141 +2019,305 @@ function FundsphereBudgetPageContent() {
                 <tbody>
                   {matrixHierarchy.departments.map((departmentGroup) => {
                     const departmentOpen = departmentOpenState[departmentGroup.key] ?? true;
-                    return (
-                      <Fragment key={departmentGroup.key}>
-                        <tr key={`${departmentGroup.key}:total`} className="bg-blue-50/70">
-                          <td className="sticky left-0 z-10 border-b border-r border-blue-100 bg-blue-50/90 px-4 py-3">
-                            <button
-                              type="button"
-                              className="flex w-full items-center gap-2 text-left"
+                    const departmentBodyRowCount = departmentOpen
+                      ? departmentGroup.serviceGroups.reduce((count, serviceGroup) => {
+                        const serviceOpen = serviceOpenState[serviceGroup.key] ?? true;
+                        return count + 1 + (serviceOpen ? serviceGroup.detailRows.length : 0);
+                      }, 0)
+                      : 0;
+                    let departmentCellRendered = false;
+
+                    if (!departmentOpen) {
+                      return (
+                        <Fragment key={departmentGroup.key}>
+                          <tr key={`${departmentGroup.key}:collapsed`} className="bg-violet-50/70">
+                            <td
+                              className={cn(
+                                BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS,
+                                "border-b border-r border-violet-200/80 bg-violet-100 px-2 py-2 align-top cursor-pointer select-none",
+                              )}
+                              style={BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE}
+                              role="button"
+                              tabIndex={0}
+                              aria-expanded={departmentOpen}
                               onClick={() => {
-                                setDepartmentOpenState((current) => ({
+                                updateDepartmentOpenState((current) => ({
                                   ...current,
                                   [departmentGroup.key]: !departmentOpen,
                                 }));
                               }}
+                              onKeyDown={(event) =>
+                                handleHierarchyCellKeyDown(event, () => {
+                                  updateDepartmentOpenState((current) => ({
+                                    ...current,
+                                    [departmentGroup.key]: !departmentOpen,
+                                  }));
+                                })
+                              }
                             >
-                              <span className="inline-flex size-6 items-center justify-center rounded-full bg-white/80 text-blue-700">
-                                {departmentOpen ? <ChevronDown className="size-4" /> : <ChevronRight className="size-4" />}
-                              </span>
-                              <div className="min-w-0">
-                                <p className="truncate text-sm font-semibold text-slate-900">{departmentGroup.departmentName}</p>
-                                <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Department total</p>
-                              </div>
-                            </button>
+                              <BudgetHierarchyLabel
+                                level={0}
+                                title={`${departmentGroup.departmentName} Total`}
+                                subtitle={null}
+                                open={departmentOpen}
+                                onToggle={() => undefined}
+                              />
+                            </td>
+                            <td
+                              className={cn(BUDGET_MATRIX_SERVICE_COLUMN_CLASS, "border-b border-r border-violet-200/80 bg-violet-100 px-2 py-2")}
+                              style={BUDGET_MATRIX_SERVICE_COLUMN_STYLE}
+                            />
+                            <td
+                              className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-b border-r border-violet-200/80 bg-violet-100 px-2 py-2")}
+                              style={BUDGET_MATRIX_SEGMENT_COLUMN_STYLE}
+                            />
+                            {matrixColumns.map((column) => (
+                              <td
+                                key={`${departmentGroup.key}:${column.key}`}
+                                className={cn(
+                                  BUDGET_MATRIX_PERIOD_COLUMN_CLASS,
+                                  "border-b border-violet-200/80 px-1 py-2 text-center text-sm font-semibold text-slate-900",
+                                )}
+                              >
+                                {centsToCurrency(departmentGroup.totalCentsByColumn[column.key] ?? 0)}
+                              </td>
+                            ))}
+                          </tr>
+                        </Fragment>
+                      );
+                    }
+
+                    return (
+                      <Fragment key={departmentGroup.key}>
+                        {departmentGroup.serviceGroups.map((serviceGroup) => {
+                          const serviceOpen = serviceOpenState[serviceGroup.key] ?? true;
+                          const serviceDetailRows = serviceOpen ? serviceGroup.detailRows : [];
+                          const showDepartmentCell = !departmentCellRendered;
+                          if (showDepartmentCell) {
+                            departmentCellRendered = true;
+                          }
+
+                          return (
+                            <Fragment key={serviceGroup.key}>
+                              <tr key={`${serviceGroup.key}:total`} className="bg-white">
+                                {showDepartmentCell ? (
+                                  <td
+                                    rowSpan={departmentBodyRowCount}
+                                    className={cn(
+                                      BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS,
+                                      "border-b border-r border-slate-200 bg-slate-50 px-2 py-2 align-top cursor-pointer select-none",
+                                    )}
+                                    style={BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE}
+                                    role="button"
+                                    tabIndex={0}
+                                    aria-expanded={departmentOpen}
+                                    onClick={() => {
+                                      updateDepartmentOpenState((current) => ({
+                                        ...current,
+                                        [departmentGroup.key]: !departmentOpen,
+                                      }));
+                                    }}
+                                    onKeyDown={(event) =>
+                                      handleHierarchyCellKeyDown(event, () => {
+                                        updateDepartmentOpenState((current) => ({
+                                          ...current,
+                                          [departmentGroup.key]: !departmentOpen,
+                                        }));
+                                      })
+                                    }
+                                  >
+                                    <BudgetHierarchyLabel
+                                      level={0}
+                                      title={departmentGroup.departmentName}
+                                      subtitle={null}
+                                      open={departmentOpen}
+                                      onToggle={() => undefined}
+                                    />
+                                  </td>
+                                ) : null}
+                                <td
+                                  className={cn(
+                                    BUDGET_MATRIX_SERVICE_COLUMN_CLASS,
+                                    "border-b border-r border-slate-200 bg-white px-2 py-2 align-top cursor-pointer select-none",
+                                  )}
+                                  style={BUDGET_MATRIX_SERVICE_COLUMN_STYLE}
+                                  role="button"
+                                  tabIndex={0}
+                                  aria-expanded={serviceOpen}
+                                  onClick={() => {
+                                    updateServiceOpenState((current) => ({
+                                      ...current,
+                                      [serviceGroup.key]: !serviceOpen,
+                                    }));
+                                  }}
+                                  onKeyDown={(event) =>
+                                    handleHierarchyCellKeyDown(event, () => {
+                                      updateServiceOpenState((current) => ({
+                                        ...current,
+                                        [serviceGroup.key]: !serviceOpen,
+                                      }));
+                                    })
+                                  }
+                                >
+                                  <BudgetHierarchyLabel
+                                    level={1}
+                                    title={serviceGroup.serviceName}
+                                    subtitle={null}
+                                    open={serviceOpen}
+                                    onToggle={() => undefined}
+                                    emphasis="muted"
+                                  />
+                                </td>
+                                <td
+                                  className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-b border-r border-slate-200 bg-white px-2 py-2")}
+                                  style={BUDGET_MATRIX_SEGMENT_COLUMN_STYLE}
+                                />
+                                {matrixColumns.map((column) => (
+                                  <td
+                                    key={`${serviceGroup.key}:${column.key}`}
+                                    className={cn(
+                                      BUDGET_MATRIX_PERIOD_COLUMN_CLASS,
+                                      "border-b border-slate-200 px-1 py-2 text-center text-sm font-semibold text-slate-800",
+                                    )}
+                                  >
+                                    {centsToCurrency(serviceGroup.totalCentsByColumn[column.key] ?? 0)}
+                                  </td>
+                                ))}
+                              </tr>
+
+                              {serviceDetailRows.map((detailRow) => {
+                                const detailLabel = detailRow.subService ? detailRow.subService : "";
+                                return (
+                                  <tr key={detailRow.key} className="bg-white">
+                                    <td
+                                      className={cn(BUDGET_MATRIX_SERVICE_COLUMN_CLASS, "border-b border-r border-slate-200 bg-white px-2 py-2")}
+                                      style={BUDGET_MATRIX_SERVICE_COLUMN_STYLE}
+                                    />
+                                    <td
+                                      className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-b border-r border-slate-200 bg-white px-2 py-2")}
+                                      style={BUDGET_MATRIX_SEGMENT_COLUMN_STYLE}
+                                    >
+                                      <BudgetHierarchyLabel
+                                        level={2}
+                                        title={detailLabel || " "}
+                                        subtitle={null}
+                                        emphasis="subtle"
+                                      />
+                                    </td>
+                                    {matrixColumns.map((column) => {
+                                      const cell = detailRow.cells[column.key] ?? null;
+                                      return (
+                                        <td
+                                          key={`${detailRow.key}:${column.key}`}
+                                          className={cn(BUDGET_MATRIX_PERIOD_COLUMN_CLASS, "border-b border-slate-200 px-1 py-1")}
+                                          style={{ width: 104, minWidth: 104, maxWidth: 104 }}
+                                        >
+                                          <BudgetMatrixCellButton
+                                            value={cell}
+                                            title={
+                                              cell?.row
+                                                ? `${column.accountCode} ${column.label} ${detailRow.serviceName} ${detailLabel || "segment"}`
+                                                : `${column.accountCode} ${column.label} ${detailRow.serviceName} ${detailLabel || "segment"} - create budget`
+                                            }
+                                            selected={
+                                              selectedCellKey ===
+                                              buildBudgetCellSelectionKey({
+                                                accountCode: column.accountCode,
+                                                month: column.month,
+                                                year: column.year,
+                                                serviceId: detailRow.serviceId,
+                                                subService: detailRow.subService,
+                                              })
+                                            }
+                                            onClick={() => {
+                                              const cellRow = cell?.row ?? null;
+                                              openCellModal(
+                                                {
+                                                  budgetId: cellRow?.budgetId ?? null,
+                                                  budgetRow: cellRow,
+                                                  accountCode: column.accountCode,
+                                                  accountName: column.accountName,
+                                                  month: column.month,
+                                                  year: column.year,
+                                                  serviceId: detailRow.serviceId,
+                                                  serviceName: detailRow.serviceName,
+                                                  departmentCode: detailRow.departmentCode,
+                                                  departmentName: detailRow.departmentName,
+                                                  subService: detailRow.subService,
+                                                },
+                                                cellRow ? "edit" : "create",
+                                              );
+                                            }}
+                                            align="center"
+                                          />
+                                        </td>
+                                      );
+                                    })}
+                                  </tr>
+                                );
+                              })}
+                            </Fragment>
+                          );
+                        })}
+                        <tr key={`${departmentGroup.key}:total`} className="bg-violet-100/70">
+                          <td
+                            className={cn(BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS, "border-t border-r border-violet-200/80 bg-violet-100 px-2 py-2")}
+                            style={BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE}
+                          >
+                            <p className="text-sm font-semibold text-slate-900">{departmentGroup.departmentName} Total</p>
                           </td>
+                          <td
+                            className={cn(BUDGET_MATRIX_SERVICE_COLUMN_CLASS, "border-t border-r border-violet-200/80 bg-violet-100 px-2 py-2")}
+                            style={BUDGET_MATRIX_SERVICE_COLUMN_STYLE}
+                          />
+                          <td
+                            className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-t border-r border-violet-200/80 bg-violet-100 px-2 py-2")}
+                            style={BUDGET_MATRIX_SEGMENT_COLUMN_STYLE}
+                          />
                           {matrixColumns.map((column) => (
-                            <td key={`${departmentGroup.key}:${column.key}`} className="border-b border-blue-100 px-1 py-2 text-right text-sm font-semibold text-slate-900">
+                            <td
+                              key={`${departmentGroup.key}:${column.key}`}
+                              className={cn(
+                                BUDGET_MATRIX_PERIOD_COLUMN_CLASS,
+                                "border-t border-violet-200/80 px-1 py-2 text-center text-sm font-semibold text-slate-900",
+                              )}
+                            >
                               {centsToCurrency(departmentGroup.totalCentsByColumn[column.key] ?? 0)}
                             </td>
                           ))}
                         </tr>
-
-                        {departmentOpen
-                          ? departmentGroup.serviceGroups.map((serviceGroup) => {
-                              const serviceOpen = serviceOpenState[serviceGroup.key] ?? true;
-                              return (
-                                <Fragment key={serviceGroup.key}>
-                                  <tr key={`${serviceGroup.key}:total`} className="bg-slate-50/80">
-                                    <td className="sticky left-0 z-10 border-b border-r border-slate-200 bg-slate-50/95 px-4 py-3">
-                                      <button
-                                        type="button"
-                                        className="flex w-full items-center gap-2 text-left"
-                                        onClick={() => {
-                                          setServiceOpenState((current) => ({
-                                            ...current,
-                                            [serviceGroup.key]: !serviceOpen,
-                                          }));
-                                        }}
-                                      >
-                                        <span className="inline-flex size-5 items-center justify-center rounded-full bg-white text-slate-500">
-                                          {serviceOpen ? <ChevronDown className="size-3.5" /> : <ChevronRight className="size-3.5" />}
-                                        </span>
-                                        <div className="min-w-0">
-                                          <p className="truncate text-sm font-medium text-slate-800">{serviceGroup.serviceName}</p>
-                                          <p className="text-[11px] uppercase tracking-[0.12em] text-slate-500">Service total</p>
-                                        </div>
-                                      </button>
-                                    </td>
-                                    {matrixColumns.map((column) => (
-                                      <td key={`${serviceGroup.key}:${column.key}`} className="border-b border-slate-200 px-1 py-2 text-right text-sm font-semibold text-slate-800">
-                                        {centsToCurrency(serviceGroup.totalCentsByColumn[column.key] ?? 0)}
-                                      </td>
-                                    ))}
-                                  </tr>
-
-                                  {departmentOpen && serviceOpen
-                                    ? serviceGroup.detailRows.map((detailRow) => {
-                                        const detailLabel = detailRow.subService ? detailRow.subService : "—";
-                                        return (
-                                          <tr key={detailRow.key} className="bg-white">
-                                            <td className="sticky left-0 z-10 border-b border-r border-slate-200 bg-white px-4 py-3">
-                                              <div className="flex items-start gap-2">
-                                                <span className="inline-flex size-5 items-center justify-center rounded-full bg-slate-100 text-slate-500">
-                                                  <span className="size-1.5 rounded-full bg-slate-400" />
-                                                </span>
-                                                <div className="min-w-0">
-                                                  <p className="truncate text-sm text-slate-700">{detailLabel}</p>
-                                                  <p className="text-[11px] uppercase tracking-[0.12em] text-slate-400">
-                                                    {detailRow.totalCents > 0 ? "Clickable budget cells" : "No budget data"}
-                                                  </p>
-                                                </div>
-                                              </div>
-                                            </td>
-                                            {matrixColumns.map((column) => {
-                                              const cell = detailRow.cells[column.key] ?? null;
-                                              return (
-                                                <td key={`${detailRow.key}:${column.key}`} className="border-b border-slate-200 px-1 py-1">
-                                                  <BudgetMatrixCellButton
-                                                    value={cell}
-                                                    title={
-                                                      cell?.row
-                                                        ? `${column.accountCode} ${column.label} ${detailRow.serviceName} ${detailLabel}`
-                                                        : `${column.accountCode} ${column.label} ${detailRow.serviceName} ${detailLabel} - create budget`
-                                                    }
-                                                    onClick={() => {
-                                                      const cellRow = cell?.row ?? null;
-                                                      openCellModal(
-                                                        {
-                                                          budgetId: cellRow?.budgetId ?? null,
-                                                          budgetRow: cellRow,
-                                                          accountCode: column.accountCode,
-                                                          accountName: column.accountName,
-                                                          month: column.month,
-                                                          year: column.year,
-                                                          serviceId: detailRow.serviceId,
-                                                          serviceName: detailRow.serviceName,
-                                                          departmentCode: detailRow.departmentCode,
-                                                          departmentName: detailRow.departmentName,
-                                                          subService: detailRow.subService,
-                                                        },
-                                                        cellRow ? "edit" : "create",
-                                                      );
-                                                    }}
-                                                  />
-                                                </td>
-                                              );
-                                            })}
-                                          </tr>
-                                        );
-                                      })
-                                    : null}
-                                </Fragment>
-                              );
-                            })
-                          : null}
                       </Fragment>
                     );
                   })}
                 </tbody>
                 <tfoot>
                   <tr className="bg-slate-900 text-white">
-                    <td className="sticky left-0 z-20 border-t border-r border-slate-800 bg-slate-900 px-4 py-3">
+                    <td
+                      className={cn(
+                        BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS,
+                        "border-t border-r border-slate-800 bg-slate-900 px-2 py-2",
+                      )}
+                      style={BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE}
+                    >
                       <p className="text-sm font-semibold">Grand Total</p>
                       <p className="text-[11px] uppercase tracking-[0.12em] text-slate-300">All departments</p>
                     </td>
+                    <td
+                      className={cn(BUDGET_MATRIX_SERVICE_COLUMN_CLASS, "border-t border-r border-slate-800 bg-slate-900 px-2 py-2")}
+                      style={BUDGET_MATRIX_SERVICE_COLUMN_STYLE}
+                    />
+                    <td
+                      className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-t border-r border-slate-800 bg-slate-900 px-2 py-2")}
+                      style={BUDGET_MATRIX_SEGMENT_COLUMN_STYLE}
+                    />
                     {matrixColumns.map((column) => (
-                      <td key={`grand:${column.key}`} className="border-t border-slate-800 px-1 py-2 text-right text-sm font-semibold">
+                      <td
+                        key={`grand:${column.key}`}
+                        className={cn(
+                          BUDGET_MATRIX_PERIOD_COLUMN_CLASS,
+                          "border-t border-slate-800 px-1 py-2 text-center text-sm font-semibold",
+                        )}
+                      >
                         {centsToCurrency(matrixHierarchy.grandTotalsByColumn[column.key] ?? 0)}
                       </td>
                     ))}
