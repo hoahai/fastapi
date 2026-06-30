@@ -26,6 +26,7 @@ const APP_PAGE_CATALOG: Record<string, AppPageDefinition[]> = {
   ],
   fundsphere: [
     { key: "fundsphere_accounts", label: "Accounts", route: "/fundsphere/accounts" },
+    { key: "fundsphere_budgets", label: "Budgets", route: "/fundsphere/budgets" },
     { key: "fundsphere_services", label: "Services", route: "/fundsphere/services" },
   ],
 };

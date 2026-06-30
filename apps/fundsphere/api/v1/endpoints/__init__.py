@@ -8,6 +8,7 @@ from apps.fundsphere.api.v1.endpoints import (
 )
 from apps.fundsphere.api.v1.endpoints.masterBudgetControl import (
     budgetData,
+    budgetMatrix,
     masterBudget,
     netSpend,
     settings,
@@ -19,6 +20,7 @@ __all__ = [
     "budgetChangeHistories",
     "budgets",
     "budgetData",
+    "budgetMatrix",
     "departments",
     "masterBudget",
     "netSpend",

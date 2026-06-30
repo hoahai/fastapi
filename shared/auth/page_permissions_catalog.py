@@ -7,6 +7,7 @@ PageDefinition = dict[str, str]
 _APP_PAGE_CATALOG: dict[str, list[PageDefinition]] = {
     "fundsphere": [
         {"key": "fundsphere_accounts", "label": "Accounts", "route": "/fundsphere/accounts"},
+        {"key": "fundsphere_budgets", "label": "Budgets", "route": "/fundsphere/budgets"},
         {"key": "fundsphere_services", "label": "Services", "route": "/fundsphere/services"},
     ],
     "leavesphere": [
@@ -89,8 +90,9 @@ _APP_API_PAGE_KEY_RULES: dict[str, tuple[tuple[tuple[str, ...], tuple[str, ...]]
                 "/services",
                 "/budgetchangehistories",
                 "/masterbudgetcontrol",
+                "/masterbudgetcontrol/budgetmatrix",
             ),
-            ("fundsphere_accounts", "fundsphere_services"),
+            ("fundsphere_accounts", "fundsphere_budgets", "fundsphere_services"),
         ),
     ),
     "leavesphere": (

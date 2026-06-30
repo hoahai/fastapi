@@ -71,6 +71,12 @@ export const APP_NAV_ITEMS: AppNavItem[] = [
         available: true,
       },
       {
+        id: "fundsphere-budgets",
+        label: "Budgets",
+        route: "/fundsphere/budgets",
+        available: true,
+      },
+      {
         id: "fundsphere-services",
         label: "Services",
         route: "/fundsphere/services",

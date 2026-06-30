@@ -49,6 +49,7 @@ _BUDGET_SUBSERVICE_CANDIDATES = ("subService", "sub_service")
 _BUDGET_GROSS_AMOUNT_CANDIDATES = ("grossAmount", "gross_amount")
 _BUDGET_COMMISSION_CANDIDATES = ("commission", "commissionRate", "commission_rate")
 _BUDGET_NET_ADJUSTMENT_CANDIDATES = ("netAdjustment", "net_adjustment")
+_BUDGET_NET_AMOUNT_CANDIDATES = ("netAmount", "net_amount")
 _BUDGET_NOTE_CANDIDATES = ("note",)
 _HISTORY_ID_CANDIDATES = ("id", "historyId", "history_id")
 _HISTORY_BUDGET_ID_CANDIDATES = ("budgetId", "budget_id")
@@ -326,6 +327,10 @@ def _resolve_budget_data_columns(
         budget_columns,
         _BUDGET_NET_ADJUSTMENT_CANDIDATES,
     )
+    budget_net_amount_col = _resolve_column_name(
+        budget_columns,
+        _BUDGET_NET_AMOUNT_CANDIDATES,
+    )
     budget_note_col = _resolve_column_name(budget_columns, _BUDGET_NOTE_CANDIDATES)
 
     missing: list[str] = []
@@ -363,6 +368,8 @@ def _resolve_budget_data_columns(
         missing.append("budgets.commission")
     if not budget_net_adjustment_col:
         missing.append("budgets.netAdjustment")
+    if not budget_net_amount_col:
+        missing.append("budgets.netAmount")
     if not budget_note_col:
         missing.append("budgets.note")
     if missing:
@@ -388,6 +395,7 @@ def _resolve_budget_data_columns(
         "budget_gross_amount_col": budget_gross_amount_col or "",
         "budget_commission_col": budget_commission_col or "",
         "budget_net_adjustment_col": budget_net_adjustment_col or "",
+        "budget_net_amount_col": budget_net_amount_col or "",
         "budget_note_col": budget_note_col or "",
     }
 
@@ -533,6 +541,26 @@ def _to_decimal(value: object, *, scale: int) -> Decimal:
 
     precision = Decimal("1").scaleb(-scale)
     return dec_value.quantize(precision, rounding=ROUND_HALF_UP)
+
+
+def _normalize_db_value(value: object) -> object:
+    if isinstance(value, Decimal):
+        if value == value.to_integral_value():
+            return int(value)
+        return float(value)
+    if isinstance(value, datetime):
+        return value.isoformat(sep=" ")
+    if isinstance(value, dict):
+        return {str(key): _normalize_db_value(item) for key, item in value.items()}
+    if isinstance(value, list):
+        return [_normalize_db_value(item) for item in value]
+    if isinstance(value, tuple):
+        return [_normalize_db_value(item) for item in value]
+    return value
+
+
+def _normalize_row(row: dict[str, object]) -> dict[str, object]:
+    return {str(key): _normalize_db_value(value) for key, value in row.items()}
 
 
 def _build_accounts_cache_key(accounts_table: str) -> str:
@@ -1011,6 +1039,101 @@ def get_master_budget_control_budget_data(
     for row in combined_rows:
         row.pop("depListingOrder", None)
     return combined_rows
+
+
+def get_master_budget_control_budget_matrix_rows(
+    *,
+    account_codes: list[str],
+    periods: list[tuple[int, int]],
+) -> list[dict]:
+    if not account_codes or not periods:
+        return []
+
+    tables = get_db_tables(require_services=True)
+    accounts_table = tables["ACCOUNTS"]
+    budgets_table = tables["BUDGETS"]
+    services_table = tables["SERVICES"]
+    departments_table = tables["DEPARTMENTS"]
+    requested_buckets = _build_budget_data_buckets(
+        account_codes=account_codes,
+        periods=periods,
+    )
+    if not requested_buckets:
+        return []
+
+    columns = _resolve_budget_data_columns(
+        accounts_table=accounts_table,
+        budgets_table=budgets_table,
+        services_table=services_table,
+        departments_table=departments_table,
+    )
+
+    quoted_accounts_table = _quote_table_name(accounts_table)
+    quoted_budgets_table = _quote_table_name(budgets_table)
+    quoted_services_table = _quote_table_name(services_table)
+    quoted_departments_table = _quote_table_name(departments_table)
+
+    account_code_expr = _quote_identifier(columns["account_code_col"])
+    account_name_expr = _quote_identifier(columns["account_name_col"])
+    service_id_expr = _quote_identifier(columns["service_id_col"])
+    service_name_expr = _quote_identifier(columns["service_name_col"])
+    service_department_code_expr = _quote_identifier(columns["service_department_code_col"])
+    department_code_expr = _quote_identifier(columns["department_code_col"])
+    department_name_expr = _quote_identifier(columns["department_name_col"])
+    department_listing_order_expr = _quote_identifier(columns["department_listing_order_col"])
+    budget_id_expr = _quote_identifier(columns["budget_id_col"])
+    budget_account_code_expr = _quote_identifier(columns["budget_account_code_col"])
+    budget_service_id_expr = _quote_identifier(columns["budget_service_id_col"])
+    budget_year_expr = _quote_identifier(columns["budget_year_col"])
+    budget_month_expr = _quote_identifier(columns["budget_month_col"])
+    budget_sub_service_expr = _quote_identifier(columns["budget_sub_service_col"])
+    budget_gross_amount_expr = _quote_identifier(columns["budget_gross_amount_col"])
+    budget_commission_expr = _quote_identifier(columns["budget_commission_col"])
+    budget_net_adjustment_expr = _quote_identifier(columns["budget_net_adjustment_col"])
+    budget_net_amount_expr = _quote_identifier(columns["budget_net_amount_col"])
+    budget_note_expr = _quote_identifier(columns["budget_note_col"])
+
+    bucket_conditions: list[str] = []
+    bucket_params: list[object] = []
+    for account_code, month, year in requested_buckets:
+        bucket_conditions.append(
+            f"(UPPER(b.{budget_account_code_expr}) = %s AND b.{budget_month_expr} = %s AND b.{budget_year_expr} = %s)"
+        )
+        bucket_params.extend([account_code, month, year])
+
+    query = (
+        "SELECT "
+        f"b.{budget_id_expr} AS budgetId, "
+        f"UPPER(b.{budget_account_code_expr}) AS accountCode, "
+        f"a.{account_name_expr} AS accountName, "
+        f"b.{budget_year_expr} AS year, "
+        f"b.{budget_month_expr} AS month, "
+        f"b.{budget_service_id_expr} AS serviceId, "
+        f"s.{service_name_expr} AS serviceName, "
+        f"s.{service_department_code_expr} AS departmentCode, "
+        f"d.{department_name_expr} AS departmentName, "
+        f"d.{department_listing_order_expr} AS departmentListingOrder, "
+        f"COALESCE(b.{budget_sub_service_expr}, '') AS subService, "
+        f"COALESCE(b.{budget_gross_amount_expr}, 0) AS grossAmount, "
+        f"COALESCE(b.{budget_commission_expr}, 0) AS commission, "
+        f"COALESCE(b.{budget_net_adjustment_expr}, 0) AS netAdjustment, "
+        f"COALESCE(b.{budget_net_amount_expr}, 0) AS netAmount, "
+        f"b.{budget_note_expr} AS note "
+        f"FROM {quoted_budgets_table} b "
+        f"INNER JOIN {quoted_accounts_table} a ON b.{budget_account_code_expr} = a.{account_code_expr} "
+        f"INNER JOIN {quoted_services_table} s ON b.{budget_service_id_expr} = s.{service_id_expr} "
+        f"INNER JOIN {quoted_departments_table} d ON s.{service_department_code_expr} = d.{department_code_expr} "
+        f"WHERE {' OR '.join(bucket_conditions)} "
+        "ORDER BY "
+        f"d.{department_listing_order_expr} ASC, "
+        f"d.{department_name_expr} ASC, "
+        f"s.{service_name_expr} ASC, "
+        f"COALESCE(b.{budget_sub_service_expr}, '') ASC, "
+        f"UPPER(b.{budget_account_code_expr}) ASC, "
+        f"b.{budget_year_expr} ASC, "
+        f"b.{budget_month_expr} ASC"
+    )
+    return [_normalize_row(row) for row in fetch_all(query, tuple(bucket_params))]
 
 
 def get_master_budget_control_master_budget_sheet_data(

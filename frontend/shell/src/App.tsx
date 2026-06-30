@@ -24,6 +24,7 @@ const LeaveSphereLeaveManagementPage = lazy(() => import("@leavesphere/pages/Lea
 const LeaveSphereEmployeeManagementPage = lazy(() => import("@leavesphere/pages/EmployeeManagementPage"));
 const LeaveSphereQuickApprovalPage = lazy(() => import("@leavesphere/pages/QuickApprovalPage"));
 const FundSphereAccountsPage = lazy(() => import("@fundsphere/pages/AccountsPage"));
+const FundSphereBudgetsPage = lazy(() => import("@fundsphere/pages/BudgetsPage"));
 const FundSphereServicesPage = lazy(() => import("@fundsphere/pages/ServicesPage"));
 const AdminUsersPage = lazy(() => import("@shell/pages/AdminUsersPage"));
 const AppScopedAdminPage = lazy(() => import("@shell/pages/AppScopedAdminPage"));
@@ -293,6 +294,9 @@ function toScrollStorageKey(route: string): string {
   }
   if (route === "/fundsphere/accounts") {
     return "fundsphere.accounts.scrollY";
+  }
+  if (route === "/fundsphere/budgets") {
+    return "fundsphere.budgets.scrollY";
   }
   if (route === "/fundsphere/services") {
     return "fundsphere.services.scrollY";
@@ -597,6 +601,7 @@ function App() {
       "/shiftzy/home",
       "/shiftzy/employees",
       "/fundsphere/accounts",
+      "/fundsphere/budgets",
       "/fundsphere/services",
       "/leavesphere/home",
       "/leavesphere/leave-management",
@@ -791,6 +796,13 @@ function App() {
               <RequireAppPageRoute appCode="fundsphere" route="/fundsphere/accounts" fallback={<RedirectToHome />}>
                 <Suspense fallback={<RouteChunkFallback />}>
                   <FundSphereAccountsPage />
+                </Suspense>
+              </RequireAppPageRoute>
+            ) : null}
+            {frontendPath === "/fundsphere/budgets" ? (
+              <RequireAppPageRoute appCode="fundsphere" route="/fundsphere/budgets" fallback={<RedirectToHome />}>
+                <Suspense fallback={<RouteChunkFallback />}>
+                  <FundSphereBudgetsPage />
                 </Suspense>
               </RequireAppPageRoute>
             ) : null}

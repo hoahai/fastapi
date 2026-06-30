@@ -10,6 +10,7 @@ from apps.fundsphere.api.v1.endpoints import (
 )
 from apps.fundsphere.api.v1.endpoints.masterBudgetControl import (
     budgetData,
+    budgetMatrix,
     masterBudget,
     netSpend,
     settings,
@@ -56,6 +57,11 @@ router.include_router(
 )
 router.include_router(
     budgetData.router,
+    prefix="/masterBudgetControl",
+    tags=["fundsphere"],
+)
+router.include_router(
+    budgetMatrix.router,
     prefix="/masterBudgetControl",
     tags=["fundsphere"],
 )
