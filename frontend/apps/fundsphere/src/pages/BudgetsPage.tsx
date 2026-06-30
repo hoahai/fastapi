@@ -788,6 +788,7 @@ function BudgetHierarchyLabel({
   open,
   onToggle,
   emphasis = "default",
+  titleClassName,
 }: {
   level: BudgetHierarchyLevel;
   title: string;
@@ -795,6 +796,7 @@ function BudgetHierarchyLabel({
   open?: boolean;
   onToggle?: () => void;
   emphasis?: "default" | "muted" | "subtle";
+  titleClassName?: string;
 }) {
   const titleClass =
     level === 0
@@ -823,7 +825,7 @@ function BudgetHierarchyLabel({
         </span>
       ) : null}
       <div className="min-w-0">
-        <p className={cn("whitespace-normal break-words leading-tight tracking-[-0.01em]", titleClass)}>{title}</p>
+        <p className={cn("whitespace-normal break-words leading-tight tracking-[-0.01em]", titleClass, titleClassName)}>{title}</p>
         {subtitle ? <p className={cn("whitespace-normal break-words leading-tight", subtitleClass)}>{subtitle}</p> : null}
       </div>
     </div>
@@ -2323,11 +2325,12 @@ function FundsphereBudgetPageContent() {
                                       open={serviceOpen}
                                       onToggle={() => undefined}
                                       emphasis="muted"
+                                      titleClassName="text-sm font-bold text-slate-900"
                                     />
                                   </td>
                                   <td
                                     className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-t border-slate-200 bg-transparent px-2 py-2")}
-                                    style={mergeStyles(BUDGET_MATRIX_SEGMENT_COLUMN_STYLE, departmentBandStyles.surfaceStyle)}
+                                    style={mergeStyles(BUDGET_MATRIX_SEGMENT_COLUMN_STYLE, departmentBandStyles.serviceStyle)}
                                   />
                                   {matrixColumns.map((column, columnIndex) => {
                                     return (
@@ -2336,9 +2339,9 @@ function FundsphereBudgetPageContent() {
                                         className={cn(
                                           BUDGET_MATRIX_PERIOD_COLUMN_CLASS,
                                           getAccountBoundaryClass(columnIndex),
-                                          "border-t border-slate-200 bg-transparent px-1 py-2 text-center text-sm font-semibold text-slate-800",
+                                          "border-t border-slate-200 bg-transparent px-1 py-2 text-center text-sm font-bold text-slate-900",
                                         )}
-                                        style={mergeStyles(getAccountBoundaryStyle(columnIndex), departmentBandStyles.headerStyle)}
+                                        style={mergeStyles(getAccountBoundaryStyle(columnIndex), departmentBandStyles.serviceStyle)}
                                       >
                                         {centsToCurrency(serviceGroup.totalCentsByColumn[column.key] ?? 0)}
                                         {columnIndex === periodCountPerAccount - 1 ? <BudgetMatrixBoundaryDivider /> : null}
