@@ -87,7 +87,7 @@ export function AppPageLayout({
         {footer ? <div aria-hidden className={cn("shrink-0", PAGE_FOOTER_SPACER_CLASSNAME)} /> : null}
       </div>
       {footer ? (
-        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(0.85rem+env(safe-area-inset-bottom))] z-10">
+        <div className="pointer-events-none fixed inset-x-0 bottom-[calc(0.85rem+env(safe-area-inset-bottom))] z-[90]">
           <div className={`mx-4 sm:mx-6 lg:mr-6 ${sidebarVisuallyExpanded ? "lg:ml-[18.75rem]" : "lg:ml-[6.5rem]"}`}>
             <div className="mx-auto w-full max-w-[1600px]">
               {footer}
