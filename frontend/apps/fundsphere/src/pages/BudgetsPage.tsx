@@ -1589,6 +1589,10 @@ function FundsphereBudgetPageContent() {
     [accountsByCode, searchCriteria.accountCodes, searchCriteria.periods],
   );
   const periodCountPerAccount = searchCriteria.periods.length;
+  const getAccountBoundaryClass = (columnIndex: number) =>
+    periodCountPerAccount > 0 && (columnIndex + 1) % periodCountPerAccount === 0
+      ? "border-r-2 border-r-slate-300"
+      : "";
   const matrixHierarchy = useMemo(() => {
     if (!matrix || matrixColumns.length === 0) {
       return {
@@ -2016,13 +2020,12 @@ function FundsphereBudgetPageContent() {
                       );
                     })}
                   </tr>
-                  <tr className="bg-violet-700">
-                    {searchCriteria.accountCodes.flatMap((accountCode, accountIndex) =>
+                  <tr className="bg-slate-50/95">
+                    {searchCriteria.accountCodes.flatMap((accountCode) =>
                       searchCriteria.periods.map((period, periodIndex) => {
                         const [monthText, yearText] = period.split("/");
                         const month = Number(monthText);
                         const year = Number(yearText);
-                        const isAccountBoundary = periodCountPerAccount > 0 && periodIndex === periodCountPerAccount - 1;
                         const label = Number.isFinite(month) && Number.isFinite(year)
                           ? formatPeriodLabel(month, year)
                           : period;
@@ -2032,7 +2035,7 @@ function FundsphereBudgetPageContent() {
                             className={cn(
                               BUDGET_MATRIX_PERIOD_COLUMN_CLASS,
                               BUDGET_MATRIX_PERIOD_HEADER_CLASS,
-                              isAccountBoundary ? "border-r-2 border-r-slate-300" : "",
+                              getAccountBoundaryClass(periodIndex),
                             )}
                             style={BUDGET_MATRIX_PERIOD_HEADER_STYLE}
                           >
@@ -2098,23 +2101,20 @@ function FundsphereBudgetPageContent() {
                               className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-b border-r border-violet-200/80 bg-violet-100 px-2 py-2")}
                               style={BUDGET_MATRIX_SEGMENT_COLUMN_STYLE}
                             />
-                            {matrixColumns.map((column, columnIndex) => (
-                              (() => {
-                                const isAccountBoundary = periodCountPerAccount > 0 && (columnIndex + 1) % periodCountPerAccount === 0;
-                                return (
+                            {matrixColumns.map((column, columnIndex) => {
+                              return (
                               <td
                                 key={`${departmentGroup.key}:${column.key}`}
                                 className={cn(
                                   BUDGET_MATRIX_PERIOD_COLUMN_CLASS,
-                                  isAccountBoundary ? "border-r-2 border-r-slate-300" : "",
+                                  getAccountBoundaryClass(columnIndex),
                                   "border-b border-violet-200/80 px-1 py-2 text-center text-sm font-semibold text-slate-900",
                                 )}
                               >
                                 {centsToCurrency(departmentGroup.totalCentsByColumn[column.key] ?? 0)}
                               </td>
-                                );
-                              })()
-                            ))}
+                              );
+                            })}
                           </tr>
                         </Fragment>
                       );
@@ -2206,13 +2206,12 @@ function FundsphereBudgetPageContent() {
                                   style={BUDGET_MATRIX_SEGMENT_COLUMN_STYLE}
                                 />
                                 {matrixColumns.map((column, columnIndex) => {
-                                  const isAccountBoundary = periodCountPerAccount > 0 && (columnIndex + 1) % periodCountPerAccount === 0;
                                   return (
                                   <td
                                     key={`${serviceGroup.key}:${column.key}`}
                                     className={cn(
                                       BUDGET_MATRIX_PERIOD_COLUMN_CLASS,
-                                      isAccountBoundary ? "border-r-2 border-r-slate-300" : "",
+                                      getAccountBoundaryClass(columnIndex),
                                       "border-b border-slate-200 px-1 py-2 text-center text-sm font-semibold text-slate-800",
                                     )}
                                   >
@@ -2243,13 +2242,12 @@ function FundsphereBudgetPageContent() {
                                     </td>
                                     {matrixColumns.map((column, columnIndex) => {
                                       const cell = detailRow.cells[column.key] ?? null;
-                                      const isAccountBoundary = periodCountPerAccount > 0 && (columnIndex + 1) % periodCountPerAccount === 0;
                                       return (
                                         <td
                                           key={`${detailRow.key}:${column.key}`}
                                           className={cn(
                                             BUDGET_MATRIX_PERIOD_COLUMN_CLASS,
-                                            isAccountBoundary ? "border-r-2 border-r-slate-300" : "",
+                                            getAccountBoundaryClass(columnIndex),
                                             "border-b border-slate-200 px-1 py-1",
                                           )}
                                           style={{ width: 104, minWidth: 104, maxWidth: 104 }}
@@ -2317,13 +2315,12 @@ function FundsphereBudgetPageContent() {
                             style={BUDGET_MATRIX_SEGMENT_COLUMN_STYLE}
                           />
                           {matrixColumns.map((column, columnIndex) => {
-                            const isAccountBoundary = periodCountPerAccount > 0 && (columnIndex + 1) % periodCountPerAccount === 0;
                             return (
                             <td
                               key={`${departmentGroup.key}:${column.key}`}
                               className={cn(
                                 BUDGET_MATRIX_PERIOD_COLUMN_CLASS,
-                                isAccountBoundary ? "border-r-2 border-r-slate-300" : "",
+                                getAccountBoundaryClass(columnIndex),
                                 "border-t border-violet-200/80 px-1 py-2 text-center text-sm font-semibold text-slate-900",
                               )}
                             >
@@ -2357,13 +2354,12 @@ function FundsphereBudgetPageContent() {
                       style={BUDGET_MATRIX_SEGMENT_COLUMN_STYLE}
                     />
                     {matrixColumns.map((column, columnIndex) => {
-                      const isAccountBoundary = periodCountPerAccount > 0 && (columnIndex + 1) % periodCountPerAccount === 0;
                       return (
                       <td
                         key={`grand:${column.key}`}
                         className={cn(
                           BUDGET_MATRIX_PERIOD_COLUMN_CLASS,
-                          isAccountBoundary ? "border-r-2 border-r-slate-300" : "",
+                          getAccountBoundaryClass(columnIndex),
                           "border-t border-slate-800 px-1 py-2 text-center text-sm font-semibold",
                         )}
                       >
