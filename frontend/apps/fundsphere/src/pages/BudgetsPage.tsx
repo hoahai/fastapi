@@ -244,12 +244,31 @@ function reduceRgbaAlpha(value: string | undefined, factor: number): string | un
   return `rgba(${red}, ${green}, ${blue}, ${nextAlpha.toFixed(3)})`;
 }
 
+function blendRgbaOverWhite(value: string | undefined): string | undefined {
+  if (!value) {
+    return undefined;
+  }
+  const match = value.trim().match(/^rgba\((\d+),\s*(\d+),\s*(\d+),\s*([0-9.]+)\)$/i);
+  if (!match) {
+    return value;
+  }
+  const red = Number(match[1]);
+  const green = Number(match[2]);
+  const blue = Number(match[3]);
+  const alpha = Number(match[4]);
+  if (![red, green, blue, alpha].every(Number.isFinite)) {
+    return value;
+  }
+  const blend = (channel: number) => Math.round((alpha * channel) + ((1 - alpha) * 255));
+  return `rgb(${blend(red)} ${blend(green)} ${blend(blue)})`;
+}
+
 function buildBudgetMatrixDepartmentBandStyles(departmentCode: string) {
   const styles = buildFundsphereDepartmentColorStyles({ identity: departmentCode });
-  const headerBackground = reduceRgbaAlpha(typeof styles.headerStyle.backgroundColor === "string" ? styles.headerStyle.backgroundColor : undefined, 3) ?? "transparent";
-  const serviceBackground = reduceRgbaAlpha(typeof styles.headerStyle.backgroundColor === "string" ? styles.headerStyle.backgroundColor : undefined, 2.2) ?? headerBackground;
-  const surfaceBackground = reduceRgbaAlpha(typeof styles.cardStyle.backgroundColor === "string" ? styles.cardStyle.backgroundColor : undefined, 3) ?? "transparent";
-  const detailBackground = reduceRgbaAlpha(typeof styles.cardStyle.backgroundColor === "string" ? styles.cardStyle.backgroundColor : undefined, 2.4) ?? surfaceBackground;
+  const headerBackground = blendRgbaOverWhite(reduceRgbaAlpha(typeof styles.headerStyle.backgroundColor === "string" ? styles.headerStyle.backgroundColor : undefined, 3)) ?? "transparent";
+  const serviceBackground = blendRgbaOverWhite(reduceRgbaAlpha(typeof styles.headerStyle.backgroundColor === "string" ? styles.headerStyle.backgroundColor : undefined, 2.2)) ?? headerBackground;
+  const surfaceBackground = blendRgbaOverWhite(reduceRgbaAlpha(typeof styles.cardStyle.backgroundColor === "string" ? styles.cardStyle.backgroundColor : undefined, 3)) ?? "transparent";
+  const detailBackground = blendRgbaOverWhite(reduceRgbaAlpha(typeof styles.cardStyle.backgroundColor === "string" ? styles.cardStyle.backgroundColor : undefined, 2.4)) ?? surfaceBackground;
 
   return {
     headerStyle: {
