@@ -2511,7 +2511,7 @@ function FundsphereBudgetPageContent() {
                             className={cn(BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS, "border-t border-slate-200 bg-transparent px-2 py-2")}
                             style={mergeStyles(BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE, departmentBandStyles.headerStyle)}
                           >
-                            <p className="text-sm font-semibold text-slate-900">{departmentGroup.departmentName} Total</p>
+                            <p className="text-sm font-bold text-slate-900">{departmentGroup.departmentName} Total</p>
                           </td>
                           <td
                             className={cn(BUDGET_MATRIX_SERVICE_COLUMN_CLASS, "border-t border-slate-200 bg-transparent px-2 py-2")}
@@ -2525,11 +2525,11 @@ function FundsphereBudgetPageContent() {
                             return (
                             <td
                               key={`${departmentGroup.key}:${column.key}`}
-                              className={cn(
-                                BUDGET_MATRIX_PERIOD_COLUMN_CLASS,
-                                getAccountBoundaryClass(columnIndex),
-                                "border-t border-slate-200 bg-transparent px-1 py-2 text-center text-sm font-semibold text-slate-900",
-                              )}
+                            className={cn(
+                              BUDGET_MATRIX_PERIOD_COLUMN_CLASS,
+                              getAccountBoundaryClass(columnIndex),
+                              "border-t border-slate-200 bg-transparent px-1 py-2 text-center text-sm font-bold text-slate-900",
+                            )}
                               style={mergeStyles(getAccountBoundaryStyle(columnIndex), departmentBandStyles.headerStyle)}
                             >
                               {centsToCurrency(departmentGroup.totalCentsByColumn[column.key] ?? 0)}
