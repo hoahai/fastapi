@@ -135,7 +135,7 @@ export function LoginPage() {
     && Boolean(auth.user)
     && (
       !authProtectionEnabled
-      || (Boolean(auth.accessProfile) && auth.accessCacheStatus?.source === "network")
+      || (Boolean(auth.accessProfile) && accessValidationResolved)
       || (accessValidationResolved && hasNoAppAccessError)
     );
   const isBusy = isSigningIn || isAwaitingValidation;
