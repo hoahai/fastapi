@@ -227,16 +227,30 @@ function mergeStyles(...styles: Array<CSSProperties | null | undefined>): CSSPro
 
 function buildBudgetMatrixDepartmentBandStyles(departmentCode: string) {
   const styles = buildFundsphereDepartmentColorStyles({ identity: departmentCode });
+  const headerBackground = styles.headerStyle.backgroundColor ?? "transparent";
+  const surfaceBackground = styles.cardStyle.backgroundColor ?? "transparent";
 
   return {
     headerStyle: {
-      backgroundColor: styles.headerStyle.backgroundColor ?? "transparent",
+      backgroundColor: headerBackground,
+      backgroundImage: "none",
+      borderLeft: "none",
+      boxShadow: "none",
+    } satisfies CSSProperties,
+    serviceStyle: {
+      backgroundColor: headerBackground,
       backgroundImage: "none",
       borderLeft: "none",
       boxShadow: "none",
     } satisfies CSSProperties,
     surfaceStyle: {
-      backgroundColor: styles.cardStyle.backgroundColor ?? "transparent",
+      backgroundColor: surfaceBackground,
+      backgroundImage: "none",
+      borderLeft: "none",
+      boxShadow: "none",
+    } satisfies CSSProperties,
+    detailStyle: {
+      backgroundColor: surfaceBackground,
       backgroundImage: "none",
       borderLeft: "none",
       boxShadow: "none",
@@ -2178,7 +2192,7 @@ function FundsphereBudgetPageContent() {
                               </td>
                             <td
                               className={cn(BUDGET_MATRIX_SERVICE_COLUMN_CLASS, "border-b border-slate-200 bg-transparent px-2 py-2")}
-                              style={mergeStyles(BUDGET_MATRIX_SERVICE_COLUMN_STYLE, departmentBandStyles.headerStyle)}
+                              style={mergeStyles(BUDGET_MATRIX_SERVICE_COLUMN_STYLE, departmentBandStyles.serviceStyle)}
                             />
                             <td
                               className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-b border-slate-200 bg-transparent px-2 py-2")}
@@ -2193,7 +2207,7 @@ function FundsphereBudgetPageContent() {
                                   getAccountBoundaryClass(columnIndex),
                                   "border-b border-slate-200 bg-transparent px-1 py-2 text-center text-sm font-semibold text-slate-900",
                                 )}
-                                style={mergeStyles(getAccountBoundaryStyle(columnIndex), departmentBandStyles.headerStyle)}
+                                  style={mergeStyles(getAccountBoundaryStyle(columnIndex), departmentBandStyles.serviceStyle)}
                               >
                                 {centsToCurrency(departmentGroup.totalCentsByColumn[column.key] ?? 0)}
                                 {columnIndex === periodCountPerAccount - 1 ? <BudgetMatrixBoundaryDivider /> : null}
@@ -2260,7 +2274,7 @@ function FundsphereBudgetPageContent() {
                                       BUDGET_MATRIX_SERVICE_COLUMN_CLASS,
                                       "border-t border-slate-200 bg-transparent px-2 py-2 align-top cursor-pointer select-none",
                                     )}
-                                    style={mergeStyles(BUDGET_MATRIX_SERVICE_COLUMN_STYLE, departmentBandStyles.headerStyle)}
+                                    style={mergeStyles(BUDGET_MATRIX_SERVICE_COLUMN_STYLE, departmentBandStyles.serviceStyle)}
                                     role="button"
                                   tabIndex={0}
                                   aria-expanded={serviceOpen}
@@ -2340,7 +2354,7 @@ function FundsphereBudgetPageContent() {
                                             minWidth: BUDGET_MATRIX_PERIOD_WIDTH,
                                             maxWidth: BUDGET_MATRIX_PERIOD_WIDTH,
                                             ...getAccountBoundaryStyle(columnIndex),
-                                            ...departmentBandStyles.surfaceStyle,
+                                            ...departmentBandStyles.detailStyle,
                                           }}
                                         >
                                           <BudgetMatrixCellButton
@@ -2400,11 +2414,11 @@ function FundsphereBudgetPageContent() {
                           </td>
                           <td
                             className={cn(BUDGET_MATRIX_SERVICE_COLUMN_CLASS, "border-t border-slate-200 bg-transparent px-2 py-2")}
-                            style={mergeStyles(BUDGET_MATRIX_SERVICE_COLUMN_STYLE, departmentBandStyles.headerStyle)}
+                            style={mergeStyles(BUDGET_MATRIX_SERVICE_COLUMN_STYLE, departmentBandStyles.serviceStyle)}
                           />
                           <td
                             className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-t border-slate-200 bg-transparent px-2 py-2")}
-                            style={mergeStyles(BUDGET_MATRIX_SEGMENT_COLUMN_STYLE, departmentBandStyles.headerStyle)}
+                            style={mergeStyles(BUDGET_MATRIX_SEGMENT_COLUMN_STYLE, departmentBandStyles.surfaceStyle)}
                           />
                           {matrixColumns.map((column, columnIndex) => {
                             return (
@@ -2415,7 +2429,7 @@ function FundsphereBudgetPageContent() {
                                 getAccountBoundaryClass(columnIndex),
                                 "border-t border-slate-200 bg-transparent px-1 py-2 text-center text-sm font-semibold text-slate-900",
                               )}
-                              style={mergeStyles(getAccountBoundaryStyle(columnIndex), departmentBandStyles.headerStyle)}
+                              style={mergeStyles(getAccountBoundaryStyle(columnIndex), departmentBandStyles.serviceStyle)}
                             >
                               {centsToCurrency(departmentGroup.totalCentsByColumn[column.key] ?? 0)}
                               {columnIndex === periodCountPerAccount - 1 ? <BudgetMatrixBoundaryDivider /> : null}
