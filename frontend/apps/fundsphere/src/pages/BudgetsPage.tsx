@@ -2184,7 +2184,7 @@ function FundsphereBudgetPageContent() {
 
                           return (
                             <Fragment key={serviceGroup.key}>
-                              <tr key={`${serviceGroup.key}:total`} className="bg-white">
+                              <tr key={`${serviceGroup.key}:total`} className="bg-violet-100/70">
                                 {showDepartmentCell ? (
                                   <td
                                     rowSpan={departmentBodyRowCount}
@@ -2220,14 +2220,14 @@ function FundsphereBudgetPageContent() {
                                     />
                                   </td>
                                 ) : null}
-                                <td
-                                  rowSpan={serviceRowSpan}
-                                  className={cn(
-                                    BUDGET_MATRIX_SERVICE_COLUMN_CLASS,
-                                    "border-b border-slate-200 bg-white px-2 py-2 align-top cursor-pointer select-none",
-                                  )}
-                                  style={BUDGET_MATRIX_SERVICE_COLUMN_STYLE}
-                                  role="button"
+                                  <td
+                                    rowSpan={serviceRowSpan}
+                                    className={cn(
+                                      BUDGET_MATRIX_SERVICE_COLUMN_CLASS,
+                                      "border-t border-violet-200/80 bg-violet-100 px-2 py-2 align-top cursor-pointer select-none",
+                                    )}
+                                    style={BUDGET_MATRIX_SERVICE_COLUMN_STYLE}
+                                    role="button"
                                   tabIndex={0}
                                   aria-expanded={serviceOpen}
                                   onClick={() => {
@@ -2255,7 +2255,7 @@ function FundsphereBudgetPageContent() {
                                   />
                                 </td>
                                 <td
-                                  className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-b border-slate-200 bg-white px-2 py-2")}
+                                  className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-t border-violet-200/80 bg-violet-100 px-2 py-2")}
                                   style={BUDGET_MATRIX_SEGMENT_COLUMN_STYLE}
                                 />
                                 {matrixColumns.map((column, columnIndex) => {
@@ -2265,7 +2265,7 @@ function FundsphereBudgetPageContent() {
                                     className={cn(
                                       BUDGET_MATRIX_PERIOD_COLUMN_CLASS,
                                       getAccountBoundaryClass(columnIndex),
-                                      "border-b border-slate-200 px-1 py-2 text-center text-sm font-semibold text-slate-800",
+                                      "border-t border-violet-200/80 px-1 py-2 text-center text-sm font-semibold text-slate-800",
                                     )}
                                     style={getAccountBoundaryStyle(columnIndex)}
                                   >
