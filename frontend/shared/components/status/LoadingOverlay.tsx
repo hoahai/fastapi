@@ -43,7 +43,7 @@ export type SectionLoadingOverlayProps = {
 
 export function SectionLoadingOverlay({ message, className, panelClassName }: SectionLoadingOverlayProps) {
   return (
-    <div className={cn("absolute inset-0 z-[70] flex items-center justify-center rounded-2xl bg-slate-100/68 backdrop-blur-[1.25px]", className)}>
+    <div className={cn("absolute inset-0 z-[150] flex items-center justify-center rounded-2xl bg-slate-950/22 backdrop-blur-[2px]", className)}>
       <OverlayPanel message={message} panelClassName={panelClassName} />
     </div>
   );
