@@ -2171,13 +2171,14 @@ function FundsphereBudgetPageContent() {
                             colSpan={searchCriteria.periods.length}
                             className={cn(
                               BUDGET_MATRIX_ACCOUNT_HEADER_CLASS,
-                              !isLastAccountGroup ? "relative border-r-2 border-r-slate-400" : "",
+                              !isLastAccountGroup ? "relative border-r-4 border-r-slate-500" : "",
                             )}
                             style={{
                               ...BUDGET_MATRIX_ACCOUNT_HEADER_STYLE,
                               width: accountGroupWidth,
                               minWidth: accountGroupWidth,
                               maxWidth: accountGroupWidth,
+                              ...(isLastAccountGroup ? null : { boxShadow: "inset -4px 0 0 0 #94a3b8" }),
                             }}
                           >
                             <BudgetMatrixAccountHeaderLabel
