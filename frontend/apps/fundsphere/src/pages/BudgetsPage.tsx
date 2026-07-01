@@ -892,7 +892,7 @@ function BudgetMatrixBoundaryDivider() {
   return (
     <span
       aria-hidden="true"
-      className="pointer-events-none absolute right-0 top-0 z-20 h-full w-[2px] bg-slate-400"
+      className="pointer-events-none absolute right-0 top-0 z-40 h-full w-[2px] bg-slate-400"
     />
   );
 }
@@ -901,7 +901,7 @@ function BudgetMatrixLeadingBoundaryDivider() {
   return (
     <span
       aria-hidden="true"
-      className="pointer-events-none absolute left-0 top-0 z-20 h-full w-[2px] bg-slate-400"
+      className="pointer-events-none absolute left-0 top-0 z-40 h-full w-[2px] bg-slate-400"
     />
   );
 }
