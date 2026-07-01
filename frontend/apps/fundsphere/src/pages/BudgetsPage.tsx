@@ -2453,12 +2453,21 @@ function FundsphereBudgetPageContent() {
                       return (
                         <Fragment key={departmentGroup.key}>
                           <tr key={`${departmentGroup.key}:collapsed`} className="bg-transparent">
-                              <td
+                            <td
+                              colSpan={3}
                               className={cn(
-                                  BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS,
-                                  "border-b border-slate-200 bg-transparent px-2 py-2 align-top cursor-pointer select-none",
-                                )}
-                              style={mergeStyles(departmentColumnStyle, departmentBandStyles.headerStyle)}
+                                BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS,
+                                "border-b border-slate-200 bg-transparent px-2 py-2 align-top cursor-pointer select-none",
+                              )}
+                              style={mergeStyles(
+                                departmentColumnStyle,
+                                {
+                                  width: BUDGET_MATRIX_MERGED_TOTAL_WIDTH,
+                                  minWidth: BUDGET_MATRIX_MERGED_TOTAL_WIDTH,
+                                  maxWidth: BUDGET_MATRIX_MERGED_TOTAL_WIDTH,
+                                },
+                                departmentBandStyles.headerStyle,
+                              )}
                               role="button"
                               tabIndex={0}
                               aria-expanded={departmentOpen}
@@ -2483,34 +2492,26 @@ function FundsphereBudgetPageContent() {
                                 subtitle={null}
                                 open={departmentOpen}
                                 onToggle={() => undefined}
-                                />
-                              </td>
-                            <td
-                              className={cn(BUDGET_MATRIX_SERVICE_COLUMN_CLASS, "border-b border-slate-200 bg-transparent px-2 py-2")}
-                              style={mergeStyles(serviceColumnStyle, departmentBandStyles.headerStyle)}
-                            />
-                            <td
-                              className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-b border-slate-200 bg-transparent px-2 py-2")}
-                              style={mergeStyles(segmentColumnStyle, departmentBandStyles.headerStyle)}
-                            />
+                              />
+                            </td>
                             {matrixColumns.map((column, columnIndex) => {
                               return (
-                              <td
-                                key={`${departmentGroup.key}:${column.key}`}
-                                        className={cn(
-                                          BUDGET_MATRIX_PERIOD_COLUMN_CLASS,
-                                          getAccountBoundaryClass(columnIndex),
-                                          getAccountGroupStartClass(columnIndex),
-                                          "border-b border-slate-200 bg-transparent px-1 py-2 text-center text-sm font-semibold text-slate-900",
-                                        )}
+                                <td
+                                  key={`${departmentGroup.key}:${column.key}`}
+                                  className={cn(
+                                    BUDGET_MATRIX_PERIOD_COLUMN_CLASS,
+                                    getAccountBoundaryClass(columnIndex),
+                                    getAccountGroupStartClass(columnIndex),
+                                    "border-b border-slate-200 bg-transparent px-1 py-2 text-center text-sm font-semibold text-slate-900",
+                                  )}
                                   style={mergeStyles(departmentBandStyles.headerStyle, getAccountBoundaryStyle(columnIndex))}
-                              >
-                                {columnIndex > 0 && columnIndex % periodCountPerAccount === 0 ? (
-                                  <BudgetMatrixGroupBoundaryDivider />
-                                ) : null}
-                                {centsToCurrency(departmentGroup.totalCentsByColumn[column.key] ?? 0)}
-                                {columnIndex === periodCountPerAccount - 1 ? <BudgetMatrixBoundaryDivider /> : null}
-                              </td>
+                                >
+                                  {columnIndex > 0 && columnIndex % periodCountPerAccount === 0 ? (
+                                    <BudgetMatrixGroupBoundaryDivider />
+                                  ) : null}
+                                  {centsToCurrency(departmentGroup.totalCentsByColumn[column.key] ?? 0)}
+                                  {columnIndex === periodCountPerAccount - 1 ? <BudgetMatrixBoundaryDivider /> : null}
+                                </td>
                               );
                             })}
                           </tr>
