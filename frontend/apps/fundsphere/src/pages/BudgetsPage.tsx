@@ -910,8 +910,8 @@ function getFrozenBoundaryClass(columnIndex: number) {
   return columnIndex === 0 ? "relative z-40 border-l-2 border-l-slate-400" : "";
 }
 
-function getFrozenBoundaryStyle(columnIndex: number): CSSProperties | undefined {
-  return columnIndex === 0 ? { boxShadow: "inset 2px 0 0 0 #cbd5e1" } : undefined;
+function getFrozenBoundaryStyle(): CSSProperties | undefined {
+  return undefined;
 }
 
 function BudgetMatrixGroupBoundaryDivider() {
@@ -2399,6 +2399,7 @@ function FundsphereBudgetPageContent() {
                             colSpan={searchCriteria.periods.length}
                             className={cn(
                               BUDGET_MATRIX_ACCOUNT_HEADER_CLASS,
+                              accountIndex === 0 ? getFrozenBoundaryClass(accountIndex) : "",
                               !isLastAccountGroup ? "relative border-r-2 border-r-slate-400" : "",
                             )}
                             style={{
@@ -2406,6 +2407,7 @@ function FundsphereBudgetPageContent() {
                               width: accountGroupWidth,
                               minWidth: accountGroupWidth,
                               maxWidth: accountGroupWidth,
+                                ...(accountIndex === 0 ? getFrozenBoundaryStyle() : null),
                               ...(isLastAccountGroup ? null : { boxShadow: "inset -2px 0 0 0 #cbd5e1" }),
                             }}
                           >
@@ -2439,7 +2441,7 @@ function FundsphereBudgetPageContent() {
                               )}
                               style={{
                                 ...BUDGET_MATRIX_PERIOD_HEADER_STYLE,
-                                ...getFrozenBoundaryStyle(periodIndex),
+                                ...getFrozenBoundaryStyle(),
                                 ...getAccountBoundaryStyle(periodIndex),
                               }}
                             >
@@ -2524,7 +2526,7 @@ function FundsphereBudgetPageContent() {
                                   )}
                                   style={mergeStyles(
                                     departmentBandStyles.headerStyle,
-                                    getFrozenBoundaryStyle(columnIndex),
+                                    getFrozenBoundaryStyle(),
                                     getAccountBoundaryStyle(columnIndex),
                                   )}
                                 >
@@ -2648,7 +2650,7 @@ function FundsphereBudgetPageContent() {
                                         )}
                                         style={mergeStyles(
                                           departmentBandStyles.serviceStyle,
-                                          getFrozenBoundaryStyle(columnIndex),
+                                          getFrozenBoundaryStyle(),
                                           getAccountBoundaryStyle(columnIndex),
                                         )}
                                       >
@@ -2779,7 +2781,7 @@ function FundsphereBudgetPageContent() {
                                             minWidth: BUDGET_MATRIX_PERIOD_WIDTH,
                                             maxWidth: BUDGET_MATRIX_PERIOD_WIDTH,
                                             ...departmentBandStyles.detailStyle,
-                                            ...getFrozenBoundaryStyle(columnIndex),
+                                            ...getFrozenBoundaryStyle(),
                                             ...getAccountBoundaryStyle(columnIndex),
                                           }}
                                         >
@@ -2854,7 +2856,7 @@ function FundsphereBudgetPageContent() {
                               )}
                                   style={mergeStyles(
                                     departmentBandStyles.headerStyle,
-                                    getFrozenBoundaryStyle(columnIndex),
+                                    getFrozenBoundaryStyle(),
                                     getAccountBoundaryStyle(columnIndex),
                                   )}
                             >
@@ -2905,7 +2907,7 @@ function FundsphereBudgetPageContent() {
                             getFrozenBoundaryClass(columnIndex),
                             "border-t border-slate-800 px-1 py-2 text-center text-sm font-semibold",
                           )}
-                          style={mergeStyles({}, getFrozenBoundaryStyle(columnIndex), getAccountBoundaryStyle(columnIndex))}
+                          style={mergeStyles({}, getFrozenBoundaryStyle(), getAccountBoundaryStyle(columnIndex))}
                         >
                           {columnIndex > 0 && columnIndex % periodCountPerAccount === 0 ? (
                             <BudgetMatrixGroupBoundaryDivider />
