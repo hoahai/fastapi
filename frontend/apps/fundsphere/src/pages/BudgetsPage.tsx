@@ -897,6 +897,15 @@ function BudgetMatrixBoundaryDivider() {
   );
 }
 
+function BudgetMatrixLeadingBoundaryDivider() {
+  return (
+    <span
+      aria-hidden="true"
+      className="pointer-events-none absolute left-0 top-0 z-20 h-full w-[2px] bg-slate-400"
+    />
+  );
+}
+
 function BudgetMatrixHeaderBoundaryDivider() {
   return (
     <span
@@ -2513,6 +2522,7 @@ function FundsphereBudgetPageContent() {
                                   )}
                                   style={mergeStyles(departmentBandStyles.headerStyle, getAccountBoundaryStyle(columnIndex))}
                                 >
+                                  {columnIndex === 0 ? <BudgetMatrixLeadingBoundaryDivider /> : null}
                                   {columnIndex > 0 && columnIndex % periodCountPerAccount === 0 ? (
                                     <BudgetMatrixGroupBoundaryDivider />
                                   ) : null}
@@ -2632,6 +2642,7 @@ function FundsphereBudgetPageContent() {
                                         )}
                                         style={mergeStyles(departmentBandStyles.serviceStyle, getAccountBoundaryStyle(columnIndex))}
                                       >
+                                        {columnIndex === 0 ? <BudgetMatrixLeadingBoundaryDivider /> : null}
                                         {columnIndex > 0 && columnIndex % periodCountPerAccount === 0 ? (
                                           <BudgetMatrixGroupBoundaryDivider />
                                         ) : null}
@@ -2724,7 +2735,7 @@ function FundsphereBudgetPageContent() {
                                     <td
                                       className={cn(
                                         BUDGET_MATRIX_SEGMENT_COLUMN_CLASS,
-                                        "border-b border-r-2 border-r-slate-400 border-slate-200 bg-transparent px-2 py-2",
+                                        "border-b border-slate-200 bg-transparent px-2 py-2",
                                       )}
                                       style={mergeStyles(
                                         segmentColumnStyle,
@@ -2761,6 +2772,7 @@ function FundsphereBudgetPageContent() {
                                             ...getAccountBoundaryStyle(columnIndex),
                                           }}
                                         >
+                                          {columnIndex === 0 ? <BudgetMatrixLeadingBoundaryDivider /> : null}
                                           {columnIndex > 0 && columnIndex % periodCountPerAccount === 0 ? (
                                             <BudgetMatrixGroupBoundaryDivider />
                                           ) : null}
@@ -2819,23 +2831,24 @@ function FundsphereBudgetPageContent() {
                           >
                             <p className="text-sm font-bold text-slate-900">{departmentGroup.departmentName} Total</p>
                           </td>
-                          {matrixColumns.map((column, columnIndex) => {
-                            return (
-                            <td
-                              key={`${departmentGroup.key}:${column.key}`}
+                                  {matrixColumns.map((column, columnIndex) => {
+                                    return (
+                                <td
+                                  key={`${departmentGroup.key}:${column.key}`}
                             className={cn(
                               BUDGET_MATRIX_PERIOD_COLUMN_CLASS,
                               getAccountBoundaryClass(columnIndex),
                               getAccountGroupStartClass(columnIndex),
                               "border-t border-slate-200 bg-transparent px-1 py-2 text-center text-sm font-bold text-slate-900",
-                            )}
-                              style={mergeStyles(departmentBandStyles.headerStyle, getAccountBoundaryStyle(columnIndex))}
+                              )}
+                                  style={mergeStyles(departmentBandStyles.headerStyle, getAccountBoundaryStyle(columnIndex))}
                             >
-                              {columnIndex > 0 && columnIndex % periodCountPerAccount === 0 ? (
-                                <BudgetMatrixGroupBoundaryDivider />
-                              ) : null}
-                              {centsToCurrency(departmentGroup.totalCentsByColumn[column.key] ?? 0)}
-                              {columnIndex === periodCountPerAccount - 1 ? <BudgetMatrixBoundaryDivider /> : null}
+                                {columnIndex === 0 ? <BudgetMatrixLeadingBoundaryDivider /> : null}
+                                {columnIndex > 0 && columnIndex % periodCountPerAccount === 0 ? (
+                                  <BudgetMatrixGroupBoundaryDivider />
+                                ) : null}
+                                {centsToCurrency(departmentGroup.totalCentsByColumn[column.key] ?? 0)}
+                                {columnIndex === periodCountPerAccount - 1 ? <BudgetMatrixBoundaryDivider /> : null}
                             </td>
                             );
                           })}
@@ -2879,6 +2892,7 @@ function FundsphereBudgetPageContent() {
                           )}
                           style={mergeStyles({}, getAccountBoundaryStyle(columnIndex))}
                         >
+                          {columnIndex === 0 ? <BudgetMatrixLeadingBoundaryDivider /> : null}
                           {columnIndex > 0 && columnIndex % periodCountPerAccount === 0 ? (
                             <BudgetMatrixGroupBoundaryDivider />
                           ) : null}
