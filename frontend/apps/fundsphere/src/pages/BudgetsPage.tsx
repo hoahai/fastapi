@@ -479,7 +479,7 @@ function centsToCurrency(cents: number): string {
 function buildBudgetPeriodOptions(): AppDropdownOption[] {
   const now = new Date();
   const options: AppDropdownOption[] = [];
-  for (let offset = 3; offset >= -12; offset -= 1) {
+  for (let offset = -12; offset <= 3; offset += 1) {
     const date = new Date(now.getFullYear(), now.getMonth() + offset, 1);
     const month = date.getMonth() + 1;
     const year = date.getFullYear();
@@ -1945,6 +1945,17 @@ function FundsphereBudgetPageContent() {
   }, [matrixHierarchy.departments]);
 
   const hasMatrix = Boolean(matrix && matrixHierarchy.departments.length > 0);
+  const allMatrixGroupsOpen = useMemo(() => {
+    if (!matrixHierarchy.departments.length) {
+      return true;
+    }
+    return matrixHierarchy.departments.every((departmentGroup) => {
+      if (departmentOpenState[departmentGroup.key] === false) {
+        return false;
+      }
+      return departmentGroup.serviceGroups.every((serviceGroup) => serviceOpenState[serviceGroup.key] !== false);
+    });
+  }, [departmentOpenState, matrixHierarchy.departments, serviceOpenState]);
   const hasDraftFilters = hasBudgetSearchCriteria(searchDraft);
   const searchResultText = !hasSearched
     ? "Select accounts, periods, and services, then click Search to load the budget matrix."
@@ -2302,19 +2313,10 @@ function FundsphereBudgetPageContent() {
                   type="button"
                   variant="outline"
                   size="sm"
-                  onClick={() => setAllMatrixGroupsOpenState(true)}
+                  onClick={() => setAllMatrixGroupsOpenState(!allMatrixGroupsOpen)}
                 >
-                  <ChevronDown className="size-4" />
-                  Expand all
-                </Button>
-                <Button
-                  type="button"
-                  variant="outline"
-                  size="sm"
-                  onClick={() => setAllMatrixGroupsOpenState(false)}
-                >
-                  <ChevronUp className="size-4" />
-                  Collapse all
+                  {allMatrixGroupsOpen ? <ChevronUp className="size-4" /> : <ChevronDown className="size-4" />}
+                  {allMatrixGroupsOpen ? "Collapse all" : "Expand all"}
                 </Button>
               </div>
               <div className="overflow-x-auto overflow-y-hidden">
@@ -2441,7 +2443,7 @@ function FundsphereBudgetPageContent() {
                   </thead>
                   <tbody>
                     {matrixHierarchy.departments.map((departmentGroup) => {
-                    const departmentBandStyles = buildBudgetMatrixDepartmentBandStyles(
+  const departmentBandStyles = buildBudgetMatrixDepartmentBandStyles(
                       departmentGroup.departmentCode,
                       departmentGroup.departmentName,
                     );
@@ -2720,9 +2722,19 @@ function FundsphereBudgetPageContent() {
                                       </>
                                     ) : null}
                                     <td
-                                      className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-b border-slate-200 bg-transparent px-2 py-2")}
-                                      style={mergeStyles(segmentColumnStyle, departmentBandStyles.surfaceStyle)}
-                                    >
+                                      className={cn(
+                                        BUDGET_MATRIX_SEGMENT_COLUMN_CLASS,
+                                        "border-b border-r-2 border-r-slate-400 border-slate-200 bg-transparent px-2 py-2",
+                                      )}
+                                      style={mergeStyles(
+                                        segmentColumnStyle,
+                                        {
+                                          position: freezeBudgetMatrixColumns ? "sticky" : "relative",
+                                          zIndex: freezeBudgetMatrixColumns ? 30 : "auto",
+                                        },
+                                        departmentBandStyles.surfaceStyle,
+                                      )}
+                                      >
                                       <BudgetHierarchyLabel
                                         level={2}
                                         title={detailLabel || " "}
