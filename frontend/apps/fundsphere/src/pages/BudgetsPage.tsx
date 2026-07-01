@@ -1547,6 +1547,29 @@ function FundsphereBudgetPageContent() {
     });
   }
 
+  function setAllMatrixGroupsOpenState(nextOpen: boolean) {
+    if (!matrixHierarchy.departments.length) {
+      return;
+    }
+    setPageState((current) => {
+      const nextDepartmentOpenState = normalizeBooleanRecord(current.departmentOpenState);
+      const nextServiceOpenState = normalizeBooleanRecord(current.serviceOpenState);
+
+      for (const department of matrixHierarchy.departments) {
+        nextDepartmentOpenState[department.key] = nextOpen;
+        for (const serviceGroup of department.serviceGroups) {
+          nextServiceOpenState[serviceGroup.key] = nextOpen;
+        }
+      }
+
+      return {
+        ...current,
+        departmentOpenState: nextDepartmentOpenState,
+        serviceOpenState: nextServiceOpenState,
+      };
+    });
+  }
+
   useEffect(() => {
     accountOptionsRef.current = accountOptions;
   }, [accountOptions]);
@@ -2272,6 +2295,26 @@ function FundsphereBudgetPageContent() {
             </div>
 
             <div className="px-5 pb-5">
+              <div className="mb-3 flex flex-wrap items-center justify-end gap-2">
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAllMatrixGroupsOpenState(true)}
+                >
+                  <ChevronDown className="size-4" />
+                  Expand all
+                </Button>
+                <Button
+                  type="button"
+                  variant="outline"
+                  size="sm"
+                  onClick={() => setAllMatrixGroupsOpenState(false)}
+                >
+                  <ChevronUp className="size-4" />
+                  Collapse all
+                </Button>
+              </div>
               <div className="overflow-x-auto overflow-y-hidden">
                 <table className="w-max min-w-full table-fixed border-separate border-spacing-0">
                   <colgroup>
