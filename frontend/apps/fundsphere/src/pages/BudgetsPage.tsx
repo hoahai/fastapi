@@ -985,9 +985,18 @@ function handleHierarchyCellKeyDown(
   }
 }
 
-const BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS = "sticky left-0 z-50 w-[180px] min-w-[180px] max-w-[180px]";
-const BUDGET_MATRIX_SERVICE_COLUMN_CLASS = "sticky left-[180px] z-40 w-[220px] min-w-[220px] max-w-[220px]";
-const BUDGET_MATRIX_SEGMENT_COLUMN_CLASS = "sticky left-[400px] z-30 w-[220px] min-w-[220px] max-w-[220px]";
+const BUDGET_MATRIX_DEPARTMENT_COLUMN_MIN_WIDTH = 120;
+const BUDGET_MATRIX_DEPARTMENT_COLUMN_MAX_WIDTH = 150;
+const BUDGET_MATRIX_SERVICE_COLUMN_MIN_WIDTH = 200;
+const BUDGET_MATRIX_SERVICE_COLUMN_MAX_WIDTH = 250;
+const BUDGET_MATRIX_SEGMENT_COLUMN_MIN_WIDTH = 200;
+const BUDGET_MATRIX_SEGMENT_COLUMN_MAX_WIDTH = 250;
+const BUDGET_MATRIX_DEPARTMENT_COLUMN_WIDTH = BUDGET_MATRIX_DEPARTMENT_COLUMN_MIN_WIDTH;
+const BUDGET_MATRIX_SERVICE_COLUMN_WIDTH = BUDGET_MATRIX_SERVICE_COLUMN_MIN_WIDTH;
+const BUDGET_MATRIX_SEGMENT_COLUMN_WIDTH = BUDGET_MATRIX_SEGMENT_COLUMN_MIN_WIDTH;
+const BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS = "sticky left-0 z-50 w-[120px] min-w-[120px] max-w-[150px]";
+const BUDGET_MATRIX_SERVICE_COLUMN_CLASS = "sticky left-[120px] z-40 w-[200px] min-w-[200px] max-w-[250px]";
+const BUDGET_MATRIX_SEGMENT_COLUMN_CLASS = "sticky left-[320px] z-30 w-[200px] min-w-[200px] max-w-[250px]";
 const BUDGET_MATRIX_PERIOD_WIDTH = 104;
 const BUDGET_MATRIX_ACCOUNT_HEADER_HEIGHT = 48;
 const BUDGET_MATRIX_PERIOD_HEADER_HEIGHT = 40;
@@ -1001,37 +1010,38 @@ const BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE: CSSProperties = {
   position: "sticky",
   left: 0,
   zIndex: 80,
-  width: 180,
-  minWidth: 180,
-  maxWidth: 180,
+  width: BUDGET_MATRIX_DEPARTMENT_COLUMN_WIDTH,
+  minWidth: BUDGET_MATRIX_DEPARTMENT_COLUMN_MIN_WIDTH,
+  maxWidth: BUDGET_MATRIX_DEPARTMENT_COLUMN_MAX_WIDTH,
   backgroundColor: "#f8fafc",
   boxShadow: "inset -1px 0 0 0 #e2e8f0",
 };
 
 const BUDGET_MATRIX_SERVICE_COLUMN_STYLE: CSSProperties = {
   position: "sticky",
-  left: 180,
+  left: BUDGET_MATRIX_DEPARTMENT_COLUMN_WIDTH,
   zIndex: 70,
-  width: 220,
-  minWidth: 220,
-  maxWidth: 220,
+  width: BUDGET_MATRIX_SERVICE_COLUMN_WIDTH,
+  minWidth: BUDGET_MATRIX_SERVICE_COLUMN_MIN_WIDTH,
+  maxWidth: BUDGET_MATRIX_SERVICE_COLUMN_MAX_WIDTH,
   backgroundColor: "#ffffff",
   boxShadow: "inset -1px 0 0 0 #e2e8f0",
 };
 
 const BUDGET_MATRIX_SEGMENT_COLUMN_STYLE: CSSProperties = {
   position: "sticky",
-  left: 400,
+  left: BUDGET_MATRIX_DEPARTMENT_COLUMN_WIDTH + BUDGET_MATRIX_SERVICE_COLUMN_WIDTH,
   zIndex: 60,
-  width: 220,
-  minWidth: 220,
-  maxWidth: 220,
+  width: BUDGET_MATRIX_SEGMENT_COLUMN_WIDTH,
+  minWidth: BUDGET_MATRIX_SEGMENT_COLUMN_MIN_WIDTH,
+  maxWidth: BUDGET_MATRIX_SEGMENT_COLUMN_MAX_WIDTH,
   backgroundColor: "#ffffff",
   boxShadow: "inset -1px 0 0 0 #e2e8f0",
 };
 
-const BUDGET_MATRIX_MERGED_TOTAL_WIDTH = 180 + 220 + 220;
-const BUDGET_MATRIX_SERVICE_TOTAL_WIDTH = 220 + 220;
+const BUDGET_MATRIX_MERGED_TOTAL_WIDTH =
+  BUDGET_MATRIX_DEPARTMENT_COLUMN_WIDTH + BUDGET_MATRIX_SERVICE_COLUMN_WIDTH + BUDGET_MATRIX_SEGMENT_COLUMN_WIDTH;
+const BUDGET_MATRIX_SERVICE_TOTAL_WIDTH = BUDGET_MATRIX_SERVICE_COLUMN_WIDTH + BUDGET_MATRIX_SEGMENT_COLUMN_WIDTH;
 
 const BUDGET_MATRIX_ACCOUNT_HEADER_STYLE: CSSProperties = {
   position: "sticky",
@@ -2320,11 +2330,29 @@ function FundsphereBudgetPageContent() {
               <div className="overflow-x-auto overflow-y-hidden">
                 <table className="w-max min-w-full table-fixed border-separate border-spacing-0">
                   <colgroup>
-                    <col style={{ width: 180, minWidth: 180 }} />
-                    <col style={{ width: 220, minWidth: 220 }} />
-                    <col style={{ width: 220, minWidth: 220 }} />
+                    <col
+                      style={{
+                        width: BUDGET_MATRIX_DEPARTMENT_COLUMN_WIDTH,
+                        minWidth: BUDGET_MATRIX_DEPARTMENT_COLUMN_WIDTH,
+                        maxWidth: BUDGET_MATRIX_DEPARTMENT_COLUMN_MAX_WIDTH,
+                      }}
+                    />
+                    <col
+                      style={{
+                        width: BUDGET_MATRIX_SERVICE_COLUMN_WIDTH,
+                        minWidth: BUDGET_MATRIX_SERVICE_COLUMN_WIDTH,
+                        maxWidth: BUDGET_MATRIX_SERVICE_COLUMN_MAX_WIDTH,
+                      }}
+                    />
+                    <col
+                      style={{
+                        width: BUDGET_MATRIX_SEGMENT_COLUMN_WIDTH,
+                        minWidth: BUDGET_MATRIX_SEGMENT_COLUMN_WIDTH,
+                        maxWidth: BUDGET_MATRIX_SEGMENT_COLUMN_MAX_WIDTH,
+                      }}
+                    />
                     {matrixColumns.map((column) => (
-                      <col key={column.key} style={{ width: 104, minWidth: 104 }} />
+                      <col key={column.key} style={{ width: BUDGET_MATRIX_PERIOD_WIDTH, minWidth: BUDGET_MATRIX_PERIOD_WIDTH }} />
                     ))}
                   </colgroup>
                   <thead>
@@ -2471,11 +2499,11 @@ function FundsphereBudgetPageContent() {
                               </td>
                             <td
                               className={cn(BUDGET_MATRIX_SERVICE_COLUMN_CLASS, "border-b border-slate-200 bg-transparent px-2 py-2")}
-                              style={mergeStyles(BUDGET_MATRIX_SERVICE_COLUMN_STYLE, departmentBandStyles.serviceStyle)}
+                              style={mergeStyles(BUDGET_MATRIX_SERVICE_COLUMN_STYLE, departmentBandStyles.headerStyle)}
                             />
                             <td
                               className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-b border-slate-200 bg-transparent px-2 py-2")}
-                              style={mergeStyles(BUDGET_MATRIX_SEGMENT_COLUMN_STYLE, departmentBandStyles.surfaceStyle)}
+                              style={mergeStyles(BUDGET_MATRIX_SEGMENT_COLUMN_STYLE, departmentBandStyles.headerStyle)}
                             />
                             {matrixColumns.map((column, columnIndex) => {
                               return (
@@ -2487,7 +2515,7 @@ function FundsphereBudgetPageContent() {
                                           getAccountGroupStartClass(columnIndex),
                                           "border-b border-slate-200 bg-transparent px-1 py-2 text-center text-sm font-semibold text-slate-900",
                                         )}
-                                  style={mergeStyles(departmentBandStyles.serviceStyle, getAccountBoundaryStyle(columnIndex))}
+                                  style={mergeStyles(departmentBandStyles.headerStyle, getAccountBoundaryStyle(columnIndex))}
                               >
                                 {columnIndex > 0 && columnIndex % periodCountPerAccount === 0 ? (
                                   <BudgetMatrixGroupBoundaryDivider />
