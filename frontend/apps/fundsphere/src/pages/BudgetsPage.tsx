@@ -17,6 +17,7 @@ import {
   ModalShell,
   ReadOnlyField,
 } from "@shared/components";
+import { TooltipTarget } from "@shared/components/actions/TooltipTarget";
 import { shouldFetchNetwork, type CachePolicy } from "@shared/cache";
 import { shouldProtectFrontendAuth } from "@shared/auth/guards";
 import { hasAppEditAccess } from "@shared/auth/permissions";
@@ -90,20 +91,6 @@ type PersistedBudgetsPageState = {
   hasSearched: boolean;
   departmentOpenState?: Record<string, boolean>;
   serviceOpenState?: Record<string, boolean>;
-  selectedCell?: PersistedBudgetCellSelectionState;
-};
-
-type PersistedBudgetCellSelectionState = {
-  accountCode: string;
-  accountName: string;
-  month: number;
-  year: number;
-  serviceId: string;
-  serviceName: string;
-  departmentCode: string;
-  departmentName: string;
-  subService: string;
-  mode: BudgetMode;
 };
 
 type BudgetCellValue = {
@@ -237,6 +224,29 @@ function formatRelativeTime(timestamp: number): string {
 
 function mergeStyles(...styles: Array<CSSProperties | null | undefined>): CSSProperties {
   return Object.assign({}, ...styles.filter(Boolean));
+}
+
+function useViewportMinWidth(minWidth: number): boolean {
+  const [matches, setMatches] = useState(() => {
+    if (typeof window === "undefined") {
+      return true;
+    }
+    return window.innerWidth >= minWidth;
+  });
+
+  useEffect(() => {
+    const updateMatches = () => {
+      setMatches(window.innerWidth >= minWidth);
+    };
+
+    updateMatches();
+    window.addEventListener("resize", updateMatches);
+    return () => {
+      window.removeEventListener("resize", updateMatches);
+    };
+  }, [minWidth]);
+
+  return matches;
 }
 
 function reduceRgbaAlpha(value: string | undefined, factor: number): string | undefined {
@@ -436,50 +446,6 @@ function normalizeBooleanRecord(value: unknown): Record<string, boolean> {
   return normalized;
 }
 
-function normalizeBudgetCellSelectionState(value: unknown): PersistedBudgetCellSelectionState | undefined {
-  if (!isRecord(value)) {
-    return undefined;
-  }
-
-  const accountCode = asString(value.accountCode).toUpperCase();
-  const accountName = asString(value.accountName);
-  const month = Number(value.month);
-  const year = Number(value.year);
-  const serviceId = asString(value.serviceId);
-  const serviceName = asString(value.serviceName);
-  const departmentCode = asString(value.departmentCode).toUpperCase();
-  const departmentName = asString(value.departmentName);
-  const subService = asString(value.subService);
-  const mode = value.mode === "edit" || value.mode === "create" ? value.mode : null;
-
-  if (
-    !accountCode ||
-    !accountName ||
-    !Number.isFinite(month) ||
-    !Number.isFinite(year) ||
-    !serviceId ||
-    !serviceName ||
-    !departmentCode ||
-    !departmentName ||
-    !mode
-  ) {
-    return undefined;
-  }
-
-  return {
-    accountCode,
-    accountName,
-    month: Math.trunc(month),
-    year: Math.trunc(year),
-    serviceId,
-    serviceName,
-    departmentCode,
-    departmentName,
-    subService,
-    mode,
-  };
-}
-
 function getMonthLabel(month: number): string {
   return new Intl.DateTimeFormat("en-US", { month: "long" }).format(new Date(2026, month - 1, 1));
 }
@@ -565,16 +531,6 @@ function budgetFormFromRow(row: FundsphereBudgetMatrixRow | null): FundsphereBud
 
 function buildColumnKey(accountCode: string, month: number, year: number): string {
   return `${accountCode.toUpperCase()}::${month}/${year}`;
-}
-
-function buildBudgetCellSelectionKey(cell: {
-  accountCode: string;
-  month: number;
-  year: number;
-  serviceId: string;
-  subService: string;
-}): string {
-  return [cell.accountCode.toUpperCase(), cell.month, cell.year, cell.serviceId, cell.subService].join("::");
 }
 
 function buildBudgetColumns(
@@ -842,8 +798,7 @@ function isPersistedBudgetsPageState(value: unknown): value is PersistedBudgetsP
     Array.isArray(value.searchCriteria.accountCodes) &&
     Array.isArray(value.searchCriteria.periods) &&
     (searchDraftServiceIds === undefined || Array.isArray(searchDraftServiceIds)) &&
-    (searchCriteriaServiceIds === undefined || Array.isArray(searchCriteriaServiceIds)) &&
-    (value.selectedCell === undefined || normalizeBudgetCellSelectionState(value.selectedCell) !== undefined)
+    (searchCriteriaServiceIds === undefined || Array.isArray(searchCriteriaServiceIds))
   );
 }
 
@@ -852,32 +807,31 @@ function BudgetMatrixCellButton({
   title,
   onClick,
   align = "center",
-  selected = false,
+  tooltipText,
 }: {
   value: BudgetCellValue | null;
   title: string;
   onClick: () => void;
   align?: "center" | "right";
-  selected?: boolean;
+  tooltipText: string;
 }) {
   return (
-    <button
-      type="button"
-      className={cn(
-        "flex w-full items-center rounded-md px-2 py-2 text-sm transition",
-        align === "right" ? "justify-end text-right" : "justify-center text-center",
-        value?.row
-          ? "bg-white/85 font-medium text-slate-800 hover:bg-blue-50 hover:text-blue-800"
-          : "bg-slate-50/80 text-slate-400 hover:bg-blue-50 hover:text-blue-800",
-        selected
-          ? "ring-2 ring-inset ring-blue-500/70 bg-blue-50/90 text-blue-900 shadow-[0_0_0_1px_rgba(59,130,246,0.25)]"
-          : null,
-      )}
-      title={title}
-      onClick={onClick}
-    >
-      {value ? centsToCurrency(value.cents) : "—"}
-    </button>
+    <TooltipTarget text={tooltipText}>
+      <button
+        type="button"
+        className={cn(
+          "flex w-full items-center rounded-md px-2 py-2 text-sm transition",
+          align === "right" ? "justify-end text-right" : "justify-center text-center",
+          value?.row
+            ? "bg-white/85 font-medium text-slate-800 hover:bg-blue-50 hover:text-blue-800"
+            : "bg-slate-50/80 text-slate-400 hover:bg-blue-50 hover:text-blue-800",
+        )}
+        title={title}
+        onClick={onClick}
+      >
+        {value ? centsToCurrency(value.cents) : "—"}
+      </button>
+    </TooltipTarget>
   );
 }
 
@@ -991,6 +945,7 @@ const BUDGET_MATRIX_SERVICE_COLUMN_MIN_WIDTH = 200;
 const BUDGET_MATRIX_SERVICE_COLUMN_MAX_WIDTH = 250;
 const BUDGET_MATRIX_SEGMENT_COLUMN_MIN_WIDTH = 200;
 const BUDGET_MATRIX_SEGMENT_COLUMN_MAX_WIDTH = 250;
+const BUDGET_MATRIX_FROZEN_COLUMNS_MIN_VIEWPORT_WIDTH = 1000;
 const BUDGET_MATRIX_DEPARTMENT_COLUMN_WIDTH = BUDGET_MATRIX_DEPARTMENT_COLUMN_MIN_WIDTH;
 const BUDGET_MATRIX_SERVICE_COLUMN_WIDTH = BUDGET_MATRIX_SERVICE_COLUMN_MIN_WIDTH;
 const BUDGET_MATRIX_SEGMENT_COLUMN_WIDTH = BUDGET_MATRIX_SEGMENT_COLUMN_MIN_WIDTH;
@@ -1037,6 +992,13 @@ const BUDGET_MATRIX_SEGMENT_COLUMN_STYLE: CSSProperties = {
   maxWidth: BUDGET_MATRIX_SEGMENT_COLUMN_MAX_WIDTH,
   backgroundColor: "#ffffff",
   boxShadow: "inset -1px 0 0 0 #e2e8f0",
+};
+
+const BUDGET_MATRIX_UNFROZEN_COLUMN_STYLE: CSSProperties = {
+  position: "static",
+  left: "auto",
+  zIndex: "auto",
+  boxShadow: "none",
 };
 
 const BUDGET_MATRIX_MERGED_TOTAL_WIDTH =
@@ -1492,6 +1454,7 @@ function FundsphereBudgetPageContent() {
   const { requestJson } = useApiRequest();
   const { isOnline } = useOnlineStatus();
   const auth = useAuth();
+  const freezeBudgetMatrixColumns = useViewportMinWidth(BUDGET_MATRIX_FROZEN_COLUMNS_MIN_VIEWPORT_WIDTH);
   const periodOrder = useMemo(() => {
     const order = new Map<string, number>();
     buildBudgetPeriodOptions().forEach((option, index) => {
@@ -1548,14 +1511,15 @@ function FundsphereBudgetPageContent() {
   const accountOptionsTokenRef = useRef(0);
   const serviceOptionsTokenRef = useRef(0);
   const matrixRequestTokenRef = useRef(0);
+  const departmentColumnStyle = freezeBudgetMatrixColumns ? BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE : BUDGET_MATRIX_UNFROZEN_COLUMN_STYLE;
+  const serviceColumnStyle = freezeBudgetMatrixColumns ? BUDGET_MATRIX_SERVICE_COLUMN_STYLE : BUDGET_MATRIX_UNFROZEN_COLUMN_STYLE;
+  const segmentColumnStyle = freezeBudgetMatrixColumns ? BUDGET_MATRIX_SEGMENT_COLUMN_STYLE : BUDGET_MATRIX_UNFROZEN_COLUMN_STYLE;
 
   const searchDraft = pageState.searchDraft;
   const searchCriteria = pageState.searchCriteria;
   const hasSearched = pageState.hasSearched;
   const departmentOpenState = pageState.departmentOpenState ?? {};
   const serviceOpenState = pageState.serviceOpenState ?? {};
-  const selectedCell = pageState.selectedCell ?? null;
-  const selectedCellKey = selectedCell ? buildBudgetCellSelectionKey(selectedCell) : null;
 
   function updateDepartmentOpenState(
     updater: Record<string, boolean> | ((current: Record<string, boolean>) => Record<string, boolean>),
@@ -1600,13 +1564,11 @@ function FundsphereBudgetPageContent() {
       const normalizedSearchCriteria = normalizeBudgetSearchCriteria(current.searchCriteria, periodOrder);
       const normalizedDepartmentOpenState = normalizeBooleanRecord(current.departmentOpenState);
       const normalizedServiceOpenState = normalizeBooleanRecord(current.serviceOpenState);
-      const normalizedSelectedCell = normalizeBudgetCellSelectionState(current.selectedCell);
       const searchDraftChanged = !areBudgetSearchCriteriaEqual(current.searchDraft, normalizedSearchDraft);
       const searchCriteriaChanged = !areBudgetSearchCriteriaEqual(current.searchCriteria, normalizedSearchCriteria);
       const departmentOpenChanged = JSON.stringify(normalizedDepartmentOpenState) !== JSON.stringify(current.departmentOpenState ?? {});
       const serviceOpenChanged = JSON.stringify(normalizedServiceOpenState) !== JSON.stringify(current.serviceOpenState ?? {});
-      const selectedCellChanged = JSON.stringify(normalizedSelectedCell ?? null) !== JSON.stringify(current.selectedCell ?? null);
-      if (!searchDraftChanged && !searchCriteriaChanged && !departmentOpenChanged && !serviceOpenChanged && !selectedCellChanged) {
+      if (!searchDraftChanged && !searchCriteriaChanged && !departmentOpenChanged && !serviceOpenChanged) {
         return current;
       }
       return {
@@ -1615,7 +1577,6 @@ function FundsphereBudgetPageContent() {
         searchCriteria: searchCriteriaChanged ? normalizedSearchCriteria : current.searchCriteria,
         departmentOpenState: departmentOpenChanged ? normalizedDepartmentOpenState : current.departmentOpenState,
         serviceOpenState: serviceOpenChanged ? normalizedServiceOpenState : current.serviceOpenState,
-        selectedCell: selectedCellChanged ? normalizedSelectedCell : current.selectedCell,
       };
     });
   }, [pageStateControls.hydrated, periodOrder, setPageState]);
@@ -2061,7 +2022,6 @@ function FundsphereBudgetPageContent() {
       hasSearched: false,
       departmentOpenState: {},
       serviceOpenState: {},
-      selectedCell: undefined,
     }));
   }
 
@@ -2069,21 +2029,6 @@ function FundsphereBudgetPageContent() {
     if (!canEditFundsphere) {
       return;
     }
-    setPageState((current) => ({
-      ...current,
-      selectedCell: {
-        accountCode: cell.accountCode,
-        accountName: cell.accountName,
-        month: cell.month,
-        year: cell.year,
-        serviceId: cell.serviceId,
-        serviceName: cell.serviceName,
-        departmentCode: cell.departmentCode,
-        departmentName: cell.departmentName,
-        subService: cell.subService,
-        mode,
-      },
-    }));
     setModalMode(mode);
     setModalCell(cell);
     setModalOpen(true);
@@ -2363,7 +2308,7 @@ function FundsphereBudgetPageContent() {
                           BUDGET_MATRIX_FROZEN_HEADER_CLASS,
                           "bg-slate-100/95 italic text-xs font-semibold normal-case tracking-[-0.01em] text-slate-900",
                         )}
-                        style={BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE}
+                        style={departmentColumnStyle}
                         rowSpan={2}
                       >
                         Department
@@ -2374,7 +2319,7 @@ function FundsphereBudgetPageContent() {
                           BUDGET_MATRIX_FROZEN_HEADER_CLASS,
                           "bg-slate-100/95 italic text-xs font-semibold normal-case tracking-[-0.01em] text-slate-900",
                         )}
-                        style={BUDGET_MATRIX_SERVICE_COLUMN_STYLE}
+                        style={serviceColumnStyle}
                         rowSpan={2}
                       >
                         Service
@@ -2385,7 +2330,7 @@ function FundsphereBudgetPageContent() {
                           BUDGET_MATRIX_FROZEN_HEADER_CLASS,
                           "bg-slate-100/95 italic text-xs font-semibold normal-case tracking-[-0.01em] text-slate-900",
                         )}
-                        style={BUDGET_MATRIX_SEGMENT_COLUMN_STYLE}
+                        style={segmentColumnStyle}
                         rowSpan={2}
                       >
                         Segment
@@ -2470,7 +2415,7 @@ function FundsphereBudgetPageContent() {
                                   BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS,
                                   "border-b border-slate-200 bg-transparent px-2 py-2 align-top cursor-pointer select-none",
                                 )}
-                              style={mergeStyles(BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE, departmentBandStyles.headerStyle)}
+                              style={mergeStyles(departmentColumnStyle, departmentBandStyles.headerStyle)}
                               role="button"
                               tabIndex={0}
                               aria-expanded={departmentOpen}
@@ -2499,11 +2444,11 @@ function FundsphereBudgetPageContent() {
                               </td>
                             <td
                               className={cn(BUDGET_MATRIX_SERVICE_COLUMN_CLASS, "border-b border-slate-200 bg-transparent px-2 py-2")}
-                              style={mergeStyles(BUDGET_MATRIX_SERVICE_COLUMN_STYLE, departmentBandStyles.headerStyle)}
+                              style={mergeStyles(serviceColumnStyle, departmentBandStyles.headerStyle)}
                             />
                             <td
                               className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-b border-slate-200 bg-transparent px-2 py-2")}
-                              style={mergeStyles(BUDGET_MATRIX_SEGMENT_COLUMN_STYLE, departmentBandStyles.headerStyle)}
+                              style={mergeStyles(segmentColumnStyle, departmentBandStyles.headerStyle)}
                             />
                             {matrixColumns.map((column, columnIndex) => {
                               return (
@@ -2547,16 +2492,16 @@ function FundsphereBudgetPageContent() {
                               {showServiceTotalRow ? (
                                 <tr key={`${serviceGroup.key}:total`} className="bg-transparent">
                                   {showDepartmentCell ? (
-                                    <td
-                                      rowSpan={departmentBodyRowCount}
-                                      className={cn(
-                                        BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS,
-                                        "border-b border-slate-200 bg-transparent px-2 py-2 align-top cursor-pointer select-none",
-                                      )}
-                                      style={mergeStyles(BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE, departmentBandStyles.headerStyle)}
-                                      role="button"
-                                      tabIndex={0}
-                                      aria-expanded={departmentOpen}
+                                      <td
+                                        rowSpan={departmentBodyRowCount}
+                                        className={cn(
+                                          BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS,
+                                          "border-b border-slate-200 bg-transparent px-2 py-2 align-top cursor-pointer select-none",
+                                        )}
+                                        style={mergeStyles(departmentColumnStyle, departmentBandStyles.headerStyle)}
+                                        role="button"
+                                        tabIndex={0}
+                                        aria-expanded={departmentOpen}
                                       onClick={() => {
                                         updateDepartmentOpenState((current) => ({
                                           ...current,
@@ -2588,7 +2533,7 @@ function FundsphereBudgetPageContent() {
                                       "border-t border-slate-200 bg-transparent px-2 py-2 align-top cursor-pointer select-none",
                                     )}
                                     style={mergeStyles(
-                                      BUDGET_MATRIX_SERVICE_COLUMN_STYLE,
+                                      serviceColumnStyle,
                                       {
                                         width: BUDGET_MATRIX_SERVICE_TOTAL_WIDTH,
                                         minWidth: BUDGET_MATRIX_SERVICE_TOTAL_WIDTH,
@@ -2661,7 +2606,7 @@ function FundsphereBudgetPageContent() {
                                               BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS,
                                               "border-b border-slate-200 bg-transparent px-2 py-2 align-top cursor-pointer select-none",
                                             )}
-                                            style={mergeStyles(BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE, departmentBandStyles.headerStyle)}
+                                            style={mergeStyles(departmentColumnStyle, departmentBandStyles.headerStyle)}
                                             role="button"
                                             tabIndex={0}
                                             aria-expanded={departmentOpen}
@@ -2689,13 +2634,13 @@ function FundsphereBudgetPageContent() {
                                             />
                                           </td>
                                         ) : null}
-                                        <td
-                                          rowSpan={serviceRowSpan}
-                                          className={cn(
-                                            BUDGET_MATRIX_SERVICE_COLUMN_CLASS,
-                                            "border-t border-slate-200 bg-transparent px-2 py-2 align-top cursor-pointer select-none",
-                                          )}
-                                          style={mergeStyles(BUDGET_MATRIX_SERVICE_COLUMN_STYLE, departmentBandStyles.serviceStyle)}
+                                      <td
+                                        rowSpan={serviceRowSpan}
+                                        className={cn(
+                                          BUDGET_MATRIX_SERVICE_COLUMN_CLASS,
+                                          "border-t border-slate-200 bg-transparent px-2 py-2 align-top cursor-pointer select-none",
+                                        )}
+                                        style={mergeStyles(serviceColumnStyle, departmentBandStyles.serviceStyle)}
                                           role="button"
                                           tabIndex={0}
                                           aria-expanded={serviceOpen}
@@ -2727,7 +2672,7 @@ function FundsphereBudgetPageContent() {
                                     ) : null}
                                     <td
                                       className={cn(BUDGET_MATRIX_SEGMENT_COLUMN_CLASS, "border-b border-slate-200 bg-transparent px-2 py-2")}
-                                      style={mergeStyles(BUDGET_MATRIX_SEGMENT_COLUMN_STYLE, departmentBandStyles.surfaceStyle)}
+                                      style={mergeStyles(segmentColumnStyle, departmentBandStyles.surfaceStyle)}
                                     >
                                       <BudgetHierarchyLabel
                                         level={2}
@@ -2762,19 +2707,10 @@ function FundsphereBudgetPageContent() {
                                             value={cell}
                                             title={
                                               cell?.row
-                                                ? `${column.accountCode} ${column.label} ${detailRow.serviceName} ${detailLabel || "segment"}`
+                                                ? `${column.accountCode} ${column.label} ${detailRow.serviceName} ${detailLabel || "segment"} - edit budget`
                                                 : `${column.accountCode} ${column.label} ${detailRow.serviceName} ${detailLabel || "segment"} - create budget`
                                             }
-                                            selected={
-                                              selectedCellKey ===
-                                              buildBudgetCellSelectionKey({
-                                                accountCode: column.accountCode,
-                                                month: column.month,
-                                                year: column.year,
-                                                serviceId: detailRow.serviceId,
-                                                subService: detailRow.subService,
-                                              })
-                                            }
+                                            tooltipText={cell?.row ? "Click to edit budget" : "Click to create budget"}
                                             onClick={() => {
                                               const cellRow = cell?.row ?? null;
                                               openCellModal(
@@ -2811,7 +2747,7 @@ function FundsphereBudgetPageContent() {
                             colSpan={3}
                             className={cn(BUDGET_MATRIX_DEPARTMENT_COLUMN_CLASS, "border-t border-slate-200 bg-transparent px-2 py-2")}
                             style={mergeStyles(
-                              BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE,
+                              departmentColumnStyle,
                               {
                                 width: BUDGET_MATRIX_MERGED_TOTAL_WIDTH,
                                 minWidth: BUDGET_MATRIX_MERGED_TOTAL_WIDTH,
@@ -2856,7 +2792,7 @@ function FundsphereBudgetPageContent() {
                           "border-t border-slate-800 bg-slate-900 px-2 py-2",
                         )}
                         style={mergeStyles(
-                          BUDGET_MATRIX_DEPARTMENT_COLUMN_STYLE,
+                          departmentColumnStyle,
                           {
                             width: BUDGET_MATRIX_MERGED_TOTAL_WIDTH,
                             minWidth: BUDGET_MATRIX_MERGED_TOTAL_WIDTH,
