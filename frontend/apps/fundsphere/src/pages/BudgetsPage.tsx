@@ -287,8 +287,10 @@ function blendRgbaOverWhite(value: string | undefined): string | undefined {
   return `rgb(${blend(red)} ${blend(green)} ${blend(blue)})`;
 }
 
-function buildBudgetMatrixDepartmentBandStyles(departmentCode: string) {
-  const styles = buildFundsphereDepartmentColorStyles({ identity: departmentCode });
+function buildBudgetMatrixDepartmentBandStyles(departmentCode: string, departmentName: string) {
+  const styles = buildFundsphereDepartmentColorStyles({
+    identity: `${departmentCode}:${departmentName}`,
+  });
   const headerBackground = blendRgbaOverWhite(reduceRgbaAlpha(typeof styles.headerStyle.backgroundColor === "string" ? styles.headerStyle.backgroundColor : undefined, 3)) ?? "transparent";
   const serviceBackground = blendRgbaOverWhite(reduceRgbaAlpha(typeof styles.headerStyle.backgroundColor === "string" ? styles.headerStyle.backgroundColor : undefined, 2.2)) ?? headerBackground;
   const surfaceBackground = blendRgbaOverWhite(reduceRgbaAlpha(typeof styles.cardStyle.backgroundColor === "string" ? styles.cardStyle.backgroundColor : undefined, 3)) ?? "transparent";
@@ -2439,7 +2441,10 @@ function FundsphereBudgetPageContent() {
                   </thead>
                   <tbody>
                     {matrixHierarchy.departments.map((departmentGroup) => {
-                    const departmentBandStyles = buildBudgetMatrixDepartmentBandStyles(departmentGroup.departmentCode);
+                    const departmentBandStyles = buildBudgetMatrixDepartmentBandStyles(
+                      departmentGroup.departmentCode,
+                      departmentGroup.departmentName,
+                    );
                     const departmentOpen = departmentOpenState[departmentGroup.key] ?? true;
                     const departmentBodyRowCount = departmentOpen
                       ? departmentGroup.serviceGroups.reduce((count, serviceGroup) => {
