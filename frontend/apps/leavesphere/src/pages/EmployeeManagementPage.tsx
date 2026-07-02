@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState, type FocusEventHandler } from "react";
 import {
   ChevronDown,
   RefreshCw,
@@ -1542,6 +1542,47 @@ function EmptyEmployeesPanel({
   );
 }
 
+function ClearableInput({
+  id,
+  value,
+  onChange,
+  onBlur,
+  inputMode,
+}: {
+  id: string;
+  value: string;
+  onChange: (nextValue: string) => void;
+  onBlur?: FocusEventHandler<HTMLInputElement>;
+  inputMode?: "text" | "numeric" | "decimal" | "email" | "tel" | "search" | "url";
+}) {
+  const hasValue = value.trim().length > 0;
+
+  return (
+    <div className="group relative">
+      <Input
+        id={id}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        onBlur={onBlur}
+        autoComplete="off"
+        spellCheck={false}
+        inputMode={inputMode}
+        className="pr-9"
+      />
+      <button
+        type="button"
+        aria-label="Clear input"
+        onClick={() => onChange("")}
+        className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 opacity-0 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:opacity-100 focus-visible:outline-none group-hover:opacity-100 group-focus-within:opacity-100"
+        style={{ visibility: hasValue ? "visible" : "hidden" }}
+        tabIndex={hasValue ? 0 : -1}
+      >
+        <X className="size-3.5" />
+      </button>
+    </div>
+  );
+}
+
 function buildWorkspaceFromPatch(
   currentWorkspace: LeaveSphereEmployeeManagementWorkspace | null,
   nextEmployee: LeaveSphereEmployeeManagementEmployee,
@@ -2245,30 +2286,22 @@ export default function EmployeeManagementPage() {
               <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
                 Name or title
               </span>
-              <div className="relative">
-                <Input
-                  value={searchDraft.nameOrTitle}
-                  onChange={(event) => setSearchDraft((current) => ({ ...current, nameOrTitle: event.target.value }))}
-                  placeholder="Search name or title"
-                  autoComplete="off"
-                  spellCheck={false}
-                  className="pl-10"
-                />
-                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
-              </div>
+              <ClearableInput
+                id="leavesphere-employees-search-name-or-title"
+                value={searchDraft.nameOrTitle}
+                onChange={(nextValue) => setSearchDraft((current) => ({ ...current, nameOrTitle: nextValue }))}
+              />
             </label>
 
             <label className="block min-w-0">
               <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
                 Email
               </span>
-              <Input
+              <ClearableInput
+                id="leavesphere-employees-search-email"
                 value={searchDraft.email}
-                onChange={(event) => setSearchDraft((current) => ({ ...current, email: event.target.value }))}
+                onChange={(nextValue) => setSearchDraft((current) => ({ ...current, email: nextValue }))}
                 onBlur={handleSearchEmailBlur}
-                placeholder="Search email"
-                autoComplete="off"
-                spellCheck={false}
                 inputMode="email"
               />
               {searchEmailTouched && searchEmailError ? <p className="mt-1.5 text-xs text-rose-600">{searchEmailError}</p> : null}

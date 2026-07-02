@@ -33,6 +33,8 @@ export function UnsavedChangesDialog({
       }}
     >
       <DialogContent
+        overlayClassName="!z-[500]"
+        contentClassName="!z-[510]"
         className="max-w-md rounded-2xl border border-amber-100 bg-white p-6 shadow-[0_20px_60px_-24px_rgba(15,23,42,0.45)]"
         onEscapeKeyDown={(event) => {
           event.preventDefault();

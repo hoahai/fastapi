@@ -346,6 +346,41 @@ function isPersistedServicesPageState(value: unknown): value is PersistedService
   );
 }
 
+function ClearableInput({
+  id,
+  value,
+  onChange,
+}: {
+  id: string;
+  value: string;
+  onChange: (nextValue: string) => void;
+}) {
+  const hasValue = value.trim().length > 0;
+
+  return (
+    <div className="group relative">
+      <Input
+        id={id}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        autoComplete="off"
+        spellCheck={false}
+        className="pr-9"
+      />
+      <button
+        type="button"
+        aria-label="Clear input"
+        onClick={() => onChange("")}
+        className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 opacity-0 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:opacity-100 focus-visible:outline-none group-hover:opacity-100 group-focus-within:opacity-100"
+        style={{ visibility: hasValue ? "visible" : "hidden" }}
+        tabIndex={hasValue ? 0 : -1}
+      >
+        <X className="size-3.5" />
+      </button>
+    </div>
+  );
+}
+
 function toServiceForm(service: FundsphereService | null): FundsphereServiceFormState {
   return normalizeFundsphereServiceForm(service);
 }
@@ -1441,25 +1476,19 @@ function FundsphereServicesPage() {
               <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
                 Service Name
               </span>
-              <div className="relative">
-                <Input
-                  value={searchDraft.name}
-                  onChange={(event) =>
-                    setPageState((current) => ({
-                      ...current,
-                      searchDraft: {
-                        ...current.searchDraft,
-                        name: event.target.value,
-                      },
-                    }))
-                  }
-                  placeholder="Search service name"
-                  autoComplete="off"
-                  spellCheck={false}
-                  className="pl-10"
-                />
-                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
-              </div>
+              <ClearableInput
+                id="fundsphere-services-search-name"
+                value={searchDraft.name}
+                onChange={(nextValue) =>
+                  setPageState((current) => ({
+                    ...current,
+                    searchDraft: {
+                      ...current.searchDraft,
+                      name: nextValue,
+                    },
+                  }))
+                }
+              />
             </label>
 
             <label className="block min-w-0">

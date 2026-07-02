@@ -2,12 +2,15 @@ import {
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  House,
+  Coins,
   LayoutDashboard,
   LogIn,
   LogOut,
   Menu,
   ShieldCheck,
   UserRound,
+  Wrench,
 } from "lucide-react";
 import { AnimatePresence, motion } from "framer-motion";
 import { useEffect, useMemo, useRef, useState, type ComponentType, type FocusEvent, type MouseEvent as ReactMouseEvent } from "react";
@@ -873,29 +876,35 @@ function SidebarChildItem({ child, currentPath, tenantSlug, activeTenantSlug, ac
   }
   const active = child.available && currentPath === child.route && (!normalizedTenantSlug || activeTenantSlug === normalizedTenantSlug);
   const ChildIcon =
-    child.route === "/tradsphere/estnums"
-      ? TRADSPHERE_ESTNUMS_CHILD_ICON
-      : child.route === "/tradsphere/contacts"
-        ? TRADSPHERE_CONTACTS_CHILD_ICON
-        : child.route === "/tradsphere/invoice-checklists"
-          ? TRADSPHERE_INVOICE_CHECKLISTS_CHILD_ICON
-        : child.route === "/tradsphere/stations"
-          ? TRADSPHERE_STATIONS_CHILD_ICON
-          : child.route === "/tradsphere/traffic"
-            ? TRADSPHERE_TRAFFIC_CHILD_ICON
-          : child.route.endsWith("/admin")
-            ? ShieldCheck
-          : child.route === "/shiftzy/home"
-            ? SHIFTZY_SCHEDULES_CHILD_ICON
-          : child.route === "/shiftzy/employees"
-              ? SHIFTZY_ACCOUNTS_CHILD_ICON
-            : child.route === "/leavesphere/home"
-              ? LEAVESPHERE_MY_PTO_CHILD_ICON
-            : child.route === "/leavesphere/leave-management"
-              ? LEAVESPHERE_LEAVE_MANAGEMENT_CHILD_ICON
-            : child.route === "/leavesphere/employees"
-              ? LEAVESPHERE_EMPLOYEES_CHILD_ICON
-          : TRADSPHERE_HOME_CHILD_ICON;
+    child.route === "/fundsphere/accounts"
+      ? House
+      : child.route === "/fundsphere/services"
+        ? Wrench
+        : child.route === "/fundsphere/budgets"
+          ? Coins
+          : child.route === "/tradsphere/estnums"
+            ? TRADSPHERE_ESTNUMS_CHILD_ICON
+            : child.route === "/tradsphere/contacts"
+              ? TRADSPHERE_CONTACTS_CHILD_ICON
+              : child.route === "/tradsphere/invoice-checklists"
+                ? TRADSPHERE_INVOICE_CHECKLISTS_CHILD_ICON
+                : child.route === "/tradsphere/stations"
+                  ? TRADSPHERE_STATIONS_CHILD_ICON
+                  : child.route === "/tradsphere/traffic"
+                    ? TRADSPHERE_TRAFFIC_CHILD_ICON
+                    : child.route.endsWith("/admin")
+                      ? ShieldCheck
+                      : child.route === "/shiftzy/home"
+                        ? SHIFTZY_SCHEDULES_CHILD_ICON
+                        : child.route === "/shiftzy/employees"
+                          ? SHIFTZY_ACCOUNTS_CHILD_ICON
+                          : child.route === "/leavesphere/home"
+                            ? LEAVESPHERE_MY_PTO_CHILD_ICON
+                            : child.route === "/leavesphere/leave-management"
+                              ? LEAVESPHERE_LEAVE_MANAGEMENT_CHILD_ICON
+                              : child.route === "/leavesphere/employees"
+                                ? LEAVESPHERE_EMPLOYEES_CHILD_ICON
+                                : TRADSPHERE_HOME_CHILD_ICON;
 
   return (
     <a

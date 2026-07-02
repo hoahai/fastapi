@@ -372,6 +372,41 @@ function isPersistedAccountsPageState(value: unknown): value is PersistedAccount
   );
 }
 
+function ClearableInput({
+  id,
+  value,
+  onChange,
+}: {
+  id: string;
+  value: string;
+  onChange: (nextValue: string) => void;
+}) {
+  const hasValue = value.trim().length > 0;
+
+  return (
+    <div className="group relative">
+      <Input
+        id={id}
+        value={value}
+        onChange={(event) => onChange(event.target.value)}
+        autoComplete="off"
+        spellCheck={false}
+        className="pr-9"
+      />
+      <button
+        type="button"
+        aria-label="Clear input"
+        onClick={() => onChange("")}
+        className="absolute right-2 top-1/2 -translate-y-1/2 rounded p-1 text-slate-400 opacity-0 transition hover:bg-slate-100 hover:text-slate-700 focus-visible:opacity-100 focus-visible:outline-none group-hover:opacity-100 group-focus-within:opacity-100"
+        style={{ visibility: hasValue ? "visible" : "hidden" }}
+        tabIndex={hasValue ? 0 : -1}
+      >
+        <X className="size-3.5" />
+      </button>
+    </div>
+  );
+}
+
 function toAccountForm(account: FundsphereAccount | null): FundsphereAccountFormState {
   return normalizeFundsphereAccountForm(account);
 }
@@ -1752,45 +1787,37 @@ function FundsphereAccountsPage() {
               <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
                 Code
               </span>
-              <div className="relative">
-                <Input
-                  value={searchDraft.code}
-                  onChange={(event) =>
-                    setPageState((current) => ({
-                      ...current,
-                      searchDraft: {
-                        ...current.searchDraft,
-                        code: event.target.value,
-                      },
-                    }))
-                  }
-                  placeholder="Search code"
-                  autoComplete="off"
-                  spellCheck={false}
-                  className="pl-10"
-                />
-                <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
-              </div>
+              <ClearableInput
+                id="fundsphere-accounts-search-code"
+                value={searchDraft.code}
+                onChange={(nextValue) =>
+                  setPageState((current) => ({
+                    ...current,
+                    searchDraft: {
+                      ...current.searchDraft,
+                      code: nextValue.toUpperCase(),
+                    },
+                  }))
+                }
+              />
             </label>
 
             <label className="block min-w-0">
               <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
                 Name
               </span>
-              <Input
+              <ClearableInput
+                id="fundsphere-accounts-search-name"
                 value={searchDraft.name}
-                onChange={(event) =>
+                onChange={(nextValue) =>
                   setPageState((current) => ({
                     ...current,
                     searchDraft: {
                       ...current.searchDraft,
-                      name: event.target.value,
+                      name: nextValue,
                     },
                   }))
                 }
-                placeholder="Search name"
-                autoComplete="off"
-                spellCheck={false}
               />
             </label>
 
@@ -1798,20 +1825,18 @@ function FundsphereAccountsPage() {
               <span className="mb-1.5 block text-[11px] font-semibold uppercase tracking-[0.14em] text-slate-500">
                 AE Name
               </span>
-              <Input
+              <ClearableInput
+                id="fundsphere-accounts-search-ae-name"
                 value={searchDraft.aeName}
-                onChange={(event) =>
+                onChange={(nextValue) =>
                   setPageState((current) => ({
                     ...current,
                     searchDraft: {
                       ...current.searchDraft,
-                      aeName: event.target.value,
+                      aeName: nextValue,
                     },
                   }))
                 }
-                placeholder="Search AE name"
-                autoComplete="off"
-                spellCheck={false}
               />
             </label>
 

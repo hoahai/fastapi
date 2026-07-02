@@ -290,8 +290,20 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [status, setStatus] = useState<AuthStatus>("loading");
   const [session, setSession] = useState<SupabaseSession | null>(() => readJson<SupabaseSession>(SESSION_STORAGE_KEY));
   const [user, setUser] = useState<AuthUser | null>(() => readJson<AuthUser>(USER_STORAGE_KEY));
-  const [tenantSlug, setTenantSlugState] = useState<string>("");
-  const [accessProfile, setAccessProfile] = useState<AccessProfile | null>(null);
+  const [tenantSlug, setTenantSlugState] = useState<string>(() => {
+    const stored = readJson<string>(TENANT_STORAGE_KEY);
+    return String(stored || "").trim().toLowerCase();
+  });
+  const [accessProfile, setAccessProfile] = useState<AccessProfile | null>(() => {
+    const storedTenantSlug = String(readJson<string>(TENANT_STORAGE_KEY) || "").trim().toLowerCase();
+    const storedUser = readJson<AuthUser>(USER_STORAGE_KEY);
+    const currentUserId = String(storedUser?.id || "").trim();
+    const currentAppCode = getCurrentAppCodeFromLocation();
+    if (!currentUserId || !storedTenantSlug) {
+      return null;
+    }
+    return readCachedAccessProfileEntry(currentUserId, storedTenantSlug, currentAppCode)?.entry?.profile ?? null;
+  });
   const [authNotice, setAuthNotice] = useState<string | null>(() => {
     const stored = readJson<string>(AUTH_NOTICE_STORAGE_KEY);
     if (typeof stored !== "string") {
@@ -304,7 +316,23 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const [accessRefreshing, setAccessRefreshing] = useState(false);
   const [accessError, setAccessError] = useState<string | null>(null);
   const [accessRefreshError, setAccessRefreshError] = useState<string | null>(null);
-  const [accessCacheStatus, setAccessCacheStatus] = useState<AccessProfileCacheStatus | null>(null);
+  const [accessCacheStatus, setAccessCacheStatus] = useState<AccessProfileCacheStatus | null>(() => {
+    const storedTenantSlug = String(readJson<string>(TENANT_STORAGE_KEY) || "").trim().toLowerCase();
+    const storedUser = readJson<AuthUser>(USER_STORAGE_KEY);
+    const currentUserId = String(storedUser?.id || "").trim();
+    const currentAppCode = getCurrentAppCodeFromLocation();
+    if (!currentUserId || !storedTenantSlug) {
+      return null;
+    }
+    const cachedEntry = readCachedAccessProfileEntry(currentUserId, storedTenantSlug, currentAppCode);
+    if (!cachedEntry?.entry?.profile) {
+      return null;
+    }
+    return {
+      source: "cache",
+      fetchedAt: cachedEntry.entry.cachedAt,
+    };
+  });
   const [accessRefreshVersion, setAccessRefreshVersion] = useState(0);
   const handledRefreshVersionRef = useRef(0);
   const lastManualRefreshAtRef = useRef(0);
@@ -525,8 +553,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       const currentAppCode = getCurrentAppCodeFromLocation();
       const cachedEntry = currentUserId ? readCachedAccessProfileEntry(currentUserId, tenantSlug, currentAppCode) : null;
       const hasCachedAccess = Boolean(cachedEntry?.entry?.profile);
-      const shouldWarmRefresh = Boolean(cachedEntry && !isManualRefresh && !accessProfile);
-      const shouldRefreshFromNetwork = isManualRefresh || !cachedEntry || cachedEntry.isExpired || shouldWarmRefresh;
+      const shouldRefreshFromNetwork = isManualRefresh || !cachedEntry || cachedEntry.isExpired;
 
       if (cachedEntry && !isManualRefresh) {
         setAccessProfile(cachedEntry.entry.profile);
@@ -539,7 +566,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
 
       if (hasCachedAccess) {
         setAccessLoading(false);
-        setAccessRefreshing(shouldRefreshFromNetwork);
+        setAccessRefreshing(!isManualRefresh && cachedEntry?.isExpired ? true : shouldRefreshFromNetwork);
         setAccessRefreshError(null);
       } else {
         setAccessLoading(true);
