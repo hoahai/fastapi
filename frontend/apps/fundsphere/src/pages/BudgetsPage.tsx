@@ -2214,7 +2214,7 @@ function FundsphereBudgetPageContent() {
                 loading={isLoadingAccounts}
                 allowCustomValue={false}
                 ariaLabel="Account filter"
-                placeholder="Select accounts"
+                placeholder=""
               />
             </label>
 
@@ -2242,7 +2242,7 @@ function FundsphereBudgetPageContent() {
                 searchable={false}
                 allowCustomValue={false}
                 ariaLabel="Period filter"
-                placeholder="Select periods"
+                placeholder=""
               />
             </label>
 
@@ -2271,7 +2271,7 @@ function FundsphereBudgetPageContent() {
                 loading={isLoadingServices}
                 allowCustomValue={false}
                 ariaLabel="Service filter"
-                placeholder="Select services"
+                placeholder=""
               />
             </label>
           </div>
