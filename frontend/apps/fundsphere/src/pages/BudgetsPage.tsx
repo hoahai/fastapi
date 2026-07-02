@@ -426,12 +426,39 @@ function sortBudgetServices(services: FundsphereService[]): FundsphereService[] 
   });
 }
 
+function sortBudgetServiceDropdownOptions(services: FundsphereService[]): FundsphereService[] {
+  return [...services].sort((left, right) => {
+    const leftOrder = left.departmentListingOrder ?? Number.MAX_SAFE_INTEGER;
+    const rightOrder = right.departmentListingOrder ?? Number.MAX_SAFE_INTEGER;
+    if (leftOrder !== rightOrder) {
+      return leftOrder - rightOrder;
+    }
+    const departmentComparison = left.departmentName.localeCompare(right.departmentName);
+    if (departmentComparison !== 0) {
+      return departmentComparison;
+    }
+    const departmentCodeComparison = left.departmentCode.localeCompare(right.departmentCode);
+    if (departmentCodeComparison !== 0) {
+      return departmentCodeComparison;
+    }
+    if (left.active !== right.active) {
+      return left.active ? -1 : 1;
+    }
+    const serviceComparison = left.name.localeCompare(right.name);
+    if (serviceComparison !== 0) {
+      return serviceComparison;
+    }
+    return left.id.localeCompare(right.id);
+  });
+}
+
 function buildBudgetServiceOptions(services: FundsphereService[]): AppDropdownOption[] {
-  return sortBudgetServices(services).map((service) => ({
+  return sortBudgetServiceDropdownOptions(services).map((service) => ({
     value: service.id,
     label: service.name,
     keywords: `${service.departmentName} ${service.departmentCode} ${service.id}`,
     muted: !service.active,
+    groupLabel: service.departmentName,
   }));
 }
 

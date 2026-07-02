@@ -1,6 +1,6 @@
 import { createPortal } from "react-dom";
-import { type CSSProperties, type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
-import { Check, ChevronsUpDown } from "lucide-react";
+import { Fragment, type CSSProperties, type KeyboardEvent, useEffect, useMemo, useRef, useState } from "react";
+import { Check, ChevronsUpDown, X } from "lucide-react";
 
 import { cn } from "@/lib/utils";
 
@@ -12,6 +12,7 @@ export type AppDropdownOption = {
   label: string;
   keywords?: string;
   muted?: boolean;
+  groupLabel?: string;
 };
 
 function formatOptionLabel(option: AppDropdownOption): string {
@@ -119,6 +120,26 @@ export function AppDropdown({
   const filteredOptionsWithCustom = customOption
     ? filteredOptions.concat(customOption)
     : filteredOptions;
+  const displayedOptions = useMemo(() => {
+    if (!multiple) {
+      return filteredOptionsWithCustom;
+    }
+
+    const selectedSet = new Set(selectedValues);
+    return filteredOptionsWithCustom
+      .map((option, index) => ({
+        option,
+        index,
+        isSelected: selectedSet.has(option.value),
+      }))
+      .sort((left, right) => {
+        if (left.isSelected !== right.isSelected) {
+          return left.isSelected ? -1 : 1;
+        }
+        return left.index - right.index;
+      })
+      .map(({ option }) => option);
+  }, [filteredOptionsWithCustom, multiple, selectedValues]);
 
   useEffect(() => {
     if (!isOpen) {
@@ -164,6 +185,7 @@ export function AppDropdown({
       selectedSet.add(nextValue);
     }
     onValuesChange?.(Array.from(selectedSet));
+    setHighlightedIndex(0);
   }
 
   function updateMenuPosition() {
@@ -215,7 +237,7 @@ export function AppDropdown({
   }, [isOpen]);
 
   function handleListKeyDown(event: KeyboardEvent<HTMLElement>) {
-    if (!filteredOptionsWithCustom.length) {
+    if (!displayedOptions.length) {
       if (event.key === "Escape") {
         event.preventDefault();
         setIsOpen(false);
@@ -225,7 +247,7 @@ export function AppDropdown({
 
     if (event.key === "ArrowDown") {
       event.preventDefault();
-      setHighlightedIndex((current) => Math.min(current + 1, filteredOptionsWithCustom.length - 1));
+      setHighlightedIndex((current) => Math.min(current + 1, displayedOptions.length - 1));
       return;
     }
 
@@ -237,7 +259,7 @@ export function AppDropdown({
 
     if (event.key === "Enter") {
       event.preventDefault();
-      const highlighted = filteredOptionsWithCustom[highlightedIndex];
+      const highlighted = displayedOptions[highlightedIndex];
       if (highlighted) {
         selectValue(highlighted.value);
       }
@@ -251,6 +273,7 @@ export function AppDropdown({
   }
 
   const isCompact = size === "sm";
+  const canClearSelections = multiple && selectedValues.length > 0;
   const triggerLabel = multiple
     ? selectedOptions.length === 0
       ? placeholder
@@ -271,7 +294,7 @@ export function AppDropdown({
     "border-white/72 bg-[linear-gradient(135deg,rgba(255,255,255,0.88)_0%,rgba(239,246,255,0.76)_100%)]";
 
   return (
-    <div ref={containerRef} data-app-dropdown-root="true" className={cn("relative w-full", className)}>
+    <div ref={containerRef} data-app-dropdown-root="true" className={cn("group relative w-full", className)}>
       <span ref={triggerRef} className="inline-flex w-full">
         <Button
           type="button"
@@ -281,18 +304,53 @@ export function AppDropdown({
           aria-expanded={isOpen}
           disabled={disabled || loading}
           className={cn(
-            "w-full justify-between rounded-lg border border-input bg-white/96 font-medium text-slate-800 shadow-[0_8px_20px_-18px_rgba(30,64,175,0.45)] backdrop-blur-sm transition-[border-color,box-shadow,background-color,transform] hover:!translate-y-0 hover:!scale-100 hover:border-blue-200 hover:bg-white active:!translate-y-0 active:!scale-100 focus-visible:translate-y-0 focus-visible:bg-white disabled:border-input disabled:bg-slate-100/80 disabled:text-slate-500 disabled:shadow-none",
+            "w-full justify-start rounded-lg border border-input bg-white/96 font-medium text-slate-800 shadow-[0_8px_20px_-18px_rgba(30,64,175,0.45)] backdrop-blur-sm transition-[border-color,box-shadow,background-color,transform] hover:!translate-y-0 hover:!scale-100 hover:border-blue-200 hover:bg-white active:!translate-y-0 active:!scale-100 focus-visible:translate-y-0 focus-visible:bg-white disabled:border-input disabled:bg-slate-100/80 disabled:text-slate-500 disabled:shadow-none",
             isOpen && "border-blue-300 bg-white shadow-[inset_0_0_0_1px_rgba(59,130,246,0.12)]",
             isCompact ? "h-8 px-2.5 py-1.5 text-xs" : "h-10 px-3 py-2 text-sm",
           )}
           onClick={() => setIsOpen((current) => !current)}
         >
-          <span className={cn("truncate text-left", isTriggerMuted && "text-slate-400")}>{triggerLabel}</span>
-          {loading ? (
-            <Spinner className={cn("ml-2 shrink-0", isCompact ? "size-3.5" : "size-4")} />
-          ) : (
-            <ChevronsUpDown className={cn("ml-2 shrink-0 opacity-50", isCompact ? "size-3.5" : "size-4")} />
-          )}
+          <span className={cn("min-w-0 flex-1 truncate text-left", isTriggerMuted && "text-slate-400")}>{triggerLabel}</span>
+          <span className="ml-1.5 flex shrink-0 items-center gap-1">
+            {canClearSelections ? (
+              <span
+                role="button"
+                tabIndex={0}
+                aria-label="Clear selections"
+                title="Clear selections"
+                className={cn(
+                  "rounded-sm p-0.5 text-slate-500 opacity-0 transition-opacity hover:text-slate-800 group-hover:opacity-100 group-focus-within:opacity-100 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-300 focus-visible:ring-offset-2",
+                  isCompact && "p-0",
+                )}
+                onMouseDown={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                }}
+                onClick={(event) => {
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onValuesChange?.([]);
+                  setHighlightedIndex(0);
+                }}
+                onKeyDown={(event) => {
+                  if (event.key !== "Enter" && event.key !== " ") {
+                    return;
+                  }
+                  event.preventDefault();
+                  event.stopPropagation();
+                  onValuesChange?.([]);
+                  setHighlightedIndex(0);
+                }}
+              >
+                <X className={cn("size-3", isCompact && "size-2.5")} />
+              </span>
+            ) : null}
+            {loading ? (
+              <Spinner className={cn("shrink-0", isCompact ? "size-3.5" : "size-4")} />
+            ) : (
+              <ChevronsUpDown className={cn("shrink-0 opacity-50", isCompact ? "size-3.5" : "size-3.5")} />
+            )}
+          </span>
         </Button>
       </span>
 
@@ -331,64 +389,79 @@ export function AppDropdown({
                   }}
                   onKeyDown={handleListKeyDown}
                 >
-                  {!filteredOptionsWithCustom.length ? (
+                  {!displayedOptions.length ? (
                     <p className={cn("px-2 py-3 text-slate-600", isCompact ? "text-xs" : "text-sm")}>
                       {emptyText}
                     </p>
                   ) : (
                     <ul>
-                      {filteredOptionsWithCustom.map((option, index) => {
+                      {displayedOptions.map((option, index) => {
                         const isSelected = multiple
                           ? selectedValues.includes(option.value)
                           : option.value === value;
                         const isHighlighted = index === highlightedIndex;
                         const isMuted = Boolean(option.muted);
+                        const groupLabel = option.groupLabel?.trim();
+                        const previousGroupLabel = displayedOptions[index - 1]?.groupLabel?.trim();
+                        const shouldRenderGroupLabel = Boolean(groupLabel) && previousGroupLabel !== groupLabel;
                         return (
-                          <li key={`${option.value}:${index}`}>
-                            <button
-                              type="button"
-                              className={cn(
-                                "flex w-full items-center justify-between rounded-lg border border-transparent px-2 text-left text-slate-900 transition-[background-color,border-color,box-shadow,color,transform] hover:-translate-y-px hover:border-white/50 hover:bg-white/40 hover:shadow-[0_8px_18px_-16px_rgba(15,23,42,0.16)]",
-                                isCompact ? "py-1.5 text-xs" : "py-2 text-sm",
-                                isSelected && selectedGradientClasses,
-                                isSelected && isHighlighted && selectedGradientHighlightedClasses,
-                                isHighlighted && !isSelected && "border-white/68 bg-white/44 text-slate-950",
-                              )}
-                              onMouseEnter={() => setHighlightedIndex(index)}
-                              onClick={() => selectValue(option.value)}
-                            >
-                              <span
-                                className={cn(
-                                  "truncate",
-                                  isSelected && "rounded-md bg-white/36 px-1.5 py-0.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.86)]",
-                                  isMuted && !isSelected && "text-slate-500",
-                                )}
-                              >
-                                {option.label}
-                              </span>
-                              <div className="ml-2 flex items-center gap-1.5">
-                                {isMuted ? (
-                                  <span
-                                    className={cn(
-                                      "shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]",
-                                      isSelected
-                                        ? "border-white/42 bg-white/48 text-slate-700"
-                                        : "border-white/60 bg-white/62 text-slate-500",
-                                    )}
-                                  >
-                                    Inactive
+                          <Fragment key={`${option.value}:${index}`}>
+                            {shouldRenderGroupLabel ? (
+                              <li aria-hidden="true" className="px-2 pb-1 pt-2">
+                                <div className="flex items-center gap-2">
+                                  <span className="shrink-0 text-[10px] font-semibold uppercase tracking-[0.18em] text-slate-500">
+                                    {groupLabel}
                                   </span>
-                                ) : null}
-                                <Check
+                                  <span className="h-px flex-1 bg-slate-200/80" />
+                                </div>
+                              </li>
+                            ) : null}
+                            <li>
+                              <button
+                                type="button"
+                                className={cn(
+                                  "flex w-full items-center justify-between rounded-lg border border-transparent px-2 text-left text-slate-900 transition-[background-color,border-color,box-shadow,color,transform] hover:-translate-y-px hover:border-white/50 hover:bg-white/40 hover:shadow-[0_8px_18px_-16px_rgba(15,23,42,0.16)]",
+                                  isCompact ? "py-1.5 text-xs" : "py-2 text-sm",
+                                  isSelected && selectedGradientClasses,
+                                  isSelected && isHighlighted && selectedGradientHighlightedClasses,
+                                  isHighlighted && !isSelected && "border-white/68 bg-white/44 text-slate-950",
+                                )}
+                                onMouseEnter={() => setHighlightedIndex(index)}
+                                onClick={() => selectValue(option.value)}
+                              >
+                                <span
                                   className={cn(
-                                    isSelected ? "text-sky-600" : "text-slate-500",
-                                    isCompact ? "size-3.5" : "size-4",
-                                    isSelected ? "opacity-100" : "opacity-0",
+                                    "truncate",
+                                    isSelected && "rounded-md bg-white/36 px-1.5 py-0.5 shadow-[inset_0_1px_0_rgba(255,255,255,0.86)]",
+                                    isMuted && !isSelected && "text-slate-500",
                                   )}
-                                />
-                              </div>
-                            </button>
-                          </li>
+                                >
+                                  {option.label}
+                                </span>
+                                <div className="ml-2 flex items-center gap-1.5">
+                                  {isMuted ? (
+                                    <span
+                                      className={cn(
+                                        "shrink-0 rounded-full border px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-[0.12em]",
+                                        isSelected
+                                          ? "border-white/42 bg-white/48 text-slate-700"
+                                          : "border-white/60 bg-white/62 text-slate-500",
+                                      )}
+                                    >
+                                      Inactive
+                                    </span>
+                                  ) : null}
+                                  <Check
+                                    className={cn(
+                                      isSelected ? "text-sky-600" : "text-slate-500",
+                                      isCompact ? "size-3.5" : "size-4",
+                                      isSelected ? "opacity-100" : "opacity-0",
+                                    )}
+                                  />
+                                </div>
+                              </button>
+                            </li>
+                          </Fragment>
                         );
                       })}
                     </ul>
