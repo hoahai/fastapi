@@ -558,6 +558,30 @@ function budgetFormFromRow(row: FundsphereBudgetMatrixRow | null): FundsphereBud
   return normalizeFundsphereBudgetForm(row);
 }
 
+function mergeBudgetFormWithRefreshedValues(
+  currentForm: FundsphereBudgetFormState,
+  currentBaseline: FundsphereBudgetFormState,
+  refreshedBaseline: FundsphereBudgetFormState,
+): FundsphereBudgetFormState {
+  const nextForm = { ...currentForm };
+  const fields: (keyof FundsphereBudgetFormState)[] = ["grossAmount", "commission", "netAdjustment", "note"];
+
+  for (const field of fields) {
+    const currentValue = field === "note"
+      ? asString(currentForm[field])
+      : normalizeBudgetFormValue(currentForm[field]);
+    const baselineValue = field === "note"
+      ? asString(currentBaseline[field])
+      : normalizeBudgetFormValue(currentBaseline[field]);
+
+    if (currentValue === baselineValue) {
+      nextForm[field] = refreshedBaseline[field];
+    }
+  }
+
+  return nextForm;
+}
+
 function buildColumnKey(accountCode: string, month: number, year: number): string {
   return `${accountCode.toUpperCase()}::${month}/${year}`;
 }
@@ -1080,15 +1104,17 @@ function BudgetModal({
   const [detailCacheStatus, setDetailCacheStatus] = useState<CacheStatus | null>(null);
   const [isDetailRefreshing, setIsDetailRefreshing] = useState(false);
   const [form, setForm] = useState<FundsphereBudgetFormState>(createEmptyBudgetForm());
+  const [baseline, setBaseline] = useState<FundsphereBudgetFormState>(budgetFormFromRow(budgetCell?.budgetRow ?? null));
   const [submitError, setSubmitError] = useState<string | null>(null);
   const [changeReason, setChangeReason] = useState("");
   const [isReasonDialogOpen, setIsReasonDialogOpen] = useState(false);
   const [isDiscardDialogOpen, setIsDiscardDialogOpen] = useState(false);
+  const formRef = useRef<FundsphereBudgetFormState>(form);
+  const baselineRef = useRef<FundsphereBudgetFormState>(baseline);
 
   const currentRow = detailRow ?? budgetCell?.budgetRow ?? null;
   const currentBudgetId = currentRow?.budgetId ?? budgetCell?.budgetId ?? null;
-  const baseline = useMemo(() => budgetFormFromRow(currentRow), [currentRow]);
-  const baselineKey = useMemo(() => {
+  const modalSeedKey = useMemo(() => {
     if (!budgetCell) {
       return "none";
     }
@@ -1098,23 +1124,28 @@ function BudgetModal({
       budgetCell.month,
       budgetCell.serviceId,
       budgetCell.subService,
-      currentBudgetId ?? "new",
+      budgetCell.budgetId ?? "new",
     ].join("::");
-  }, [budgetCell, currentBudgetId]);
+  }, [budgetCell]);
 
   useEffect(() => {
     if (!open) {
       return;
     }
-    setDetailRow(budgetCell?.budgetRow ?? null);
+    const nextDetailRow = budgetCell?.budgetRow ?? null;
+    const nextBaseline = budgetFormFromRow(nextDetailRow);
+    formRef.current = nextBaseline;
+    baselineRef.current = nextBaseline;
+    setDetailRow(nextDetailRow);
+    setBaseline(nextBaseline);
     setDetailCacheStatus(null);
     setIsDetailRefreshing(false);
-    setForm(baseline);
+    setForm(nextBaseline);
     setSubmitError(null);
     setChangeReason("");
     setIsReasonDialogOpen(false);
     setIsDiscardDialogOpen(false);
-  }, [baseline, baselineKey, open]);
+  }, [modalSeedKey, open]);
 
   useEffect(() => {
     if (!open || mode !== "edit" || !currentBudgetId) {
@@ -1151,11 +1182,17 @@ function BudgetModal({
       ...current,
       [field]: nextValue,
     }));
+    formRef.current = {
+      ...formRef.current,
+      [field]: nextValue,
+    };
     setSubmitError(null);
   }
 
   function restoreBaseline() {
-    setForm(baseline);
+    const nextForm = baselineRef.current;
+    formRef.current = nextForm;
+    setForm(nextForm);
     setSubmitError(null);
     setChangeReason("");
     setIsReasonDialogOpen(false);
@@ -1206,6 +1243,12 @@ function BudgetModal({
         fetchedAt,
       });
       syncFundsphereBudgetDetailCache(cacheContext, nextBudget, { source: "network", fetchedAt });
+      const nextBaseline = budgetFormFromRow(nextBudget);
+      const mergedForm = mergeBudgetFormWithRefreshedValues(formRef.current, baselineRef.current, nextBaseline);
+      baselineRef.current = nextBaseline;
+      formRef.current = mergedForm;
+      setBaseline(nextBaseline);
+      setForm(mergedForm);
     } finally {
       setIsDetailRefreshing(false);
     }
@@ -1380,7 +1423,7 @@ function BudgetModal({
                     ? "Refreshing budget data..."
                     : detailCacheStatus
                       ? `Data source: ${detailCacheStatus.source}. Last updated ${formatRelativeTime(detailCacheStatus.fetchedAt)}.`
-                      : "No cached budget data yet"
+                      : "No cached budget snapshot yet"
                 }
                 onRefresh={() => {
                   if (!isDetailRefreshing && !isDirty && !busy) {
@@ -1428,6 +1471,8 @@ function BudgetModal({
 
       <Dialog open={isReasonDialogOpen} onOpenChange={setIsReasonDialogOpen}>
         <DialogContent
+          overlayClassName="!z-[500]"
+          contentClassName="!z-[510]"
           className="max-w-[560px] rounded-xl bg-white p-6"
           onInteractOutside={(event) => {
             if (busy) {

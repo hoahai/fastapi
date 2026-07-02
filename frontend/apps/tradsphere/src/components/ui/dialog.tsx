@@ -19,6 +19,11 @@ const dialogContentMotionTransition = {
 
 type DialogProps = React.ComponentPropsWithoutRef<typeof DialogPrimitive.Root>;
 
+type DialogLayerProps = {
+  overlayClassName?: string;
+  contentClassName?: string;
+};
+
 const DialogStateContext = React.createContext<{ open: boolean }>({ open: false });
 
 function Dialog({ open: openProp, defaultOpen = false, onOpenChange, ...props }: DialogProps) {
@@ -61,8 +66,8 @@ DialogOverlay.displayName = DialogPrimitive.Overlay.displayName;
 
 const DialogContent = React.forwardRef<
   React.ElementRef<typeof DialogPrimitive.Content>,
-  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content>
->(({ className, children, ...props }, ref) => {
+  React.ComponentPropsWithoutRef<typeof DialogPrimitive.Content> & DialogLayerProps
+>(({ className, overlayClassName, contentClassName, children, ...props }, ref) => {
   const { open } = React.useContext(DialogStateContext);
   const [shouldRender, setShouldRender] = React.useState(open);
 
@@ -90,6 +95,7 @@ const DialogContent = React.forwardRef<
           <>
             <DialogOverlay asChild forceMount>
               <motion.div
+                className={cn("fixed inset-0 z-[200] bg-black/75 backdrop-blur-[8px]", overlayClassName)}
                 initial={{ opacity: 0 }}
                 animate={{ opacity: open ? 1 : 0 }}
                 exit={{ opacity: 0 }}
@@ -100,6 +106,7 @@ const DialogContent = React.forwardRef<
               <motion.div
                 className={cn(
                   "fixed inset-0 z-[210] m-auto h-fit w-[calc(100%-2rem)] max-w-lg rounded-xl border border-border bg-white p-6 shadow-soft focus:outline-none",
+                  contentClassName,
                   className,
                 )}
                 initial={{ opacity: 0, scale: 1.1 }}
