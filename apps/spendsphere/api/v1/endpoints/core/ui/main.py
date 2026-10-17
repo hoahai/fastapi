@@ -1798,6 +1798,8 @@ def update_ui_allocations_rollbreaks(
     Note: First-seen blocked VIDEO warnings are deferred to sheet/cache.
     A warning is emitted only on later runs if the matching sheet request
     remains unresolved.
+    Note: Demand Gen budget targets below Google's per-day minimum are skipped
+    and the campaign is paused instead of sending an invalid budget mutation.
 
     Requirements:
         - Requires X-Tenant-Id header

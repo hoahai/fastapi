@@ -94,6 +94,9 @@ def update_google_ads(request_payload: GoogleAdsUpdateRequest):
     Requirements:
         - Requires X-Tenant-Id header
         - Requires valid API key
+        - Demand Gen budget targets below Google's per-day minimum are
+          skipped and the campaign is paused instead of sending an invalid
+          budget mutation.
         - When `SPREADSHEETS.spendSphere.videoCampaignStatusUpdate`
           (or `videoCampaignStatusUpdateSheet`) is configured, blocked
           VIDEO campaign status updates are appended to that sheet.
@@ -181,6 +184,9 @@ def update_google_ads_async(
     Requirements:
         - Requires X-Tenant-Id header
         - Requires valid API key
+        - Demand Gen budget targets below Google's per-day minimum are
+          skipped and the campaign is paused instead of sending an invalid
+          budget mutation.
         - When `SPREADSHEETS.spendSphere.videoCampaignStatusUpdate`
           (or `videoCampaignStatusUpdateSheet`) is configured, blocked
           VIDEO campaign status updates are appended to that sheet.

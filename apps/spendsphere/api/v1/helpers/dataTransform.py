@@ -71,6 +71,17 @@ def _is_demand_gen_budget(campaigns: list[dict]) -> bool:
     )
 
 
+def _get_demand_gen_minimum_budget(row: dict) -> Decimal | None:
+    raw_value = row.get("demandGenMinimumBudget")
+    if raw_value is None:
+        return None
+    try:
+        minimum = Decimal(str(raw_value))
+    except Exception:
+        return None
+    return minimum if minimum > 0 else None
+
+
 def _should_filter_row_before_mutation(
     row: dict,
     *,
@@ -441,6 +452,9 @@ def group_campaigns_by_budget(
                 "budgetAmount": Decimal(
                     str(budget_meta.get("amount", 0))
                 ),
+                "demandGenMinimumBudget": budget_meta.get(
+                    "demandGenMinimumBudget"
+                ),
                 "campaigns": [],
                 "totalCost": Decimal("0"),
             }
@@ -509,6 +523,7 @@ def group_campaigns_by_budget(
             "budgetName": budget.get("budgetName"),
             "budgetStatus": budget.get("status"),
             "budgetAmount": Decimal(str(budget.get("amount", 0))),
+            "demandGenMinimumBudget": budget.get("demandGenMinimumBudget"),
             "campaigns": fallback_campaigns,
             "totalCost": budget_cost_lookup.get(group_key, Decimal("0")),
         }
@@ -919,6 +934,9 @@ def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
             continue
 
         customer_id = row["ggAccountId"]
+        campaigns = row.get("campaigns", [])
+        is_demand_gen_budget = _is_demand_gen_budget(campaigns)
+        demand_gen_minimum = _get_demand_gen_minimum_budget(row)
         allocation = row.get("allocation")
         daily_budget_raw = row.get("dailyBudget")
         budget_amount_raw = row.get("budgetAmount")
@@ -942,10 +960,16 @@ def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
                 expected_status = "PAUSED"
             else:
                 expected_status = (
-                    "ENABLED" if daily_budget >= Decimal("0.01") else "PAUSED"
+                    "ENABLED"
+                    if daily_budget >= Decimal("0.01")
+                    and not (
+                        is_demand_gen_budget
+                        and demand_gen_minimum is not None
+                        and daily_budget < demand_gen_minimum
+                    )
+                    else "PAUSED"
                 )
 
-        campaigns = row.get("campaigns", [])
         campaign_names = [
             c.get("campaignName")
             for c in campaigns
@@ -987,15 +1011,19 @@ def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
 
         budget_amount = Decimal(budget_amount_raw)
 
-        is_demand_gen_budget = _is_demand_gen_budget(campaigns)
-
         # Demand Gen has a platform-specific minimum that can be much higher
-        # than the generic $0.01 fallback. A non-positive Demand Gen target
-        # means the campaign should be paused, so omit its budget mutation.
+        # than the generic $0.01 fallback. A target below that floor cannot be
+        # sent to Google Ads, so omit its budget mutation.
         if daily_budget <= Decimal("0"):
             if is_demand_gen_budget:
                 continue
             amount_to_set = Decimal("0.01")
+        elif (
+            is_demand_gen_budget
+            and demand_gen_minimum is not None
+            and daily_budget < demand_gen_minimum
+        ):
+            continue
         else:
             amount_to_set = daily_budget
 

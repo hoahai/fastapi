@@ -599,6 +599,56 @@ def get_mcc_accounts() -> list[dict]:
     return results
 
 
+def get_demand_gen_minimum_budget(customer_id: str) -> Decimal:
+    """Return Google's Demand Gen daily-budget floor for an account currency."""
+    client = get_client()
+    ga_service = client.get_service("GoogleAdsService")
+    customer_currency_query = """
+        SELECT customer.currency_code
+        FROM customer
+    """
+
+    try:
+        currency_response = ga_service.search(
+            customer_id=customer_id,
+            query=customer_currency_query,
+        )
+        currency_code = next(
+            (
+                str(row.customer.currency_code).strip().upper()
+                for row in currency_response
+                if str(row.customer.currency_code).strip()
+            ),
+            None,
+        )
+        if not currency_code or not re.fullmatch(r"[A-Z]{3}", currency_code):
+            raise RuntimeError(
+                f"Google Ads did not return a valid currency for customer {customer_id}."
+            )
+
+        minimum_budget_query = f"""
+            SELECT currency_constant.demand_gen_info.minimum_budget_per_day_micros
+            FROM currency_constant
+            WHERE currency_constant.code = '{currency_code}'
+        """
+        minimum_response = ga_service.search(
+            customer_id=customer_id,
+            query=minimum_budget_query,
+        )
+        for row in minimum_response:
+            minimum_micros = int(
+                row.currency_constant.demand_gen_info.minimum_budget_per_day_micros
+            )
+            if minimum_micros > 0:
+                return Decimal(minimum_micros) / Decimal("1000000")
+    except GoogleAdsException as ex:
+        raise RuntimeError(f"Google Ads API error: {ex.failure}") from ex
+
+    raise RuntimeError(
+        f"Google Ads did not return a Demand Gen minimum budget for customer {customer_id}."
+    )
+
+
 def _normalize_account_code_token(value: object) -> str | None:
     return standardize_account_code(value)
 
@@ -926,6 +976,7 @@ def get_ggad_budget(customer_id: str) -> list[dict]:
     """
     client = get_client()
     ga_service = client.get_service("GoogleAdsService")
+    demand_gen_minimum_budget = get_demand_gen_minimum_budget(customer_id)
 
     query = """
         SELECT
@@ -952,6 +1003,7 @@ def get_ggad_budget(customer_id: str) -> list[dict]:
                     "explicitlyShared": b.explicitly_shared,
                     "status": b.status.name,
                     "amount": b.amount_micros / 1_000_000 if b.amount_micros else 0,
+                    "demandGenMinimumBudget": float(demand_gen_minimum_budget),
                 }
             )
 
@@ -1006,7 +1058,25 @@ def get_ggad_budgets(
     results: list[dict] = []
     for code in account_codes:
         if code in cached:
-            results.extend(cached[code])
+            cached_budgets = cached[code]
+            if any(
+                "demandGenMinimumBudget" not in budget
+                or budget.get("demandGenMinimumBudget") is None
+                for budget in cached_budgets
+                if isinstance(budget, dict)
+            ):
+                minimum_budget = get_demand_gen_minimum_budget(account_map[code]["id"])
+                cached_budgets = [
+                    {
+                        **budget,
+                        "demandGenMinimumBudget": float(minimum_budget),
+                    }
+                    for budget in cached_budgets
+                ]
+                set_google_ads_budgets_cache(
+                    account_map[code].get("accountCode"), cached_budgets
+                )
+            results.extend(cached_budgets)
 
     if missing:
         missing_accounts = [account_map[code] for code in account_codes if code in missing]

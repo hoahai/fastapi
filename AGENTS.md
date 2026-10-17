@@ -352,7 +352,8 @@ Documentation rules:
 -   Campaign status update rule:
     -   `expected_status` is `PAUSED` when account is inactive.
     -   `expected_status` is `ENABLED` when active and `dailyBudget >=
-        0.01`; otherwise `PAUSED`.
+        0.01`, unless a Demand Gen target is below Google's per-day minimum;
+        otherwise `PAUSED`.
     -   Campaigns with names prefixed by any
         `GOOGLE_ADS_NAMING.inactivePrefixes` value are never status-updated.
     -   Campaigns with blocked mutation channel types (currently `VIDEO`)
@@ -365,8 +366,11 @@ Documentation rules:
     -   Skip if `dailyBudget` is missing.
     -   Skip if current Google budget amount is missing.
     -   Compute target amount:
-        -   `0.01` when `dailyBudget <= 0`
+        -   `0.01` when `dailyBudget <= 0` for non-Demand-Gen budgets
         -   otherwise `dailyBudget`
+    -   For Demand Gen budgets, the per-currency minimum is read from
+        Google Ads `currency_constant.demand_gen_info` and targets below that
+        minimum are skipped; the campaign status is forced to `PAUSED`.
     -   Skip small changes when absolute delta is `<=
         GGADS_MIN_BUDGET_DELTA` (except target `0`/`0.01` flow).
     -   Skip when target amount equals current amount.
