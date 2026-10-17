@@ -10,7 +10,7 @@ from decimal import Decimal, ROUND_HALF_UP
 from google.ads.googleads.client import GoogleAdsClient
 from google.protobuf.field_mask_pb2 import FieldMask
 from google.ads.googleads.errors import GoogleAdsException
-from google.ads.googleads.v22.errors.types.errors import GoogleAdsFailure
+from google.ads.googleads.v26.errors.types.errors import GoogleAdsFailure
 
 from shared.utils import (
     get_current_period,
@@ -53,6 +53,8 @@ from apps.spendsphere.api.v1.helpers.spendsphereHelpers import (
 )
 
 logger = get_logger("Google Ads")
+
+GOOGLE_ADS_API_VERSION = "v26"
 
 _RETRYABLE_GOOGLE_ADS_ERROR_CODES: set[tuple[str, str]] = {
     ("internal_error", "INTERNAL_ERROR"),
@@ -214,6 +216,8 @@ def _build_budget_failure_entry(
     primary = issues[0] if issues else {}
     failure = {
         "budgetId": row.get("budgetId"),
+        "accountCode": row.get("accountCode"),
+        "campaignNames": row.get("campaignNames", []),
         "oldAmount": row.get("currentAmount"),
         "newAmount": row.get("newAmount"),
         "error": primary.get("message", "Unknown Google Ads error."),
@@ -540,7 +544,10 @@ def get_client() -> GoogleAdsClient:
         "use_proto_plus": str(use_proto_plus).lower()
         in {"1", "true", "yes", "on"},
     }
-    return GoogleAdsClient.load_from_dict(config)
+    return GoogleAdsClient.load_from_dict(
+        config,
+        version=GOOGLE_ADS_API_VERSION,
+    )
 
 
 # =====================

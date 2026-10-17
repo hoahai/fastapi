@@ -11,6 +11,7 @@ from shared.logger import get_logger
 from apps.spendsphere.api.v1.helpers.accountCodes import standardize_account_code
 from apps.spendsphere.api.v1.helpers.campaignRules import (
     TOUCHABLE_CAMPAIGN_STATUSES,
+    get_campaign_channel_type,
     get_campaign_status,
     has_any_active_campaign,
     should_filter_row,
@@ -60,6 +61,14 @@ def _is_zero_spent_for_mutation(value: object) -> bool:
         return Decimal(str(value)) == Decimal("0")
     except Exception:
         return False
+
+
+def _is_demand_gen_budget(campaigns: list[dict]) -> bool:
+    """Return true only when every campaign linked to the budget is Demand Gen."""
+    return bool(campaigns) and all(
+        get_campaign_channel_type(campaign) in {"DEMAND_GEN", "DEMANDGEN"}
+        for campaign in campaigns
+    )
 
 
 def _should_filter_row_before_mutation(
@@ -978,12 +987,19 @@ def generate_update_payloads(data: list[dict]) -> tuple[list[dict], list[dict]]:
 
         budget_amount = Decimal(budget_amount_raw)
 
-        # Enforce Google Ads minimum
-        amount_to_set = (
-            Decimal("0.01") if daily_budget <= Decimal("0") else daily_budget
-        )
+        is_demand_gen_budget = _is_demand_gen_budget(campaigns)
 
-        # Skip small changes unless targeting 0.00/0.01
+        # Demand Gen has a platform-specific minimum that can be much higher
+        # than the generic $0.01 fallback. A non-positive Demand Gen target
+        # means the campaign should be paused, so omit its budget mutation.
+        if daily_budget <= Decimal("0"):
+            if is_demand_gen_budget:
+                continue
+            amount_to_set = Decimal("0.01")
+        else:
+            amount_to_set = daily_budget
+
+        # Skip small changes unless targeting 0.00/0.01.
         if amount_to_set not in (Decimal("0"), Decimal("0.01")):
             if abs(amount_to_set - budget_amount) <= Decimal(
                 str(GGADS_MIN_BUDGET_DELTA)
