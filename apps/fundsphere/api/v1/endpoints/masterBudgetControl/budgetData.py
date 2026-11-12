@@ -635,6 +635,7 @@ def _parse_budget_data_sheet_rows(
                 continue
             delete_items.append(
                 {
+                    "row": row_number,
                     "budgetId": budget_id,
                     "changeNote": change_note,
                 }
@@ -846,6 +847,49 @@ def _build_row_error_messages(errors: list[dict[str, object]]) -> list[str]:
     return [f"Row {row}: {', '.join(grouped[row])}" for row in row_order]
 
 
+def _validate_change_reasons(
+    *,
+    changes: list[dict[str, object]],
+    creates: list[dict[str, object]],
+    deletes: list[dict[str, object]],
+) -> list[dict[str, object]]:
+    """Require a reason for every budget mutation represented by the sheet."""
+    errors: list[dict[str, object]] = []
+
+    for item in changes:
+        # Preserve reason-only history entries. They already have a reason and
+        # do not represent an editable-field mutation.
+        diffs = item.get("diffs")
+        if not isinstance(diffs, list) or not diffs:
+            continue
+        action = "update"
+        reason = str(item.get("changeNote") or "").strip()
+        if reason:
+            continue
+        errors.append(
+            {
+                "row": item.get("row"),
+                "field": "changeReason",
+                "message": f"changeReason is required for {action} rows",
+            }
+        )
+
+    for action, items in (("create", creates), ("delete", deletes)):
+        for item in items:
+            reason = str(item.get("changeNote") or "").strip()
+            if reason:
+                continue
+            errors.append(
+                {
+                    "row": item.get("row"),
+                    "field": "changeReason",
+                    "message": f"changeReason is required for {action} rows",
+                }
+            )
+
+    return errors
+
+
 # ============================================================
 # ROUTES
 # ============================================================
@@ -967,9 +1011,11 @@ def update_budget_data_route(request: Request):
         - Reads configured budgetDataUpdateReadRange from budgetDataSheetName
         - Uses budgetDataUpdateColumns mapping to resolve all read columns
         - Uses `budgetDataUpdateColumns.changeNote` (sheet label may be `changeReason`)
-          as optional history note text for each update/create/delete row
+          as the required reason for each update/create/delete row
         - Existing rows with no editable-field changes are still accepted when
           `changeNote/changeReason` is provided, and create a history-only event
+        - Rows with an editable update, create, or delete task but no
+          `changeNote/changeReason` are rejected before any DB query or mutation
         - `originalSig` must follow key-value format:
           "subService=...|grossAmount=...|commission=...|netAdjustment=...|note=..."
         - New budget create rows are supported when:
@@ -1056,6 +1102,23 @@ def update_budget_data_route(request: Request):
     )
 
     scanned_row_count = len(sheet_rows)
+
+    change_reason_errors = _validate_change_reasons(
+        changes=changed_rows,
+        creates=create_rows,
+        deletes=delete_rows,
+    )
+    if change_reason_errors:
+        reason_messages = _build_row_error_messages(change_reason_errors)
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Validation failed. No rows were updated.",
+                "messages": reason_messages,
+                "errors": change_reason_errors,
+            },
+        )
+
     validation_messages: list[str] = []
     validation_errors: list[dict[str, object]] = []
     has_non_duplicate_errors = False
