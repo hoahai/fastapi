@@ -6,6 +6,8 @@ from unittest.mock import patch
 
 from apps.fundsphere.api.v1.helpers.dbQueries import (
     BudgetSegmentValidationError,
+    _fetch_master_budget_control_budget_rows_for_buckets,
+    _filter_budget_rows_by_service_names,
     replace_budget_segments,
     validate_budget_segment_rows,
 )
@@ -14,6 +16,7 @@ from apps.fundsphere.api.v1.endpoints.masterBudgetControl.budgetSegments import 
 )
 from apps.fundsphere.api.v1.endpoints.masterBudgetControl.budgetData import (
     _build_budget_data_values,
+    _extract_service_names,
     _parse_budget_data_sheet_rows,
 )
 
@@ -39,6 +42,70 @@ class _FakeCursor:
 
 
 class BudgetSegmentsTests(unittest.TestCase):
+    def test_budget_service_selector_accepts_blank_and_multiple_values(self):
+        self.assertEqual(_extract_service_names(""), [])
+        self.assertEqual(
+            _extract_service_names(" Search Engine Marketing,\nDigital Display Ads "),
+            ["Search Engine Marketing", "Digital Display Ads"],
+        )
+
+    def test_budget_service_selector_filters_rows_case_insensitively(self):
+        rows = [
+            {"budgetId": "sem-1", "serviceName": "Search Engine Marketing"},
+            {"budgetId": "display-1", "serviceName": "Digital Display Ads"},
+        ]
+
+        self.assertEqual(
+            _filter_budget_rows_by_service_names(rows, ["digital display ads"]),
+            [rows[1]],
+        )
+        self.assertEqual(_filter_budget_rows_by_service_names(rows, []), rows)
+
+    def test_budget_db_query_restricts_selected_services(self):
+        columns = {
+            "account_code_col": "accountCode",
+            "account_name_col": "accountName",
+            "service_id_col": "serviceId",
+            "service_name_col": "serviceName",
+            "service_department_code_col": "departmentCode",
+            "department_code_col": "code",
+            "department_listing_order_col": "listingOrder",
+            "budget_id_col": "id",
+            "budget_account_code_col": "accountCode",
+            "budget_service_id_col": "serviceId",
+            "budget_year_col": "year",
+            "budget_month_col": "month",
+            "budget_sub_service_col": "subService",
+            "budget_gross_amount_col": "grossAmount",
+            "budget_commission_col": "commission",
+            "budget_net_adjustment_col": "netAdjustment",
+            "budget_note_col": "note",
+        }
+
+        with patch(
+            "apps.fundsphere.api.v1.helpers.dbQueries._resolve_budget_data_columns",
+            return_value=columns,
+        ), patch(
+            "apps.fundsphere.api.v1.helpers.dbQueries.fetch_all",
+            return_value=[{"budgetId": ""}],
+        ) as fetch_all:
+            _fetch_master_budget_control_budget_rows_for_buckets(
+                accounts_table="Accounts",
+                budgets_table="Budgets",
+                services_table="Services",
+                departments_table="Departments",
+                budget_segment_objectives_table="",
+                budget_segment_languages_table="",
+                budget_change_histories_table="BudgetChangeHistories",
+                buckets=[("ACME", 3, 2026)],
+                service_names=["Digital Display Ads"],
+            )
+
+        query, params = fetch_all.call_args.args
+        self.assertIn("LOWER(s.`serviceName`) IN (%s)", query)
+        self.assertEqual(params[0], "digital display ads")
+        self.assertEqual(params[1:], ("ACME", 3, 2026))
+
     def test_budget_data_segment_preview_round_trips_as_a_change(self):
         row = {
             "budgetId": "budget-1",

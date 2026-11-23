@@ -1050,6 +1050,30 @@ def _is_valid_cached_rows(value: object) -> bool:
     return all(isinstance(row, dict) for row in value)
 
 
+def _filter_budget_rows_by_service_names(
+    rows: list[dict],
+    service_names: list[str] | None,
+) -> list[dict]:
+    normalized_service_names = _normalize_service_names(service_names)
+    if not normalized_service_names:
+        return rows
+
+    return [
+        row
+        for row in rows
+        if " ".join(str(row.get("serviceName") or "").split()).casefold()
+        in normalized_service_names
+    ]
+
+
+def _normalize_service_names(service_names: list[str] | None) -> set[str]:
+    return {
+        " ".join(str(service_name or "").split()).casefold()
+        for service_name in (service_names or [])
+        if " ".join(str(service_name or "").split())
+    }
+
+
 def _to_int(value: object, *, default: int = 0) -> int:
     try:
         return int(str(value).strip())
@@ -1078,6 +1102,7 @@ def _fetch_master_budget_control_budget_rows_for_buckets(
     budget_segment_languages_table: str,
     budget_change_histories_table: str,
     buckets: list[tuple[str, int, int]],
+    service_names: list[str] | None = None,
 ) -> list[dict]:
     if not buckets:
         return []
@@ -1122,6 +1147,16 @@ def _fetch_master_budget_control_budget_rows_for_buckets(
         )
         bucket_params.extend([account_code, month, year])
 
+    normalized_service_names = _normalize_service_names(service_names)
+    service_filter = ""
+    service_params: list[object] = []
+    if normalized_service_names:
+        service_placeholders = ", ".join(["%s"] * len(normalized_service_names))
+        service_filter = (
+            f"LOWER(s.{service_name_expr}) IN ({service_placeholders}) AND "
+        )
+        service_params = sorted(normalized_service_names)
+
     query = (
         "SELECT "
         f"a.{account_code_expr} AS accountCode, "
@@ -1143,7 +1178,7 @@ def _fetch_master_budget_control_budget_rows_for_buckets(
         f"ON s.{service_id_expr} = b.{budget_service_id_expr} "
         f"INNER JOIN {quoted_accounts_table} a "
         f"ON b.{budget_account_code_expr} = a.{account_code_expr} "
-        f"WHERE {' OR '.join(bucket_conditions)} "
+        f"WHERE {service_filter}{' OR '.join(bucket_conditions)} "
         f"ORDER BY a.{account_name_expr} ASC, "
         f"b.{budget_year_expr} DESC, "
         f"b.{budget_month_expr} DESC, "
@@ -1151,7 +1186,7 @@ def _fetch_master_budget_control_budget_rows_for_buckets(
         f"s.{service_name_expr} ASC, "
         f"b.{budget_sub_service_expr} ASC"
     )
-    rows = fetch_all(query, tuple(bucket_params))
+    rows = fetch_all(query, tuple(service_params + bucket_params))
     if not rows:
         return []
 
@@ -1567,6 +1602,7 @@ def get_master_budget_control_budget_data(
     periods: list[tuple[int, int]],
     refresh_cache: bool = False,
     include_budget_segments: bool | None = None,
+    service_names: list[str] | None = None,
 ) -> list[dict]:
     if not account_codes or not periods:
         return []
@@ -1596,6 +1632,7 @@ def get_master_budget_control_budget_data(
     if not requested_buckets:
         return []
 
+    normalized_service_names = _normalize_service_names(service_names)
     bucket_rows_map: dict[tuple[str, int, int], list[dict]] = {}
     missing_buckets = list(requested_buckets)
     if not refresh_cache:
@@ -1638,6 +1675,7 @@ def get_master_budget_control_budget_data(
                 or "BudgetChangeHistories"
             ),
             buckets=missing_buckets,
+            service_names=service_names if normalized_service_names else None,
         )
         fetched_rows_by_bucket: dict[tuple[str, int, int], list[dict]] = {}
         for row in fetched_rows:
@@ -1659,16 +1697,24 @@ def get_master_budget_control_budget_data(
                 month=month,
                 year=year,
             )
-            set_tenant_shared_cache_value(
-                bucket=_SHARED_DB_READ_CACHE_BUCKET,
-                cache_key=cache_key,
-                value=bucket_rows,
-            )
+            # The standard bucket cache represents all services. Never place a
+            # service-filtered DB result into it, or a later blank-selector load
+            # would incorrectly see only the selected services.
+            if not normalized_service_names:
+                set_tenant_shared_cache_value(
+                    bucket=_SHARED_DB_READ_CACHE_BUCKET,
+                    cache_key=cache_key,
+                    value=bucket_rows,
+                )
             bucket_rows_map[bucket] = bucket_rows
 
     combined_rows: list[dict] = []
     for account_code, month, year in requested_buckets:
         combined_rows.extend(bucket_rows_map.get((account_code, month, year), []))
+    combined_rows = _filter_budget_rows_by_service_names(
+        combined_rows,
+        service_names,
+    )
     combined_rows.sort(key=_budget_data_sort_key)
     for row in combined_rows:
         row.pop("depListingOrder", None)

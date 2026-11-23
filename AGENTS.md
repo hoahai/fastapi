@@ -625,6 +625,8 @@ Documentation rules:
       (alias: `settingsRange`)
     - `SPREADSHEETS.masterBudgetControl.settingServicesRange`
       (alias: `servicesRange`)
+    - `SPREADSHEETS.masterBudgetControl.budgetDataServiceSelectionRange`
+      (the multi-service selector cell; TAAA uses `I2`)
 -   Tenant DB table config source:
     - `DB_TABLES.accounts`
     - `DB_TABLES.departments`

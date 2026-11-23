@@ -263,6 +263,9 @@ def _parse_fundsphere_sheet_settings(
     budget_data_period_selection_range = str(
         master_budget_control_entry.get("budgetdataperiodselectionrange") or ""
     ).strip()
+    budget_data_service_selection_range = str(
+        master_budget_control_entry.get("budgetdataserviceselectionrange") or ""
+    ).strip()
     budget_data_output_range = str(
         master_budget_control_entry.get("budgetdataoutputrange") or ""
     ).strip()
@@ -375,6 +378,14 @@ def _parse_fundsphere_sheet_settings(
                 invalid.append(
                     f"{key_prefix}.masterBudgetControl.budgetDataPeriodSelectionRange"
                 )
+            if not budget_data_service_selection_range:
+                missing.append(
+                    f"{key_prefix}.masterBudgetControl.budgetDataServiceSelectionRange"
+                )
+            elif not _CELL_RANGE_RE.fullmatch(budget_data_service_selection_range):
+                invalid.append(
+                    f"{key_prefix}.masterBudgetControl.budgetDataServiceSelectionRange"
+                )
             if not budget_data_output_range:
                 missing.append(f"{key_prefix}.masterBudgetControl.budgetDataOutputRange")
             elif not _SETTINGS_RANGE_RE.fullmatch(budget_data_output_range):
@@ -467,6 +478,10 @@ def _parse_fundsphere_sheet_settings(
         if budget_data_period_selection_range:
             settings["budget_data_period_selection_range"] = (
                 budget_data_period_selection_range
+            )
+        if budget_data_service_selection_range:
+            settings["budget_data_service_selection_range"] = (
+                budget_data_service_selection_range
             )
         if budget_data_output_range:
             settings["budget_data_output_range"] = budget_data_output_range

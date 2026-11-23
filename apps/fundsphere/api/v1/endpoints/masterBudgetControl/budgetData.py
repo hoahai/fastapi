@@ -236,6 +236,26 @@ def _parse_periods(value: str) -> list[tuple[int, int]]:
     return periods
 
 
+def _extract_service_names(value: str) -> list[str]:
+    """Parse the comma/newline-separated service names stored in the selector cell."""
+    raw_value = str(value or "").strip()
+    if not raw_value:
+        return []
+
+    service_names: list[str] = []
+    seen: set[str] = set()
+    for token in re.split(r"[,;\n]+", raw_value):
+        service_name = " ".join(str(token or "").split())
+        if not service_name:
+            continue
+        key = service_name.casefold()
+        if key in seen:
+            continue
+        seen.add(key)
+        service_names.append(service_name)
+    return service_names
+
+
 def _to_decimal(value: object, *, scale: int) -> Decimal:
     if value is None or value == "":
         dec_value = Decimal("0")
@@ -750,6 +770,7 @@ def _load_budget_data_to_sheet(
     sheet_name = str(sheet_settings["budget_data_sheet_name"])
     account_selection_cell = str(sheet_settings["budget_data_account_selection_range"])
     period_selection_cell = str(sheet_settings["budget_data_period_selection_range"])
+    service_selection_cell = str(sheet_settings["budget_data_service_selection_range"])
     output_range = str(sheet_settings["budget_data_output_range"])
 
     selected_accounts_raw = _read_single_cell(
@@ -762,9 +783,15 @@ def _load_budget_data_to_sheet(
         sheet_name=sheet_name,
         cell_range=period_selection_cell,
     )
+    selected_services_raw = _read_single_cell(
+        spreadsheet_id=spreadsheet_id,
+        sheet_name=sheet_name,
+        cell_range=service_selection_cell,
+    )
 
     account_codes = _extract_account_codes(selected_accounts_raw)
     periods = _parse_periods(selected_periods_raw)
+    service_names = _extract_service_names(selected_services_raw)
     segment_tables = get_db_tables()
     include_segments = bool(
         segment_tables.get("BUDGETSEGMENTOBJECTIVES")
@@ -776,6 +803,7 @@ def _load_budget_data_to_sheet(
         periods=periods,
         refresh_cache=refresh_budget_data,
         include_budget_segments=include_segments,
+        service_names=service_names,
     )
     if include_segments:
         update_settings = get_fundsphere_budget_data_update_settings()
@@ -874,10 +902,12 @@ def _load_budget_data_to_sheet(
         "sheetName": sheet_name,
         "accountSelectionRange": f"'{sheet_name}'!{account_selection_cell}",
         "periodSelectionRange": f"'{sheet_name}'!{period_selection_cell}",
+        "serviceSelectionRange": f"'{sheet_name}'!{service_selection_cell}",
         "clearRange": clear_range,
         "writeRange": write_range,
         "selectedAccountCodes": account_codes,
         "selectedPeriods": [f"{month}/{year}" for month, year in periods],
+        "selectedServices": service_names,
         "dbRowCount": len(db_rows),
         "writtenRowCount": max(len(values) - 1, 0),
     }
@@ -1470,8 +1500,8 @@ def load_budget_data_route(
     ),
 ):
     """
-    Read selected account codes and periods from the configured budget-data sheet,
-    fetch matching budgets from DB, and overwrite the budget-data output range.
+    Read selected account codes, periods, and optional services from the configured
+    budget-data sheet, fetch matching budgets from DB, and overwrite the output range.
 
     Example request:
         POST /api/fundsphere/v1/masterBudgetControl/budgetData/load
@@ -1493,6 +1523,7 @@ def load_budget_data_route(
             "sheetName": "0.2 Budget Data",
             "accountSelectionRange": "'0.2 Budget Data'!A2",
             "periodSelectionRange": "'0.2 Budget Data'!A3",
+            "serviceSelectionRange": "'0.2 Budget Data'!I2",
             "clearRange": "'0.2 Budget Data'!A5:N",
             "writeRange": "'0.2 Budget Data'!A5:N31",
             "selectedAccountCodes": ["ACH", "AFS"],
@@ -1509,6 +1540,7 @@ def load_budget_data_route(
         - Tenant config must include SPREADSHEETS.masterBudgetControl.budgetDataSheetName
         - Tenant config must include SPREADSHEETS.masterBudgetControl.budgetDataAccountSelectionRange
         - Tenant config must include SPREADSHEETS.masterBudgetControl.budgetDataPeriodSelectionRange
+        - Tenant config must include SPREADSHEETS.masterBudgetControl.budgetDataServiceSelectionRange
         - Tenant config must include SPREADSHEETS.masterBudgetControl.budgetDataOutputRange
         - Tenant config must include DB_TABLES.accounts, DB_TABLES.departments,
           DB_TABLES.services, DB_TABLES.budgets, and DB_TABLES.changeHistories
@@ -1525,6 +1557,8 @@ def load_budget_data_route(
         - Period selection cell accepts comma-separated M/YYYY or MM/YYYY values,
           for example "3/2026, 4/2026"
         - When period selection cell is empty, all months (1..12) of current tenant year are used
+        - Service selection cell accepts comma/newline-separated service names;
+          when it is empty, budgets for every service are loaded
     """
     return _load_budget_data_to_sheet(
         sheet_settings=get_fundsphere_budget_data_sheet_settings(),
