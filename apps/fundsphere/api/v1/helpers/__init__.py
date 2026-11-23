@@ -14,7 +14,10 @@ from apps.fundsphere.api.v1.helpers.dbQueries import (
     get_master_budget_control_master_budget_sheet_data,
     get_master_budget_control_master_budget_sheet_data_by_accounts,
     get_master_budget_control_services,
+    get_budget_segments,
+    replace_budget_segments,
     update_master_budget_control_budget_data,
+    validate_budget_segment_rows,
     validate_master_budget_control_budget_refs,
 )
 
@@ -31,7 +34,10 @@ __all__ = [
     "get_master_budget_control_master_budget_sheet_data",
     "get_master_budget_control_master_budget_sheet_data_by_accounts",
     "get_master_budget_control_services",
+    "get_budget_segments",
+    "replace_budget_segments",
     "update_master_budget_control_budget_data",
+    "validate_budget_segment_rows",
     "validate_master_budget_control_budget_refs",
     "validate_tenant_config",
 ]

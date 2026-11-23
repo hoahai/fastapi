@@ -106,7 +106,7 @@ _APP_NAME = "FundSphere"
 _SHARED_DB_READ_CACHE_BUCKET = "db_reads"
 _ACCOUNTS_CACHE_KEY_PREFIX = "accounts::"
 _SERVICES_CACHE_KEY_PREFIX = "services::"
-_BUDGET_DATA_CACHE_KEY_PREFIX = "budget_data::"
+_BUDGET_DATA_CACHE_KEY_PREFIX = "budget_data_v2::"
 _DEFAULT_DB_READ_CACHE_TTL_SECONDS = 300
 _NUMERIC_SQL_TYPE_TOKENS = (
     "int",
@@ -116,6 +116,33 @@ _NUMERIC_SQL_TYPE_TOKENS = (
     "double",
     "real",
 )
+_BUDGET_SEGMENT_OBJECTIVES = ("New", "Used", "Service")
+_BUDGET_SEGMENT_LANGUAGES = ("English", "Spanish")
+_BUDGET_SEGMENT_ID_CANDIDATES = ("id", "segmentId", "segment_id")
+_BUDGET_SEGMENT_BUDGET_ID_CANDIDATES = ("budgetId", "budget_id")
+_BUDGET_SEGMENT_OBJECTIVE_CANDIDATES = ("objective",)
+_BUDGET_SEGMENT_LANGUAGE_CANDIDATES = ("language",)
+_BUDGET_SEGMENT_PERCENT_CANDIDATES = ("segmentPercent", "segment_percent")
+_BUDGET_OBJECTIVE_PERCENT_CANDIDATES = (
+    "objectivePercent",
+    "objective_percent",
+)
+_BUDGET_SEGMENT_OBJECTIVE_ID_CANDIDATES = (
+    "budgetSegmentObjectiveId",
+    "budget_segment_objective_id",
+)
+
+
+class BudgetSegmentValidationError(ValueError):
+    """Raised when a budget segment payload violates the segment contract."""
+
+    def __init__(self, errors: list[dict[str, object]]) -> None:
+        self.errors = errors
+        super().__init__("Invalid budget segment payload")
+
+
+class BudgetSegmentsBudgetNotFoundError(ValueError):
+    """Raised when segment operations target a missing budget."""
 
 
 # ============================================================
@@ -191,6 +218,412 @@ def _load_table_column_specs(table_name: str) -> dict[str, dict[str, object]]:
             continue
         specs[name.lower()] = row
     return specs
+
+
+def _resolve_budget_segment_columns(
+    *,
+    budget_segment_objectives_table: str,
+    budget_segment_languages_table: str,
+    budgets_table: str,
+) -> dict[str, str]:
+    objective_columns = _load_table_columns(budget_segment_objectives_table)
+    language_columns = _load_table_columns(budget_segment_languages_table)
+    budget_columns = _load_table_columns(budgets_table)
+
+    resolved = {
+        "objective_id_col": _resolve_column_name(
+            objective_columns,
+            _BUDGET_SEGMENT_ID_CANDIDATES,
+        ),
+        "objective_budget_id_col": _resolve_column_name(
+            objective_columns,
+            _BUDGET_SEGMENT_BUDGET_ID_CANDIDATES,
+        ),
+        "objective_col": _resolve_column_name(
+            objective_columns,
+            _BUDGET_SEGMENT_OBJECTIVE_CANDIDATES,
+        ),
+        "objective_percent_col": _resolve_column_name(
+            objective_columns,
+            _BUDGET_OBJECTIVE_PERCENT_CANDIDATES,
+        ),
+        "language_id_col": _resolve_column_name(
+            language_columns,
+            _BUDGET_SEGMENT_ID_CANDIDATES,
+        ),
+        "language_objective_id_col": _resolve_column_name(
+            language_columns,
+            _BUDGET_SEGMENT_OBJECTIVE_ID_CANDIDATES,
+        ),
+        "language_col": _resolve_column_name(
+            language_columns,
+            _BUDGET_SEGMENT_LANGUAGE_CANDIDATES,
+        ),
+        "segment_percent_col": _resolve_column_name(
+            language_columns,
+            _BUDGET_SEGMENT_PERCENT_CANDIDATES,
+        ),
+        "budget_id_col": _resolve_column_name(
+            budget_columns,
+            _BUDGET_ID_CANDIDATES,
+        ),
+    }
+    missing = [
+        label
+        for label, column_name in (
+            (
+                "budgetSegmentObjectives.id",
+                resolved["objective_id_col"],
+            ),
+            (
+                "budgetSegmentObjectives.budgetId",
+                resolved["objective_budget_id_col"],
+            ),
+            (
+                "budgetSegmentObjectives.objective",
+                resolved["objective_col"],
+            ),
+            (
+                "budgetSegmentObjectives.objectivePercent",
+                resolved["objective_percent_col"],
+            ),
+            ("budgetSegmentLanguages.id", resolved["language_id_col"]),
+            (
+                "budgetSegmentLanguages.budgetSegmentObjectiveId",
+                resolved["language_objective_id_col"],
+            ),
+            ("budgetSegmentLanguages.language", resolved["language_col"]),
+            (
+                "budgetSegmentLanguages.segmentPercent",
+                resolved["segment_percent_col"],
+            ),
+            ("budgets.id", resolved["budget_id_col"]),
+        )
+        if not column_name
+    ]
+    if missing:
+        raise ValueError(
+            "Budget segment queries are missing required DB columns: "
+            + ", ".join(missing)
+        )
+
+    return {key: str(value) for key, value in resolved.items()}
+
+
+def _fetch_budget_segments_by_ids(
+    *,
+    budget_segment_objectives_table: str,
+    budget_segment_languages_table: str,
+    budgets_table: str,
+    budget_ids: list[str],
+) -> dict[str, list[dict[str, object]]]:
+    normalized_ids = list(dict.fromkeys(str(item or "").strip() for item in budget_ids))
+    normalized_ids = [item for item in normalized_ids if item]
+    if not normalized_ids:
+        return {}
+
+    columns = _resolve_budget_segment_columns(
+        budget_segment_objectives_table=budget_segment_objectives_table,
+        budget_segment_languages_table=budget_segment_languages_table,
+        budgets_table=budgets_table,
+    )
+    quoted_objectives_table = _quote_table_name(budget_segment_objectives_table)
+    quoted_languages_table = _quote_table_name(budget_segment_languages_table)
+    quoted_budgets_table = _quote_table_name(budgets_table)
+    objective_id_expr = _quote_identifier(columns["objective_id_col"])
+    objective_budget_id_expr = _quote_identifier(columns["objective_budget_id_col"])
+    objective_expr = _quote_identifier(columns["objective_col"])
+    objective_percent_expr = _quote_identifier(columns["objective_percent_col"])
+    language_id_expr = _quote_identifier(columns["language_id_col"])
+    language_objective_id_expr = _quote_identifier(
+        columns["language_objective_id_col"]
+    )
+    language_expr = _quote_identifier(columns["language_col"])
+    segment_percent_expr = _quote_identifier(columns["segment_percent_col"])
+    budget_id_expr = _quote_identifier(columns["budget_id_col"])
+    placeholders = ", ".join(["%s"] * len(normalized_ids))
+    query = (
+        "SELECT "
+        f"l.{language_id_expr} AS id, "
+        f"o.{objective_id_expr} AS budgetSegmentObjectiveId, "
+        f"o.{objective_budget_id_expr} AS budgetId, "
+        f"o.{objective_expr} AS objective, "
+        f"o.{objective_percent_expr} AS objectivePercent, "
+        f"l.{language_expr} AS language, "
+        f"l.{segment_percent_expr} AS segmentPercent "
+        f"FROM {quoted_languages_table} l "
+        f"INNER JOIN {quoted_objectives_table} o "
+        f"ON l.{language_objective_id_expr} = o.{objective_id_expr} "
+        f"INNER JOIN {quoted_budgets_table} b "
+        f"ON o.{objective_budget_id_expr} = b.{budget_id_expr} "
+        f"WHERE o.{objective_budget_id_expr} IN ({placeholders}) "
+        f"ORDER BY o.{objective_expr} ASC, l.{language_expr} ASC"
+    )
+    rows = fetch_all(query, tuple(normalized_ids))
+    result: dict[str, list[dict[str, object]]] = {
+        budget_id: [] for budget_id in normalized_ids
+    }
+    for row in rows:
+        budget_id = str(row.get("budgetId") or "").strip()
+        if budget_id in result:
+            result[budget_id].append(row)
+    return result
+
+
+def validate_budget_segment_rows(
+    segments: list[dict[str, object]] | None,
+) -> list[dict[str, object]]:
+    """Normalize and validate objective allocation and language splits."""
+    if segments is None:
+        return []
+
+    errors: list[dict[str, object]] = []
+    normalized: list[dict[str, object]] = []
+    seen_keys: set[tuple[str, str]] = set()
+    objective_percent_by_objective: dict[str, Decimal] = {}
+
+    for index, segment in enumerate(segments):
+        if not isinstance(segment, dict):
+            errors.append(
+                {
+                    "index": index,
+                    "message": "Each segment must be an object",
+                }
+            )
+            continue
+
+        objective = str(segment.get("objective") or "").strip()
+        language = str(segment.get("language") or "").strip()
+        objective_percent_value = segment.get("objectivePercent")
+        percent_value = segment.get("segmentPercent")
+
+        if objective not in _BUDGET_SEGMENT_OBJECTIVES:
+            errors.append(
+                {
+                    "index": index,
+                    "field": "objective",
+                    "message": "objective must be New, Used, or Service",
+                }
+            )
+        if language not in _BUDGET_SEGMENT_LANGUAGES:
+            errors.append(
+                {
+                    "index": index,
+                    "field": "language",
+                    "message": "language must be English or Spanish",
+                }
+            )
+
+        objective_percent: Decimal | None = None
+        if isinstance(objective_percent_value, bool) or objective_percent_value in (
+            None,
+            "",
+        ):
+            errors.append(
+                {
+                    "index": index,
+                    "field": "objectivePercent",
+                    "message": "objectivePercent is required",
+                }
+            )
+        else:
+            try:
+                objective_percent = Decimal(str(objective_percent_value).strip())
+            except (InvalidOperation, ValueError):
+                errors.append(
+                    {
+                        "index": index,
+                        "field": "objectivePercent",
+                        "message": "objectivePercent must be a valid number",
+                    }
+                )
+            else:
+                if (
+                    not objective_percent.is_finite()
+                    or objective_percent < 0
+                    or objective_percent > 100
+                ):
+                    errors.append(
+                        {
+                            "index": index,
+                            "field": "objectivePercent",
+                            "message": "objectivePercent must be between 0 and 100",
+                        }
+                    )
+                elif abs(objective_percent.as_tuple().exponent) > 2:
+                    errors.append(
+                        {
+                            "index": index,
+                            "field": "objectivePercent",
+                            "message": "objectivePercent supports at most 2 decimal places",
+                        }
+                    )
+
+        percent: Decimal | None = None
+        if isinstance(percent_value, bool) or percent_value in (None, ""):
+            errors.append(
+                {
+                    "index": index,
+                    "field": "segmentPercent",
+                    "message": "segmentPercent is required",
+                }
+            )
+        else:
+            try:
+                percent = Decimal(str(percent_value).strip())
+            except (InvalidOperation, ValueError):
+                errors.append(
+                    {
+                        "index": index,
+                        "field": "segmentPercent",
+                        "message": "segmentPercent must be a valid number",
+                    }
+                )
+            else:
+                if not percent.is_finite() or percent < 0 or percent > 100:
+                    errors.append(
+                        {
+                            "index": index,
+                            "field": "segmentPercent",
+                            "message": "segmentPercent must be between 0 and 100",
+                        }
+                    )
+                elif abs(percent.as_tuple().exponent) > 2:
+                    errors.append(
+                        {
+                            "index": index,
+                            "field": "segmentPercent",
+                            "message": "segmentPercent supports at most 2 decimal places",
+                        }
+                    )
+
+        key = (objective, language)
+        if (
+            objective in _BUDGET_SEGMENT_OBJECTIVES
+            and language in _BUDGET_SEGMENT_LANGUAGES
+        ):
+            if key in seen_keys:
+                errors.append(
+                    {
+                        "index": index,
+                        "field": "objective/language",
+                        "message": "Duplicate objective/language combination",
+                    }
+                )
+            else:
+                seen_keys.add(key)
+
+        if (
+            objective in _BUDGET_SEGMENT_OBJECTIVES
+            and objective_percent is not None
+            and objective_percent.is_finite()
+            and 0 <= objective_percent <= 100
+        ):
+            normalized_objective_percent = objective_percent.quantize(
+                Decimal("0.01"),
+                rounding=ROUND_HALF_UP,
+            )
+            existing_objective_percent = objective_percent_by_objective.get(objective)
+            if (
+                existing_objective_percent is not None
+                and existing_objective_percent != normalized_objective_percent
+            ):
+                errors.append(
+                    {
+                        "index": index,
+                        "field": "objectivePercent",
+                        "message": (
+                            f"All {objective} language rows must use the same "
+                            "objectivePercent"
+                        ),
+                    }
+                )
+            else:
+                objective_percent_by_objective[objective] = normalized_objective_percent
+
+        if (
+            objective_percent is not None
+            and objective_percent.is_finite()
+            and 0 <= objective_percent <= 100
+            and percent is not None
+            and percent.is_finite()
+            and 0 <= percent <= 100
+        ):
+            normalized.append(
+                {
+                    "objective": objective,
+                    "language": language,
+                    "objectivePercent": objective_percent_by_objective.get(
+                        objective,
+                        objective_percent.quantize(
+                            Decimal("0.01"),
+                            rounding=ROUND_HALF_UP,
+                        ),
+                    ),
+                    "segmentPercent": percent.quantize(
+                        Decimal("0.01"),
+                        rounding=ROUND_HALF_UP,
+                    ),
+                }
+            )
+
+    if errors:
+        raise BudgetSegmentValidationError(errors)
+
+    if normalized:
+        objective_total = sum(
+            objective_percent_by_objective.values(),
+            Decimal("0.00"),
+        ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+        if objective_total != Decimal("100.00"):
+            errors.append(
+                {
+                    "field": "objectiveTotal",
+                    "message": (
+                        "Objective percentages must total 100.00; "
+                        f"received {objective_total:.2f}"
+                    ),
+                }
+            )
+
+        for objective in _BUDGET_SEGMENT_OBJECTIVES:
+            objective_values = [
+                item["segmentPercent"]
+                for item in normalized
+                if item["objective"] == objective
+            ]
+            if not objective_values:
+                continue
+
+            objective_total = sum(
+                (
+                    value
+                    for value in objective_values
+                ),
+                Decimal("0.00"),
+            ).quantize(Decimal("0.01"), rounding=ROUND_HALF_UP)
+            if objective_total != Decimal("100.00"):
+                errors.append(
+                    {
+                        "field": "languageTotal",
+                        "objective": objective,
+                        "message": (
+                            f"{objective} segment percentages must total 100.00; "
+                            f"received {objective_total:.2f}"
+                        ),
+                    }
+                )
+
+    if errors:
+        raise BudgetSegmentValidationError(errors)
+
+    normalized.sort(
+        key=lambda item: (
+            _BUDGET_SEGMENT_OBJECTIVES.index(str(item["objective"])),
+            _BUDGET_SEGMENT_LANGUAGES.index(str(item["language"])),
+        )
+    )
+    return normalized
 
 
 def _resolve_service_identity_columns(services_table: str) -> tuple[str, str]:
@@ -641,6 +1074,8 @@ def _fetch_master_budget_control_budget_rows_for_buckets(
     budgets_table: str,
     services_table: str,
     departments_table: str,
+    budget_segment_objectives_table: str,
+    budget_segment_languages_table: str,
     budget_change_histories_table: str,
     buckets: list[tuple[str, int, int]],
 ) -> list[dict]:
@@ -728,8 +1163,20 @@ def _fetch_master_budget_control_budget_rows_for_buckets(
     unique_budget_ids = list(dict.fromkeys(budget_ids))
     if not unique_budget_ids:
         for row in rows:
+            row["segments"] = []
             row["changeHistories"] = ""
         return rows
+
+    segment_map = (
+        _fetch_budget_segments_by_ids(
+            budget_segment_objectives_table=budget_segment_objectives_table,
+            budget_segment_languages_table=budget_segment_languages_table,
+            budgets_table=budgets_table,
+            budget_ids=unique_budget_ids,
+        )
+        if budget_segment_objectives_table and budget_segment_languages_table
+        else {}
+    )
 
     history_summary_map: dict[str, str] = {}
     try:
@@ -742,6 +1189,7 @@ def _fetch_master_budget_control_budget_rows_for_buckets(
 
     for row in rows:
         budget_id = str(row.get("budgetId") or "").strip()
+        row["segments"] = segment_map.get(budget_id, [])
         row["changeHistories"] = history_summary_map.get(budget_id, "")
     return rows
 
@@ -775,6 +1223,12 @@ def _refresh_budget_data_cache_buckets(
         budgets_table=tables["BUDGETS"],
         services_table=tables["SERVICES"],
         departments_table=tables["DEPARTMENTS"],
+        budget_segment_objectives_table=str(
+            tables.get("BUDGETSEGMENTOBJECTIVES") or ""
+        ).strip(),
+        budget_segment_languages_table=str(
+            tables.get("BUDGETSEGMENTLANGUAGES") or ""
+        ).strip(),
         budget_change_histories_table=(
             str(tables.get("BUDGETCHANGEHISTORIES") or "").strip()
             or "BudgetChangeHistories"
@@ -808,6 +1262,195 @@ def _refresh_budget_data_cache_buckets(
         )
         updated_count += 1
     return updated_count
+
+
+# ============================================================
+# BUDGET SEGMENT QUERIES
+# ============================================================
+
+
+def get_budget_segments(*, budget_id: str) -> list[dict[str, object]]:
+    normalized_budget_id = str(budget_id or "").strip()
+    if not normalized_budget_id:
+        raise ValueError("budgetId is required")
+
+    tables = get_db_tables(require_budget_segments=True)
+    budget_segment_objectives_table = tables["BUDGETSEGMENTOBJECTIVES"]
+    budget_segment_languages_table = tables["BUDGETSEGMENTLANGUAGES"]
+    budgets_table = tables["BUDGETS"]
+    columns = _resolve_budget_segment_columns(
+        budget_segment_objectives_table=budget_segment_objectives_table,
+        budget_segment_languages_table=budget_segment_languages_table,
+        budgets_table=budgets_table,
+    )
+
+    quoted_objectives_table = _quote_table_name(budget_segment_objectives_table)
+    quoted_languages_table = _quote_table_name(budget_segment_languages_table)
+    quoted_budgets_table = _quote_table_name(budgets_table)
+    objective_id_expr = _quote_identifier(columns["objective_id_col"])
+    objective_budget_id_expr = _quote_identifier(columns["objective_budget_id_col"])
+    objective_expr = _quote_identifier(columns["objective_col"])
+    objective_percent_expr = _quote_identifier(columns["objective_percent_col"])
+    language_id_expr = _quote_identifier(columns["language_id_col"])
+    language_objective_id_expr = _quote_identifier(
+        columns["language_objective_id_col"]
+    )
+    language_expr = _quote_identifier(columns["language_col"])
+    segment_percent_expr = _quote_identifier(columns["segment_percent_col"])
+    budget_id_expr = _quote_identifier(columns["budget_id_col"])
+
+    budget_exists_query = (
+        f"SELECT {budget_id_expr} "
+        f"FROM {quoted_budgets_table} "
+        f"WHERE {budget_id_expr} = %s"
+    )
+    if not fetch_all(budget_exists_query, (normalized_budget_id,)):
+        raise BudgetSegmentsBudgetNotFoundError(
+            f"Budget not found: {normalized_budget_id}"
+        )
+
+    query = (
+        "SELECT "
+        f"l.{language_id_expr} AS id, "
+        f"o.{objective_id_expr} AS budgetSegmentObjectiveId, "
+        f"o.{objective_budget_id_expr} AS budgetId, "
+        f"o.{objective_expr} AS objective, "
+        f"o.{objective_percent_expr} AS objectivePercent, "
+        f"l.{language_expr} AS language, "
+        f"l.{segment_percent_expr} AS segmentPercent "
+        f"FROM {quoted_languages_table} l "
+        f"INNER JOIN {quoted_objectives_table} o "
+        f"ON l.{language_objective_id_expr} = o.{objective_id_expr} "
+        f"INNER JOIN {quoted_budgets_table} b "
+        f"ON o.{objective_budget_id_expr} = b.{budget_id_expr} "
+        f"WHERE o.{objective_budget_id_expr} = %s "
+        f"ORDER BY o.{objective_expr} ASC, l.{language_expr} ASC"
+    )
+    return fetch_all(query, (normalized_budget_id,))
+
+
+def replace_budget_segments(
+    *,
+    budget_id: str,
+    segments: list[dict[str, object]] | None,
+) -> dict[str, object]:
+    normalized_budget_id = str(budget_id or "").strip()
+    if not normalized_budget_id:
+        raise ValueError("budgetId is required")
+
+    normalized_segments = validate_budget_segment_rows(segments)
+    tables = get_db_tables(require_budget_segments=True)
+    budget_segment_objectives_table = tables["BUDGETSEGMENTOBJECTIVES"]
+    budget_segment_languages_table = tables["BUDGETSEGMENTLANGUAGES"]
+    budgets_table = tables["BUDGETS"]
+    columns = _resolve_budget_segment_columns(
+        budget_segment_objectives_table=budget_segment_objectives_table,
+        budget_segment_languages_table=budget_segment_languages_table,
+        budgets_table=budgets_table,
+    )
+
+    quoted_objectives_table = _quote_table_name(budget_segment_objectives_table)
+    quoted_languages_table = _quote_table_name(budget_segment_languages_table)
+    quoted_budgets_table = _quote_table_name(budgets_table)
+    objective_id_expr = _quote_identifier(columns["objective_id_col"])
+    objective_budget_id_expr = _quote_identifier(columns["objective_budget_id_col"])
+    objective_expr = _quote_identifier(columns["objective_col"])
+    objective_percent_expr = _quote_identifier(columns["objective_percent_col"])
+    language_id_expr = _quote_identifier(columns["language_id_col"])
+    language_objective_id_expr = _quote_identifier(
+        columns["language_objective_id_col"]
+    )
+    language_expr = _quote_identifier(columns["language_col"])
+    segment_percent_expr = _quote_identifier(columns["segment_percent_col"])
+    budget_id_expr = _quote_identifier(columns["budget_id_col"])
+
+    budget_exists_query = (
+        f"SELECT {budget_id_expr} "
+        f"FROM {quoted_budgets_table} "
+        f"WHERE {budget_id_expr} = %s"
+    )
+    delete_languages_query = (
+        f"DELETE l FROM {quoted_languages_table} l "
+        f"INNER JOIN {quoted_objectives_table} o "
+        f"ON l.{language_objective_id_expr} = o.{objective_id_expr} "
+        f"WHERE o.{objective_budget_id_expr} = %s"
+    )
+    delete_objectives_query = (
+        f"DELETE FROM {quoted_objectives_table} "
+        f"WHERE {objective_budget_id_expr} = %s"
+    )
+    objective_insert_query = (
+        f"INSERT INTO {quoted_objectives_table} "
+        f"({objective_id_expr}, {objective_budget_id_expr}, {objective_expr}, "
+        f"{objective_percent_expr}) VALUES (%s, %s, %s, %s)"
+    )
+    language_insert_query = (
+        f"INSERT INTO {quoted_languages_table} "
+        f"({language_id_expr}, {language_objective_id_expr}, {language_expr}, "
+        f"{segment_percent_expr}) VALUES (%s, %s, %s, %s)"
+    )
+
+    def _work(cursor) -> dict[str, object]:
+        cursor.execute(budget_exists_query, (normalized_budget_id,))
+        if not cursor.fetchone():
+            raise BudgetSegmentsBudgetNotFoundError(
+                f"Budget not found: {normalized_budget_id}"
+            )
+
+        cursor.execute(delete_languages_query, (normalized_budget_id,))
+        deleted_language_count = max(int(cursor.rowcount or 0), 0)
+        cursor.execute(delete_objectives_query, (normalized_budget_id,))
+        deleted_objective_count = max(int(cursor.rowcount or 0), 0)
+
+        objective_ids: list[str] = []
+        language_ids: list[str] = []
+        if normalized_segments:
+            objective_id_by_name: dict[str, str] = {}
+            objective_rows: list[tuple[object, ...]] = []
+            for segment in normalized_segments:
+                objective = str(segment["objective"])
+                if objective in objective_id_by_name:
+                    continue
+                objective_id = str(uuid.uuid4())
+                objective_id_by_name[objective] = objective_id
+                objective_ids.append(objective_id)
+                objective_rows.append(
+                    (
+                        objective_id,
+                        normalized_budget_id,
+                        objective,
+                        segment["objectivePercent"],
+                    )
+                )
+            cursor.executemany(objective_insert_query, objective_rows)
+
+            language_rows: list[tuple[object, ...]] = []
+            for segment in normalized_segments:
+                language_id = str(uuid.uuid4())
+                language_ids.append(language_id)
+                language_rows.append(
+                    (
+                        language_id,
+                        objective_id_by_name[str(segment["objective"])],
+                        segment["language"],
+                        segment["segmentPercent"],
+                    )
+                )
+            cursor.executemany(language_insert_query, language_rows)
+
+        return {
+            "deletedCount": deleted_language_count,
+            "deletedObjectiveCount": deleted_objective_count,
+            "deletedLanguageCount": deleted_language_count,
+            "writtenRowCount": len(normalized_segments),
+            "objectiveIds": objective_ids,
+            "segmentIds": language_ids,
+        }
+
+    result = run_transaction(_work)
+    result["budgetId"] = normalized_budget_id
+    result["segments"] = get_budget_segments(budget_id=normalized_budget_id)
+    return result
 
 
 # ============================================================
@@ -923,11 +1566,20 @@ def get_master_budget_control_budget_data(
     account_codes: list[str],
     periods: list[tuple[int, int]],
     refresh_cache: bool = False,
+    include_budget_segments: bool | None = None,
 ) -> list[dict]:
     if not account_codes or not periods:
         return []
 
-    tables = get_db_tables(require_services=True)
+    tables = get_db_tables(
+        require_services=True,
+        require_budget_segments=bool(include_budget_segments),
+    )
+    if include_budget_segments is None:
+        include_budget_segments = bool(
+            tables.get("BUDGETSEGMENTOBJECTIVES")
+            and tables.get("BUDGETSEGMENTLANGUAGES")
+        )
     accounts_table = tables["ACCOUNTS"]
     budgets_table = tables["BUDGETS"]
     services_table = tables["SERVICES"]
@@ -971,6 +1623,16 @@ def get_master_budget_control_budget_data(
             budgets_table=budgets_table,
             services_table=services_table,
             departments_table=departments_table,
+            budget_segment_objectives_table=(
+                str(tables.get("BUDGETSEGMENTOBJECTIVES") or "").strip()
+                if include_budget_segments
+                else ""
+            ),
+            budget_segment_languages_table=(
+                str(tables.get("BUDGETSEGMENTLANGUAGES") or "").strip()
+                if include_budget_segments
+                else ""
+            ),
             budget_change_histories_table=(
                 str(tables.get("BUDGETCHANGEHISTORIES") or "").strip()
                 or "BudgetChangeHistories"
@@ -2039,6 +2701,103 @@ def _should_generate_budget_id(
     return True
 
 
+def _replace_budget_segments_in_transaction(
+    *,
+    cursor,
+    budget_segment_objectives_table: str,
+    budget_segment_languages_table: str,
+    segment_columns: dict[str, str],
+    budget_id: str,
+    segments: list[dict[str, object]] | None,
+) -> dict[str, object]:
+    normalized_segments = validate_budget_segment_rows(segments or [])
+    quoted_objectives_table = _quote_table_name(budget_segment_objectives_table)
+    quoted_languages_table = _quote_table_name(budget_segment_languages_table)
+    objective_id_expr = _quote_identifier(segment_columns["objective_id_col"])
+    objective_budget_id_expr = _quote_identifier(
+        segment_columns["objective_budget_id_col"]
+    )
+    objective_expr = _quote_identifier(segment_columns["objective_col"])
+    objective_percent_expr = _quote_identifier(
+        segment_columns["objective_percent_col"]
+    )
+    language_id_expr = _quote_identifier(segment_columns["language_id_col"])
+    language_objective_id_expr = _quote_identifier(
+        segment_columns["language_objective_id_col"]
+    )
+    language_expr = _quote_identifier(segment_columns["language_col"])
+    segment_percent_expr = _quote_identifier(segment_columns["segment_percent_col"])
+
+    cursor.execute(
+        f"DELETE l FROM {quoted_languages_table} l "
+        f"INNER JOIN {quoted_objectives_table} o "
+        f"ON l.{language_objective_id_expr} = o.{objective_id_expr} "
+        f"WHERE o.{objective_budget_id_expr} = %s",
+        (budget_id,),
+    )
+    deleted_language_count = max(int(cursor.rowcount or 0), 0)
+    cursor.execute(
+        f"DELETE FROM {quoted_objectives_table} "
+        f"WHERE {objective_budget_id_expr} = %s",
+        (budget_id,),
+    )
+    deleted_objective_count = max(int(cursor.rowcount or 0), 0)
+    objective_ids: list[str] = []
+    language_ids: list[str] = []
+    if normalized_segments:
+        objective_insert_query = (
+            f"INSERT INTO {quoted_objectives_table} "
+            f"({objective_id_expr}, {objective_budget_id_expr}, {objective_expr}, "
+            f"{objective_percent_expr}) VALUES (%s, %s, %s, %s)"
+        )
+        objective_id_by_name: dict[str, str] = {}
+        objective_rows: list[tuple[object, ...]] = []
+        for segment in normalized_segments:
+            objective = str(segment["objective"])
+            if objective in objective_id_by_name:
+                continue
+            objective_id = str(uuid.uuid4())
+            objective_id_by_name[objective] = objective_id
+            objective_ids.append(objective_id)
+            objective_rows.append(
+                (
+                    objective_id,
+                    budget_id,
+                    objective,
+                    segment["objectivePercent"],
+                )
+            )
+        cursor.executemany(objective_insert_query, objective_rows)
+
+        language_insert_query = (
+            f"INSERT INTO {quoted_languages_table} "
+            f"({language_id_expr}, {language_objective_id_expr}, {language_expr}, "
+            f"{segment_percent_expr}) VALUES (%s, %s, %s, %s)"
+        )
+        language_rows: list[tuple[object, ...]] = []
+        for segment in normalized_segments:
+            language_id = str(uuid.uuid4())
+            language_ids.append(language_id)
+            language_rows.append(
+                (
+                    language_id,
+                    objective_id_by_name[str(segment["objective"])],
+                    segment["language"],
+                    segment["segmentPercent"],
+                )
+            )
+        cursor.executemany(language_insert_query, language_rows)
+
+    return {
+        "deletedCount": deleted_language_count,
+        "deletedObjectiveCount": deleted_objective_count,
+        "deletedLanguageCount": deleted_language_count,
+        "writtenRowCount": len(normalized_segments),
+        "objectiveIds": objective_ids,
+        "segmentIds": language_ids,
+    }
+
+
 def apply_budget_mutations_with_history(
     *,
     changes: list[dict[str, object]],
@@ -2047,6 +2806,7 @@ def apply_budget_mutations_with_history(
     changed_by: str = "system",
     source_action: str = "system",
     change_note: str | None = None,
+    include_budget_segments: bool = False,
 ) -> dict[str, object]:
     create_items = creates or []
     delete_items = deletes or []
@@ -2061,15 +2821,33 @@ def apply_budget_mutations_with_history(
             "deletedBudgetIds": [],
         }
 
-    tables = get_db_tables(require_services=True)
+    tables = get_db_tables(
+        require_services=True,
+        require_budget_segments=include_budget_segments,
+    )
     budgets_table = tables["BUDGETS"]
     services_table = tables["SERVICES"]
+    budget_segment_objectives_table = str(
+        tables.get("BUDGETSEGMENTOBJECTIVES") or ""
+    ).strip()
+    budget_segment_languages_table = str(
+        tables.get("BUDGETSEGMENTLANGUAGES") or ""
+    ).strip()
     change_histories_table = tables["CHANGEHISTORIES"]
     budget_change_histories_table = (
         str(tables.get("BUDGETCHANGEHISTORIES") or "").strip() or "BudgetChangeHistories"
     )
 
     budget_columns = _resolve_budget_update_columns(budgets_table)
+    budget_segment_columns = (
+        _resolve_budget_segment_columns(
+            budget_segment_objectives_table=budget_segment_objectives_table,
+            budget_segment_languages_table=budget_segment_languages_table,
+            budgets_table=budgets_table,
+        )
+        if include_budget_segments
+        else {}
+    )
     budget_column_specs = _load_table_column_specs(budgets_table)
     history_columns = _resolve_change_history_columns(change_histories_table)
     history_semantics, history_insert_columns = _build_history_insert_plan(history_columns)
@@ -2256,6 +3034,13 @@ def apply_budget_mutations_with_history(
                 },
                 {"field": "note", "oldValue": old_note, "newValue": ""},
             ]
+            delete_segment_diffs = delete.get("segmentDiffs")
+            if isinstance(delete_segment_diffs, list):
+                delete_diffs.extend(
+                    diff
+                    for diff in delete_segment_diffs
+                    if isinstance(diff, dict)
+                )
 
             for diff in delete_diffs:
                 field_name = str(diff.get("field") or "").strip()
@@ -2292,11 +3077,30 @@ def apply_budget_mutations_with_history(
                 "netAdjustment": f"{old_net_adjustment:.2f}",
                 "note": old_note,
             }
+            delete_segment_diffs = [
+                diff
+                for diff in delete_diffs
+                if str(diff.get("field") or "").startswith("segment.")
+            ]
+            for diff in delete_segment_diffs:
+                field_name = str(diff.get("field") or "").strip()
+                delete_old_data[field_name] = diff.get("oldValue")
             budget_change_history_value_map = {
                 "budget_id": budget_id,
                 "action_type": "DELETE",
                 "changed_fields": json.dumps(
-                    ["subService", "grossAmount", "commission", "netAdjustment", "note"],
+                    [
+                        "subService",
+                        "grossAmount",
+                        "commission",
+                        "netAdjustment",
+                        "note",
+                    ]
+                    + [
+                        str(diff.get("field") or "").strip()
+                        for diff in delete_segment_diffs
+                        if str(diff.get("field") or "").strip()
+                    ],
                     ensure_ascii=False,
                 ),
                 "old_data": json.dumps(delete_old_data, ensure_ascii=False),
@@ -2329,7 +3133,21 @@ def apply_budget_mutations_with_history(
                 diffs = []
             else:
                 diffs = [diff for diff in diffs if isinstance(diff, dict)]
-            has_field_diffs = bool(diffs)
+            budget_diffs = [
+                diff
+                for diff in diffs
+                if not str(diff.get("field") or "").startswith("segment.")
+            ]
+            segment_diffs = [
+                diff
+                for diff in diffs
+                if str(diff.get("field") or "").startswith("segment.")
+            ]
+            has_field_diffs = bool(budget_diffs)
+            segments_changed = bool(change.get("segmentsChanged")) or bool(segment_diffs)
+            segments = change.get("segments")
+            if not isinstance(segments, list):
+                segments = []
 
             history_account_code = str(change.get("accountCode") or "").strip() or None
             history_service_id = str(change.get("serviceId") or "").strip() or None
@@ -2365,7 +3183,50 @@ def apply_budget_mutations_with_history(
                     affected_buckets.add(update_bucket)
 
                 updated_budget_ids.append(budget_id)
-            elif change_note_value:
+            if segments_changed:
+                if not has_field_diffs:
+                    cursor.execute(select_existing_budget_query, (budget_id,))
+                    existing_row = cursor.fetchone()
+                    if not existing_row:
+                        raise ValueError(f"Budget not found for update: {budget_id}")
+                    existing_account_code = str(existing_row[0] or "").strip().upper()
+                    existing_month_value = _to_int(existing_row[1], default=0)
+                    existing_year_value = _to_int(existing_row[2], default=0)
+                    existing_service_id = str(existing_row[3] or "").strip()
+                    existing_sub_service = str(existing_row[5] or "").strip()
+                    existing_gross_amount = _to_decimal(existing_row[6], scale=2)
+                    existing_commission = _to_decimal(existing_row[7], scale=4)
+                    existing_net_adjustment = _to_decimal(existing_row[8], scale=2)
+                    existing_note = str(existing_row[9] or "").strip()
+
+                    history_account_code = existing_account_code or None
+                    history_service_id = existing_service_id or None
+                    history_month = existing_month_value if existing_month_value > 0 else None
+                    history_year = existing_year_value if existing_year_value > 0 else None
+                    history_sub_service = existing_sub_service
+                    history_gross_amount = existing_gross_amount
+                    history_commission = existing_commission
+                    history_net_adjustment = existing_net_adjustment
+                    history_note = existing_note
+
+                _replace_budget_segments_in_transaction(
+                    cursor=cursor,
+                    budget_segment_objectives_table=budget_segment_objectives_table,
+                    budget_segment_languages_table=budget_segment_languages_table,
+                    segment_columns=budget_segment_columns,
+                    budget_id=budget_id,
+                    segments=segments,
+                )
+                segment_bucket = _normalize_budget_bucket(
+                    account_code=history_account_code or change.get("accountCode"),
+                    month=history_month or change.get("month"),
+                    year=history_year or change.get("year"),
+                )
+                if segment_bucket:
+                    affected_buckets.add(segment_bucket)
+                if budget_id not in updated_budget_ids:
+                    updated_budget_ids.append(budget_id)
+            elif not has_field_diffs and change_note_value:
                 cursor.execute(select_existing_budget_query, (budget_id,))
                 existing_row = cursor.fetchone()
                 if not existing_row:
@@ -2389,7 +3250,7 @@ def apply_budget_mutations_with_history(
                 history_commission = existing_commission
                 history_net_adjustment = existing_net_adjustment
                 history_note = existing_note
-            else:
+            elif not has_field_diffs:
                 continue
 
             for diff in diffs:
@@ -2434,10 +3295,8 @@ def apply_budget_mutations_with_history(
                     continue
                 if field_name not in changed_fields:
                     changed_fields.append(field_name)
-                if field_name in old_data_map:
-                    old_data_map[field_name] = diff.get("oldValue")
-                if field_name in new_data_map:
-                    new_data_map[field_name] = diff.get("newValue")
+                old_data_map[field_name] = diff.get("oldValue")
+                new_data_map[field_name] = diff.get("newValue")
 
             budget_change_history_value_map: dict[str, object] = {
                 "budget_id": budget_id,
@@ -2471,6 +3330,9 @@ def apply_budget_mutations_with_history(
             commission = _to_decimal(create.get("commission"), scale=4)
             net_adjustment = _to_decimal(create.get("netAdjustment"), scale=2)
             note = str(create.get("note") or "").strip()
+            create_segments = create.get("segments")
+            if not isinstance(create_segments, list):
+                create_segments = []
 
             create_budget_id = str(uuid.uuid4()) if generate_budget_id else ""
             insert_params: list[object] = []
@@ -2501,6 +3363,17 @@ def apply_budget_mutations_with_history(
                     str(last_row_id).strip()
                     if last_row_id not in (None, 0, "0")
                     else ""
+                )
+            if create_segments:
+                if not create_budget_id:
+                    raise ValueError("Budget ID is required to create budget segments")
+                _replace_budget_segments_in_transaction(
+                    cursor=cursor,
+                    budget_segment_objectives_table=budget_segment_objectives_table,
+                    budget_segment_languages_table=budget_segment_languages_table,
+                    segment_columns=budget_segment_columns,
+                    budget_id=create_budget_id,
+                    segments=create_segments,
                 )
             created_budget_ids.append(create_budget_id)
             create_bucket = _normalize_budget_bucket(
@@ -2541,6 +3414,7 @@ def apply_budget_mutations_with_history(
                 )
                 if note:
                     diffs.append({"field": "note", "oldValue": "", "newValue": note})
+                diffs.extend(_segment_diffs([], create_segments))
             else:
                 diffs = [diff for diff in diffs if isinstance(diff, dict)]
             filtered_diffs: list[dict[str, object]] = []
@@ -2594,6 +3468,10 @@ def apply_budget_mutations_with_history(
                 "netAdjustment": f"{net_adjustment:.2f}",
                 "note": note,
             }
+            for diff in diffs:
+                field_name = str(diff.get("field") or "").strip()
+                if field_name.startswith("segment."):
+                    create_new_data[field_name] = diff.get("newValue")
             create_old_data: dict[str, object] = {
                 "subService": None,
                 "grossAmount": None,
@@ -2601,6 +3479,10 @@ def apply_budget_mutations_with_history(
                 "netAdjustment": None,
                 "note": None,
             }
+            for diff in diffs:
+                field_name = str(diff.get("field") or "").strip()
+                if field_name.startswith("segment."):
+                    create_old_data[field_name] = None
             create_changed_fields: list[str] = []
             for diff in diffs:
                 field_name = str(diff.get("field") or "").strip()
@@ -2699,6 +3581,7 @@ def update_master_budget_control_budget_data(
     creates: list[dict[str, object]] | None = None,
     deletes: list[dict[str, object]] | None = None,
     changed_by: str = "budgetData.update",
+    include_budget_segments: bool = False,
 ) -> dict[str, object]:
     """
     Backward-compatible wrapper for masterBudgetControl budget update/create/delete flow.
@@ -2709,4 +3592,5 @@ def update_master_budget_control_budget_data(
         deletes=deletes,
         changed_by=changed_by,
         source_action="budgetData.update",
+        include_budget_segments=include_budget_segments,
     )

@@ -614,6 +614,9 @@ Documentation rules:
       (supports optional query `fresh_data=true`)
     - `POST /api/fundsphere/v1/masterBudgetControl/settings/services`
       (supports optional query `fresh_data=true`)
+    - `POST /api/fundsphere/v1/masterBudgetControl/budgetData/load`
+    - `POST /api/fundsphere/v1/masterBudgetControl/budgetData/update`
+    - `GET/PUT/DELETE /api/fundsphere/v1/masterBudgetControl/budgetSegments...`
 -   Tenant sheet config source:
     - `SPREADSHEETS.masterBudgetControl.id`
     - `SPREADSHEETS.masterBudgetControl.settingsSheetName` (aliases:
@@ -628,6 +631,32 @@ Documentation rules:
     - `DB_TABLES.budgets`
     - `DB_TABLES.changeHistories`
     - `DB_TABLES.services` (required for `/masterBudgetControl/settings/services`)
+    - `DB_TABLES.budgetSegmentObjectives` and
+      `DB_TABLES.budgetSegmentLanguages` (optional; enable segment integration
+      in `0.2 Budget Data`)
+-   FundSphere budget-data segment behavior:
+    - When both segment tables are configured, budget-data load joins
+      objective/language rows and writes a `segment` column after `note` in the
+      configured budget-data output range.
+    - The segment cell uses the compact display format:
+      `New60:E70/S30, Used40:E50/S50`; only populated objectives/languages are
+      shown, and E/S are English/Spanish.
+    - Objective percentages must total 100% across populated objectives. For
+      each objective, English and Spanish percentages together must total 100%;
+      objectives without rows are omitted. An empty collection clears all
+      segments.
+    - `originalSig` includes a canonical segment signature for change detection.
+    - `budgetData/update` validates budget and segment changes as one batch and
+      commits them in one transaction; an empty segment value
+      clears all child segment rows.
+    - Budget-data cache keys use the versioned prefix
+      `budget_data_v2::<budgets table>::<account>::<month>/<year>` so cached
+      rows without segment data are not reused after this integration.
+    - Segment changes are recorded in both `DB_TABLES.changeHistories` and
+      `BudgetChangeHistories` when those history schemas support the existing
+      dynamic history plans.
+    - `budgetDataUpdateColumns.segment` is required when both segment tables
+      are configured.
 -   Settings accounts sync behavior:
     - Pulls account rows from `DB_TABLES.accounts`
     - Reads `DB_TABLES.accounts` with cache-first behavior using

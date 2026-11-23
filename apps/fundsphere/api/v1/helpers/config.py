@@ -166,6 +166,18 @@ def _parse_budget_data_update_columns(
             continue
         parsed[key] = column_label
 
+    # ``segment`` is the canonical sheet/config name. Keep accepting the
+    # earlier ``segmentPreview`` spelling so older tenant configs continue to
+    # validate while they are migrated.
+    optional_segment = str(
+        normalized.get("segment") or normalized.get("segmentpreview") or ""
+    ).strip().upper()
+    if optional_segment:
+        if not _COLUMN_LABEL_RE.fullmatch(optional_segment):
+            invalid.append(f"{key_prefix}.budgetDataUpdateColumns.segment")
+        else:
+            parsed["segment"] = optional_segment
+
     optional_is_row_changed = str(normalized.get("isrowchanged") or "").strip().upper()
     if optional_is_row_changed:
         if not _COLUMN_LABEL_RE.fullmatch(optional_is_row_changed):
@@ -562,7 +574,11 @@ def get_fundsphere_master_budget_sheet_settings() -> dict[str, object]:
     )
 
 
-def get_db_tables(*, require_services: bool = False) -> dict[str, str]:
+def get_db_tables(
+    *,
+    require_services: bool = False,
+    require_budget_segments: bool = False,
+) -> dict[str, str]:
     raw = _get_db_tables_raw()
     if raw is None or str(raw).strip() == "":
         raise TenantConfigValidationError(app_name=APP_NAME, missing=["DB_TABLES"])
@@ -587,6 +603,13 @@ def get_db_tables(*, require_services: bool = False) -> dict[str, str]:
     required_keys = set(_REQUIRED_DB_TABLE_KEYS)
     if require_services:
         required_keys.add("SERVICES")
+    if require_budget_segments:
+        required_keys.update(
+            {
+                "BUDGETSEGMENTOBJECTIVES",
+                "BUDGETSEGMENTLANGUAGES",
+            }
+        )
 
     missing_keys = required_keys.difference(tables.keys())
     if missing_keys:

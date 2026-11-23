@@ -35,8 +35,21 @@
 - Current settings sync flows:
   - accounts sync
   - services sync
+- Current budget-data flows:
+  - `budgetData/load` loads budgets and optional `BudgetSegmentObjective` plus
+    `BudgetSegmentLanguage` rows into
+    the configured budget-data sheet
+  - `budgetData/update` validates and commits budget plus segment changes in
+    one transaction
 - Preserve existing range/header conventions for sheet writes.
 - Keep account/service normalization behavior unchanged unless explicitly requested.
+- When both `DB_TABLES.budgetSegmentObjectives` and
+  `DB_TABLES.budgetSegmentLanguages` are configured, require
+  `budgetDataUpdateColumns.segment` and keep the segment column after
+  `note` in the budget-data sheet.
+- Objective percentages must total 100% across populated objectives.
+- Segment totals are validated per objective: English and Spanish percentages
+  for each objective must total 100%; objectives without rows are omitted.
 
 ## Cache Rules
 

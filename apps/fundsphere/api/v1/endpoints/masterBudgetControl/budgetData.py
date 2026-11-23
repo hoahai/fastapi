@@ -8,12 +8,15 @@ from zoneinfo import ZoneInfo
 from fastapi import APIRouter, HTTPException, Query, Request
 
 from apps.fundsphere.api.v1.helpers.config import (
+    get_db_tables,
     get_fundsphere_budget_data_sheet_settings,
     get_fundsphere_budget_data_update_settings,
 )
 from apps.fundsphere.api.v1.helpers.dbQueries import (
+    BudgetSegmentValidationError,
     get_master_budget_control_budget_data,
     update_master_budget_control_budget_data,
+    validate_budget_segment_rows,
     validate_master_budget_control_budget_duplicates,
     validate_master_budget_control_budget_refs,
 )
@@ -56,10 +59,20 @@ _BUDGET_DATA_HEADER = [
     "commission",
     "netAdjustment",
     "note",
+    "segment",
     "changeReason",
     "changeHistories",
 ]
 _EDITABLE_FIELDS = ("subService", "grossAmount", "commission", "netAdjustment", "note")
+_SEGMENT_OBJECTIVES = ("New", "Used", "Service")
+_SEGMENT_LANGUAGES = ("English", "Spanish")
+_SEGMENT_LANGUAGE_CODES = {"English": "E", "Spanish": "S"}
+_SEGMENT_LANGUAGE_ALIASES = {
+    "EN": "English",
+    "ENGLISH": "English",
+    "ES": "Spanish",
+    "SPANISH": "Spanish",
+}
 _REQUIRED_UPDATE_COLUMN_KEYS = (
     "originalSig",
     "budgetId",
@@ -250,24 +263,454 @@ def _to_sheet_number(value: object, *, scale: int) -> int | float:
     return float(dec_value)
 
 
-def _build_original_sig(row: dict) -> str:
+def _segment_key(segment: dict[str, object]) -> tuple[str, str]:
+    return (
+        str(segment.get("objective") or "").strip(),
+        str(segment.get("language") or "").strip(),
+    )
+
+
+def _segment_signature(segments: list[dict[str, object]] | None) -> str:
+    normalized = validate_budget_segment_rows(segments or [])
+    by_objective: dict[str, list[dict[str, object]]] = {}
+    for segment in normalized:
+        by_objective.setdefault(str(segment["objective"]), []).append(segment)
+
+    parts: list[str] = []
+    for objective in _SEGMENT_OBJECTIVES:
+        objective_segments = by_objective.get(objective, [])
+        if not objective_segments:
+            continue
+        objective_percent = _decimal_text(
+            objective_segments[0]["objectivePercent"],
+            scale=2,
+        )
+        languages = ",".join(
+            f"{language}={_decimal_text(item['segmentPercent'], scale=2)}"
+            for language in _SEGMENT_LANGUAGES
+            for item in objective_segments
+            if item["language"] == language
+        )
+        parts.append(f"{objective}={objective_percent}({languages})")
+    return ";".join(parts)
+
+
+def _segment_preview(segments: list[dict[str, object]] | None) -> str:
+    normalized = validate_budget_segment_rows(segments or [])
+    if not normalized:
+        return ""
+
+    values = {_segment_key(segment): segment for segment in normalized}
+    objective_parts: list[str] = []
+    for objective in _SEGMENT_OBJECTIVES:
+        objective_segments = [
+            values[(objective, language)]
+            for language in _SEGMENT_LANGUAGES
+            if (objective, language) in values
+        ]
+        if objective_segments:
+            objective_percent = _segment_display_percent(
+                objective_segments[0]["objectivePercent"]
+            )
+            language_parts = "/".join(
+                f"{_SEGMENT_LANGUAGE_CODES[language]}"
+                f"{_segment_display_percent(values[(objective, language)]['segmentPercent'])}"
+                for language in _SEGMENT_LANGUAGES
+                if (objective, language) in values
+            )
+            objective_parts.append(f"{objective}{objective_percent}:{language_parts}")
+    return ", ".join(objective_parts)
+
+
+def _segment_display_percent(value: object) -> str:
+    decimal_value = _to_decimal(value, scale=2)
+    return format(decimal_value.normalize(), "f")
+
+
+def _parse_segment_signature(value: object) -> list[dict[str, object]]:
+    raw = str(value or "").strip()
+    if not raw:
+        return []
+
+    segments: list[dict[str, object]] = []
+    for item in raw.split(";"):
+        token = item.strip()
+        if not token:
+            continue
+        match = re.fullmatch(
+            r"(?P<objective>New|Used|Service)=(?P<objectivePercent>[0-9]+(?:\.[0-9]+)?)"
+            r"\((?P<languages>[^)]*)\)",
+            token,
+            flags=re.IGNORECASE,
+        )
+        if not match:
+            raise ValueError("segments signature is invalid")
+        objective = str(match.group("objective") or "").title()
+        objective_percent = str(match.group("objectivePercent") or "").strip()
+        for language_item in str(match.group("languages") or "").split(","):
+            if "=" not in language_item:
+                raise ValueError("segments signature is invalid")
+            language, percent = language_item.split("=", 1)
+            segments.append(
+                {
+                    "objective": objective,
+                    "objectivePercent": objective_percent,
+                    "language": language.strip(),
+                    "segmentPercent": percent.strip(),
+                }
+            )
+    return validate_budget_segment_rows(segments)
+
+
+def _parse_segment_preview(
+    value: object,
+    *,
+    row_number: int,
+    errors: list[dict[str, object]],
+) -> list[dict[str, object]] | None:
+    raw = str(value or "").strip()
+    if not raw or raw.lower() in {"no segments", "none", "n/a", "—", "-"}:
+        return []
+
+    parsed: list[dict[str, object]] = []
+    seen_objectives: set[str] = set()
+
+    # Primary compact format: ``New40:E70/S30, Used60:E50/S50``.
+    named_sections = [
+        part.strip()
+        for part in re.split(r"\s*(?:,|\|)\s*", raw)
+        if part.strip()
+    ]
+    if named_sections and all(
+        re.match(
+            r"^(?:New|Used|Service)\s*[0-9]",
+            section,
+            flags=re.IGNORECASE,
+        )
+        for section in named_sections
+    ):
+        for section in named_sections:
+            match = re.fullmatch(
+                r"(?P<objective>New|Used|Service)\s*"
+                r"(?P<objectivePercent>[0-9]+(?:\.[0-9]+)?)\s*%?\s*:\s*"
+                r"(?P<values>"
+                r"[ES]\s*(?:—|-|[0-9]+(?:\.[0-9]+)?)"
+                r"(?:\s*/\s*[ES]\s*(?:—|-|[0-9]+(?:\.[0-9]+)?))?"
+                r")\s*%?",
+                section,
+                flags=re.IGNORECASE,
+            )
+            if not match:
+                errors.append(
+                    {
+                        "row": row_number,
+                        "field": "segment",
+                        "message": (
+                            f"Invalid segment value: {section}. Expected "
+                            "'New40:E70/S30, Used60:E50/S50'"
+                        ),
+                    }
+                )
+                continue
+
+            objective = str(match.group("objective") or "").title()
+            if objective in seen_objectives:
+                errors.append(
+                    {
+                        "row": row_number,
+                        "field": "segment",
+                        "message": f"segments contains duplicate {objective} objective",
+                    }
+                )
+                continue
+            seen_objectives.add(objective)
+
+            language_matches = re.findall(
+                r"(?P<code>[ES])\s*(?P<percent>—|-|[0-9]+(?:\.[0-9]+)?)",
+                str(match.group("values") or ""),
+                flags=re.IGNORECASE,
+            )
+            if len({code.upper() for code, _percent in language_matches}) != len(
+                language_matches
+            ):
+                errors.append(
+                    {
+                        "row": row_number,
+                        "field": "segment",
+                        "message": f"segments contains duplicate language in {objective}",
+                    }
+                )
+                continue
+            for code, percent in language_matches:
+                language = "English" if code.upper() == "E" else "Spanish"
+                if percent not in {"—", "-"}:
+                    parsed.append(
+                        {
+                            "objective": objective,
+                            "objectivePercent": match.group("objectivePercent"),
+                            "language": language,
+                            "segmentPercent": percent,
+                        }
+                    )
+
+        if errors and any(error.get("row") == row_number for error in errors):
+            return None
+        try:
+            return validate_budget_segment_rows(parsed)
+        except BudgetSegmentValidationError as exc:
+            for error in exc.errors:
+                errors.append(
+                    {
+                        "row": row_number,
+                        "field": f"segment.{error.get('field') or 'value'}",
+                        "message": str(error.get("message") or "Invalid segment"),
+                    }
+                )
+            return None
+
+    for section in [part.strip() for part in raw.split("|") if part.strip()]:
+        compact_match = re.fullmatch(
+            r"(?P<objective>[NUS])\s+"
+            r"(?P<objectivePercent>[0-9]+(?:\.[0-9]+)?)\s*%?\s+"
+            r"(?P<values>"
+            r"[ES]\s*(?:—|-|[0-9]+(?:\.[0-9]+)?)"
+            r"(?:\s*/\s*[ES]\s*(?:—|-|[0-9]+(?:\.[0-9]+)?))?"
+            r")\s*%?",
+            section,
+            flags=re.IGNORECASE,
+        )
+        if compact_match:
+            objective = {
+                "N": "New",
+                "U": "Used",
+                "S": "Service",
+            }[str(compact_match.group("objective") or "").upper()]
+            if objective in seen_objectives:
+                errors.append(
+                    {
+                        "row": row_number,
+                        "field": "segment",
+                        "message": f"segments contains duplicate {objective} objective",
+                    }
+                )
+                continue
+            seen_objectives.add(objective)
+            language_matches = re.findall(
+                r"(?P<code>[ES])\s*(?P<percent>—|-|[0-9]+(?:\.[0-9]+)?)",
+                str(compact_match.group("values") or ""),
+                flags=re.IGNORECASE,
+            )
+            for code, percent in language_matches:
+                language = "English" if code.upper() == "E" else "Spanish"
+                if percent not in {"—", "-"}:
+                    parsed.append(
+                        {
+                            "objective": objective,
+                            "objectivePercent": compact_match.group("objectivePercent"),
+                            "language": language,
+                            "segmentPercent": percent,
+                        }
+                    )
+            continue
+
+        if ":" not in section:
+            errors.append(
+                {
+                    "row": row_number,
+                    "field": "segment",
+                    "message": (
+                        "segments must use 'New40:E70/S30, Used60:E50/S50' "
+                        "format"
+                    ),
+                }
+            )
+            continue
+
+        objective_raw, values_raw = section.split(":", 1)
+        objective = objective_raw.strip()
+        if objective not in _SEGMENT_OBJECTIVES:
+            errors.append(
+                {
+                    "row": row_number,
+                    "field": "segment",
+                    "message": "segments objective must be New, Used, or Service",
+                }
+            )
+            continue
+        if objective in seen_objectives:
+            errors.append(
+                {
+                    "row": row_number,
+                    "field": "segment",
+                    "message": f"segments contains duplicate {objective} objective",
+                }
+            )
+            continue
+        seen_objectives.add(objective)
+
+        if values_raw.strip() in {"—", "-", ""}:
+            continue
+
+        seen_languages: set[str] = set()
+        for pair in [part.strip() for part in values_raw.split(",") if part.strip()]:
+            match = re.fullmatch(
+                r"(?P<language>[A-Za-z]+)\s*(?:=|:)?\s*"
+                r"(?P<percent>—|-|[0-9]+(?:\.[0-9]+)?)\s*%?",
+                pair,
+            )
+            if not match:
+                errors.append(
+                    {
+                        "row": row_number,
+                        "field": "segment",
+                        "message": f"Invalid segment value: {pair}",
+                    }
+                )
+                continue
+
+            language = _SEGMENT_LANGUAGE_ALIASES.get(
+                str(match.group("language") or "").upper()
+            )
+            if not language:
+                errors.append(
+                    {
+                        "row": row_number,
+                        "field": "segment",
+                        "message": "segments language must be English/EN or Spanish/ES",
+                    }
+                )
+                continue
+            if language in seen_languages:
+                errors.append(
+                    {
+                        "row": row_number,
+                        "field": "segment",
+                        "message": f"segments contains duplicate {objective}/{language}",
+                    }
+                )
+                continue
+            seen_languages.add(language)
+
+            percent = str(match.group("percent") or "").strip()
+            if percent in {"—", "-"}:
+                continue
+            parsed.append(
+                {
+                    "objective": objective,
+                    "objectivePercent": "100",
+                    "language": language,
+                    "segmentPercent": percent,
+                }
+            )
+
+    if not parsed and not errors:
+        errors.append(
+            {
+                "row": row_number,
+                "field": "segment",
+                "message": "segments must contain at least one valid value or '—'",
+            }
+        )
+    if errors and any(error.get("row") == row_number for error in errors):
+        return None
+
+    try:
+        return validate_budget_segment_rows(parsed)
+    except BudgetSegmentValidationError as exc:
+        for error in exc.errors:
+            errors.append(
+                {
+                    "row": row_number,
+                    "field": f"segment.{error.get('field') or 'value'}",
+                    "message": str(error.get("message") or "Invalid segment"),
+                }
+            )
+        return None
+
+
+def _build_segment_diffs(
+    old_segments: list[dict[str, object]],
+    new_segments: list[dict[str, object]],
+) -> list[dict[str, str]]:
+    old_map = {_segment_key(item): item for item in old_segments}
+    new_map = {_segment_key(item): item for item in new_segments}
+    diffs: list[dict[str, str]] = []
+    for objective in _SEGMENT_OBJECTIVES:
+        old_objective_segments = [
+            item for item in old_segments if item.get("objective") == objective
+        ]
+        new_objective_segments = [
+            item for item in new_segments if item.get("objective") == objective
+        ]
+        old_objective_value = (
+            _decimal_text(old_objective_segments[0]["objectivePercent"], scale=2)
+            if old_objective_segments
+            else ""
+        )
+        new_objective_value = (
+            _decimal_text(new_objective_segments[0]["objectivePercent"], scale=2)
+            if new_objective_segments
+            else ""
+        )
+        if old_objective_value != new_objective_value:
+            diffs.append(
+                {
+                    "field": f"segment.{objective}.objectivePercent",
+                    "oldValue": old_objective_value,
+                    "newValue": new_objective_value,
+                }
+            )
+        for language in _SEGMENT_LANGUAGES:
+            key = (objective, language)
+            old_value = (
+                _decimal_text(old_map[key]["segmentPercent"], scale=2)
+                if key in old_map
+                else ""
+            )
+            new_value = (
+                _decimal_text(new_map[key]["segmentPercent"], scale=2)
+                if key in new_map
+                else ""
+            )
+            if old_value == new_value:
+                continue
+            diffs.append(
+                {
+                    "field": f"segment.{objective}.{language}",
+                    "oldValue": old_value,
+                    "newValue": new_value,
+                }
+            )
+    return diffs
+
+
+def _build_original_sig(row: dict, *, include_segments: bool = False) -> str:
     sub_service = str(row.get("subService") or "").strip()
     gross_amount = _decimal_text(row.get("grossAmount"), scale=2)
     commission = _decimal_text(row.get("commission"), scale=4)
     net_adjustment = _decimal_text(row.get("netAdjustment"), scale=2)
     note = str(row.get("note") or "").strip()
-
-    return (
+    signature = (
         f"subService={sub_service}"
         f"|grossAmount={gross_amount}"
         f"|commission={commission}"
         f"|netAdjustment={net_adjustment}"
         f"|note={note}"
     )
+    if include_segments:
+        signature += f"|segments={_segment_signature(row.get('segments') or [])}"
+    return signature
 
 
-def _build_budget_data_values(rows: list[dict]) -> list[list[object]]:
-    values: list[list[object]] = [_BUDGET_DATA_HEADER]
+def _build_budget_data_values(
+    rows: list[dict],
+    *,
+    include_segments: bool = False,
+) -> list[list[object]]:
+    header = _BUDGET_DATA_HEADER if include_segments else [
+        item for item in _BUDGET_DATA_HEADER if item != "segment"
+    ]
+    values: list[list[object]] = [header]
 
     for row in rows:
         month_value = row.get("month")
@@ -276,9 +719,8 @@ def _build_budget_data_values(rows: list[dict]) -> list[list[object]]:
             if month_value is None or month_value == ""
             else _to_sheet_number(month_value, scale=0)
         )
-        values.append(
-            [
-                _build_original_sig(row),
+        row_values = [
+            _build_original_sig(row, include_segments=include_segments),
                 str(row.get("budgetId") or "").strip(),
                 str(row.get("accountName") or "").strip(),
                 str(row.get("year") or "").strip(),
@@ -291,8 +733,10 @@ def _build_budget_data_values(rows: list[dict]) -> list[list[object]]:
                 str(row.get("note") or "").strip(),
                 "",
                 str(row.get("changeHistories") or "").strip(),
-            ]
-        )
+        ]
+        if include_segments:
+            row_values.insert(11, _segment_preview(row.get("segments") or []))
+        values.append(row_values)
 
     return values
 
@@ -321,18 +765,38 @@ def _load_budget_data_to_sheet(
 
     account_codes = _extract_account_codes(selected_accounts_raw)
     periods = _parse_periods(selected_periods_raw)
+    segment_tables = get_db_tables()
+    include_segments = bool(
+        segment_tables.get("BUDGETSEGMENTOBJECTIVES")
+        and segment_tables.get("BUDGETSEGMENTLANGUAGES")
+    )
 
     db_rows = get_master_budget_control_budget_data(
         account_codes=account_codes,
         periods=periods,
         refresh_cache=refresh_budget_data,
+        include_budget_segments=include_segments,
     )
-    values = _build_budget_data_values(db_rows)
+    if include_segments:
+        update_settings = get_fundsphere_budget_data_update_settings()
+        update_columns = update_settings.get("budget_data_update_columns")
+        if not isinstance(update_columns, dict) or not str(
+            update_columns.get("segment") or ""
+        ).strip():
+            raise HTTPException(
+                status_code=500,
+                detail=(
+                    "DB_TABLES.budgetSegmentObjectives and "
+                    "DB_TABLES.budgetSegmentLanguages require "
+                    "budgetDataUpdateColumns.segment"
+                ),
+            )
+    values = _build_budget_data_values(db_rows, include_segments=include_segments)
 
     start_col, start_row, configured_end_col = _parse_output_range(output_range)
     start_col_index = _column_label_to_index(start_col)
     configured_end_col_index = _column_label_to_index(configured_end_col)
-    required_end_col_index = start_col_index + (len(_BUDGET_DATA_HEADER) - 1)
+    required_end_col_index = start_col_index + (len(values[0]) - 1)
     effective_end_col_index = max(configured_end_col_index, required_end_col_index)
     end_col = _column_index_to_label(effective_end_col_index)
 
@@ -521,6 +985,7 @@ def _normalize_original_values(original_sig: dict[str, str]) -> dict[str, str]:
         "commission": _decimal_text(original_sig.get("commission"), scale=4),
         "netAdjustment": _decimal_text(original_sig.get("netAdjustment"), scale=2),
         "note": str(original_sig.get("note") or "").strip(),
+        "segments": str(original_sig.get("segments") or "").strip(),
     }
 
 
@@ -531,6 +996,7 @@ def _parse_budget_data_sheet_rows(
     column_indexes: dict[str, int],
     is_row_changed_index: int | None = None,
     is_delete_index: int | None = None,
+    include_segments: bool = False,
 ) -> tuple[
     list[dict[str, object]],
     list[dict[str, object]],
@@ -589,6 +1055,11 @@ def _parse_budget_data_sheet_rows(
             column_indexes["netAdjustment"],
         )
         note_cell = _extract_cell_value(row_values, column_indexes["note"])
+        segment_preview_cell = (
+            _extract_cell_value(row_values, column_indexes["segment"])
+            if include_segments
+            else ""
+        )
         account_code_cell = _extract_cell_value(
             row_values,
             column_indexes["accountCode"],
@@ -608,6 +1079,7 @@ def _parse_budget_data_sheet_rows(
             commission_cell,
             net_adjustment_cell,
             note_cell,
+            segment_preview_cell if include_segments else "",
             account_code_cell,
             service_id_cell,
         ]
@@ -620,8 +1092,21 @@ def _parse_budget_data_sheet_rows(
         year_value = _coerce_int(year_cell)
         sub_service = str(sub_service_cell or "").strip()
         note = str(note_cell or "").strip()
+        segment_preview = str(segment_preview_cell or "").strip()
         account_code = str(account_code_cell or "").strip().upper()
         service_id = str(service_id_cell or "").strip()
+
+        current_segments = (
+            _parse_segment_preview(
+                segment_preview,
+                row_number=row_number,
+                errors=errors,
+            )
+            if include_segments
+            else []
+        )
+        if current_segments is None:
+            continue
 
         if is_delete:
             if not budget_id:
@@ -633,11 +1118,46 @@ def _parse_budget_data_sheet_rows(
                     }
                 )
                 continue
+
+            original_sig = _parse_original_sig(original_sig_raw)
+            if include_segments and "segments" not in original_sig:
+                errors.append(
+                    {
+                        "row": row_number,
+                        "field": "originalSig",
+                        "message": "originalSig must include segments; reload the sheet",
+                    }
+                )
+                continue
+            try:
+                original_segments = (
+                    _parse_segment_signature(original_sig.get("segments"))
+                    if include_segments
+                    else []
+                )
+            except (BudgetSegmentValidationError, ValueError) as exc:
+                message = str(exc)
+                if isinstance(exc, BudgetSegmentValidationError) and exc.errors:
+                    message = str(exc.errors[0].get("message") or message)
+                errors.append(
+                    {
+                        "row": row_number,
+                        "field": "originalSig.segments",
+                        "message": f"Invalid original segment signature: {message}",
+                    }
+                )
+                continue
             delete_items.append(
                 {
                     "row": row_number,
                     "budgetId": budget_id,
                     "changeNote": change_note,
+                    "segments": original_segments,
+                    "segmentDiffs": (
+                        _build_segment_diffs(original_segments, [])
+                        if include_segments
+                        else []
+                    ),
                 }
             )
             continue
@@ -705,6 +1225,34 @@ def _parse_budget_data_sheet_rows(
                 )
                 continue
 
+            if include_segments and "segments" not in original_sig:
+                errors.append(
+                    {
+                        "row": row_number,
+                        "field": "originalSig",
+                        "message": "originalSig must include segments; reload the sheet",
+                    }
+                )
+                continue
+            try:
+                original_segments = (
+                    _parse_segment_signature(original_sig.get("segments"))
+                    if include_segments
+                    else []
+                )
+            except (BudgetSegmentValidationError, ValueError) as exc:
+                message = str(exc)
+                if isinstance(exc, BudgetSegmentValidationError) and exc.errors:
+                    message = str(exc.errors[0].get("message") or message)
+                errors.append(
+                    {
+                        "row": row_number,
+                        "field": "originalSig.segments",
+                        "message": f"Invalid original segment signature: {message}",
+                    }
+                )
+                continue
+
             current_values = {
                 "subService": sub_service,
                 "grossAmount": gross_amount,
@@ -728,6 +1276,14 @@ def _parse_budget_data_sheet_rows(
                     }
                 )
 
+            segment_diffs = (
+                _build_segment_diffs(original_segments, current_segments)
+                if include_segments
+                else []
+            )
+            diffs.extend(segment_diffs)
+            segments_changed = bool(segment_diffs)
+
             if not diffs and not change_note:
                 continue
 
@@ -744,6 +1300,9 @@ def _parse_budget_data_sheet_rows(
                     "commission": commission,
                     "netAdjustment": net_adjustment,
                     "note": note,
+                    "segments": current_segments,
+                    "segmentDiffs": segment_diffs,
+                    "segmentsChanged": segments_changed,
                     "changeNote": change_note,
                     "diffs": diffs,
                 }
@@ -808,6 +1367,9 @@ def _parse_budget_data_sheet_rows(
                 "commission": commission,
                 "netAdjustment": net_adjustment,
                 "note": note,
+                "segments": current_segments,
+                "segmentDiffs": _build_segment_diffs([], current_segments),
+                "segmentsChanged": bool(current_segments),
                 "changeNote": change_note,
                 "diffs": [
                     {"field": "subService", "oldValue": "", "newValue": sub_service},
@@ -815,7 +1377,12 @@ def _parse_budget_data_sheet_rows(
                     {"field": "commission", "oldValue": "", "newValue": commission},
                     {"field": "netAdjustment", "oldValue": "", "newValue": net_adjustment},
                     {"field": "note", "oldValue": "", "newValue": note},
-                ],
+                ]
+                + (
+                    _build_segment_diffs([], current_segments)
+                    if include_segments
+                    else []
+                ),
             }
         )
 
@@ -926,8 +1493,8 @@ def load_budget_data_route(
             "sheetName": "0.2 Budget Data",
             "accountSelectionRange": "'0.2 Budget Data'!A2",
             "periodSelectionRange": "'0.2 Budget Data'!A3",
-            "clearRange": "'0.2 Budget Data'!A5:M",
-            "writeRange": "'0.2 Budget Data'!A5:M31",
+            "clearRange": "'0.2 Budget Data'!A5:N",
+            "writeRange": "'0.2 Budget Data'!A5:N31",
             "selectedAccountCodes": ["ACH", "AFS"],
             "selectedPeriods": ["3/2026", "4/2026"],
             "dbRowCount": 26,
@@ -945,6 +1512,9 @@ def load_budget_data_route(
         - Tenant config must include SPREADSHEETS.masterBudgetControl.budgetDataOutputRange
         - Tenant config must include DB_TABLES.accounts, DB_TABLES.departments,
           DB_TABLES.services, DB_TABLES.budgets, and DB_TABLES.changeHistories
+        - When DB_TABLES.budgetSegmentObjectives and
+          DB_TABLES.budgetSegmentLanguages are configured, the load includes the
+          segments column and segment-aware originalSig values
         - Account selection cell supports:
           "ACH - Atzenhoffer Chevrolet, AFS - Academy Ford Sales"
           or legacy parentheses format:
@@ -983,15 +1553,17 @@ def update_budget_data_route(request: Request):
           "data": {
             "spreadsheetId": "1IQQ0vPOwB_8ngST0EbnfCUDcMo5T9Kp7ApGHdrSO_6M",
             "sheetName": "0.2 Budget Data",
-            "readRange": "'0.2 Budget Data'!A6:Y",
+            "readRange": "'0.2 Budget Data'!A6:AA",
             "scannedRowCount": 22,
             "changedRowCount": 5,
             "createdCandidateRowCount": 2,
             "deletedCandidateRowCount": 1,
             "updatedRowCount": 5,
+            "segmentChangedRowCount": 3,
             "createdRowCount": 2,
             "deletedRowCount": 1,
             "historyRowCount": 10,
+            "changeHistoryRowCount": 10,
             "createdBudgetIds": ["f5a0..."],
             "deletedBudgetIds": ["a1b2..."],
             "sheetReloaded": true
@@ -1006,6 +1578,9 @@ def update_budget_data_route(request: Request):
         - Tenant config must include SPREADSHEETS.masterBudgetControl.budgetDataSheetName
         - Tenant config must include SPREADSHEETS.masterBudgetControl.budgetDataUpdateReadRange
         - Tenant config must include SPREADSHEETS.masterBudgetControl.budgetDataUpdateColumns
+        - When DB_TABLES.budgetSegmentObjectives and
+          DB_TABLES.budgetSegmentLanguages are configured,
+          budgetDataUpdateColumns.segment must identify the segment column
         - Tenant config must include DB_TABLES.accounts, DB_TABLES.services,
           DB_TABLES.budgets, and DB_TABLES.changeHistories
         - Reads configured budgetDataUpdateReadRange from budgetDataSheetName
@@ -1018,15 +1593,26 @@ def update_budget_data_route(request: Request):
           `changeNote/changeReason` are rejected before any DB query or mutation
         - `originalSig` must follow key-value format:
           "subService=...|grossAmount=...|commission=...|netAdjustment=...|note=..."
+          and includes `|segments=...` when segment integration is enabled
         - New budget create rows are supported when:
           `budgetId` is empty, `originalSig` is empty, and
-          `accountCode` (col O), `serviceId` (col U), `year`, `month` are provided
+          `accountCode`, `serviceId`, `year`, and `month` are provided
         - Existing budget delete rows are supported when:
           `budgetId` is present and `budgetDataUpdateColumns.isDelete` column is true
         - `grossAmount` and `commission` are required on all write rows
         - `grossAmount`, `commission`, and `netAdjustment` must be numeric cells (not text)
         - `netAdjustment` is editable; blank values default to `0`
         - `note` must not contain `|` (pipe) character
+        - Segment cells use the compact format:
+          "New60:E70/S30, Used40:E50/S50"
+          where only populated objectives/languages are shown and E/S are
+          English/Spanish.
+        - Objective and language segment values must be between 0 and 100 with
+          at most two decimal places;
+          an empty cell clears all segment rows
+        - Objective percentages must total 100% across populated objectives
+        - When an objective has segment values, its English and Spanish values
+          must total 100%; objectives without values are omitted
         - If budgetDataUpdateColumns.isRowChanged is configured, only flagged rows are processed,
           except rows with non-empty `changeNote/changeReason` which are also processed
         - Validates duplicate keys for `accountCode + month + year + serviceId + subService`
@@ -1036,6 +1622,8 @@ def update_budget_data_route(request: Request):
         - If any validation fails, no update/insert is executed
         - After successful DB update/insert, the endpoint reloads
           budget data to sheet using updated cache buckets
+        - Budget and segment mutations are committed in one transaction
+        - Segment changes are recorded in changeHistories and BudgetChangeHistories
     """
     sheet_settings = get_fundsphere_budget_data_update_settings()
     changed_by = str(request.headers.get("x-user-name") or "").strip() or "budgetData.update"
@@ -1047,6 +1635,20 @@ def update_budget_data_route(request: Request):
         raise HTTPException(
             status_code=500,
             detail="Invalid tenant budget data update columns config",
+        )
+    segment_tables = get_db_tables()
+    include_segments = bool(
+        segment_tables.get("BUDGETSEGMENTOBJECTIVES")
+        and segment_tables.get("BUDGETSEGMENTLANGUAGES")
+    )
+    if include_segments and not str(update_columns.get("segment") or "").strip():
+        raise HTTPException(
+            status_code=500,
+            detail=(
+                "DB_TABLES.budgetSegmentObjectives and "
+                "DB_TABLES.budgetSegmentLanguages require "
+                "budgetDataUpdateColumns.segment"
+            ),
         )
 
     missing_column_keys = [
@@ -1067,6 +1669,10 @@ def update_budget_data_route(request: Request):
     try:
         for key in _REQUIRED_UPDATE_COLUMN_KEYS:
             column_indexes[key] = _column_label_to_index(str(update_columns.get(key)))
+        if include_segments:
+            column_indexes["segment"] = _column_label_to_index(
+                str(update_columns.get("segment"))
+            )
     except ValueError as exc:
         raise HTTPException(status_code=500, detail=str(exc)) from exc
 
@@ -1099,6 +1705,12 @@ def update_budget_data_route(request: Request):
         column_indexes=column_indexes,
         is_row_changed_index=is_row_changed_index,
         is_delete_index=is_delete_index,
+        include_segments=include_segments,
+    )
+    segment_changed_row_count = sum(
+        1
+        for item in changed_rows + create_rows
+        if item.get("segmentsChanged")
     )
 
     scanned_row_count = len(sheet_rows)
@@ -1298,9 +1910,11 @@ def update_budget_data_route(request: Request):
             "createdCandidateRowCount": 0,
             "deletedCandidateRowCount": 0,
             "updatedRowCount": 0,
+            "segmentChangedRowCount": 0,
             "createdRowCount": 0,
             "deletedRowCount": 0,
             "historyRowCount": 0,
+            "changeHistoryRowCount": 0,
             "createdBudgetIds": [],
             "deletedBudgetIds": [],
             "invalidRowCount": 0,
@@ -1312,6 +1926,7 @@ def update_budget_data_route(request: Request):
             creates=create_rows,
             deletes=delete_rows,
             changed_by=changed_by,
+            include_budget_segments=include_segments,
         )
     except Exception as exc:
         exc_text = str(exc)
@@ -1380,9 +1995,13 @@ def update_budget_data_route(request: Request):
         "createdCandidateRowCount": len(create_rows),
         "deletedCandidateRowCount": len(delete_rows),
         "updatedRowCount": int(update_result.get("updatedRowCount") or 0),
+        "segmentChangedRowCount": segment_changed_row_count,
         "createdRowCount": int(update_result.get("createdRowCount") or 0),
         "deletedRowCount": int(update_result.get("deletedRowCount") or 0),
         "historyRowCount": int(update_result.get("historyRowCount") or 0),
+        "changeHistoryRowCount": int(
+            update_result.get("legacyHistoryRowCount") or 0
+        ),
         "createdBudgetIds": update_result.get("createdBudgetIds") or [],
         "deletedBudgetIds": update_result.get("deletedBudgetIds") or [],
         "invalidRowCount": 0,
