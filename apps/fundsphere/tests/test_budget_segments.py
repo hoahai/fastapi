@@ -265,6 +265,104 @@ class BudgetSegmentsTests(unittest.TestCase):
 
         self.assertTrue(any(error["field"] == "segment.segmentPercent" for error in errors))
 
+    def test_existing_row_detects_segment_removal_without_is_row_changed_flag(self):
+        row = {
+            "budgetId": "budget-1",
+            "accountName": "Acme",
+            "year": 2026,
+            "month": 3,
+            "serviceName": "SEO",
+            "subService": "Retail",
+            "grossAmount": "1000.00",
+            "commission": "0.2500",
+            "netAdjustment": "0.00",
+            "note": "",
+            "segments": [
+                {
+                    "objective": "Service",
+                    "objectivePercent": "100.00",
+                    "language": "English",
+                    "segmentPercent": "100.00",
+                }
+            ],
+        }
+        values = _build_budget_data_values([row], include_segments=True)[1]
+        values[11] = ""
+
+        changed, creates, deletes, errors = _parse_budget_data_sheet_rows(
+            [values],
+            start_row=6,
+            column_indexes={
+                "originalSig": 0,
+                "budgetId": 1,
+                "year": 3,
+                "month": 4,
+                "subService": 6,
+                "grossAmount": 7,
+                "commission": 8,
+                "netAdjustment": 9,
+                "note": 10,
+                "segment": 11,
+                "changeNote": 12,
+                "accountCode": 15,
+                "serviceId": 21,
+            },
+            is_row_changed_index=26,
+            include_segments=True,
+        )
+
+        self.assertEqual(creates, [])
+        self.assertEqual(deletes, [])
+        self.assertEqual(errors, [])
+        self.assertEqual(
+            [diff["field"] for diff in changed[0]["segmentDiffs"]],
+            ["segment.Service.objectivePercent", "segment.Service.English"],
+        )
+
+    def test_existing_row_detects_note_removal_without_is_row_changed_flag(self):
+        row = {
+            "budgetId": "budget-1",
+            "accountName": "Acme",
+            "year": 2026,
+            "month": 3,
+            "serviceName": "SEO",
+            "subService": "Retail",
+            "grossAmount": "1000.00",
+            "commission": "0.2500",
+            "netAdjustment": "0.00",
+            "note": "Original note",
+            "segments": [],
+        }
+        values = _build_budget_data_values([row], include_segments=True)[1]
+        values[10] = ""
+
+        changed, creates, deletes, errors = _parse_budget_data_sheet_rows(
+            [values],
+            start_row=6,
+            column_indexes={
+                "originalSig": 0,
+                "budgetId": 1,
+                "year": 3,
+                "month": 4,
+                "subService": 6,
+                "grossAmount": 7,
+                "commission": 8,
+                "netAdjustment": 9,
+                "note": 10,
+                "segment": 11,
+                "changeNote": 12,
+                "accountCode": 15,
+                "serviceId": 21,
+            },
+            is_row_changed_index=26,
+            include_segments=True,
+        )
+
+        self.assertEqual(creates, [])
+        self.assertEqual(deletes, [])
+        self.assertEqual(errors, [])
+        self.assertEqual(changed[0]["diffs"][0]["field"], "note")
+
     def test_segment_rows_are_normalized_and_sorted(self):
         rows = validate_budget_segment_rows(
             [

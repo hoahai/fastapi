@@ -1108,11 +1108,6 @@ def _parse_budget_data_sheet_rows(
         )
         change_note = str(change_note_cell or "").strip()
 
-        if is_row_changed_index is not None and not is_delete:
-            row_changed_value = _extract_cell_value(row_values, is_row_changed_index)
-            if not _is_row_changed_flag_true(row_changed_value) and not change_note:
-                continue
-
         original_sig_cell = _extract_cell_value(
             row_values,
             column_indexes["originalSig"],
@@ -1702,8 +1697,9 @@ def update_budget_data_route(request: Request):
         - Objective percentages must total 100% across populated objectives
         - When an objective has segment values, its English and Spanish values
           must total 100%; objectives without values are omitted
-        - If budgetDataUpdateColumns.isRowChanged is configured, only flagged rows are processed,
-          except rows with non-empty `changeNote/changeReason` which are also processed
+        - Existing rows are compared against `originalSig` regardless of the
+          `isRowChanged` formula; `isRowChanged` remains a sheet-side visual
+          hint and does not determine whether the backend detects a change
         - Validates duplicate keys for `accountCode + month + year + serviceId + subService`
           across request rows and existing budgets before write
         - Validation errors are aggregated (row values, references, duplicates)
