@@ -17,6 +17,7 @@ from apps.fundsphere.api.v1.endpoints.masterBudgetControl.budgetSegments import 
 from apps.fundsphere.api.v1.endpoints.masterBudgetControl.budgetData import (
     _build_budget_data_values,
     _extract_service_names,
+    _parse_segment_signature,
     _parse_budget_data_sheet_rows,
 )
 
@@ -147,6 +148,13 @@ class BudgetSegmentsTests(unittest.TestCase):
         }
         values = _build_budget_data_values([row], include_segments=True)[1]
         self.assertEqual(
+            values[0],
+            "subService=Retail|grossAmount=1000.00|commission=0.2500|"
+            "netAdjustment=0.00|note=|segments="
+            "new-objective=60.00;new-english=40.00;new-spanish=60.00;"
+            "used-objective=40.00;used-english=60.00;used-spanish=40.00",
+        )
+        self.assertEqual(
             values[11],
             "New60:E40/S60, Used40:E60/S40",
         )
@@ -201,6 +209,21 @@ class BudgetSegmentsTests(unittest.TestCase):
                     "oldValue": "40.00",
                     "newValue": "45.00",
                 },
+            ],
+        )
+
+    def test_legacy_segment_signature_remains_readable(self):
+        self.assertEqual(
+            _parse_segment_signature(
+                "Service=100.00(English=100.00)"
+            ),
+            [
+                {
+                    "objective": "Service",
+                    "objectivePercent": Decimal("100.00"),
+                    "language": "English",
+                    "segmentPercent": Decimal("100.00"),
+                }
             ],
         )
 

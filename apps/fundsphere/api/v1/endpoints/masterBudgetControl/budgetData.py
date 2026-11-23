@@ -301,17 +301,19 @@ def _segment_signature(segments: list[dict[str, object]] | None) -> str:
         objective_segments = by_objective.get(objective, [])
         if not objective_segments:
             continue
+        objective_slug = objective.lower()
         objective_percent = _decimal_text(
             objective_segments[0]["objectivePercent"],
             scale=2,
         )
-        languages = ",".join(
-            f"{language}={_decimal_text(item['segmentPercent'], scale=2)}"
+        parts.append(f"{objective_slug}-objective={objective_percent}")
+        parts.extend(
+            f"{objective_slug}-{language.lower()}="
+            f"{_decimal_text(item['segmentPercent'], scale=2)}"
             for language in _SEGMENT_LANGUAGES
             for item in objective_segments
             if item["language"] == language
         )
-        parts.append(f"{objective}={objective_percent}({languages})")
     return ";".join(parts)
 
 
@@ -353,6 +355,59 @@ def _parse_segment_signature(value: object) -> list[dict[str, object]]:
         return []
 
     segments: list[dict[str, object]] = []
+
+    # Current canonical format is a semicolon-delimited set of stable tokens,
+    # for example: ``service-objective=100.00;service-english=100.00``.
+    # Keep the legacy ``Service=100.00(English=100.00)`` format below so
+    # existing sheets can still be updated without requiring a full reload.
+    canonical_token_re = re.compile(
+        r"(?P<objective>new|used|service)-"
+        r"(?P<field>objective|english|spanish)="
+        r"(?P<value>[0-9]+(?:\.[0-9]+)?)$",
+        flags=re.IGNORECASE,
+    )
+    if any(canonical_token_re.fullmatch(item.strip()) for item in raw.split(";")):
+        values_by_objective: dict[str, dict[str, str]] = {}
+        for item in raw.split(";"):
+            token = item.strip()
+            if not token:
+                continue
+            match = canonical_token_re.fullmatch(token)
+            if not match:
+                raise ValueError("segments signature is invalid")
+
+            objective = str(match.group("objective") or "").title()
+            field = str(match.group("field") or "").lower()
+            objective_values = values_by_objective.setdefault(objective, {})
+            if field in objective_values:
+                raise ValueError("segments signature contains duplicate values")
+            objective_values[field] = str(match.group("value") or "").strip()
+
+        for objective in _SEGMENT_OBJECTIVES:
+            objective_values = values_by_objective.get(objective)
+            if not objective_values:
+                continue
+            objective_percent = objective_values.get("objective")
+            if objective_percent is None:
+                raise ValueError("segments signature is missing objective allocation")
+            languages = [
+                language
+                for language in _SEGMENT_LANGUAGES
+                if language.lower() in objective_values
+            ]
+            if not languages:
+                raise ValueError("segments signature is missing language values")
+            segments.extend(
+                {
+                    "objective": objective,
+                    "objectivePercent": objective_percent,
+                    "language": language,
+                    "segmentPercent": objective_values[language.lower()],
+                }
+                for language in languages
+            )
+        return validate_budget_segment_rows(segments)
+
     for item in raw.split(";"):
         token = item.strip()
         if not token:
