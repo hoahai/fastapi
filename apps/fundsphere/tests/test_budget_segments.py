@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from decimal import Decimal
+import json
 import unittest
 from unittest.mock import patch
 
@@ -8,6 +9,7 @@ from apps.fundsphere.api.v1.helpers.dbQueries import (
     BudgetSegmentValidationError,
     _fetch_master_budget_control_budget_rows_for_buckets,
     _filter_budget_rows_by_service_names,
+    _format_budget_change_history_line,
     replace_budget_segments,
     validate_budget_segment_rows,
 )
@@ -43,6 +45,63 @@ class _FakeCursor:
 
 
 class BudgetSegmentsTests(unittest.TestCase):
+    def test_budget_history_summary_uses_readable_single_line_language(self):
+        segment_line = _format_budget_change_history_line(
+            {
+                "changedBy": "hai",
+                "actionType": "UPDATE",
+                "changedFields": json.dumps(
+                    [
+                        "segment.Service.objectivePercent",
+                        "segment.Service.English",
+                    ]
+                ),
+                "oldData": json.dumps(
+                    {
+                        "segment.Service.objectivePercent": None,
+                        "segment.Service.English": None,
+                    }
+                ),
+                "newData": json.dumps(
+                    {
+                        "segment.Service.objectivePercent": "100.00",
+                        "segment.Service.English": "100.00",
+                    }
+                ),
+            }
+        )
+        self.assertEqual(
+            segment_line,
+            "hai added budget segments: Service objective none → 100.00%; "
+            "Service / English none → 100.00%",
+        )
+        self.assertNotIn("\n", segment_line)
+
+        create_line = _format_budget_change_history_line(
+            {
+                "changedBy": "sheryl",
+                "actionType": "CREATE",
+                "changedFields": json.dumps(
+                    ["subService", "grossAmount", "commission", "netAdjustment"]
+                ),
+                "oldData": "{}",
+                "newData": json.dumps(
+                    {
+                        "subService": "Service Google Ads",
+                        "grossAmount": "1250.00",
+                        "commission": "32.0000",
+                        "netAdjustment": "0.00",
+                    }
+                ),
+            }
+        )
+        self.assertEqual(
+            create_line,
+            "sheryl created budget: sub-service Service Google Ads; "
+            "gross amount 1250.00; commission 32.0000; "
+            "net adjustment 0.00",
+        )
+
     def test_budget_service_selector_accepts_blank_and_multiple_values(self):
         self.assertEqual(_extract_service_names(""), [])
         self.assertEqual(

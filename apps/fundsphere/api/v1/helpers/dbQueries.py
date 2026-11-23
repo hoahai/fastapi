@@ -2524,9 +2524,43 @@ def _normalize_history_value(value: object) -> str:
     if value is None:
         return "n/a"
     if isinstance(value, (dict, list)):
-        return json.dumps(value, ensure_ascii=False)
-    text = str(value).strip()
+        text = json.dumps(value, ensure_ascii=False)
+    else:
+        text = str(value).strip()
+    text = re.sub(r"\s*\r?\n\s*", " ", text).strip()
     return text if text else "n/a"
+
+
+def _history_field_label(field_name: str) -> str:
+    labels = {
+        "subService": "sub-service",
+        "grossAmount": "gross amount",
+        "commission": "commission",
+        "netAdjustment": "net adjustment",
+        "note": "note",
+    }
+    if field_name in labels:
+        return labels[field_name]
+
+    parts = field_name.split(".")
+    if len(parts) == 3 and parts[0] == "segment":
+        objective = parts[1].title()
+        field = parts[2]
+        if field == "objectivePercent":
+            return f"{objective} objective"
+        if field in _BUDGET_SEGMENT_LANGUAGES:
+            return f"{objective} / {field}"
+
+    return field_name
+
+
+def _history_display_value(field_name: str, value: object) -> str:
+    normalized = _normalize_history_value(value)
+    if normalized == "n/a":
+        return "none"
+    if field_name.startswith("segment."):
+        return f"{normalized}%"
+    return normalized
 
 
 def _order_budget_change_fields(field_names: list[str]) -> list[str]:
@@ -2551,6 +2585,67 @@ def _order_budget_change_fields(field_names: list[str]) -> list[str]:
     return ordered_fields
 
 
+def _format_budget_change_history_line(row: dict[str, object]) -> str:
+    changed_by = str(row.get("changedBy") or "").strip() or "unknown"
+    old_data = _parse_json_object(row.get("oldData"))
+    new_data = _parse_json_object(row.get("newData"))
+    changed_fields = _order_budget_change_fields(
+        _parse_json_string_list(row.get("changedFields"))
+    )
+    action_type = str(row.get("actionType") or "").strip().upper() or "UPDATE"
+
+    change_entries: list[str] = []
+    if action_type == "CREATE":
+        for field_name in changed_fields:
+            new_value = _history_display_value(field_name, new_data.get(field_name))
+            change_entries.append(f"{_history_field_label(field_name)} {new_value}")
+        line_body = (
+            f"{changed_by} created budget: {'; '.join(change_entries)}"
+            if change_entries
+            else f"{changed_by} created budget"
+        )
+    elif action_type == "DELETE":
+        line_body = f"{changed_by} deleted budget"
+    else:
+        for field_name in changed_fields:
+            old_value = _history_display_value(field_name, old_data.get(field_name))
+            new_value = _history_display_value(field_name, new_data.get(field_name))
+            change_entries.append(
+                f"{_history_field_label(field_name)} {old_value} → {new_value}"
+            )
+
+        only_segments = bool(changed_fields) and all(
+            field_name.startswith("segment.") for field_name in changed_fields
+        )
+        if only_segments:
+            old_segment_values = [
+                _history_display_value(field_name, old_data.get(field_name))
+                for field_name in changed_fields
+            ]
+            new_segment_values = [
+                _history_display_value(field_name, new_data.get(field_name))
+                for field_name in changed_fields
+            ]
+            if all(value == "none" for value in old_segment_values):
+                segment_action = "added budget segments"
+            elif all(value == "none" for value in new_segment_values):
+                segment_action = "removed budget segments"
+            else:
+                segment_action = "updated budget segments"
+            line_body = f"{changed_by} {segment_action}: {'; '.join(change_entries)}"
+        elif change_entries:
+            line_body = f"{changed_by} updated budget: {'; '.join(change_entries)}"
+        else:
+            line_body = f"{changed_by} added budget history"
+
+    date_label = _format_history_date_label(row.get("dateCreated"))
+    line = f"{date_label} · {line_body}".strip() if date_label else line_body
+    history_note = _normalize_history_value(row.get("note"))
+    if history_note != "n/a":
+        line = f"{line} - {history_note}"
+    return line
+
+
 def _format_history_date_label(value: object) -> str:
     try:
         tenant_tz = ZoneInfo(get_timezone())
@@ -2562,9 +2657,11 @@ def _format_history_date_label(value: object) -> str:
             localized = dt.replace(tzinfo=tenant_tz)
         else:
             localized = dt.astimezone(tenant_tz)
+        hour = localized.hour % 12 or 12
+        meridiem = "AM" if localized.hour < 12 else "PM"
         return (
-            f"{localized.month}/{localized.day}/{localized.year % 100:02d} "
-            f"{localized.hour}:{localized.minute:02d}"
+            f"{localized.month}/{localized.day}/{localized.year} "
+            f"{hour}:{localized.minute:02d} {meridiem}"
         )
 
     if isinstance(value, datetime):
@@ -2683,42 +2780,7 @@ def _get_budget_change_history_summary_map(
         if not budget_id:
             continue
 
-        changed_by = str(row.get("changedBy") or "").strip() or "unknown"
-        old_data = _parse_json_object(row.get("oldData"))
-        new_data = _parse_json_object(row.get("newData"))
-        changed_fields = _order_budget_change_fields(
-            _parse_json_string_list(row.get("changedFields"))
-        )
-        action_type = str(row.get("actionType") or "").strip().upper() or "UPDATE"
-
-        change_entries: list[str] = []
-        if action_type == "CREATE":
-            if changed_fields:
-                for field_name in changed_fields:
-                    new_value = _normalize_history_value(new_data.get(field_name))
-                    change_entries.append(f"{field_name} ({new_value})")
-            line_body = (
-                f"{changed_by} create budget {', '.join(change_entries)}"
-                if change_entries
-                else f"{changed_by} create budget"
-            )
-        elif action_type == "DELETE":
-            line_body = f"{changed_by} delete budget"
-        else:
-            if changed_fields:
-                for field_name in changed_fields:
-                    old_value = _normalize_history_value(old_data.get(field_name))
-                    new_value = _normalize_history_value(new_data.get(field_name))
-                    change_entries.append(f"{field_name}({old_value} -> {new_value})")
-                line_body = f"{changed_by} change budget {', '.join(change_entries)}"
-            else:
-                line_body = f"{changed_by} add change history"
-
-        date_label = _format_history_date_label(row.get("dateCreated"))
-        line = f"{date_label}: {line_body}".strip() if date_label else line_body
-        history_note = str(row.get("note") or "").strip()
-        if history_note:
-            line = f"{line} - {history_note}"
+        line = _format_budget_change_history_line(row)
         budget_to_lines.setdefault(budget_id, []).append(line)
 
     summary_map: dict[str, str] = {}
