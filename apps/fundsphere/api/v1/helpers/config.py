@@ -290,11 +290,15 @@ def _parse_fundsphere_sheet_settings(
     net_spend_sheet_name = str(net_spend_entry.get("budgetdatasheetname") or "").strip()
     net_spend_data_range = str(net_spend_entry.get("budgetdataoutputrange") or "").strip()
     net_spend_sync_options_entry = _normalize_entry(
-        normalized.get("netspendsyncoptions"),
+        master_budget_control_entry.get("netspendsyncoptions")
+        or normalized.get("netspendsyncoptions"),
         key_name=f"{key_prefix}.netSpendSyncOptions",
         invalid=invalid,
     )
     net_spend_period = str(net_spend_sync_options_entry.get("period") or "").strip()
+    net_spend_period_cell = (
+        net_spend_period if _CELL_RANGE_RE.fullmatch(net_spend_period) else ""
+    )
     master_budget_entry = _normalize_entry(
         normalized.get("masterbudget"),
         key_name=f"{key_prefix}.masterBudget",
@@ -508,6 +512,11 @@ def _parse_fundsphere_sheet_settings(
         settings["net_spend_data_range"] = net_spend_data_range
     if net_spend_sync_options_entry:
         settings["net_spend_period"] = net_spend_period
+        if net_spend_period_cell:
+            settings["net_spend_period_cell"] = net_spend_period_cell
+            if budget_data_sheet_name:
+                settings["net_spend_period_spreadsheet_id"] = spreadsheet_id
+                settings["net_spend_period_sheet_name"] = budget_data_sheet_name
     return settings, missing, invalid
 
 

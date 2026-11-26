@@ -12,6 +12,7 @@ from shared.ggSheet import (
     _clear_sheet_values,
     _column_label_to_index,
     _parse_row_bounded_a1_range,
+    _read_sheet_values,
     _write_sheet_values,
 )
 
@@ -167,6 +168,22 @@ def _resolve_period_from_params(
     return month, year
 
 
+def _read_single_cell(
+    *,
+    spreadsheet_id: str,
+    sheet_name: str,
+    cell_range: str,
+) -> str:
+    values = _read_sheet_values(
+        spreadsheet_id=spreadsheet_id,
+        range_name=f"'{sheet_name}'!{cell_range}",
+        app_name="FundSphere",
+    )
+    if not values or not isinstance(values[0], list) or not values[0]:
+        return ""
+    return str(values[0][0] or "").strip()
+
+
 # ============================================================
 # ROUTES
 # ============================================================
@@ -235,9 +252,11 @@ def load_net_spend_route(
         - Tenant config must include SPREADSHEETS.netSpend.id
         - Tenant config must include SPREADSHEETS.netSpend.budgetDataSheetName
         - Tenant config must include SPREADSHEETS.netSpend.budgetDataOutputRange
-        - Reads target period from SPREADSHEETS.netSpendSyncOptions.period
+        - Reads target period from the configured
+          masterBudgetControl.budgetDataSheetName using the configured
+          netSpendSyncOptions.period cell when that value is a cell reference
         - Optional request body fields `month` + `year` can be used to bypass
-          SPREADSHEETS.netSpendSyncOptions.period
+          the configured sheet period
         - `month` and `year` must be provided together when using request body
         - If netSpendSyncOptions.period is empty, no sheet/DB action is executed
         - Supported period formats: 1/2026 or 01/2026
@@ -257,7 +276,25 @@ def load_net_spend_route(
     resolved_period = _resolve_period_from_params(month=body_month, year=body_year)
     period_source = "body" if resolved_period is not None else "config"
     if resolved_period is None:
-        resolved_period = _resolve_period_from_config(settings.get("net_spend_period"))
+        period_cell = str(settings.get("net_spend_period_cell") or "").strip()
+        period_sheet_name = str(
+            settings.get("net_spend_period_sheet_name") or ""
+        ).strip()
+        period_spreadsheet_id = str(
+            settings.get("net_spend_period_spreadsheet_id") or ""
+        ).strip()
+        if period_cell and period_sheet_name:
+            period_raw = _read_single_cell(
+                spreadsheet_id=period_spreadsheet_id or spreadsheet_id,
+                sheet_name=period_sheet_name,
+                cell_range=period_cell,
+            )
+            resolved_period = _resolve_period_from_config(period_raw)
+            period_source = "sheet"
+        else:
+            resolved_period = _resolve_period_from_config(
+                settings.get("net_spend_period")
+            )
     if resolved_period is None:
         return {
             "spreadsheetId": spreadsheet_id,
