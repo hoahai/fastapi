@@ -400,27 +400,27 @@ def load_master_budget_route(
           "data": {
             "controlSpreadsheetId": "1IQQ0vPOwB_8ngST0EbnfCUDcMo5T9Kp7ApGHdrSO_6M",
             "controlSheetName": "0. Settings",
-            "sheetIdMappingRange": "'0. Settings'!V3:AG",
-            "accountCodesSelectionRange": "'0. Settings'!M2",
-            "yearSelectionRange": "'0. Settings'!M3",
+            "sheetIdMappingRange": "'0. Settings'!S3:U",
+            "accountCodesSelectionRange": "'0.2 Budget Data'!N2",
+            "yearSelectionRange": "'0.2 Budget Data'!N3",
             "selectedAccountCodes": ["ACH", "AUC"],
             "selectedYear": 2026,
             "targetSheetName": "0.1 Budget Data",
-            "targetOutputRange": "A5:I",
+            "targetOutputRange": "I5:Q",
             "accountResults": [
               {
                 "accountCode": "ACH",
                 "spreadsheetId": "1gYmlchcc8nrUKv19N6NRQQsbXnUzjQdQM0UnvW_gD08",
-                "clearRange": "'0.1 Budget Data'!A5:I",
-                "writeRange": "'0.1 Budget Data'!A5:I93",
+                "clearRange": "'0.1 Budget Data'!I5:Q",
+                "writeRange": "'0.1 Budget Data'!I5:Q93",
                 "dbRowCount": 89,
                 "writtenRowCount": 89
               },
               {
                 "accountCode": "AUC",
                 "spreadsheetId": "1fVrY0F4BqrgpZFpdO-Ar5iHtQ_8EJURuobpeKClcrb4",
-                "clearRange": "'0.1 Budget Data'!A5:I",
-                "writeRange": "'0.1 Budget Data'!A5:I76",
+                "clearRange": "'0.1 Budget Data'!I5:Q",
+                "writeRange": "'0.1 Budget Data'!I5:Q76",
                 "dbRowCount": 72,
                 "writtenRowCount": 72
               }
@@ -443,7 +443,9 @@ def load_master_budget_route(
         - Tenant config must include SPREADSHEETS.masterBudgetControl.settongsMasterBudgetSheetIdsRange
         - Tenant config must include SPREADSHEETS.masterBudget.budgetDataSheetName
         - Tenant config must include SPREADSHEETS.masterBudget.budgetDataOutputRange
-        - Reads selected account codes and year from masterBudgetControl option cells
+        - Reads selected account codes and year from the configured
+          masterBudgetControl.budgetDataSheetName using the configured
+          masterBudgetSyncOptions.accountCodes and year cells
         - Optional request body fields `accountCodes` + `year` can be used to bypass
           spreadsheet selection cells
         - `accountCodes` and `year` must be provided together when using request body
@@ -467,6 +469,7 @@ def load_master_budget_route(
     settings = get_fundsphere_master_budget_sheet_settings()
     control_spreadsheet_id = str(settings["spreadsheet_id"])
     control_sheet_name = str(settings["sheet_name"])
+    selection_sheet_name = str(settings["budget_data_sheet_name"])
     account_codes_selection_cell = str(settings["master_budget_sync_account_codes_cell"])
     account_code_limit = int(settings["master_budget_sync_account_code_limit"])
     year_selection_cell = str(settings["master_budget_sync_year_cell"])
@@ -491,12 +494,12 @@ def load_master_budget_route(
     else:
         selected_accounts_raw = _read_single_cell(
             spreadsheet_id=control_spreadsheet_id,
-            sheet_name=control_sheet_name,
+            sheet_name=selection_sheet_name,
             cell_range=account_codes_selection_cell,
         )
         selected_year_raw = _read_single_cell(
             spreadsheet_id=control_spreadsheet_id,
-            sheet_name=control_sheet_name,
+            sheet_name=selection_sheet_name,
             cell_range=year_selection_cell,
         )
         selected_account_codes = _parse_selected_account_codes(selected_accounts_raw)
@@ -613,12 +616,12 @@ def load_master_budget_route(
         "sheetIdMappingRange": mapping_range_name,
         "selectionSource": "body" if using_body_params else "spreadsheet",
         "accountCodesSelectionRange": (
-            f"'{control_sheet_name}'!{account_codes_selection_cell}"
+            f"'{selection_sheet_name}'!{account_codes_selection_cell}"
             if not using_body_params
             else None
         ),
         "yearSelectionRange": (
-            f"'{control_sheet_name}'!{year_selection_cell}"
+            f"'{selection_sheet_name}'!{year_selection_cell}"
             if not using_body_params
             else None
         ),
