@@ -301,16 +301,21 @@ def _parse_fundsphere_sheet_settings(
     net_spend_spreadsheet_id = str(net_spend_entry.get("id") or "").strip()
     net_spend_sheet_name = str(net_spend_entry.get("budgetdatasheetname") or "").strip()
     net_spend_data_range = str(net_spend_entry.get("budgetdataoutputrange") or "").strip()
-    net_spend_presentation = _normalize_nested_config(
-        net_spend_entry.get("presentation")
-    )
+    net_spend_presentation_raw = net_spend_entry.get("presentation")
+    if not isinstance(net_spend_presentation_raw, dict):
+        net_spend_presentation_raw = {
+            key: net_spend_entry[key]
+            for key in ("combineddatarange", "servicegrouping", "rolloversource")
+            if key in net_spend_entry
+        }
+    net_spend_presentation = _normalize_nested_config(net_spend_presentation_raw)
     net_spend_presentation_configured = (
         isinstance(net_spend_presentation, dict) and bool(net_spend_presentation)
     )
-    net_spend_service_catalog_range = (
-        str(net_spend_presentation.get("servicecatalogrange") or "").strip()
+    net_spend_service_grouping = (
+        net_spend_presentation.get("servicegrouping")
         if isinstance(net_spend_presentation, dict)
-        else ""
+        else None
     )
     net_spend_combined_data_range = (
         str(net_spend_presentation.get("combineddatarange") or "").strip()
@@ -486,21 +491,17 @@ def _parse_fundsphere_sheet_settings(
             missing.append(f"{key_prefix}.netSpend.budgetDataSheetName")
 
         if net_spend_presentation_configured:
-            if not net_spend_service_catalog_range:
+            if not isinstance(net_spend_service_grouping, list):
                 missing.append(
-                    f"{key_prefix}.netSpend.presentation.serviceCatalogRange"
-                )
-            elif not _SETTINGS_RANGE_RE.fullmatch(net_spend_service_catalog_range):
-                invalid.append(
-                    f"{key_prefix}.netSpend.presentation.serviceCatalogRange"
+                    f"{key_prefix}.netSpend.serviceGrouping"
                 )
             if not net_spend_combined_data_range:
                 missing.append(
-                    f"{key_prefix}.netSpend.presentation.combinedDataRange"
+                    f"{key_prefix}.netSpend.combinedDataRange"
                 )
             elif not _SETTINGS_RANGE_RE.fullmatch(net_spend_combined_data_range):
                 invalid.append(
-                    f"{key_prefix}.netSpend.presentation.combinedDataRange"
+                    f"{key_prefix}.netSpend.combinedDataRange"
                 )
         elif not net_spend_data_range:
             missing.append(f"{key_prefix}.netSpend.budgetDataOutputRange")

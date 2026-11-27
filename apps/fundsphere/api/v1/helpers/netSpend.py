@@ -91,6 +91,44 @@ def parse_service_catalog(rows: Iterable[Iterable[object]]) -> list[dict[str, ob
     )
 
 
+def parse_service_grouping_config(value: object) -> list[dict[str, object]]:
+    """Parse tenant YAML service groups into the combined-data catalog shape."""
+    groups = value
+    if not isinstance(groups, list):
+        return []
+
+    services: list[dict[str, object]] = []
+    fallback_order = 0
+    for group_entry in groups:
+        if not isinstance(group_entry, dict):
+            continue
+        group_name = str(group_entry.get("group") or "").strip()
+        group_services = group_entry.get("services")
+        if not group_name or not isinstance(group_services, list):
+            continue
+
+        for service_entry in group_services:
+            if not isinstance(service_entry, dict):
+                continue
+            service_id = str(service_entry.get("id") or "").strip()
+            service_name = str(service_entry.get("name") or "").strip()
+            if not service_id or not service_name:
+                continue
+            fallback_order += 1
+            services.append(
+                {
+                    "serviceId": service_id,
+                    "serviceName": service_name,
+                    "serviceGroup": group_name,
+                    "groupOrder": _group_order(
+                        service_entry.get("order") or fallback_order
+                    ),
+                }
+            )
+
+    return services
+
+
 def build_net_spend_rows(
     rows: Iterable[dict[str, object]],
     *,
@@ -120,7 +158,7 @@ def build_net_spend_rows(
                 "accountCode": account_code.upper(),
                 "accountName": str(row.get("accountName") or "").strip(),
                 "serviceId": service_id,
-                "serviceName": str(row.get("serviceName") or service["serviceName"]),
+                "serviceName": str(service["serviceName"]),
                 "subService": str(row.get("subService") or "").strip(),
                 "departmentName": str(row.get("departmentName") or "").strip(),
                 "budgetId": str(row.get("budgetId") or "").strip(),

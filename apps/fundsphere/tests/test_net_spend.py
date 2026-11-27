@@ -7,6 +7,7 @@ from apps.fundsphere.api.v1.helpers.netSpend import (
     build_net_spend_rows,
     build_rollover_rows,
     parse_service_catalog,
+    parse_service_grouping_config,
 )
 
 
@@ -87,6 +88,33 @@ class NetSpendTests(unittest.TestCase):
         self.assertEqual(rows[0]["Value"], Decimal("0"))
         self.assertEqual(rows[1]["serviceGroup"], "1. Google")
         self.assertEqual(rows[1]["Value"], Decimal("7822.04"))
+
+    def test_tenant_service_grouping_config_maps_group_and_order(self):
+        catalog = parse_service_grouping_config(
+            [
+                {
+                    "group": "1. Google",
+                    "services": [
+                        {
+                            "id": "sem",
+                            "name": "Search Engine Marketing",
+                        }
+                    ],
+                }
+            ]
+        )
+
+        self.assertEqual(
+            catalog,
+            [
+                {
+                    "serviceId": "sem",
+                    "serviceName": "Search Engine Marketing",
+                    "serviceGroup": "1. Google",
+                    "groupOrder": 1,
+                }
+            ],
+        )
 
     def test_rollovers_are_filtered_and_mapped_to_report_rows(self):
         rows = build_rollover_rows(

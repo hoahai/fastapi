@@ -14,7 +14,7 @@ from apps.fundsphere.api.v1.helpers.netSpend import (
     build_combined_values,
     build_net_spend_rows,
     build_rollover_rows,
-    parse_service_catalog,
+    parse_service_grouping_config,
 )
 from shared.ggSheet import (
     _clear_sheet_values,
@@ -313,20 +313,16 @@ def load_net_spend_route(
           }
         }
 
-    Example response (period is empty):
+    Example error response (period is empty):
         {
           "meta": {
             "requestId": "...",
             "durationMs": 5,
             "timestamp": "2026-03-28T09:20:30.000Z"
           },
-          "data": {
-            "spreadsheetId": "1npAa9vNyn8355-VcfZ7sp5l5dvMEv-YRrXc3rpez_C8",
-            "sheetName": "0.0 Settings",
-            "skipped": true,
-            "reason": "netSpendSyncOptions.period is empty",
-            "dbRowCount": 0,
-            "writtenRowCount": 0
+          "error": {
+            "message": "Net Spend period is required",
+            "detail": "Set a period in 0.2 Budget Data!N1 or provide month and year."
           }
         }
 
@@ -336,8 +332,8 @@ def load_net_spend_route(
         - Tenant config must include SPREADSHEETS.netSpend.id
         - Tenant config must include SPREADSHEETS.netSpend.budgetDataSheetName
         - Presentation mode requires
-          SPREADSHEETS.netSpend.presentation.serviceCatalogRange and
-          SPREADSHEETS.netSpend.presentation.combinedDataRange
+          SPREADSHEETS.netSpend.serviceGrouping service entries and
+          SPREADSHEETS.netSpend.combinedDataRange
         - Legacy mode requires SPREADSHEETS.netSpend.budgetDataOutputRange
         - Reads target period from the configured
           masterBudgetControl.budgetDataSheetName using the configured
@@ -345,7 +341,8 @@ def load_net_spend_route(
         - Optional request body fields `month` + `year` can be used to bypass
           the configured sheet period
         - `month` and `year` must be provided together when using request body
-        - If netSpendSyncOptions.period is empty, no sheet/DB action is executed
+        - If netSpendSyncOptions.period is empty and no request-body period is
+          provided, the endpoint returns HTTP 400 without reading or writing data
         - Supported period formats: 1/2026 or 01/2026
         - Only one period is accepted (comma-separated values are not allowed)
         - Output columns are:
@@ -353,14 +350,15 @@ def load_net_spend_route(
           departmentName, budgetId, grossAmount, commission, netAdjustment,
           month, year
         - Net spend query logic is implemented in the backend DB helper
-        - When SPREADSHEETS.netSpend.presentation is configured, the backend
-          also reads the service catalog and rollover source, calculates net
-          values, and populates the configured combined data range. Existing
-          Digital, Social, and Packages pivot tables remain sheet-managed and
-          consume that combined data; the backend does not overwrite those tabs
-          or insert separate raw/rollover output tables.
-        - Without the optional presentation configuration, the endpoint keeps
-          the legacy behavior of writing only the configured raw data range
+        - When SPREADSHEETS.netSpend.serviceGrouping and
+          SPREADSHEETS.netSpend.combinedDataRange are configured, the backend
+          also reads the rollover source, calculates net values, and populates
+          the combined data range. Existing Digital, Social, and Packages pivot
+          tables remain sheet-managed and consume that combined data; the
+          backend does not overwrite those tabs or insert separate raw/rollover
+          output tables.
+        - Without the combined-data configuration, the endpoint keeps the legacy
+          behavior of writing only the configured raw data range
     """
     settings = get_fundsphere_net_spend_settings()
     spreadsheet_id = str(settings["net_spend_spreadsheet_id"])
@@ -391,44 +389,40 @@ def load_net_spend_route(
                 settings.get("net_spend_period")
             )
     if resolved_period is None:
-        return {
-            "spreadsheetId": spreadsheet_id,
-            "sheetName": sheet_name,
-            "periodSource": "config",
-            "skipped": True,
-            "reason": "netSpendSyncOptions.period is empty",
-            "dbRowCount": 0,
-            "writtenRowCount": 0,
-        }
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "message": "Net Spend period is required",
+                "detail": (
+                    "Set a period in the configured netSpendSyncOptions.period "
+                    "cell or provide month and year."
+                ),
+            },
+        )
     month, year = resolved_period
 
     db_rows = get_master_budget_control_net_spend_data(month=month, year=year)
     presentation = settings.get("net_spend_presentation")
     if isinstance(presentation, dict) and presentation:
-        catalog_range = str(presentation.get("servicecatalogrange") or "").strip()
         combined_range = str(presentation.get("combineddatarange") or "").strip()
-        if not catalog_range or not combined_range:
+        service_grouping = presentation.get("servicegrouping")
+        if not service_grouping or not combined_range:
             raise HTTPException(
                 status_code=500,
                 detail={
                     "message": "Incomplete net spend presentation configuration",
                     "required": [
-                        "serviceCatalogRange",
+                        "serviceGrouping",
                         "combinedDataRange",
                     ],
                 },
             )
 
-        catalog_values = _read_sheet_values(
-            spreadsheet_id=spreadsheet_id,
-            range_name=f"'{sheet_name}'!{catalog_range}",
-            app_name="FundSphere",
-        )
-        service_catalog = parse_service_catalog(catalog_values)
+        service_catalog = parse_service_grouping_config(service_grouping)
         if not service_catalog:
             raise HTTPException(
                 status_code=500,
-                detail="Net spend service catalog is empty",
+                detail="Net spend serviceGrouping configuration is empty",
             )
 
         rollover_rows = _load_rollover_rows(
