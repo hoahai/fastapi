@@ -107,6 +107,18 @@ def _normalize_entry(
     return {}
 
 
+def _normalize_nested_config(value: object) -> object:
+    """Normalize nested config keys without changing scalar/list values."""
+    if isinstance(value, dict):
+        return {
+            str(key).strip().lower(): _normalize_nested_config(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_normalize_nested_config(item) for item in value]
+    return value
+
+
 def _validate_google_accounts_config(
     parsed: dict,
     *,
@@ -289,6 +301,22 @@ def _parse_fundsphere_sheet_settings(
     net_spend_spreadsheet_id = str(net_spend_entry.get("id") or "").strip()
     net_spend_sheet_name = str(net_spend_entry.get("budgetdatasheetname") or "").strip()
     net_spend_data_range = str(net_spend_entry.get("budgetdataoutputrange") or "").strip()
+    net_spend_presentation = _normalize_nested_config(
+        net_spend_entry.get("presentation")
+    )
+    net_spend_presentation_configured = (
+        isinstance(net_spend_presentation, dict) and bool(net_spend_presentation)
+    )
+    net_spend_service_catalog_range = (
+        str(net_spend_presentation.get("servicecatalogrange") or "").strip()
+        if isinstance(net_spend_presentation, dict)
+        else ""
+    )
+    net_spend_combined_data_range = (
+        str(net_spend_presentation.get("combineddatarange") or "").strip()
+        if isinstance(net_spend_presentation, dict)
+        else ""
+    )
     net_spend_sync_options_entry = _normalize_entry(
         master_budget_control_entry.get("netspendsyncoptions")
         or normalized.get("netspendsyncoptions"),
@@ -457,7 +485,24 @@ def _parse_fundsphere_sheet_settings(
         if not net_spend_sheet_name:
             missing.append(f"{key_prefix}.netSpend.budgetDataSheetName")
 
-        if not net_spend_data_range:
+        if net_spend_presentation_configured:
+            if not net_spend_service_catalog_range:
+                missing.append(
+                    f"{key_prefix}.netSpend.presentation.serviceCatalogRange"
+                )
+            elif not _SETTINGS_RANGE_RE.fullmatch(net_spend_service_catalog_range):
+                invalid.append(
+                    f"{key_prefix}.netSpend.presentation.serviceCatalogRange"
+                )
+            if not net_spend_combined_data_range:
+                missing.append(
+                    f"{key_prefix}.netSpend.presentation.combinedDataRange"
+                )
+            elif not _SETTINGS_RANGE_RE.fullmatch(net_spend_combined_data_range):
+                invalid.append(
+                    f"{key_prefix}.netSpend.presentation.combinedDataRange"
+                )
+        elif not net_spend_data_range:
             missing.append(f"{key_prefix}.netSpend.budgetDataOutputRange")
         elif not _SETTINGS_RANGE_RE.fullmatch(net_spend_data_range):
             invalid.append(f"{key_prefix}.netSpend.budgetDataOutputRange")
@@ -510,6 +555,8 @@ def _parse_fundsphere_sheet_settings(
         settings["net_spend_sheet_name"] = net_spend_sheet_name
     if net_spend_data_range:
         settings["net_spend_data_range"] = net_spend_data_range
+    if isinstance(net_spend_presentation, dict):
+        settings["net_spend_presentation"] = net_spend_presentation
     if net_spend_sync_options_entry:
         settings["net_spend_period"] = net_spend_period
         if net_spend_period_cell:

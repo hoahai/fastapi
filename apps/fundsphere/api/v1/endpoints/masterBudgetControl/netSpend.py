@@ -8,10 +8,19 @@ from pydantic import BaseModel
 
 from apps.fundsphere.api.v1.helpers.config import get_fundsphere_net_spend_settings
 from apps.fundsphere.api.v1.helpers.dbQueries import get_master_budget_control_net_spend_data
+from apps.fundsphere.api.v1.helpers.netSpend import (
+    COMBINED_HEADER,
+    NET_SPEND_HEADER,
+    build_combined_values,
+    build_net_spend_rows,
+    build_rollover_rows,
+    parse_service_catalog,
+)
 from shared.ggSheet import (
     _clear_sheet_values,
     _column_label_to_index,
     _parse_row_bounded_a1_range,
+    _read_sheet_raw,
     _read_sheet_values,
     _write_sheet_values,
 )
@@ -38,20 +47,7 @@ class NetSpendLoadRequest(BaseModel):
 # CONSTANTS
 # ============================================================
 
-_NET_SPEND_HEADER = [
-    "accountCode",
-    "accountName",
-    "serviceId",
-    "serviceName",
-    "subService",
-    "departmentName",
-    "budgetId",
-    "grossAmount",
-    "commission",
-    "netAdjustment",
-    "month",
-    "year",
-]
+_NET_SPEND_HEADER = NET_SPEND_HEADER
 _PERIOD_MONTH_YEAR_RE = re.compile(r"^(1[0-2]|0?[1-9])\/(\d{4})$")
 
 
@@ -184,6 +180,86 @@ def _read_single_cell(
     return str(values[0][0] or "").strip()
 
 
+def _write_matrix(
+    *,
+    spreadsheet_id: str,
+    sheet_name: str,
+    configured_range: str,
+    values: list[list[object]],
+) -> dict[str, object]:
+    start_col, start_row, configured_end_col = _parse_output_range(configured_range)
+    start_col_index = _column_label_to_index(start_col)
+    configured_end_col_index = _column_label_to_index(configured_end_col)
+    configured_column_count = configured_end_col_index - start_col_index + 1
+    value_column_count = max((len(row) for row in values), default=0)
+    if value_column_count > configured_column_count:
+        raise HTTPException(
+            status_code=500,
+            detail={
+                "message": "Net spend output range is too narrow for generated values",
+                "sheetName": sheet_name,
+                "dataRange": configured_range,
+                "columnCount": value_column_count,
+                "capacity": configured_column_count,
+            },
+        )
+
+    clear_range = f"'{sheet_name}'!{configured_range}"
+    _clear_sheet_values(
+        spreadsheet_id=spreadsheet_id,
+        range_name=clear_range,
+        app_name="FundSphere",
+    )
+
+    end_row = start_row + len(values) - 1
+    write_end_col = _column_index_to_label(start_col_index + value_column_count - 1)
+    write_range = f"'{sheet_name}'!{start_col}{start_row}:{write_end_col}{end_row}"
+    _write_sheet_values(
+        spreadsheet_id=spreadsheet_id,
+        range_name=write_range,
+        values=values,
+        app_name="FundSphere",
+        value_input_option="USER_ENTERED",
+    )
+    return {
+        "clearRange": clear_range,
+        "writeRange": write_range,
+        "writtenRowCount": max(len(values) - 1, 0),
+    }
+
+
+def _load_rollover_rows(
+    presentation: dict[str, object],
+    *,
+    month: int,
+    year: int,
+) -> list[dict[str, object]]:
+    source = presentation.get("rolloversource")
+    if not isinstance(source, dict):
+        return []
+
+    spreadsheet_id = str(source.get("spreadsheetid") or "").strip()
+    sheet_name = str(source.get("sheetname") or "").strip()
+    range_name = str(source.get("range") or "").strip()
+    mappings = source.get("vendors")
+    if not spreadsheet_id or not sheet_name or not range_name:
+        return []
+    if not isinstance(mappings, list):
+        return []
+
+    source_rows = _read_sheet_raw(
+        spreadsheet_id=spreadsheet_id,
+        range_name=f"'{sheet_name}'!{range_name}",
+        app_name="FundSphere",
+    )
+    return build_rollover_rows(
+        source_rows,
+        vendor_mappings=[item for item in mappings if isinstance(item, dict)],
+        month=month,
+        year=year,
+    )
+
+
 # ============================================================
 # ROUTES
 # ============================================================
@@ -219,13 +295,21 @@ def load_net_spend_route(
           },
           "data": {
             "spreadsheetId": "1npAa9vNyn8355-VcfZ7sp5l5dvMEv-YRrXc3rpez_C8",
-            "sheetName": "DIGITAL SERVICES & NET BUDGETS",
-            "clearRange": "'DIGITAL SERVICES & NET BUDGETS'!A3:L",
-            "writeRange": "'DIGITAL SERVICES & NET BUDGETS'!A3:L124",
+            "sheetName": "0.0 Settings",
             "month": 3,
             "year": 2026,
             "dbRowCount": 121,
-            "writtenRowCount": 121
+            "rolloverRowCount": 4,
+            "combinedRowCount": 125,
+            "writtenRowCount": 125,
+            "presentationMode": true,
+            "pivotTablesRefreshFromCombinedData": true,
+            "writes": {
+              "combinedData": {
+                "writeRange": "'0.0 Settings'!F3:T127",
+                "writtenRowCount": 125
+              }
+            }
           }
         }
 
@@ -251,7 +335,10 @@ def load_net_spend_route(
         - Requires valid API key
         - Tenant config must include SPREADSHEETS.netSpend.id
         - Tenant config must include SPREADSHEETS.netSpend.budgetDataSheetName
-        - Tenant config must include SPREADSHEETS.netSpend.budgetDataOutputRange
+        - Presentation mode requires
+          SPREADSHEETS.netSpend.presentation.serviceCatalogRange and
+          SPREADSHEETS.netSpend.presentation.combinedDataRange
+        - Legacy mode requires SPREADSHEETS.netSpend.budgetDataOutputRange
         - Reads target period from the configured
           masterBudgetControl.budgetDataSheetName using the configured
           netSpendSyncOptions.period cell when that value is a cell reference
@@ -265,12 +352,20 @@ def load_net_spend_route(
           accountCode, accountName, serviceId, serviceName, subService,
           departmentName, budgetId, grossAmount, commission, netAdjustment,
           month, year
-        - Net spend query logic is hard-coded in backend DB helper
+        - Net spend query logic is implemented in the backend DB helper
+        - When SPREADSHEETS.netSpend.presentation is configured, the backend
+          also reads the service catalog and rollover source, calculates net
+          values, and populates the configured combined data range. Existing
+          Digital, Social, and Packages pivot tables remain sheet-managed and
+          consume that combined data; the backend does not overwrite those tabs
+          or insert separate raw/rollover output tables.
+        - Without the optional presentation configuration, the endpoint keeps
+          the legacy behavior of writing only the configured raw data range
     """
     settings = get_fundsphere_net_spend_settings()
     spreadsheet_id = str(settings["net_spend_spreadsheet_id"])
     sheet_name = str(settings["net_spend_sheet_name"])
-    data_range = str(settings["net_spend_data_range"])
+    data_range = str(settings.get("net_spend_data_range") or "").strip()
     body_month = body.month if body is not None else None
     body_year = body.year if body is not None else None
     resolved_period = _resolve_period_from_params(month=body_month, year=body_year)
@@ -308,6 +403,69 @@ def load_net_spend_route(
     month, year = resolved_period
 
     db_rows = get_master_budget_control_net_spend_data(month=month, year=year)
+    presentation = settings.get("net_spend_presentation")
+    if isinstance(presentation, dict) and presentation:
+        catalog_range = str(presentation.get("servicecatalogrange") or "").strip()
+        combined_range = str(presentation.get("combineddatarange") or "").strip()
+        if not catalog_range or not combined_range:
+            raise HTTPException(
+                status_code=500,
+                detail={
+                    "message": "Incomplete net spend presentation configuration",
+                    "required": [
+                        "serviceCatalogRange",
+                        "combinedDataRange",
+                    ],
+                },
+            )
+
+        catalog_values = _read_sheet_values(
+            spreadsheet_id=spreadsheet_id,
+            range_name=f"'{sheet_name}'!{catalog_range}",
+            app_name="FundSphere",
+        )
+        service_catalog = parse_service_catalog(catalog_values)
+        if not service_catalog:
+            raise HTTPException(
+                status_code=500,
+                detail="Net spend service catalog is empty",
+            )
+
+        rollover_rows = _load_rollover_rows(
+            presentation,
+            month=month,
+            year=year,
+        )
+        combined_rows = build_net_spend_rows(
+            [*db_rows, *rollover_rows],
+            service_catalog=service_catalog,
+            month=month,
+            year=year,
+        )
+
+        writes: dict[str, dict[str, object]] = {}
+        writes["combinedData"] = _write_matrix(
+            spreadsheet_id=spreadsheet_id,
+            sheet_name=sheet_name,
+            configured_range=combined_range,
+            values=[COMBINED_HEADER, *build_combined_values(combined_rows)],
+        )
+
+        return {
+            "spreadsheetId": spreadsheet_id,
+            "sheetName": sheet_name,
+            "periodSource": period_source,
+            "month": month,
+            "year": year,
+            "dbRowCount": len(db_rows),
+            "rolloverRowCount": len(rollover_rows),
+            "combinedRowCount": len(combined_rows),
+            "writtenRowCount": len(combined_rows),
+            "presentationMode": True,
+            "pivotTablesRefreshFromCombinedData": True,
+            "writes": writes,
+        }
+
     values = _build_sheet_values(db_rows)
 
     start_col, start_row, configured_end_col = _parse_output_range(data_range)
