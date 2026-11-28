@@ -306,7 +306,7 @@ def load_net_spend_route(
             "pivotTablesRefreshFromCombinedData": true,
             "writes": {
               "combinedData": {
-                "writeRange": "'0.0 Settings'!F3:T127",
+                "writeRange": "'0.0 Settings'!F3:U127",
                 "writtenRowCount": 125
               }
             }
@@ -356,7 +356,9 @@ def load_net_spend_route(
           the combined data range. Existing Digital, Social, and Packages pivot
           tables remain sheet-managed and consume that combined data; the
           backend does not overwrite those tabs or insert separate raw/rollover
-          output tables.
+          output tables. The combined data adds Value, serviceGroup,
+          groupOrder, and compact segment fields after the legacy output
+          columns.
         - Without the combined-data configuration, the endpoint keeps the legacy
           behavior of writing only the configured raw data range
     """

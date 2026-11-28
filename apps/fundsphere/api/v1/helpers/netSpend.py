@@ -19,7 +19,16 @@ NET_SPEND_HEADER = [
     "year",
 ]
 
-COMBINED_HEADER = NET_SPEND_HEADER + ["Value", "serviceGroup", "groupOrder"]
+COMBINED_HEADER = NET_SPEND_HEADER + [
+    "Value",
+    "serviceGroup",
+    "groupOrder",
+    "segment",
+]
+
+_SEGMENT_OBJECTIVES = ("New", "Used", "Service")
+_SEGMENT_LANGUAGES = ("English", "Spanish")
+_SEGMENT_LANGUAGE_CODES = {"English": "E", "Spanish": "S"}
 
 
 def _to_decimal(value: object, default: Decimal = Decimal("0")) -> Decimal:
@@ -56,6 +65,51 @@ def _group_order(value: object) -> int:
 
 def _service_group(value: object) -> str:
     return str(value or "").strip()
+
+
+def _display_percent(value: object) -> str:
+    decimal_value = _to_decimal(value)
+    if decimal_value == decimal_value.to_integral_value():
+        return str(int(decimal_value))
+    return format(decimal_value.normalize(), "f")
+
+
+def format_segment_preview(segments: Iterable[dict[str, object]] | None) -> str:
+    """Render budget segments in the compact format used by FundSphere sheets."""
+    if not segments:
+        return ""
+
+    values = {
+        (
+            str(segment.get("objective") or "").strip(),
+            str(segment.get("language") or "").strip(),
+        ): segment
+        for segment in segments
+        if isinstance(segment, dict)
+    }
+    objective_parts: list[str] = []
+    for objective in _SEGMENT_OBJECTIVES:
+        objective_segments = [
+            values[(objective, language)]
+            for language in _SEGMENT_LANGUAGES
+            if (objective, language) in values
+        ]
+        if not objective_segments:
+            continue
+
+        objective_percent = _display_percent(
+            objective_segments[0].get("objectivePercent")
+        )
+        language_parts = "/".join(
+            f"{_SEGMENT_LANGUAGE_CODES[language]}"
+            f"{_display_percent(values[(objective, language)].get('segmentPercent'))}"
+            for language in _SEGMENT_LANGUAGES
+            if (objective, language) in values
+        )
+        if language_parts:
+            objective_parts.append(f"{objective}{objective_percent}:{language_parts}")
+
+    return ", ".join(objective_parts)
 
 
 def parse_service_catalog(rows: Iterable[Iterable[object]]) -> list[dict[str, object]]:
@@ -170,6 +224,7 @@ def build_net_spend_rows(
                 "Value": value,
                 "serviceGroup": service["serviceGroup"],
                 "groupOrder": service["groupOrder"],
+                "segment": format_segment_preview(row.get("segments") or []),
             }
         )
         result.append(row)

@@ -1855,6 +1855,12 @@ def get_master_budget_control_net_spend_data(
     budgets_table = tables["BUDGETS"]
     services_table = tables["SERVICES"]
     departments_table = tables["DEPARTMENTS"]
+    budget_segment_objectives_table = str(
+        tables.get("BUDGETSEGMENTOBJECTIVES") or ""
+    ).strip()
+    budget_segment_languages_table = str(
+        tables.get("BUDGETSEGMENTLANGUAGES") or ""
+    ).strip()
 
     columns = _resolve_budget_data_columns(
         accounts_table=accounts_table,
@@ -1940,7 +1946,30 @@ def get_master_budget_control_net_spend_data(
         "ORDER BY accountCode ASC, departmentName ASC, serviceName ASC"
     )
 
-    return fetch_all(query, (month, year, month, year))
+    rows = fetch_all(query, (month, year, month, year))
+    budget_ids = list(
+        dict.fromkeys(
+            str(row.get("budgetId") or "").strip()
+            for row in rows
+            if str(row.get("budgetId") or "").strip()
+        )
+    )
+    segment_map = (
+        _fetch_budget_segments_by_ids(
+            budget_segment_objectives_table=budget_segment_objectives_table,
+            budget_segment_languages_table=budget_segment_languages_table,
+            budgets_table=budgets_table,
+            budget_ids=budget_ids,
+        )
+        if budget_segment_objectives_table
+        and budget_segment_languages_table
+        and budget_ids
+        else {}
+    )
+    for row in rows:
+        budget_id = str(row.get("budgetId") or "").strip()
+        row["segments"] = segment_map.get(budget_id, [])
+    return rows
 
 
 def validate_master_budget_control_budget_refs(

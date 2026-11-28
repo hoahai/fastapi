@@ -6,6 +6,7 @@ import unittest
 from apps.fundsphere.api.v1.helpers.netSpend import (
     build_net_spend_rows,
     build_rollover_rows,
+    format_segment_preview,
     parse_service_catalog,
     parse_service_grouping_config,
 )
@@ -88,6 +89,40 @@ class NetSpendTests(unittest.TestCase):
         self.assertEqual(rows[0]["Value"], Decimal("0"))
         self.assertEqual(rows[1]["serviceGroup"], "1. Google")
         self.assertEqual(rows[1]["Value"], Decimal("7822.04"))
+
+    def test_combined_rows_include_compact_segment_preview(self):
+        rows = build_net_spend_rows(
+            [
+                {
+                    "accountCode": "AUC",
+                    "accountName": "Auto City Credit",
+                    "serviceId": "sem",
+                    "grossAmount": "1000",
+                    "commission": "32",
+                    "netAdjustment": "0",
+                    "segments": [
+                        {
+                            "objective": "New",
+                            "objectivePercent": "60",
+                            "language": "English",
+                            "segmentPercent": "70",
+                        },
+                        {
+                            "objective": "New",
+                            "objectivePercent": "60",
+                            "language": "Spanish",
+                            "segmentPercent": "30",
+                        },
+                    ],
+                }
+            ],
+            service_catalog=self.catalog,
+            month=11,
+            year=2026,
+        )
+
+        self.assertEqual(rows[0]["segment"], "New60:E70/S30")
+        self.assertEqual(format_segment_preview([]), "")
 
     def test_tenant_service_grouping_config_maps_group_and_order(self):
         catalog = parse_service_grouping_config(
